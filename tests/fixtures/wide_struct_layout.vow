@@ -1,0 +1,19 @@
+module WideStructLayout
+
+struct Mix {
+    a: i64,
+    b: i128,
+    c: i64,
+}
+
+fn make(a: i64, b: i128, c: i64) -> Mix {
+    Mix { a: a, b: b, c: c }
+}
+
+fn third(m: Mix) -> i64 {
+    m.c
+}
+
+fn main() -> i32 {
+    0
+}

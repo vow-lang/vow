@@ -1,0 +1,28 @@
+// TEST: category invariant
+// A `return` inside the inner loop reads the outer and inner variables.
+module LoopNestedReturn
+
+fn find_pair() -> u64 vow {
+  ensures: result == 7
+} {
+  let mut i: u64 = 0;
+  while i < 4 vow {
+    invariant: i <= 4
+  } {
+    let mut j: u64 = 0;
+    while j < 4 vow {
+      invariant: j <= 4
+    } {
+      if i * 3 + j == 7 {
+        return i * 3 + j;
+      }
+      j = j + 1;
+    }
+    i = i + 1;
+  }
+  0
+}
+
+fn main() -> i32 [io] {
+  0
+}

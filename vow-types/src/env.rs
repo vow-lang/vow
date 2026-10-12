@@ -251,6 +251,7 @@ fn builtin_free_fn_signatures() -> Vec<(String, FnSig)> {
         def("hash_u64", vec![Ty::U64], Ty::U64, &[]),
         def("hash_str", vec![Ty::Str], Ty::U64, &[]),
         def("eprintln_str", vec![Ty::Str], Ty::Unit, &[Effect::IO]),
+        def("try_eprintln_str", vec![Ty::Str], Ty::I64, &[Effect::IO]),
         def("args", vec![], vec_ty(Ty::Str), &[Effect::Read]),
         def("stdin_read", vec![], Ty::Str, &[Effect::Read]),
         def("stdin_read_line", vec![], Ty::Str, &[Effect::Read]),
@@ -1065,6 +1066,7 @@ sub_sat_u8(U8, U8) -> U8 []
 time_micros() -> I64 [IO]
 time_unix() -> I64 [IO]
 time_unix_ms() -> I64 [IO]
+try_eprintln_str(Str) -> I64 [IO]
 u128_to_i128_sat(U128) -> I128 []
 u128_to_i128_wrap(U128) -> I128 []
 u128_to_i16_sat(U128) -> I16 []

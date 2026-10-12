@@ -1,0 +1,16 @@
+// TEST: category invariant
+module LoopVoidInvariant
+
+fn count_up() {
+  let mut i: u64 = 0;
+  while i < 8 vow {
+    invariant: i <= 8
+  } {
+    i = i + 1;
+  }
+}
+
+fn main() -> i32 [io] {
+  count_up();
+  0
+}

@@ -1,0 +1,19 @@
+// TEST: category invariant
+// TEST: counterexample-fn trip
+// TEST: counterexample-blame Callee
+// The violated clause is only reachable on the 41st header visit, beyond the
+// first rounds of the unrolling schedule.
+module LoopBugAtIteration40
+
+fn trip() -> u64 vow {
+  ensures: result == 50
+} {
+  let mut i: u64 = 0;
+  while i < 50 vow {
+    invariant: i <= 50,
+    invariant: i != 40
+  } {
+    i = i + 1;
+  }
+  i
+}

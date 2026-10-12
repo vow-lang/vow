@@ -1,0 +1,20 @@
+module StructIfElseResult
+
+struct Counter { size: i64, cap: i64 }
+
+fn shrink(n: i64) -> Counter vow {
+  requires: n > 0,
+  ensures: result.size == n - 1,
+  ensures: result.cap == 1000
+} {
+  if n == 1 {
+    Counter { size: 0, cap: 1000 }
+  } else {
+    Counter { size: n - 1, cap: 1000 }
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(shrink(3).size);
+  0
+}

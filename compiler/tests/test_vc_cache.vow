@@ -1,0 +1,297 @@
+module TestVcCache
+
+use verifier
+use vc_smt
+use vc_solver
+use vc_cache
+
+fn sat_answer() -> VcSolverAnswer {
+    let values: Vec<i64> = Vec::new();
+    let highs: Vec<i64> = Vec::new();
+    values.push(-9223372036854775807);
+    highs.push(0);
+    values.push(42);
+    highs.push(-1);
+    vc_answer(VC_ANS_SAT(), values, highs, String::from("raw"))
+}
+
+fn unsat_answer() -> VcSolverAnswer {
+    vc_answer_plain(VC_ANS_UNSAT(), String::from("unsat\n"))
+}
+
+fn query() -> String {
+    String::from("(declare-const x (_ BitVec 8))\n(assert (= x #x00))\n(check-sat)\n")
+}
+
+fn encode_answer(a: VcSolverAnswer, q: String) -> String {
+    vc_cache_encode(a, q)
+}
+
+fn check_round_trip() -> i64 {
+    let q: String = query();
+    match vc_cache_decode(encode_answer(sat_answer(), q), q, 2) {
+        Option::Some(a) => {
+            if a.verdict != VC_ANS_SAT() { return 1; }
+            if a.values.len() != 2 || a.values[0] != -9223372036854775807 || a.values[1] != 42 { return 2; }
+            if a.highs[0] != 0 || a.highs[1] != -1 { return 3; }
+        },
+        Option::None => { return 4; },
+    }
+    match vc_cache_decode(encode_answer(unsat_answer(), q), q, 2) {
+        Option::Some(a) => {
+            if a.verdict != VC_ANS_UNSAT() { return 5; }
+            if a.values.len() != 0 { return 6; }
+        },
+        Option::None => { return 7; },
+    }
+    0
+}
+
+fn check_query_with_newlines_and_marker() -> i64 {
+    let q: String = String::from("a\nEND\n\n\nEND\n");
+    match vc_cache_decode(encode_answer(unsat_answer(), q), q, 0) {
+        Option::Some(a) => { if a.verdict != VC_ANS_UNSAT() { return 1; } },
+        Option::None => { return 2; },
+    }
+    0
+}
+
+fn decodes(text: String, q: String, n: u64) -> bool {
+    match vc_cache_decode(text, q, n) {
+        Option::Some(a) => { true },
+        Option::None => { false },
+    }
+}
+
+fn replace_first(s: String, from: String, to: String) -> String {
+    let at: i64 = str_find_from(s, 0, from);
+    if at < 0 { return s; }
+    let out: String = s.substring(0, at as u64);
+    out.push_str(to);
+    out.push_str(s.substring(at as u64 + from.len(), s.len()));
+    out
+}
+
+fn check_decode_rejects_damage() -> i64 {
+    let q: String = query();
+    let good: String = encode_answer(sat_answer(), q);
+    if !decodes(good, q, 2) { return 1; }
+    if decodes(replace_first(good, String::from("v1"), String::from("v2")), q, 2) { return 2; }
+    if decodes(replace_first(good, String::from("\nsat\n"), String::from("\nunknown\n")), q, 2) { return 3; }
+    if decodes(replace_first(good, String::from("\nsat\n"), String::from("\nerror\n")), q, 2) { return 4; }
+    if decodes(good, q, 3) { return 5; }
+    if decodes(good, q, 1) { return 6; }
+    let mut cut: u64 = 0;
+    while cut < good.len() {
+        if decodes(good.substring(0, cut), q, 2) { return 7; }
+        cut = cut + 1;
+    }
+    let extra: String = String::from(good);
+    extra.push_str(String::from("x"));
+    if decodes(extra, q, 2) { return 8; }
+    let other: String = String::from(q);
+    other.push_str(String::from(" "));
+    if decodes(good, other, 2) { return 9; }
+    let flipped: String = replace_first(q, String::from("x00"), String::from("x01"));
+    if decodes(good, flipped, 2) { return 10; }
+    if decodes(String::from(""), q, 2) { return 11; }
+    let unsat_with_model: String = replace_first(good, String::from("\nsat\n"), String::from("\nunsat\n"));
+    if decodes(unsat_with_model, q, 2) { return 12; }
+    0
+}
+
+fn check_key() -> i64 {
+    let salt: String = vc_cache_salt(String::from("0.7.0"));
+    let q: String = query();
+    let k: String = vc_cache_key(salt, q);
+    if k.len() != 32 { return 1; }
+    if k != vc_cache_key(salt, q) { return 2; }
+    if k == vc_cache_key(vc_cache_salt(String::from("0.7.1")), q) { return 3; }
+    let other: String = String::from(q);
+    other.push_str(String::from(" "));
+    if k == vc_cache_key(salt, other) { return 4; }
+    if k.substring(0, 16) == k.substring(16, 32) { return 5; }
+    if vc_hex_digits(0, 16) != String::from("0000000000000000") { return 6; }
+    if vc_hex_digits(14695981039346656037u64 as i64, 16) != String::from("cbf29ce484222325") { return 7; }
+    if vc_hex_digits(-1, 16) != String::from("ffffffffffffffff") { return 8; }
+    if !vc_cache_salt(String::from("0.7.0")).contains(String::from("--bv-output-format 2")) { return 9; }
+    0
+}
+
+fn check_resolution() -> i64 [io, read, write] {
+    if vc_cache_dir_from(String::from("/tmp/c"), String::from("/home/u")) != String::from("/tmp/c/verify-native") { return 1; }
+    if vc_cache_dir_from(String::from(""), String::from("/home/u")) != String::from("/home/u/.cache/vow/verify-native") { return 2; }
+    if vc_cache_dir_from(String::from(""), String::from("")).len() != 0 { return 3; }
+    if vc_cache_solver_id(String::from("0.7.0\n")) != String::from("0.7.0") { return 4; }
+    if vc_cache_solver_id(String::from("\n  \n  Bitwuzla 0.7.0 \r\nmore\n")) != String::from("Bitwuzla 0.7.0") { return 5; }
+    if vc_cache_solver_id(String::from("")).len() != 0 { return 6; }
+    if vc_cache_solver_id(String::from("\n \n")).len() != 0 { return 7; }
+    if vc_cache_solver_id(String::from("v")) != String::from("v") { return 8; }
+    let off: VcCache = vc_cache_off();
+    if vc_cache_on(off) { return 9; }
+    if vc_cache_on(VcCache { dir: String::from("/x"), solver_id: String::from("") }) { return 10; }
+    if vc_cache_on(VcCache { dir: String::from(""), solver_id: String::from("v") }) { return 11; }
+    if !vc_cache_on(VcCache { dir: String::from("/x"), solver_id: String::from("v") }) { return 12; }
+    if vc_cache_resolve(String::from("")).dir.len() != 0 { return 13; }
+    0
+}
+
+fn disk_cache(tag: String) -> VcCache [io] {
+    let dir: String = mktemp_dir(tag);
+    VcCache { dir: dir, solver_id: String::from("fake 1.0") }
+}
+
+fn key_of(c: VcCache, q: String) -> String {
+    vc_cache_key(vc_cache_salt(c.solver_id), q)
+}
+
+fn count_files(dir: String) -> u64 [read] {
+    fs_listdir(dir).len()
+}
+
+fn check_store_and_lookup() -> i64 [io, read, write] {
+    let c: VcCache = disk_cache(String::from("vc-cache-a-"));
+    let q: String = query();
+    match vc_cache_lookup(c, key_of(c, q), q, 2) {
+        Option::Some(a) => { return 1; },
+        Option::None => {},
+    }
+    vc_cache_store(c, key_of(c, q), q, sat_answer());
+    match vc_cache_lookup(c, key_of(c, q), q, 2) {
+        Option::Some(a) => {
+            if a.verdict != VC_ANS_SAT() || a.values[1] != 42 || a.highs[1] != -1 { return 2; }
+        },
+        Option::None => { return 3; },
+    }
+    let other: VcCache = VcCache { dir: c.dir, solver_id: String::from("fake 2.0") };
+    match vc_cache_lookup(other, key_of(other, q), q, 2) {
+        Option::Some(a) => { return 4; },
+        Option::None => {},
+    }
+    let key: String = key_of(c, q);
+    let entry: String = vc_cache_entry_path(c.dir, key);
+    if fs_write(entry, String::from("garbage")) != 0 { return 5; }
+    match vc_cache_lookup(c, key_of(c, q), q, 2) {
+        Option::Some(a) => { return 6; },
+        Option::None => {},
+    }
+    vc_cache_store(c, key_of(c, q), q, unsat_answer());
+    match vc_cache_lookup(c, key_of(c, q), q, 2) {
+        Option::Some(a) => { if a.verdict != VC_ANS_UNSAT() { return 7; } },
+        Option::None => { return 8; },
+    }
+    if count_files(vc_cache_shard_path(c.dir, key)) != 1 { return 9; }
+    fs_remove_dir_all(c.dir);
+    0
+}
+
+fn check_indecisive_answers_are_not_stored() -> i64 [io, read, write] {
+    let c: VcCache = disk_cache(String::from("vc-cache-b-"));
+    let q: String = query();
+    let verdicts: Vec<i64> = Vec::new();
+    verdicts.push(VC_ANS_UNKNOWN());
+    verdicts.push(VC_ANS_ERROR());
+    verdicts.push(VC_ANS_TIMEOUT());
+    verdicts.push(VC_ANS_NOT_FOUND());
+    verdicts.push(VC_ANS_MEMORY());
+    let mut i: u64 = 0;
+    while i < verdicts.len() {
+        vc_cache_store(c, key_of(c, q), q, vc_answer_plain(verdicts[i], String::from("")));
+        i = i + 1;
+    }
+    if count_files(c.dir) != 0 { return 1; }
+    vc_cache_store(vc_cache_off(), String::from("k"), q, unsat_answer());
+    if count_files(c.dir) != 0 { return 2; }
+    fs_remove_dir_all(c.dir);
+    0
+}
+
+fn check_shard_stays_bounded() -> i64 [io, read, write] {
+    let shard: String = mktemp_dir(String::from("vc-cache-c-"));
+    let mut i: u64 = 0;
+    while i < 200 {
+        vc_cache_make_room(shard);
+        let p: String = String::from(shard);
+        p.push_str(String::from("/e"));
+        p.push_str(i64_to_string(i as i64));
+        if fs_write(p, String::from("x")) != 0 { return 1; }
+        if count_files(shard) > VC_CACHE_SHARD_CAP() { return 2; }
+        i = i + 1;
+    }
+    if count_files(shard) == 0 { return 3; }
+    fs_remove_dir_all(shard);
+    0
+}
+
+fn check_budget_precedes_lookup() -> i64 [io, read, write] {
+    let c: VcCache = disk_cache(String::from("vc-cache-d-"));
+    let q: String = query();
+    let names: Vec<String> = Vec::new();
+    names.push(String::from("a"));
+    names.push(String::from("b"));
+    let widths: Vec<i64> = Vec::new();
+    widths.push(8);
+    widths.push(8);
+    vc_cache_store(c, key_of(c, q), q, sat_answer());
+    let hit: VcSolverAnswer = vc_solver_check_cached(c, String::from(""), q, names, widths, 1000, String::from(""));
+    if hit.verdict != VC_ANS_SAT() || hit.values[1] != 42 { return 1; }
+    let late: VcSolverAnswer = vc_solver_check_cached(c, String::from(""), q, names, widths, 0, String::from(""));
+    if late.verdict != VC_ANS_TIMEOUT() { return 2; }
+    let neg: VcSolverAnswer = vc_solver_check_cached(c, String::from(""), q, names, widths, -5, String::from(""));
+    if neg.verdict != VC_ANS_TIMEOUT() { return 3; }
+    let wrong: Vec<String> = Vec::new();
+    let cold: VcSolverAnswer = vc_solver_check_cached(c, String::from(""), q, wrong, widths, 1000, String::from(""));
+    if cold.verdict == VC_ANS_SAT() || cold.verdict == VC_ANS_UNSAT() { return 4; }
+    fs_remove_dir_all(c.dir);
+    0
+}
+
+fn check_miss_without_solver_stores_nothing() -> i64 [io, read, write] {
+    let c: VcCache = disk_cache(String::from("vc-cache-e-"));
+    let names: Vec<String> = Vec::new();
+    let widths: Vec<i64> = Vec::new();
+    let ans: VcSolverAnswer = vc_solver_check_cached(c, String::from(""), query(), names, widths, 1000, String::from(""));
+    if ans.verdict != VC_ANS_ERROR() { return 1; }
+    if count_files(c.dir) != 0 { return 2; }
+    fs_remove_dir_all(c.dir);
+    0
+}
+
+// `vc_cache_peek` is the lookup a session-decided claim goes through; its miss
+// is verdict `VC_ANS_NONE`, and `vc_cache_put` files an answer under the text.
+fn check_peek_and_put() -> i64 [io, read, write] {
+    let c: VcCache = disk_cache(String::from("vc-cache-d-"));
+    let q: String = query();
+    if vc_cache_peek(c, q, 0).verdict != VC_ANS_NONE() { return 1; }
+    vc_cache_put(c, q, unsat_answer());
+    if vc_cache_peek(c, q, 0).verdict != VC_ANS_UNSAT() { return 2; }
+    let other: String = String::from("(check-sat)\n");
+    if vc_cache_peek(c, other, 0).verdict != VC_ANS_NONE() { return 3; }
+    vc_cache_put(c, other, vc_answer_plain(VC_ANS_UNKNOWN(), String::from("")));
+    if vc_cache_peek(c, other, 0).verdict != VC_ANS_NONE() { return 4; }
+    let off: VcCache = vc_cache_off();
+    vc_cache_put(off, q, unsat_answer());
+    if vc_cache_peek(off, q, 0).verdict != VC_ANS_NONE() { return 5; }
+    let modelled: String = String::from("(assert true)\n(check-sat)\n");
+    vc_cache_put(c, modelled, sat_answer());
+    if vc_cache_peek(c, modelled, 3).verdict != VC_ANS_NONE() { return 6; }
+    let hit: VcSolverAnswer = vc_cache_peek(c, modelled, 2);
+    if hit.verdict != VC_ANS_SAT() || hit.values[1] != 42 { return 7; }
+    fs_remove_dir_all(c.dir);
+    0
+}
+
+fn main() -> i32 [io, read, write] {
+    let mut r: i64 = check_round_trip();
+    if r == 0 { r = check_query_with_newlines_and_marker(); }
+    if r == 0 { r = check_decode_rejects_damage(); }
+    if r == 0 { r = check_key(); }
+    if r == 0 { r = check_resolution(); }
+    if r == 0 { r = check_store_and_lookup(); }
+    if r == 0 { r = check_indecisive_answers_are_not_stored(); }
+    if r == 0 { r = check_shard_stays_bounded(); }
+    if r == 0 { r = check_budget_precedes_lookup(); }
+    if r == 0 { r = check_miss_without_solver_stores_nothing(); }
+    if r == 0 { r = check_peek_and_put(); }
+    i64_to_i32_wrap(r)
+}

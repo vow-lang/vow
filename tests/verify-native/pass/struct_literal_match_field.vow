@@ -1,0 +1,15 @@
+module StructLiteralMatchField
+
+struct P { a: i64, b: i64 }
+
+fn with_match(o: Option<i64>) -> P vow {
+  ensures: result.b == 0
+} {
+  P { a: match o { Option::Some(v) => v, Option::None => 0 }, b: 0 }
+}
+
+fn main() -> i32 [io] {
+  print_i64(with_match(Option::Some(4)).a);
+  print_i64(with_match(Option::None).a);
+  0
+}

@@ -1,0 +1,20 @@
+module InlineCalleeBuildsVec
+
+fn sum_two(a: i64, b: i64) -> i64 {
+  let v: Vec<i64> = Vec::new();
+  v.push(a);
+  v.push(b);
+  v[0] + v[1]
+}
+
+fn twice(x: i64) -> i64 vow {
+  requires: x > -1000 && x < 1000
+  ensures: result == x + x
+} {
+  sum_two(x, x)
+}
+
+fn main() -> i32 [io] {
+  print_i64(twice(21));
+  0
+}

@@ -1,0 +1,15 @@
+module OptionMatchParam
+
+fn or_default(o: Option<i64>, d: i64) -> i64 vow {
+  ensures: result == d || result != d
+} {
+  match o {
+    Option::Some(v) => v,
+    Option::None => d,
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(or_default(Option::Some(1), 0));
+  0
+}

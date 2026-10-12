@@ -1,0 +1,17 @@
+// TEST: counterexample-fn "with_if"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+module StructLiteralIfFieldWrong
+
+struct P { a: i64, b: i64 }
+
+fn with_if(c: i64) -> P vow {
+  ensures: result.a >= 2
+} {
+  P { a: if c > 0 { c } else { 1 }, b: 0 }
+}
+
+fn main() -> i32 [io] {
+  print_i64(with_if(5).a);
+  0
+}

@@ -1,0 +1,9 @@
+// TEST: stderr "Vec::from_raw_parts_copy"
+module VecRawPartsCopyI128
+
+// `Vec::from_raw_parts_copy` copies one 8-byte slot per element, so it cannot
+// build a `Vec<i128>`, whose elements are two slots wide.
+fn main() -> i32 [io] {
+    let v: Vec<i128> = Vec::from_raw_parts_copy(0, 0);
+    0
+}

@@ -92,6 +92,278 @@ class PrecisionTest(unittest.TestCase):
         self.assertEqual("PRECISION", result["verdict"])
 
 
+def _call_args(mock_run_json):
+    return [c.args[1] for c in mock_run_json.call_args_list]
+
+
+class BackendTest(unittest.TestCase):
+    """`--backend native` reaches `verify` only; `build` rejects it."""
+
+    @patch("verifier_runtime.run_debug_binary", return_value=(None, None))
+    @patch("verifier_runtime.run_json")
+    def test_soundness_passes_backend_to_verify_not_to_build(self, run_json, _dbg):
+        run_json.side_effect = [
+            ({"status": "Verified"}, None),
+            ({"executable": "x"}, None),
+        ]
+
+        verifier_runtime.check_soundness(
+            Path("f.vow"), "vowc", Path("/tmp"), 30, backend="native"
+        )
+
+        verify, build = _call_args(run_json)
+        self.assertEqual(["--backend", "native"], verify[1:3])
+        self.assertNotIn("--backend", build)
+        self.assertIn("build", build)
+
+    @patch("verifier_runtime.run_json")
+    def test_precision_passes_backend_to_verify(self, run_json):
+        run_json.return_value = (_verify_failed("confirmed"), None)
+
+        verifier_runtime.check_precision(Path("f.vow"), "vowc", 30, backend="native")
+
+        (args,) = _call_args(run_json)
+        self.assertEqual(["--backend", "native"], args[1:3])
+        self.assertIn("--replay-cex", args)
+
+    @patch("verifier_runtime.run_json")
+    def test_no_backend_leaves_the_invocation_unchanged(self, run_json):
+        run_json.return_value = (_verify_failed("confirmed"), None)
+
+        verifier_runtime.check_precision(Path("f.vow"), "verifier", 30)
+
+        (args,) = _call_args(run_json)
+        self.assertNotIn("--backend", args)
+
+    def test_pair_review_style_positional_call_still_binds(self):
+        with patch("verifier_runtime.run_json", return_value=(None, "timeout")):
+            result = verifier_runtime.check_soundness(
+                Path("f.vow"), "verifier", Path("/tmp"), 30
+            )
+
+        self.assertEqual("skipped", result["verdict"])
+
+
+class NativeStrictPrecisionTest(unittest.TestCase):
+    """The native model is checked against the runtime, not trusted."""
+
+    def check(self, payload, backend="native"):
+        with patch("verifier_runtime.run_json", return_value=(payload, None)):
+            return verifier_runtime.check_precision(
+                Path("f.vow"), "vowc", 30, backend=backend
+            )
+
+    def test_aborted_is_a_finding_under_native_only(self):
+        payload = _verify_failed("confirmed", "aborted")
+
+        self.assertEqual("PRECISION", self.check(payload)["verdict"])
+        self.assertEqual("ok", self.check(payload, backend=None)["verdict"])
+
+    def test_a_verifier_bug_diagnostic_is_a_finding(self):
+        payload = _verify_failed("confirmed")
+        payload["diagnostics"] = [{"error_code": "VerifierBug", "message": "m"}]
+
+        result = self.check(payload)
+
+        self.assertEqual("PRECISION", result["verdict"])
+        self.assertIn("VerifierBug", result["detail"])
+
+    def test_a_skipped_replay_is_a_gap_bucketed_by_reason(self):
+        payload = _verify_failed("confirmed", "skipped")
+        payload["counterexamples"][1]["replay_reason"] = "parameter 0: unsupported type"
+
+        result = self.check(payload)
+
+        self.assertEqual("REPLAY-GAP", result["verdict"])
+        self.assertEqual(["parameter 0: unsupported type"], result["replay_skipped"])
+
+    def test_skipped_stays_unjudged_under_esbmc(self):
+        payload = _verify_failed("confirmed", "skipped")
+
+        self.assertEqual("ok", self.check(payload, backend=None)["verdict"])
+
+    def test_all_confirmed_is_ok(self):
+        self.assertEqual("ok", self.check(_verify_failed("confirmed"))["verdict"])
+
+
+class ReplayByDesignTest(unittest.TestCase):
+    """Obligations that are not runtime aborts are not replay failures."""
+
+    def check(self, *reasons):
+        payload = _verify_failed(*["skipped"] * len(reasons))
+        for ce, reason in zip(payload["counterexamples"], reasons):
+            ce["replay_reason"] = reason
+        with patch("verifier_runtime.run_json", return_value=(payload, None)):
+            return verifier_runtime.check_precision(
+                Path("f.vow"), "vowc", 30, backend="native"
+            )
+
+    def test_the_documented_non_abort_reasons_are_not_gaps(self):
+        for reason in (
+            "replay: a shift-count counterexample is a verifier obligation; "
+            "the runtime masks the count (8-bit shifts excepted)",
+            "replay: no runtime abort is predicted for this obligation",
+            "replay: counterexample belongs to a co-emitted callee; "
+            "its inputs are the caller's",
+        ):
+            with self.subTest(reason=reason):
+                result = self.check(reason)
+                self.assertEqual("skipped", result["verdict"])
+                self.assertEqual([reason], result["replay_skipped"])
+
+    def test_an_unsupported_parameter_type_is_still_a_gap(self):
+        result = self.check(
+            "parameter 0: unsupported type (self-hosted v1: scalars only)"
+        )
+
+        self.assertEqual("REPLAY-GAP", result["verdict"])
+
+    def test_an_unrecognised_reason_fails_closed(self):
+        self.assertEqual("REPLAY-GAP", self.check("something new")["verdict"])
+
+
+class ReplaySkippedDirectiveTest(unittest.TestCase):
+    def test_directive_documents_a_deliberate_skip(self):
+        m = verifier_runtime.DIRECTIVE_REPLAY_SKIPPED.search(
+            "// TEST: replay-skipped 128-bit parameter\n"
+        )
+
+        self.assertEqual("128-bit parameter", m.group(1))
+
+
+class DisclaimedCallSiteTest(unittest.TestCase):
+    """A Caller violation at a call the verifier said it did not verify."""
+
+    CONTRACTS = {
+        "contracts": [
+            {"vow_id": 0, "function": "double", "kind": "requires"},
+            {"vow_id": 1, "function": "double", "kind": "ensures"},
+            {"vow_id": 2, "function": "other", "kind": "requires"},
+        ]
+    }
+
+    @staticmethod
+    def note(callee):
+        return {
+            "error_code": "VerificationSkipped",
+            "message": f"calls from `main` to contracted `{callee}` were not "
+            "verified: `main` cannot be modelled",
+        }
+
+    def run_soundness(self, diagnostics, violation):
+        with (
+            patch(
+                "verifier_runtime.run_json",
+                side_effect=[
+                    ({"status": "Verified", "diagnostics": diagnostics}, None),
+                    ({"executable": "x"}, None),
+                    (self.CONTRACTS, None),
+                ],
+            ),
+            patch("verifier_runtime.run_debug_binary", return_value=(violation, None)),
+        ):
+            return verifier_runtime.check_soundness(
+                Path("f.vow"), "vowc", Path("/tmp"), 30, backend="native"
+            )
+
+    def violation(self, vow_id=0, blame="Caller"):
+        return {"error": "VowViolation", "vow_id": vow_id, "blame": blame}
+
+    def test_violated_requires_of_a_disclaimed_callee_is_not_a_false_proof(self):
+        result = self.run_soundness([self.note("double")], self.violation(0))
+
+        self.assertEqual("unverified-call-site", result["verdict"])
+
+    def test_a_violation_of_a_different_callee_stays_a_false_proof(self):
+        result = self.run_soundness([self.note("double")], self.violation(2))
+
+        self.assertEqual("SOUNDNESS", result["verdict"])
+
+    def test_callee_blame_is_still_a_false_proof_despite_the_note(self):
+        result = self.run_soundness(
+            [self.note("double")], self.violation(1, blame="Callee")
+        )
+
+        self.assertEqual("SOUNDNESS", result["verdict"])
+
+    def test_without_a_note_it_is_a_false_proof(self):
+        result = self.run_soundness([], self.violation(0))
+
+        self.assertEqual("SOUNDNESS", result["verdict"])
+
+    def test_an_unmappable_vow_id_fails_closed(self):
+        result = self.run_soundness([self.note("double")], self.violation(99))
+
+        self.assertEqual("SOUNDNESS", result["verdict"])
+
+
+class NativeCorpusTest(unittest.TestCase):
+    def test_native_default_roots_add_the_native_fixtures(self):
+        native = verifier_runtime.default_roots("native")
+        esbmc = verifier_runtime.default_roots(None)
+
+        for d in ("pass", "fail", "unknown"):
+            root = verifier_runtime.REPO_ROOT / "tests" / "verify-native" / d
+            self.assertIn(root, native)
+            self.assertNotIn(root, esbmc)
+            self.assertTrue(root.is_dir())
+
+    def test_collect_corpus_shards_deterministically(self):
+        root = verifier_runtime.REPO_ROOT / "tests" / "verify-native" / "pass"
+
+        whole = verifier_runtime.collect_corpus([root])
+        halves = [verifier_runtime.collect_corpus([root], f"{k}/2") for k in (0, 1)]
+
+        self.assertEqual(sorted(whole), sorted(halves[0] + halves[1]))
+        self.assertTrue(set(halves[0]).isdisjoint(halves[1]))
+
+
+class ExtraRootTest(unittest.TestCase):
+    def test_extra_roots_extend_the_defaults(self):
+        roots = verifier_runtime.resolve_roots([], ["/gen"], "native")
+
+        self.assertEqual(verifier_runtime.default_roots("native") + ["/gen"], roots)
+
+    def test_explicit_roots_replace_the_defaults_and_still_take_extras(self):
+        roots = verifier_runtime.resolve_roots(["a"], ["/gen"], None)
+
+        self.assertEqual(["a", "/gen"], roots)
+
+
+class RelativePathTest(unittest.TestCase):
+    def test_a_corpus_outside_the_repo_keeps_its_absolute_path(self):
+        outside = Path("/somewhere/else/gen_0.vow")
+
+        self.assertEqual(str(outside), verifier_runtime.relative_to_repo(outside))
+
+    def test_a_repo_file_is_reported_repo_relative(self):
+        inside = verifier_runtime.REPO_ROOT / "tests" / "verify" / "x.vow"
+
+        self.assertEqual(
+            "tests/verify/x.vow", verifier_runtime.relative_to_repo(inside)
+        )
+
+
+class MainBackendTest(unittest.TestCase):
+    def test_native_with_the_rust_compiler_is_a_usage_error(self):
+        with patch.object(
+            verifier_runtime.sys,
+            "argv",
+            [
+                "verifier_runtime.py",
+                "--backend",
+                "native",
+                "--verifier",
+                "target/release/vow",
+            ],
+        ):
+            self.assertEqual(2, verifier_runtime.main())
+
+    def test_native_defaults_the_verifier_to_vowc(self):
+        self.assertEqual("build/vowc", verifier_runtime.default_verifier("native"))
+        self.assertEqual("target/release/vow", verifier_runtime.default_verifier(None))
+
+
 class DebugRunTest(unittest.TestCase):
     """A hung binary is not evidence that the verifier was right."""
 

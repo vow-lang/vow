@@ -1,0 +1,22 @@
+// TEST: category invariant
+// A `&&` in an invariant lowers to branches, so its clause spans several
+// blocks of the header. It must still be used inductively.
+module LoopUnboundedAndInvariant
+
+fn count(n: i64) -> i64 vow {
+  requires: n >= 0
+  ensures: result == n
+} {
+  let mut i: i64 = 0;
+  while i < n vow {
+    invariant: i >= 0 && i <= n
+  } {
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  print_i64(count(3));
+  0
+}

@@ -1,0 +1,85 @@
+// TEST: category model-drift
+// Float payloads and fields cross the model's int64 slots by bit pattern. A
+// numeric int64 round-trip truncates 2.5 to 2 and makes every contract below
+// fail with a spurious counterexample.
+module FloatEnumPayloadVerified
+
+struct Sample {
+    gain: f64,
+    bias: f32,
+    count: i64,
+}
+
+fn option_f64(x: f64) -> f64 vow {
+    requires: x - x == x - x,
+    ensures: result == x
+} {
+    match Option::Some(x) {
+        Option::Some(v) => v,
+        Option::None => 0.0,
+    }
+}
+
+fn option_f64_fraction(x: f64) -> f64 vow {
+    requires: x == 2.5,
+    ensures: result == 2.5
+} {
+    match Option::Some(x) {
+        Option::Some(v) => v,
+        Option::None => 0.0,
+    }
+}
+
+fn option_f32(x: f32, fallback: f32) -> f32 vow {
+    requires: x - x == x - x,
+    ensures: result == x
+} {
+    match Option::Some(x) {
+        Option::Some(v) => v,
+        Option::None => fallback,
+    }
+}
+
+fn result_ok_f64(x: f64) -> f64 vow {
+    requires: x - x == x - x,
+    ensures: result == x
+} {
+    match Result::Ok(x) {
+        Result::Ok(v) => v,
+        Result::Err(_) => 0.0,
+    }
+}
+
+fn result_err_f32(x: f32, fallback: f32) -> f32 vow {
+    requires: x - x == x - x,
+    ensures: result == x
+} {
+    let r: Result<f64, f32> = Result::Err(x);
+    match r {
+        Result::Ok(_) => fallback,
+        Result::Err(e) => e,
+    }
+}
+
+fn struct_fields(g: f64, b: f32, n: i64) -> f64 vow {
+    requires: g - g == g - g,
+    requires: b - b == b - b,
+    ensures: result == g
+} {
+    let s: Sample = Sample { gain: g, bias: b, count: n };
+    s.gain
+}
+
+fn struct_f32_field(g: f64, b: f32, n: i64) -> f32 vow {
+    requires: g - g == g - g,
+    requires: b - b == b - b,
+    ensures: result == b
+} {
+    let s: Sample = Sample { gain: g, bias: b, count: n };
+    s.bias
+}
+
+fn main() -> i32 [io] {
+    print_i64(0);
+    0
+}

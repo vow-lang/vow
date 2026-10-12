@@ -1,0 +1,232 @@
+module TestVcSlice
+
+use ir
+use vc_term
+use vc_smt
+use vc_exec
+use vc_slice
+use tests.builders
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn args2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v.push(b);
+    v
+}
+
+fn params2() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    p.push(ITY_I64());
+    p
+}
+
+fn mk_vow(id: i64, op: i64, pred: i64, vow_id: i64) -> IrInst {
+    ir_inst_new(id, op, ITY_UNIT(), args1(pred), IDATA_VOW_ID(), vow_id, 0, String::from(""))
+}
+
+fn one_block(name: String, params: Vec<i64>, ret: i64, insts: Vec<IrInst>) -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(1, name, params, ret, blocks)
+}
+
+fn full_text(cs: VcClaims, k: u64) -> String {
+    vc_smt_render(cs.arena, vc_claim_script(cs, k))
+}
+
+fn sliced_text(cs: VcClaims, k: u64) -> String {
+    let sx: VcSlicer = vc_slicer_new(cs);
+    let sl: VcSlice = vc_slice_claim(sx, cs, k);
+    vc_smt_render(cs.arena, vc_claim_script_sliced(cs, k, sl))
+}
+
+fn count_of(hay: String, needle: String) -> i64 {
+    let mut n: i64 = 0;
+    let mut i: u64 = 0;
+    while i + needle.len() <= hay.len() {
+        if hay.substring(i, i + needle.len()) == needle {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    n
+}
+
+fn index_of(hay: String, needle: String) -> i64 {
+    let mut i: u64 = 0;
+    while i + needle.len() <= hay.len() {
+        if hay.substring(i, i + needle.len()) == needle {
+            return i as i64;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+// f(a, b): requires a > 0, requires b > 0, ensures a + a > a, ensures b + b > b
+fn two_chains() -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_arg(1, ITY_I64(), 1));
+    i.push(mk_inst_const_i64(2, 0));
+    i.push(mk_inst(3, IOP_GT(), ITY_BOOL(), args2(0, 2)));
+    i.push(mk_vow(4, IOP_VOW_REQ(), 3, 0));
+    i.push(mk_inst(5, IOP_GT(), ITY_BOOL(), args2(1, 2)));
+    i.push(mk_vow(6, IOP_VOW_REQ(), 5, 1));
+    i.push(mk_inst_add(7, 0, 0));
+    i.push(mk_inst(8, IOP_GT(), ITY_BOOL(), args2(7, 0)));
+    i.push(mk_vow(9, IOP_VOW_ENS(), 8, 2));
+    i.push(mk_inst_add(10, 1, 1));
+    i.push(mk_inst(11, IOP_GT(), ITY_BOOL(), args2(10, 1)));
+    i.push(mk_vow(12, IOP_VOW_ENS(), 11, 3));
+    i.push(mk_inst_return(13, 7));
+    one_block(String::from("two_chains"), params2(), ITY_I64(), i)
+}
+
+fn check_independent_chains_are_separated() -> i64 {
+    let cs: VcClaims = vc_claims(two_chains());
+    if cs.kinds.len() != 2 { return 1; }
+    let sx: VcSlicer = vc_slicer_new(cs);
+    let s0: VcSlice = vc_slice_claim(sx, cs, 0);
+    let t0: String = vc_smt_render(cs.arena, vc_claim_script_sliced(cs, 0, s0));
+    if !t0.contains(String::from("(assert v3)\n")) { return 2; }
+    if t0.contains(String::from("v5")) { return 3; }
+    if t0.contains(String::from("v10")) { return 4; }
+    if !s0.dropped_asserts { return 5; }
+    let s1: VcSlice = vc_slice_claim(sx, cs, 1);
+    let t1: String = vc_smt_render(cs.arena, vc_claim_script_sliced(cs, 1, s1));
+    if !t1.contains(String::from("(assert v5)\n")) { return 6; }
+    if t1.contains(String::from("v3")) { return 7; }
+    if t1.contains(String::from("v7")) { return 8; }
+    if !s1.dropped_asserts || !s1.dropped_defs { return 9; }
+    let full1: String = full_text(cs, 1);
+    if t1.len() >= full1.len() { return 10; }
+    if count_of(t1, String::from("\n")) >= count_of(full1, String::from("\n")) { return 11; }
+    0
+}
+
+// f(a, b): requires a + b > 0, ensures a + b > a
+fn check_clause_over_both_keeps_everything() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_arg(1, ITY_I64(), 1));
+    i.push(mk_inst_const_i64(2, 0));
+    i.push(mk_inst_add(3, 0, 1));
+    i.push(mk_inst(4, IOP_GT(), ITY_BOOL(), args2(3, 2)));
+    i.push(mk_vow(5, IOP_VOW_REQ(), 4, 0));
+    i.push(mk_inst(6, IOP_GT(), ITY_BOOL(), args2(3, 0)));
+    i.push(mk_vow(7, IOP_VOW_ENS(), 6, 1));
+    i.push(mk_inst_return(8, 3));
+    let cs: VcClaims = vc_claims(one_block(String::from("both"), params2(), ITY_I64(), i));
+    if cs.kinds.len() != 1 { return 1; }
+    let sx: VcSlicer = vc_slicer_new(cs);
+    let s: VcSlice = vc_slice_claim(sx, cs, 0);
+    if s.dropped_asserts || s.dropped_defs { return 2; }
+    if sliced_text(cs, 0) != full_text(cs, 0) { return 3; }
+    0
+}
+
+// f(a, b): requires a + a < 100, requires b > 0, ensures a > 5.
+// The assumption mentions only the definition `v3 = a + a`, which restricts
+// `a`; it must survive although the goal never names `v3`.
+fn check_assumption_reaches_goal_through_a_definition() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_arg(1, ITY_I64(), 1));
+    i.push(mk_inst_const_i64(2, 100));
+    i.push(mk_inst_add(3, 0, 0));
+    i.push(mk_inst(4, IOP_LT(), ITY_BOOL(), args2(3, 2)));
+    i.push(mk_vow(5, IOP_VOW_REQ(), 4, 0));
+    i.push(mk_inst_const_i64(6, 0));
+    i.push(mk_inst(7, IOP_GT(), ITY_BOOL(), args2(1, 6)));
+    i.push(mk_vow(8, IOP_VOW_REQ(), 7, 1));
+    i.push(mk_inst_const_i64(9, 5));
+    i.push(mk_inst(10, IOP_GT(), ITY_BOOL(), args2(0, 9)));
+    i.push(mk_vow(11, IOP_VOW_ENS(), 10, 2));
+    i.push(mk_inst_return(12, 0));
+    let cs: VcClaims = vc_claims(one_block(String::from("through"), params2(), ITY_I64(), i));
+    if cs.kinds.len() != 1 { return 1; }
+    let t: String = sliced_text(cs, 0);
+    if !t.contains(String::from("(define-fun v3 () (_ BitVec 64) (bvadd p0 p0))")) { return 2; }
+    if !t.contains(String::from("(assert v4)\n")) { return 3; }
+    if t.contains(String::from("v7")) { return 4; }
+    0
+}
+
+fn check_declarations_and_model_request_survive() -> i64 {
+    let cs: VcClaims = vc_claims(two_chains());
+    let t: String = sliced_text(cs, 0);
+    if !t.contains(String::from("(declare-const p0 (_ BitVec 64))\n")) { return 1; }
+    if !t.contains(String::from("(declare-const p1 (_ BitVec 64))\n")) { return 2; }
+    if !t.contains(String::from("(set-logic QF_BV)\n(set-option :produce-models true)\n")) { return 3; }
+    if !t.contains(String::from("(check-sat)\n(get-value (p0 p1))\n")) { return 4; }
+    0
+}
+
+fn check_definitions_precede_uses() -> i64 {
+    let cs: VcClaims = vc_claims(two_chains());
+    let t: String = sliced_text(cs, 1);
+    let def_at: i64 = index_of(t, String::from("(define-fun v10 "));
+    let use_at: i64 = index_of(t, String::from("(define-fun v11 "));
+    let assert_at: i64 = index_of(t, String::from("(assert "));
+    if def_at < 0 || use_at < 0 || assert_at < 0 { return 1; }
+    if def_at >= use_at { return 2; }
+    if use_at >= assert_at { return 3; }
+    0
+}
+
+// ensures a > 5, then a later requires a < 100: claim 0 sees no assumption.
+fn check_later_assumption_is_outside_the_prefix() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_const_i64(1, 5));
+    i.push(mk_inst(2, IOP_GT(), ITY_BOOL(), args2(0, 1)));
+    i.push(mk_vow(3, IOP_VOW_ENS(), 2, 0));
+    i.push(mk_inst_const_i64(4, 100));
+    i.push(mk_inst(5, IOP_LT(), ITY_BOOL(), args2(0, 4)));
+    i.push(mk_vow(6, IOP_VOW_REQ(), 5, 1));
+    i.push(mk_inst_return(7, 0));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    let cs: VcClaims = vc_claims(one_block(String::from("late"), p, ITY_I64(), i));
+    if cs.kinds.len() != 1 { return 1; }
+    let t: String = sliced_text(cs, 0);
+    if count_of(t, String::from("(assert ")) != 1 { return 2; }
+    if t.contains(String::from("v5")) { return 3; }
+    0
+}
+
+// Nothing is assumed, so nothing can be dropped.
+fn check_claim_without_assumptions_drops_nothing() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_const_i64(1, 5));
+    i.push(mk_inst(2, IOP_GT(), ITY_BOOL(), args2(0, 1)));
+    i.push(mk_vow(3, IOP_VOW_ENS(), 2, 0));
+    i.push(mk_inst_return(4, 0));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    let cs: VcClaims = vc_claims(one_block(String::from("g"), p, ITY_I64(), i));
+    let sx: VcSlicer = vc_slicer_new(cs);
+    let s: VcSlice = vc_slice_claim(sx, cs, 0);
+    if s.dropped_asserts || s.dropped_defs { return 1; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_independent_chains_are_separated();
+    if r == 0 { r = check_clause_over_both_keeps_everything(); }
+    if r == 0 { r = check_assumption_reaches_goal_through_a_definition(); }
+    if r == 0 { r = check_declarations_and_model_request_survive(); }
+    if r == 0 { r = check_definitions_precede_uses(); }
+    if r == 0 { r = check_later_assumption_is_outside_the_prefix(); }
+    if r == 0 { r = check_claim_without_assumptions_drops_nothing(); }
+    i64_to_i32_wrap(r)
+}

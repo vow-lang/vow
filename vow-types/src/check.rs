@@ -243,10 +243,13 @@ fn is_flat_slot_ty(ty: &Ty) -> bool {
     )
 }
 
+/// A `Vec` whose elements are one 8-byte slot each. `Vec<i128>`/`Vec<u128>`
+/// elements take two, so the slot-copying `pin_to_root` and
+/// `Vec::from_raw_parts_copy` would halve them.
 fn is_flat_vec_ty(ty: &Ty) -> bool {
     ty.applied_args(NominalKind::Struct, "Vec")
         .and_then(|args| args.first())
-        .is_some_and(is_flat_slot_ty)
+        .is_some_and(|elem| is_flat_slot_ty(elem) && !matches!(elem, Ty::I128 | Ty::U128))
 }
 
 fn is_supported_pin_ty(ty: &Ty) -> bool {
@@ -1102,6 +1105,18 @@ impl<'e> Checker<'e> {
         )
     }
 
+    /// Records a `Vec` access whose element is 128 bits wide (an index read or
+    /// write, a `push`, or a `for` loop), keyed by its AST address. The element
+    /// helpers are 8-byte, so lowering needs the width from the checker rather
+    /// than from whatever metadata the receiver happens to carry.
+    fn record_wide_vec_site(&mut self, key: usize, elem_ty: &Ty) {
+        if matches!(elem_ty, Ty::I128 | Ty::U128)
+            && let Some(scalar) = pattern_scalar_type(elem_ty)
+        {
+            self.payload_scalars.insert(key, scalar);
+        }
+    }
+
     /// Records scalar and aggregate payload metadata for an extraction site
     /// (`?`, `.unwrap()`, or an identifier pattern), keyed by its AST address.
     fn record_payload_metadata(&mut self, key: usize, payload_ty: &Ty) {
@@ -1794,7 +1809,7 @@ impl<'e> Checker<'e> {
                                     ),
                                     ann.span(),
                                     vec![
-                                        "pointer-containing Vec payloads need a hand-written deep-copy wrapper".to_string(),
+                                        "pointer-containing Vec payloads need a hand-written deep-copy wrapper; 128-bit elements take two slots, so copy them with push".to_string(),
                                     ],
                                 );
                             }
@@ -2502,7 +2517,7 @@ impl<'e> Checker<'e> {
                             format!("pin_to_root does not support `{arg_ty}`"),
                             args[0].span,
                             vec![
-                                "supported forms are String and Vec<T> where T is a flat scalar slot; pointer-containing values need a hand-written deep-copy wrapper".to_string(),
+                                "supported forms are String and Vec<T> where T is a one-slot scalar (not i128/u128); pointer-containing values need a hand-written deep-copy wrapper".to_string(),
                             ],
                         );
                     }
@@ -2679,6 +2694,12 @@ impl<'e> Checker<'e> {
                 // `method_result_type` / `builtin_method_names` seams; the arm
                 // keeps only the diagnostics and side effects those cannot own.
                 let result_ty = method_result_type(&recv_ty, method);
+                if method == "push"
+                    && let Some(args) = recv_ty.applied_args(NominalKind::Struct, "Vec")
+                    && let Some(elem_ty) = args.first()
+                {
+                    self.record_wide_vec_site(expr as *const Expr as usize, elem_ty);
+                }
 
                 if is_option_or_result {
                     // `unwrap` takes no arguments. Without this the lowerer
@@ -2813,7 +2834,9 @@ impl<'e> Checker<'e> {
                     );
                 }
                 if let Some(args) = base_ty.applied_args(NominalKind::Struct, "Vec") {
-                    args.first().cloned().unwrap_or(Ty::Unit)
+                    let elem_ty = args.first().cloned().unwrap_or(Ty::Unit);
+                    self.record_wide_vec_site(expr as *const Expr as usize, &elem_ty);
+                    elem_ty
                 } else {
                     match &base_ty {
                         Ty::Unknown => Ty::Unknown,
@@ -2987,6 +3010,7 @@ impl<'e> Checker<'e> {
                         Ty::I64
                     }
                 };
+                self.record_wide_vec_site(expr as *const Expr as usize, &elem_ty);
                 self.env.push_scope();
                 self.env.define(binding, elem_ty);
                 if let Some(vow) = vow {
@@ -3231,6 +3255,17 @@ impl<'e> Checker<'e> {
                                 );
                             }
                         }
+                        for (declared, _) in &info.fields {
+                            if !fields.iter().any(|(n, _)| n == declared) {
+                                self.emit_error(
+                                    ErrorCode::TypeMismatch,
+                                    format!(
+                                        "struct `{name}` literal is missing field `{declared}`"
+                                    ),
+                                    expr.span,
+                                );
+                            }
+                        }
                         Ty::Struct(name.clone())
                     }
                 }
@@ -3252,13 +3287,19 @@ impl<'e> Checker<'e> {
                         self.check_integer_literal_range(operand, &tgt_ty);
                     }
                     CastVerdict::Narrowing => {
+                        let try_name = format!("{src_ty}_to_{tgt_ty}_try");
+                        let hint = if self.env.lookup_fn(&try_name).is_some() {
+                            format!("use a `{try_name}`, `_wrap`, or `_sat` narrowing intrinsic")
+                        } else {
+                            format!(
+                                "no narrowing intrinsic from {src_ty} to {tgt_ty} exists; narrow to i32 or smaller with `{src_ty}_to_i32_try`, or keep the value as {src_ty}"
+                            )
+                        };
                         self.emit_error_with_hints(
                             ErrorCode::NarrowingCastNotAllowed,
                             format!("cannot cast {src_ty} to {tgt_ty} via as"),
                             operand.span,
-                            vec![format!(
-                                "use a `{src_ty}_to_{tgt_ty}_try`, `_wrap`, or `_sat` narrowing intrinsic"
-                            )],
+                            vec![hint],
                         );
                     }
                     CastVerdict::Mismatch => {
@@ -7063,6 +7104,41 @@ mod tests {
             fields: vec![("x".to_string(), bool_lit())],
         }));
         assert!(checker.has_errors());
+    }
+
+    #[test]
+    fn struct_literal_missing_fields_report_each_in_declaration_order() {
+        use crate::env::StructInfo;
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.define_struct(
+            "Point3",
+            StructInfo {
+                fields: vec![
+                    ("x".to_string(), Ty::I32),
+                    ("y".to_string(), Ty::I32),
+                    ("z".to_string(), Ty::I32),
+                ],
+                is_linear: false,
+            },
+        );
+        checker.env.push_scope();
+        let ty = checker.check_expr(&make_expr(ExprKind::StructLiteral {
+            name: "Point3".to_string(),
+            fields: vec![("y".to_string(), int_lit())],
+        }));
+        assert_eq!(ty, Ty::Struct("Point3".to_string()));
+        assert_eq!(emitter.0.len(), 2);
+        assert_eq!(emitter.0[0].code, ErrorCode::TypeMismatch);
+        assert_eq!(
+            emitter.0[0].message,
+            "struct `Point3` literal is missing field `x`"
+        );
+        assert_eq!(emitter.0[1].code, ErrorCode::TypeMismatch);
+        assert_eq!(
+            emitter.0[1].message,
+            "struct `Point3` literal is missing field `z`"
+        );
     }
 
     #[test]

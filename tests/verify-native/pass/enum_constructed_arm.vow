@@ -1,0 +1,23 @@
+module EnumConstructedArm
+
+enum Shape { Circle(i64), Rect(i64), Empty }
+
+fn pick(k: i64, v: i64) -> i64 vow {
+  requires: v >= 0,
+  requires: v < 1000,
+  ensures: k != 0 || result == v,
+  ensures: k != 1 || result == v + 1,
+  ensures: k == 0 || k == 1 || result == 0
+} {
+  let s: Shape = if k == 0 { Shape::Circle(v) } else if k == 1 { Shape::Rect(v) } else { Shape::Empty };
+  match s {
+    Shape::Circle(r) => r,
+    Shape::Rect(w) => w + 1,
+    Shape::Empty => 0,
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(pick(1, 2));
+  0
+}

@@ -1,0 +1,19 @@
+// TEST: counterexample-fn "push_three"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+module VecOvercount
+
+fn push_three() -> Vec<i64> vow {
+  ensures: result.len() == 5
+} {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v.push(2);
+  v.push(3);
+  v
+}
+
+fn main() -> i32 [io] {
+  print_u64(push_three().len());
+  0
+}

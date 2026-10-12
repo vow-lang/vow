@@ -1,0 +1,24 @@
+// TEST: category invariant
+// The bound is a parameter, so no finite unrolling covers every `n`. The
+// invariant is inductive: it holds on entry, survives an iteration, and with
+// the negated condition it gives the postcondition.
+module LoopUnboundedCount
+
+fn count(n: i64) -> i64 vow {
+  requires: n >= 0
+  ensures: result == n
+} {
+  let mut i: i64 = 0;
+  while i < n vow {
+    invariant: i >= 0,
+    invariant: i <= n
+  } {
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  print_i64(count(3));
+  0
+}

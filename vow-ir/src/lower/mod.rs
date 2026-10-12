@@ -54,6 +54,7 @@ fn catalogue_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "stdin_read_line" => Some(("__vow_stdin_read_line", Ty::Ptr)),
         "stdin_ready" => Some(("__vow_stdin_ready", Ty::Bool)),
         "eprintln_str" => Some(("__vow_eprintln_str", Ty::Unit)),
+        "try_eprintln_str" => Some(("__vow_try_eprintln_str", Ty::I64)),
         "process_exit" => Some(("__vow_process_exit", Ty::Unit)),
         "process_run" => Some(("__vow_process_run", Ty::I64)),
         "process_get_stdout" => Some(("__vow_process_get_stdout", Ty::Ptr)),
@@ -464,6 +465,65 @@ fn checked_payload_ty(ctx: &LowerCtx, key: usize) -> Option<Ty> {
         .get(&key)
         .copied()
         .map(pattern_scalar_ir_type)
+}
+
+/// The 128-bit element type of a `Vec` access (index read or write, `push`,
+/// `for` loop), as resolved by the checker for that expression.
+fn checked_wide_vec_elem(ctx: &LowerCtx, expr: &Expr) -> Option<Ty> {
+    checked_payload_ty(ctx, expr as *const Expr as usize)
+        .filter(|ty| matches!(ty, Ty::I128 | Ty::U128))
+}
+
+/// Reads a 128-bit `Vec` element: a bounds-checked element address, then the
+/// two-slot `WideSlot` load. Twin of `lctx_emit_wide_vec_elem_get`.
+fn emit_wide_vec_elem_get(
+    ctx: &mut LowerCtx,
+    vec: InstId,
+    index: InstId,
+    wide_ty: Ty,
+    span: Span,
+) -> InstId {
+    let slot = ctx.emit(
+        Opcode::Call,
+        Ty::Ptr,
+        vec![vec, index],
+        InstData::CallExtern("__vow_vec_get_wide_ptr".to_string()),
+        span,
+    );
+    ctx.emit(
+        Opcode::FieldGet,
+        wide_ty,
+        vec![slot],
+        InstData::WideSlot(0),
+        span,
+    )
+}
+
+/// Stores into a 128-bit `Vec` element address with the two-slot `WideSlot`
+/// store. Twin of `lctx_emit_wide_slot_store`.
+fn emit_wide_slot_store(ctx: &mut LowerCtx, slot: InstId, value: InstId, span: Span) -> InstId {
+    ctx.emit(
+        Opcode::FieldSet,
+        Ty::Unit,
+        vec![slot, value],
+        InstData::WideSlot(0),
+        span,
+    )
+}
+
+fn emit_wide_vec_elem_call(
+    ctx: &mut LowerCtx,
+    helper: &str,
+    args: Vec<InstId>,
+    span: Span,
+) -> InstId {
+    ctx.emit(
+        Opcode::Call,
+        Ty::Ptr,
+        args,
+        InstData::CallExtern(helper.to_string()),
+        span,
+    )
 }
 
 fn apply_pattern_aggregate_metadata(
@@ -891,6 +951,31 @@ fn payload_slot(payload_tys: &[Ty], index: usize) -> u32 {
         .take(index)
         .map(|ty| payload_slot_width(*ty))
         .sum::<u32>()
+}
+
+fn field_type_slot_width(type_name: &str) -> u32 {
+    payload_slot_width(scalar_ty_for_field_type_name(type_name))
+}
+
+/// First 8-byte slot of struct field `index` (or, with `index` equal to the
+/// field count, the slot count). Structs have no tag, so slots start at 0 and
+/// every field after a 128-bit one moves up by one.
+fn struct_field_slot(ctx: &LowerCtx, struct_name: &str, index: usize) -> u32 {
+    let Some(type_names) = ctx.struct_field_type_names.get(struct_name) else {
+        return index as u32;
+    };
+    (0..index)
+        .map(|i| type_names.get(i).map_or(1, |n| field_type_slot_width(n)))
+        .sum()
+}
+
+fn struct_field_data(ctx: &LowerCtx, struct_name: &str, index: usize) -> InstData {
+    let field_ty = ctx
+        .struct_field_type_names
+        .get(struct_name)
+        .and_then(|names| names.get(index))
+        .map_or(Ty::I64, |name| scalar_ty_for_field_type_name(name));
+    payload_field_data(field_ty, struct_field_slot(ctx, struct_name, index))
 }
 
 /// Declared 128-bit width of an enum variant's payload slot, by enum name.
@@ -1530,6 +1615,27 @@ fn ir_ty_is_integer(ty: Ty) -> bool {
     )
 }
 
+fn is_int_marker_binop(op: BinOp) -> bool {
+    matches!(
+        op,
+        BinOp::Add
+            | BinOp::Sub
+            | BinOp::Mul
+            | BinOp::Div
+            | BinOp::Rem
+            | BinOp::AddChecked
+            | BinOp::SubChecked
+            | BinOp::MulChecked
+            | BinOp::DivChecked
+            | BinOp::RemChecked
+            | BinOp::BitAnd
+            | BinOp::BitOr
+            | BinOp::BitXor
+            | BinOp::Shl
+            | BinOp::Shr
+    )
+}
+
 fn expr_is_coercible_int_marker(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Lit(Lit::Int(_)) => true,
@@ -1537,26 +1643,9 @@ fn expr_is_coercible_int_marker(expr: &Expr) -> bool {
             op: UnOp::Neg,
             operand,
         } => expr_is_coercible_int_marker(operand),
-        ExprKind::BinaryOp {
-            op:
-                BinOp::Add
-                | BinOp::Sub
-                | BinOp::Mul
-                | BinOp::Div
-                | BinOp::Rem
-                | BinOp::AddChecked
-                | BinOp::SubChecked
-                | BinOp::MulChecked
-                | BinOp::DivChecked
-                | BinOp::RemChecked
-                | BinOp::BitAnd
-                | BinOp::BitOr
-                | BinOp::BitXor
-                | BinOp::Shl
-                | BinOp::Shr,
-            lhs,
-            rhs,
-        } => expr_is_coercible_int_marker(lhs) && expr_is_coercible_int_marker(rhs),
+        ExprKind::BinaryOp { op, lhs, rhs } if is_int_marker_binop(*op) => {
+            expr_is_coercible_int_marker(lhs) && expr_is_coercible_int_marker(rhs)
+        }
         ExprKind::Block(block) => block_result_is_coercible_int_marker(block),
         ExprKind::If {
             then_branch,
@@ -2378,6 +2467,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 }
                 // Index store transfers a linear RHS into the heap container.
                 ctx.emit_linear_consume_if_needed(new_val, span);
+                if checked_wide_vec_elem(ctx, lhs).is_some() {
+                    let slot = emit_wide_vec_elem_call(
+                        ctx,
+                        "__vow_vec_set_wide_ptr",
+                        vec![vec_ptr, idx_id],
+                        span,
+                    );
+                    emit_wide_slot_store(ctx, slot, new_val, span);
+                    return new_val;
+                }
                 ctx.emit(
                     Opcode::Call,
                     Ty::Unit,
@@ -2452,7 +2551,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             Opcode::FieldSet,
                             Ty::Unit,
                             vec![ptr_id, new_val],
-                            InstData::FieldIndex(field_idx),
+                            struct_field_data(ctx, &struct_name, field_idx as usize),
                             span,
                         );
                     }
@@ -2754,13 +2853,17 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             // Body: get element and bind to loop variable
             ctx.switch_to_block(body_block);
-            let elem_id = ctx.emit(
-                Opcode::Call,
-                Ty::I64,
-                vec![iter_id, idx_phi],
-                InstData::CallExtern("__vow_vec_get_val".to_string()),
-                span,
-            );
+            let elem_id = if let Some(wide_ty) = checked_wide_vec_elem(ctx, expr) {
+                emit_wide_vec_elem_get(ctx, iter_id, idx_phi, wide_ty, span)
+            } else {
+                ctx.emit(
+                    Opcode::Call,
+                    Ty::I64,
+                    vec![iter_id, idx_phi],
+                    InstData::CallExtern("__vow_vec_get_val".to_string()),
+                    span,
+                )
+            };
             project_vec_index_metadata(ctx, iter_id, elem_id);
             record_collection_foreach_element(ctx, iter_id, elem_id);
 
@@ -3145,7 +3248,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     Opcode::FieldGet,
                     field_ty,
                     vec![ptr_id],
-                    InstData::FieldIndex(field_idx),
+                    struct_field_data(ctx, &struct_name, field_idx as usize),
                     span,
                 );
                 if let Some(ast_type) = ctx
@@ -3183,6 +3286,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 vec![]
             };
             let n_fields = field_names.len().max(fields.len());
+            let n_slots = (struct_field_slot(ctx, name, field_names.len()) as usize).max(n_fields);
             let result_ty = if ctx.linear_owner_names.contains(name) {
                 Ty::LinearPtr
             } else {
@@ -3193,7 +3297,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 result_ty,
                 vec![],
                 InstData::AllocSize {
-                    size: (n_fields as u32 + 1) * 8,
+                    size: (n_slots as u32 + 1) * 8,
                     align: 8,
                 },
                 span,
@@ -3240,7 +3344,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         Opcode::FieldSet,
                         Ty::Unit,
                         vec![ptr_id, val_id],
-                        InstData::FieldIndex(idx),
+                        struct_field_data(ctx, name, idx as usize),
                         span,
                     );
                 }
@@ -4017,13 +4121,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     )
                 }
                 (_, "push") => {
-                    let elem_ty = ctx
-                        .inst_vec_elem_types
-                        .get(&recv_id)
-                        .and_then(|path| path.first())
-                        .filter(|name| is_scalar_field_type_name(name))
-                        .map(|name| scalar_ty_for_field_type_name(name))
-                        .filter(|ty| matches!(ty, Ty::I128 | Ty::U128));
+                    let elem_ty = checked_wide_vec_elem(ctx, expr);
                     let elem_id = args
                         .first()
                         .map(|e| {
@@ -4038,6 +4136,15 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         .unwrap_or_else(|| {
                             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                         });
+                    if elem_ty.is_some() {
+                        let slot = emit_wide_vec_elem_call(
+                            ctx,
+                            "__vow_vec_push_wide_ptr",
+                            vec![recv_id],
+                            span,
+                        );
+                        return emit_wide_slot_store(ctx, slot, elem_id, span);
+                    }
                     ctx.emit(
                         Opcode::Call,
                         Ty::Unit,
@@ -4072,6 +4179,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             let elem_ast_type = known_expr_ast_type(ctx, expr);
             let vec_ptr = lower_expr(ctx, base);
             let idx_id = lower_expr(ctx, index);
+            if let Some(wide_ty) = checked_wide_vec_elem(ctx, expr) {
+                let result = emit_wide_vec_elem_get(ctx, vec_ptr, idx_id, wide_ty, span);
+                if let Some(ast_type) = elem_ast_type {
+                    ctx.inst_declared_ast_types.insert(result, ast_type);
+                }
+                return result;
+            }
             let raw_result = ctx.emit(
                 Opcode::Call,
                 Ty::I64,
@@ -4202,7 +4316,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         }
         ExprKind::Cast { expr, target_ty } => {
             let tgt = lower_ty_with_linear(target_ty, &ctx.linear_owner_names, &ctx.type_aliases);
-            if matches!(tgt, Ty::I128 | Ty::U128) {
+            if matches!(tgt, Ty::I128 | Ty::U128) && int_expr_is_literal_only(expr) {
                 record_wide_marker_context(ctx, expr, tgt);
             }
             let val = lower_expr(ctx, expr);
@@ -4675,6 +4789,9 @@ fn known_index_assignment_ty(ctx: &LowerCtx, lhs: &Expr) -> Option<Ty> {
     let ExprKind::Index { base, .. } = &lhs.kind else {
         return None;
     };
+    if let Some(wide) = checked_wide_vec_elem(ctx, lhs) {
+        return Some(wide);
+    }
     known_vec_element_path(ctx, base)
         .and_then(|path| path.first().cloned())
         .filter(|name| is_scalar_field_type_name(name))
@@ -4697,6 +4814,80 @@ fn wide_context_contains_control_flow(expr: &Expr) -> bool {
         }
         _ => false,
     }
+}
+
+/// What an integer expression's result positions bottom out in.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IntLeaf {
+    Literal,
+    Typed,
+    Diverges,
+}
+
+/// Combines the result positions of one expression: any typed leaf pins the whole
+/// operand, a diverging position (`return`, `break`, `continue`) is neutral, and
+/// at least one literal is needed for the operand to be literal-only.
+fn merge_int_leaves(leaves: impl IntoIterator<Item = IntLeaf>) -> IntLeaf {
+    let mut merged = IntLeaf::Diverges;
+    for leaf in leaves {
+        match leaf {
+            IntLeaf::Typed => return IntLeaf::Typed,
+            IntLeaf::Literal => merged = IntLeaf::Literal,
+            IntLeaf::Diverges => {}
+        }
+    }
+    merged
+}
+
+fn int_leaf_of_block(block: &Block) -> IntLeaf {
+    if let Some(result) = integer_marker_from_block(block) {
+        return int_leaf(result);
+    }
+    match block.stmts.last() {
+        Some(Stmt::Expr { expr, .. }) if int_leaf(expr) == IntLeaf::Diverges => IntLeaf::Diverges,
+        _ => IntLeaf::Typed,
+    }
+}
+
+fn int_leaf(expr: &Expr) -> IntLeaf {
+    match &expr.kind {
+        ExprKind::Lit(Lit::Int(_)) => IntLeaf::Literal,
+        ExprKind::Return { .. } | ExprKind::Break { .. } | ExprKind::Continue => IntLeaf::Diverges,
+        ExprKind::UnaryOp {
+            op: UnOp::Neg,
+            operand,
+        } => int_leaf(operand),
+        ExprKind::BinaryOp { op, lhs, rhs } if is_int_marker_binop(*op) => {
+            merge_int_leaves([int_leaf(lhs), int_leaf(rhs)])
+        }
+        ExprKind::Block(block) => int_leaf_of_block(block),
+        ExprKind::If {
+            then_branch,
+            else_branch: Some(else_expr),
+            ..
+        } => merge_int_leaves([int_leaf_of_block(then_branch), int_leaf(else_expr)]),
+        ExprKind::Match { arms, .. } if !arms.is_empty() => {
+            merge_int_leaves(arms.iter().map(|arm| int_leaf(&arm.body)))
+        }
+        ExprKind::Loop { body, .. } => {
+            let values = loop_break_values(body);
+            if values.is_empty() {
+                IntLeaf::Typed
+            } else {
+                merge_int_leaves(values.into_iter().map(int_leaf))
+            }
+        }
+        _ => IntLeaf::Typed,
+    }
+}
+
+/// True when the leaves of an integer expression's result positions are integer
+/// literals (diverging positions aside), i.e. the checker types the whole operand
+/// as `LitInt`. Only such operands take their width from an enclosing
+/// `as i128`/`as u128`; a typed leaf already pins the operand's width, and its
+/// literals are reconciled by binary-op lowering.
+fn int_expr_is_literal_only(expr: &Expr) -> bool {
+    int_leaf(expr) == IntLeaf::Literal
 }
 
 fn record_wide_marker_context(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) {
@@ -6402,6 +6593,7 @@ type PairView = PairAlias;
             ("print_i64", "__vow_print_i64", Ty::Unit),
             ("print_u64", "__vow_print_u64", Ty::Unit),
             ("eprintln_str", "__vow_eprintln_str", Ty::Unit),
+            ("try_eprintln_str", "__vow_try_eprintln_str", Ty::I64),
             ("fs_read", "__vow_fs_read", Ty::Ptr),
             ("fs_open", "__vow_fs_open", Ty::I64),
             ("fs_read_line", "__vow_fs_read_line", Ty::Ptr),
@@ -6887,6 +7079,153 @@ fn unsigned_max() -> u128 {
             .filter(|inst| inst.opcode == Opcode::ConstI128)
             .count();
         assert_eq!(zeros, 1, "only the negation's own zero may be emitted");
+    }
+
+    fn wide_const_count(func: &Function) -> usize {
+        insts_of(func)
+            .iter()
+            .filter(|inst| matches!(inst.opcode, Opcode::ConstU128 | Opcode::ConstI128))
+            .count()
+    }
+
+    fn operand_signature(func: &Function) -> Vec<(Opcode, Ty)> {
+        insts_of(func)
+            .iter()
+            .filter(|inst| {
+                !matches!(
+                    inst.opcode,
+                    Opcode::IntCast | Opcode::Return | Opcode::ConstI64 | Opcode::ConstU64
+                )
+            })
+            .map(|inst| (inst.opcode, inst.ty))
+            .collect()
+    }
+
+    #[test]
+    fn cast_to_u128_keeps_typed_operand_literals_at_their_own_width() {
+        let module = lower_source_to_module(
+            concat!(
+                "module CastOperand\n",
+                "fn cast(i: u64, j: u64) -> u128 { (i * 10 + j) as u128 }\n",
+                "fn cast_signed(i: i64, j: i64) -> i128 { (i * 10 + j) as i128 }\n",
+                "fn base(i: u64, j: u64) -> u64 { i * 10 + j }\n",
+                "fn base_signed(i: i64, j: i64) -> i64 { i * 10 + j }\n",
+                "fn main() -> i32 [io] { 0 }\n",
+            ),
+            "cast_operand.vow",
+        );
+        let find = |name: &str| module.functions.iter().find(|f| f.name == name).unwrap();
+        for (cast, base) in [("cast", "base"), ("cast_signed", "base_signed")] {
+            assert_eq!(
+                wide_const_count(find(cast)),
+                0,
+                "{cast} leaked a wide const"
+            );
+            assert_eq!(
+                operand_signature(find(cast)),
+                operand_signature(find(base)),
+                "{cast} operand must compute at the width of the uncast baseline"
+            );
+        }
+    }
+
+    #[test]
+    fn cast_to_u128_in_vec_push_keeps_typed_operand_at_its_own_width() {
+        let fill = lowered_function(
+            concat!(
+                "module CastPush\n",
+                "fn fill(i: u64, j: u64) -> Vec<u128> {\n",
+                "    let v: Vec<u128> = Vec::new();\n",
+                "    v.push((i * 10 + j) as u128);\n",
+                "    v\n",
+                "}\n",
+                "fn main() -> i32 [io] { 0 }\n",
+            ),
+            "fill",
+        );
+        assert_eq!(
+            wide_const_count(&fill),
+            0,
+            "push operand leaked a wide const"
+        );
+    }
+
+    #[test]
+    fn cast_to_u128_of_literal_only_operand_stays_wide() {
+        let big = lowered_function(
+            concat!(
+                "module CastLiteral\n",
+                "fn big() -> u128 { (1 << 100) as u128 }\n",
+                "fn main() -> i32 [io] { 0 }\n",
+            ),
+            "big",
+        );
+        assert!(
+            insts_of(&big)
+                .iter()
+                .any(|inst| inst.opcode == Opcode::ConstU128 && inst.data == InstData::ConstU128(1)),
+            "literal operand lost its wide context"
+        );
+    }
+
+    #[test]
+    fn cast_to_u128_context_follows_literal_only_control_flow_and_unary_operands() {
+        let module = lower_source_to_module(
+            concat!(
+                "module CastShapes\n",
+                "fn neg() -> i128 { (-5) as i128 }\n",
+                "fn block() -> u128 { ({ 1 << 100 }) as u128 }\n",
+                "fn branch(c: bool) -> u128 { (if c { 1 << 100 } else { 3 }) as u128 }\n",
+                "fn arms(o: Option<i64>) -> u128 {\n",
+                "    (match o { Option::Some(n) => 3, Option::None => 1 << 70 }) as u128\n",
+                "}\n",
+                "fn spin() -> u128 { (loop { break 1 << 70; }) as u128 }\n",
+                "fn typed_branch(c: bool, i: u64) -> u128 { (if c { i } else { 2 }) as u128 }\n",
+                "fn typed_arms(m: Option<u64>) -> u128 {\n",
+                "    (match m { Option::Some(n) => n, Option::None => 2 }) as u128\n",
+                "}\n",
+                "fn main() -> i32 [io] { 0 }\n",
+            ),
+            "cast_shapes.vow",
+        );
+        let wide = |name: &str| {
+            let func = module.functions.iter().find(|f| f.name == name).unwrap();
+            wide_const_count(func)
+        };
+        for name in ["neg", "block", "branch", "arms", "spin"] {
+            assert!(wide(name) > 0, "{name} lost its wide literal context");
+        }
+        for name in ["typed_branch", "typed_arms"] {
+            assert_eq!(wide(name), 0, "{name} leaked a wide const");
+        }
+    }
+
+    #[test]
+    fn cast_to_u128_context_survives_diverging_branches_of_literal_operand() {
+        let module = lower_source_to_module(
+            concat!(
+                "module CastDiverge\n",
+                "fn d_match(o: Option<i64>) -> u128 {\n",
+                "    (match o { Option::Some(_) => 1 << 100, Option::None => return 0 }) as u128\n",
+                "}\n",
+                "fn d_if(c: bool) -> u128 { (if c { 1 << 100 } else { return 0 }) as u128 }\n",
+                "fn d_if_stmt(c: bool) -> u128 { (if c { 1 << 100 } else { return 0; }) as u128 }\n",
+                "fn d_loop(c: bool) -> u128 {\n",
+                "    (loop { if c { return 0; } break 1 << 100; }) as u128\n",
+                "}\n",
+                "fn main() -> i32 [io] { 0 }\n",
+            ),
+            "cast_diverge.vow",
+        );
+        for name in ["d_match", "d_if", "d_if_stmt", "d_loop"] {
+            let func = module.functions.iter().find(|f| f.name == name).unwrap();
+            assert!(
+                insts_of(func).iter().any(|inst| {
+                    inst.opcode == Opcode::ConstU128 && inst.data == InstData::ConstU128(1)
+                }),
+                "{name} lost its wide literal context"
+            );
+        }
     }
 
     fn lower_source_to_module(source: &str, file: &str) -> Module {
@@ -7560,6 +7899,73 @@ fn third(m: Mix) -> i64 {
             insts_of(third).iter().any(|inst| inst.opcode == Opcode::FieldGet
                 && inst.data == InstData::FieldIndex(4)),
             "`z` must be read from slot 4, past the wide member:\n{third:#?}"
+        );
+    }
+
+    /// A struct has no tag, so its slots start at 0: an `i128` field takes two
+    /// consecutive slots, every later field moves up by one, and the allocation
+    /// grows with it (3 fields + 1 wide slot + the guard slot).
+    #[test]
+    fn wide_struct_field_shifts_later_slots_and_grows_allocation() {
+        let module = lower_source_to_module(
+            r#"
+module WideStructLayout
+
+struct Mix {
+    a: i64,
+    b: i128,
+    c: i64,
+}
+
+fn make(a: i64, b: i128, c: i64) -> Mix {
+    Mix { a: a, b: b, c: c }
+}
+
+fn third(m: Mix) -> i64 {
+    m.c
+}
+"#,
+            "wide_struct_layout.vow",
+        );
+        let find = |name: &str| {
+            module
+                .functions
+                .iter()
+                .find(|f| f.name == name)
+                .unwrap_or_else(|| panic!("missing function `{name}`"))
+        };
+
+        let make = find("make");
+        let make_insts = insts_of(make);
+        let alloc = make_insts
+            .iter()
+            .find(|inst| inst.opcode == Opcode::RegionAlloc)
+            .expect("struct allocation");
+        assert_eq!(
+            alloc.data,
+            InstData::AllocSize { size: 40, align: 8 },
+            "1 + 2 + 1 field slots + guard slot:\n{make:#?}"
+        );
+        let stored: Vec<InstData> = make_insts
+            .iter()
+            .filter(|inst| inst.opcode == Opcode::FieldSet)
+            .map(|inst| inst.data.clone())
+            .collect();
+        assert_eq!(
+            stored,
+            vec![
+                InstData::FieldIndex(0),
+                InstData::WideSlot(1),
+                InstData::FieldIndex(3),
+            ],
+            "a, b (2 slots, explicit marker), c"
+        );
+
+        let third = find("third");
+        assert!(
+            insts_of(third).iter().any(|inst| inst.opcode == Opcode::FieldGet
+                && inst.data == InstData::FieldIndex(3)),
+            "`c` must be read from slot 3, past the wide member:\n{third:#?}"
         );
     }
 

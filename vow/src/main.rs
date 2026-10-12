@@ -425,7 +425,8 @@ pub(crate) fn run_pipeline_from_frontend(
     // be dropped before codegen + verify start. The `deps` manifest survives
     // for the cache-key computation below; `all_diagnostics` flows into the
     // final BuildOutput; `ir_module` is the only large allocation we keep
-    // alive past this point (shared via Arc with the verify thread). See #178.
+    // alive past this point (shared via Arc with the verify thread, which only
+    // starts once codegen and linking are done). See #178, #179.
     let (all_diagnostics, ir_opt, deps) = frontend.into_parts();
     let ir_module = ir_opt.expect("LoweredIr goal must produce IR for build pipeline");
 
@@ -442,7 +443,7 @@ pub(crate) fn run_pipeline_from_frontend(
     }
 
     // Upfront ESBMC check: abort before codegen if verification is requested but ESBMC is missing.
-    // The test-only VOW_TEST_VERIFIER_PANIC hook lives in the verify worker thread below, so on a
+    // The test-only VOW_TEST_VERIFIER_PANIC hook lives in the verify worker thread, so on a
     // machine without ESBMC this early return would short-circuit before the worker is ever spawned
     // — making the panic regression test (#413) depend on an installed verifier. When the hook is
     // armed, skip the early return so the worker runs and panics, exercising the real JoinError
@@ -453,7 +454,9 @@ pub(crate) fn run_pipeline_from_frontend(
         return verify_outcome::to_output(VerifyOutcome::ToolNotFound, all_diagnostics, None);
     }
 
-    // Spawn verification thread
+    // Verification is staged after codegen + link so the in-process Cranelift
+    // working set is released before any ESBMC child starts (#179). The work is
+    // built here but only run, on its own thread, by `finish_with_verify`.
     let module_for_verify = Arc::clone(&ir_module);
     let file_for_verify = source.to_string_lossy().to_string();
     let call_site_index = counterexample::build_call_site_index(&ir_module, &file_for_verify);
@@ -467,7 +470,7 @@ pub(crate) fn run_pipeline_from_frontend(
     // Owned clone (Arc-backed) moved into the verify thread so it can record
     // proof spans on its own track; the synchronous side keeps `prof`.
     let verify_prof = prof.cloned();
-    let verify_handle = thread::spawn(move || -> (VerifyOutcome, Vec<VerifyWarning>) {
+    let run_verify = move || -> (VerifyOutcome, Vec<VerifyWarning>) {
         let driver_start = verify_prof.as_ref().map(|p| p.now_us()).unwrap_or(0);
         let result = if no_verify {
             (VerifyOutcome::NotRun, Vec::new())
@@ -500,7 +503,7 @@ pub(crate) fn run_pipeline_from_frontend(
             );
         }
         result
-    });
+    };
 
     let output_path = output.map(|p| p.to_path_buf()).unwrap_or_else(|| {
         let stem = source.file_stem().unwrap_or_default();
@@ -546,10 +549,7 @@ pub(crate) fn run_pipeline_from_frontend(
         let link_start = prof.map(|p| p.now_us()).unwrap_or(0);
         let exe_path = match link_obj(&obj_path, &output_path) {
             Ok(p) => Some(p),
-            Err(error) => {
-                let _ = verify_handle.join();
-                return codegen_error_to_output(error, source, all_diagnostics);
-            }
+            Err(error) => return codegen_error_to_output(error, source, all_diagnostics),
         };
         if let Some(p) = prof {
             p.span(
@@ -561,54 +561,11 @@ pub(crate) fn run_pipeline_from_frontend(
                 vec![],
             );
         }
-        let (verify_outcome, warnings) = match verify_handle.join() {
-            Ok(result) => result,
-            Err(_) => return verify_outcome::panicked_output(all_diagnostics, exe_path),
-        };
-        return verify_outcome::to_output_with_warnings(
-            verify_outcome,
-            all_diagnostics,
-            &warnings,
-            exe_path,
-        );
+        return finish_with_verify(run_verify, all_diagnostics, exe_path);
     }
 
-    // Codegen
-    let codegen_start = prof.map(|p| p.now_us()).unwrap_or(0);
-    let backend = CraneliftBackend::new();
-    let compiled = match backend.compile_module(&ir_module, mode, trace) {
-        Ok(c) => c,
-        Err(error) => {
-            let _ = verify_handle.join();
-            return codegen_error_to_output(error, source, all_diagnostics);
-        }
-    };
-
-    if let Some(parent) = output_path.parent()
-        && let Err(e) = std::fs::create_dir_all(parent)
-    {
-        let _ = verify_handle.join();
-        let error = CodegenError::Io(format!("{}: {e}", parent.display()));
+    if let Err(error) = codegen_to_object(&ir_module, mode, trace, &output_path, &obj_path, prof) {
         return codegen_error_to_output(error, source, all_diagnostics);
-    }
-
-    if let Err(e) = compiled.write_to_file(&obj_path) {
-        let _ = verify_handle.join();
-        // The diagnostic's span names the Vow source, so the object path only
-        // reaches the caller if the message carries it.
-        let error = CodegenError::Io(format!("{}: {e}", obj_path.display()));
-        return codegen_error_to_output(error, source, all_diagnostics);
-    }
-
-    if let Some(p) = prof {
-        p.span(
-            "codegen",
-            perfetto::PID_COMPILER,
-            perfetto::TID_MAIN,
-            codegen_start,
-            p.now_us().saturating_sub(codegen_start),
-            vec![],
-        );
     }
 
     // Store in cache
@@ -621,10 +578,7 @@ pub(crate) fn run_pipeline_from_frontend(
     let link_start = prof.map(|p| p.now_us()).unwrap_or(0);
     let exe_path = match link_obj(&obj_path, &output_path) {
         Ok(p) => Some(p),
-        Err(error) => {
-            let _ = verify_handle.join();
-            return codegen_error_to_output(error, source, all_diagnostics);
-        }
+        Err(error) => return codegen_error_to_output(error, source, all_diagnostics),
     };
     if let Some(p) = prof {
         p.span(
@@ -637,7 +591,57 @@ pub(crate) fn run_pipeline_from_frontend(
         );
     }
 
-    let (verify_outcome, warnings) = match verify_handle.join() {
+    finish_with_verify(run_verify, all_diagnostics, exe_path)
+}
+
+/// Lowered IR -> object file. The backend and compiled module are owned by
+/// this frame, so the Cranelift working set is freed before the caller links
+/// and verifies (#179).
+fn codegen_to_object(
+    ir_module: &vow_ir::Module,
+    mode: BuildMode,
+    trace: TraceMode,
+    output_path: &Path,
+    obj_path: &Path,
+    prof: Option<&perfetto::Profiler>,
+) -> Result<(), CodegenError> {
+    let codegen_start = prof.map(|p| p.now_us()).unwrap_or(0);
+    let backend = CraneliftBackend::new();
+    let compiled = backend.compile_module(ir_module, mode, trace)?;
+
+    if let Some(parent) = output_path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        return Err(CodegenError::Io(format!("{}: {e}", parent.display())));
+    }
+
+    // The diagnostic's span names the Vow source, so the object path only
+    // reaches the caller if the message carries it.
+    compiled
+        .write_to_file(obj_path)
+        .map_err(|e| CodegenError::Io(format!("{}: {e}", obj_path.display())))?;
+
+    if let Some(p) = prof {
+        p.span(
+            "codegen",
+            perfetto::PID_COMPILER,
+            perfetto::TID_MAIN,
+            codegen_start,
+            p.now_us().saturating_sub(codegen_start),
+            vec![],
+        );
+    }
+    Ok(())
+}
+
+/// Run verification on a dedicated worker thread and fold its verdict into the
+/// build output. A worker panic fails the build closed (#413).
+fn finish_with_verify(
+    run_verify: impl FnOnce() -> (VerifyOutcome, Vec<VerifyWarning>) + Send + 'static,
+    all_diagnostics: Vec<Diagnostic>,
+    exe_path: Option<PathBuf>,
+) -> BuildOutput {
+    let (verify_outcome, warnings) = match thread::spawn(run_verify).join() {
         Ok(result) => result,
         Err(_) => return verify_outcome::panicked_output(all_diagnostics, exe_path),
     };

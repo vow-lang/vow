@@ -1,0 +1,20 @@
+module InlineUnitCallee
+
+fn noop_check(x: i64) vow {
+  requires: x >= 0
+} {
+  let y: i64 = x + 1;
+}
+
+fn guarded(x: i64) -> i64 vow {
+  requires: x >= 0
+  ensures: result == x
+} {
+  noop_check(x);
+  x
+}
+
+fn main() -> i32 [io] {
+  print_i64(guarded(3));
+  0
+}

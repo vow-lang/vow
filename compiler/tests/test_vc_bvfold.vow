@@ -1,0 +1,212 @@
+module TestVcBvfold
+
+use vc_bvfold
+
+// Reference semantics, written from the SMT-LIB definitions with plain
+// `i128`/`u128` arithmetic and no shared code with `vc_bvfold`. A `w`-bit
+// pattern is an `i64` with the bits above `w` clear.
+
+fn pow2(w: i64) -> i128 {
+    let mut p: i128 = 1;
+    let mut i: i64 = 0;
+    while i < w {
+        p = p * 2;
+        i = i + 1;
+    }
+    p
+}
+
+fn uval(w: i64, a: i64) -> i128 {
+    if w == 64 { return (a as u64) as i128; }
+    a as i128
+}
+
+fn sval(w: i64, a: i64) -> i128 {
+    let u: i128 = uval(w, a);
+    if u >= pow2(w - 1) { return u - pow2(w); }
+    u
+}
+
+// The low 64 bits of a non-negative `v` as an `i64` pattern.
+fn narrow(v: i128) -> i64 {
+    let lo: u32 = i128_to_u32_wrap(v);
+    let hi: u32 = i128_to_u32_wrap(v / 4294967296);
+    ((hi as i64) << 32) | (lo as i64)
+}
+
+fn back(w: i64, v: i128) -> i64 {
+    let p: i128 = pow2(w);
+    let m: i128 = ((v % p) + p) % p;
+    narrow(m)
+}
+
+fn floor_div(x: i128, d: i128) -> i128 {
+    let q: i128 = x / d;
+    if x % d != 0 && x < 0 { return q - 1; }
+    q
+}
+
+fn ref_udiv(w: i64, a: i64, b: i64) -> i64 {
+    if b == 0 { return back(w, pow2(w) - 1); }
+    back(w, uval(w, a) / uval(w, b))
+}
+
+fn ref_urem(w: i64, a: i64, b: i64) -> i64 {
+    if b == 0 { return a; }
+    back(w, uval(w, a) % uval(w, b))
+}
+
+fn ref_sdiv(w: i64, a: i64, b: i64) -> i64 {
+    let x: i128 = sval(w, a);
+    let y: i128 = sval(w, b);
+    if y == 0 {
+        if x < 0 { return 1; }
+        return back(w, pow2(w) - 1);
+    }
+    back(w, x / y)
+}
+
+fn ref_srem(w: i64, a: i64, b: i64) -> i64 {
+    let x: i128 = sval(w, a);
+    let y: i128 = sval(w, b);
+    if y == 0 { return a; }
+    back(w, x % y)
+}
+
+fn ref_shl(w: i64, a: i64, c: i64) -> i64 {
+    let n: i128 = uval(w, c);
+    if n >= w as i128 { return 0; }
+    back(w, uval(w, a) * pow2(narrow(n)))
+}
+
+fn ref_lshr(w: i64, a: i64, c: i64) -> i64 {
+    let n: i128 = uval(w, c);
+    if n >= w as i128 { return 0; }
+    back(w, uval(w, a) / pow2(narrow(n)))
+}
+
+fn ref_ashr(w: i64, a: i64, c: i64) -> i64 {
+    let n: i128 = uval(w, c);
+    let x: i128 = sval(w, a);
+    if n >= w as i128 {
+        if x < 0 { return back(w, pow2(w) - 1); }
+        return 0;
+    }
+    back(w, floor_div(x, pow2(narrow(n))))
+}
+
+fn ref_umulo(w: i64, a: i64, b: i64) -> bool {
+    let p: u128 = (uval(w, a) as u128) * (uval(w, b) as u128);
+    p >= (pow2(w) as u128)
+}
+
+fn out_of_range(w: i64, v: i128) -> bool {
+    v < 0 - pow2(w - 1) || v >= pow2(w - 1)
+}
+
+fn check_pair(w: i64, a: i64, b: i64) -> i64 {
+    let ua: i128 = uval(w, a);
+    let ub: i128 = uval(w, b);
+    let sa: i128 = sval(w, a);
+    let sb: i128 = sval(w, b);
+    if vc_bvfold_add(w, a, b) != back(w, ua + ub) { return 1; }
+    if vc_bvfold_sub(w, a, b) != back(w, ua - ub) { return 2; }
+    if vc_bvfold_mul(w, a, b) != back(w, sa * sb) { return 3; }
+    if vc_bvfold_ult(a, b) != (ua < ub) { return 4; }
+    if vc_bvfold_ule(a, b) != (ua <= ub) { return 5; }
+    if vc_bvfold_slt(w, a, b) != (sa < sb) { return 6; }
+    if vc_bvfold_sle(w, a, b) != (sa <= sb) { return 7; }
+    if vc_bvfold_udiv(w, a, b) != ref_udiv(w, a, b) { return 8; }
+    if vc_bvfold_urem(w, a, b) != ref_urem(w, a, b) { return 9; }
+    if vc_bvfold_sdiv(w, a, b) != ref_sdiv(w, a, b) { return 10; }
+    if vc_bvfold_srem(w, a, b) != ref_srem(w, a, b) { return 11; }
+    if vc_bvfold_shl(w, a, b) != ref_shl(w, a, b) { return 12; }
+    if vc_bvfold_lshr(w, a, b) != ref_lshr(w, a, b) { return 13; }
+    if vc_bvfold_ashr(w, a, b) != ref_ashr(w, a, b) { return 14; }
+    if vc_bvfold_saddo(w, a, b) != out_of_range(w, sa + sb) { return 15; }
+    if vc_bvfold_uaddo(w, a, b) != (ua + ub >= pow2(w)) { return 16; }
+    if vc_bvfold_ssubo(w, a, b) != out_of_range(w, sa - sb) { return 17; }
+    if vc_bvfold_usubo(w, a, b) != (ua < ub) { return 18; }
+    if vc_bvfold_mulo_ok(w) {
+        if vc_bvfold_umulo(w, a, b) != ref_umulo(w, a, b) { return 19; }
+        if vc_bvfold_smulo(w, a, b) != out_of_range(w, sa * sb) { return 20; }
+    }
+    0
+}
+
+fn check_all_width_8() -> i64 {
+    let mut a: i64 = 0;
+    while a < 256 {
+        let mut b: i64 = 0;
+        while b < 256 {
+            let r: i64 = check_pair(8, a, b);
+            if r != 0 { return 1000 + r; }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    0
+}
+
+// Edge patterns of a `w`-bit value: 0, 1, 2, 3, the signed and unsigned
+// extremes and their neighbours, and the width-sized shift counts.
+fn edges(w: i64) -> Vec<i64> {
+    let e: Vec<i64> = Vec::new();
+    let all: i64 = vc_bvfold_mask(w, -1);
+    let min: i64 = vc_bvfold_mask(w, 1 << (w - 1));
+    e.push(0);
+    e.push(1);
+    e.push(2);
+    e.push(3);
+    e.push(7);
+    e.push(w - 1);
+    e.push(w);
+    e.push(w + 1);
+    e.push(vc_bvfold_mask(w, 100));
+    e.push(vc_bvfold_mask(w, 255));
+    e.push(all);
+    e.push(vc_bvfold_mask(w, all - 1));
+    e.push(vc_bvfold_mask(w, all - 2));
+    e.push(min);
+    e.push(vc_bvfold_mask(w, min + 1));
+    e.push(vc_bvfold_mask(w, min - 1));
+    e.push(vc_bvfold_mask(w, min + 7));
+    e.push(vc_bvfold_mask(w, min >> 1));
+    e.push(vc_bvfold_mask(w, 6148914691236517205));
+    e.push(vc_bvfold_mask(w, 2685821657736338717));
+    e
+}
+
+fn check_edges(w: i64) -> i64 {
+    let e: Vec<i64> = edges(w);
+    let mut i: u64 = 0;
+    while i < e.len() {
+        let mut j: u64 = 0;
+        while j < e.len() {
+            let r: i64 = check_pair(w, e[i], e[j]);
+            if r != 0 { return w * 1000 + r; }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    0
+}
+
+fn check_mask_and_sext() -> i64 {
+    if vc_bvfold_mask(8, -1) != 255 { return 1; }
+    if vc_bvfold_mask(64, -1) != -1 { return 2; }
+    if vc_bvfold_mask(32, 4294967297) != 1 { return 3; }
+    if vc_bvfold_sext(8, 255) != -1 { return 4; }
+    if vc_bvfold_sext(8, 127) != 127 { return 5; }
+    if vc_bvfold_sext(64, -5) != -5 { return 6; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_mask_and_sext();
+    if r == 0 { r = check_all_width_8(); }
+    if r == 0 { r = check_edges(16); }
+    if r == 0 { r = check_edges(32); }
+    if r == 0 { r = check_edges(64); }
+    i64_to_i32_wrap(r)
+}

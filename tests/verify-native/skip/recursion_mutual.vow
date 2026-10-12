@@ -1,0 +1,28 @@
+// TEST: category unverifiable
+// TEST: skip-reason recursion-unsupported
+module RecursionMutual
+
+fn is_even(n: i64) -> bool vow {
+  requires: n >= 0
+  ensures: result == result
+} {
+  if n == 0 {
+    return true;
+  }
+  is_odd(n - 1)
+}
+
+fn is_odd(n: i64) -> bool vow {
+  requires: n >= 0
+  ensures: result == result
+} {
+  if n == 0 {
+    return false;
+  }
+  is_even(n - 1)
+}
+
+fn main() -> i32 [io] {
+  print_i64(1);
+  0
+}

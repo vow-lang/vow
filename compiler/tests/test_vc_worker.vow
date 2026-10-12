@@ -1,8 +1,11 @@
 module TestVcWorker
 
 use verifier
+use vc_clause
 use vc_native
+use vc_cex
 use vc_worker
+use tests.builders
 
 fn sample_result() -> VerifyResult {
     let names: Vec<String> = Vec::new();
@@ -37,7 +40,18 @@ fn sample() -> VcOutcome {
     let sites: Vec<ParsedArithSite> = Vec::new();
     sites.push(ParsedArithSite { cause: String::from("overflow in +!"), owner: 3, ostart: 17, olen: 6 });
     sites.push(ParsedArithSite { cause: String::from("a\nb"), owner: -1, ostart: 0, olen: 0 });
-    VcOutcome { result: sample_result(), sites: sites }
+    let oc: VcOutcome = VcOutcome { result: sample_result(), sites: sites, chain_funcs: Vec::new(), chain_starts: Vec::new(), chain_lens: Vec::new(), clause_ids: Vec::new(), clause_proven: Vec::new() };
+    oc.chain_funcs.push(4);
+    oc.chain_starts.push(120);
+    oc.chain_lens.push(9);
+    oc.chain_funcs.push(7);
+    oc.chain_starts.push(-1);
+    oc.chain_lens.push(0);
+    oc.clause_ids.push(5);
+    oc.clause_proven.push(1);
+    oc.clause_ids.push(2);
+    oc.clause_proven.push(0);
+    oc
 }
 
 fn check_round_trip() -> i64 {
@@ -61,6 +75,12 @@ fn check_round_trip() -> i64 {
     if back.var_values[0] != String::from("-9223372036854775808") { return 8; }
     if back.block_visits.len() != 2 || back.block_visits[1] != -1 { return 9; }
     if back.raw_output != vr.raw_output { return 10; }
+    if back_oc.chain_funcs.len() != 2 || back_oc.chain_starts.len() != 2 || back_oc.chain_lens.len() != 2 { return 16; }
+    if back_oc.chain_funcs[0] != 4 || back_oc.chain_starts[0] != 120 || back_oc.chain_lens[0] != 9 { return 17; }
+    if back_oc.chain_funcs[1] != 7 || back_oc.chain_starts[1] != -1 || back_oc.chain_lens[1] != 0 { return 18; }
+    if back_oc.clause_ids.len() != 2 || back_oc.clause_proven.len() != 2 { return 19; }
+    if back_oc.clause_ids[0] != 5 || back_oc.clause_proven[0] != 1 { return 20; }
+    if back_oc.clause_ids[1] != 2 || back_oc.clause_proven[1] != 0 { return 21; }
     0
 }
 
@@ -90,8 +110,8 @@ fn check_truncation_never_decodes() -> i64 {
     }
     if is_none(full) { return 2; }
     if !is_none(String::from("")) { return 3; }
-    if !is_none(String::from("VOWRES1\n99\n")) { return 4; }
-    if !is_none(String::from("VOWRES1\n99\n0\n0\n0\n0\n0\n0\n0\n0\n")) { return 5; }
+    if !is_none(String::from("VOWRES3\n99\n")) { return 4; }
+    if !is_none(String::from("VOWRES3\n99\n0\n0\n0\n0\n0\n0\n0\n0\n")) { return 5; }
     0
 }
 
@@ -156,7 +176,266 @@ fn check_tail_keeps_whole_characters() -> i64 {
     0
 }
 
-fn main() -> i32 {
+fn check_unwinding_reason_round_trips() -> i64 {
+    let reason: String = vc_unwinding_reason(64);
+    if !vc_output_has_unwinding(reason) { return 20; }
+    if vc_output_has_unwinding(String::from("the solver answered unknown")) { return 21; }
+    if !vc_output_has_unwinding(vc_unwinding_budget_reason(8)) { return 22; }
+    let oc: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), reason));
+    let back: VcOutcome = match vc_wire_decode(vc_wire_encode(oc)) {
+        Option::Some(v) => { v },
+        Option::None => { return 23; },
+    };
+    let vr: VerifyResult = back.result;
+    if vr.status != VERIFY_UNKNOWN() || vr.raw_output != reason { return 24; }
+    0
+}
+
+fn check_unwind_schedule() -> i64 {
+    let b: Vec<i64> = vc_unwind_bounds();
+    if b.len() == 0 { return 30; }
+    let mut i: u64 = 1;
+    while i < b.len() {
+        if b[i] <= b[i - 1] { return 31; }
+        i = i + 1;
+    }
+    if b[0] < 1 { return 32; }
+    // ESBMC's default --max-k-step is 50: everything it proves must still prove.
+    if b[b.len() - 1] < 50 { return 33; }
+    0
+}
+
+// The call chain of a failing claim runs from the target's own call down to the
+// claim's frame, outermost first, each call made in the function it sits in.
+fn check_chain_outcome() -> i64 {
+    let fr: VcFrames = vc_frames_new();
+    fr.func_ids.push(21);
+    fr.call_starts.push(100);
+    fr.call_lens.push(7);
+    fr.parents.push(-1);
+    fr.func_ids.push(22);
+    fr.call_starts.push(300);
+    fr.call_lens.push(5);
+    fr.parents.push(0);
+    let f: IrFunction = mk_function(20, String::from("t"), Vec::new(), ITY_I64(), Vec::new());
+    let deep: VcOutcome = vc_chain_outcome(f, fr, 1, sample_result());
+    if deep.chain_funcs.len() != 2 { return 1; }
+    if deep.chain_funcs[0] != 20 || deep.chain_starts[0] != 100 || deep.chain_lens[0] != 7 { return 2; }
+    if deep.chain_funcs[1] != 21 || deep.chain_starts[1] != 300 || deep.chain_lens[1] != 5 { return 3; }
+    let shallow: VcOutcome = vc_chain_outcome(f, fr, 0, sample_result());
+    if shallow.chain_funcs.len() != 1 || shallow.chain_funcs[0] != 20 { return 4; }
+    let own: VcOutcome = vc_chain_outcome(f, fr, -1, sample_result());
+    if own.chain_funcs.len() != 0 { return 5; }
+    // The chain survives the wire.
+    let back: VcOutcome = match vc_wire_decode(vc_wire_encode(deep)) {
+        Option::Some(v) => { v },
+        Option::None => { return 6; },
+    };
+    if back.chain_funcs.len() != 2 || back.chain_funcs[1] != 21 { return 7; }
+    0
+}
+
+// A larger unrolling that cannot be built after a round found a failure must
+// not turn that failure into `unknown`: the failure and the failed clauses stay,
+// and nothing is proven.
+fn check_stopped_outcome_keeps_earlier_failure() -> i64 {
+    let fr: VcFrames = vc_frames_new();
+    let f: IrFunction = mk_function(20, String::from("t"), Vec::new(), ITY_I64(), Vec::new());
+    let acc: VcClauseAcc = vc_clause_acc_new();
+    vc_clause_note(acc, 3, VC_CLAUSE_FAILED());
+    vc_clause_note(acc, 4, VC_CLAUSE_UNSAT());
+    let targets: Vec<i64> = Vec::new();
+    targets.push(3);
+    targets.push(4);
+    let frozen: VcRound = vc_round(sample_result(), true, true, -1, false, false);
+    let unfrozen: VcRound = vc_round(sample_result(), false, false, -1, false, false);
+    let kept_fb: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), String::from("budget")));
+    let kept: VcOutcome = vc_stopped_outcome(f, fr, frozen, kept_fb, acc, targets, true);
+    if kept.result.status != VERIFY_FAILED() { return 1; }
+    if kept.clause_ids.len() != 1 || kept.clause_ids[0] != 3 || kept.clause_proven[0] != 0 { return 2; }
+    let none_fb: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), String::from("budget")));
+    let none: VcOutcome = vc_stopped_outcome(f, fr, unfrozen, none_fb, acc, targets, true);
+    if none.result.status != VERIFY_UNKNOWN() { return 3; }
+    let plain_fb: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), String::from("budget")));
+    let plain: VcOutcome = vc_stopped_outcome(f, fr, unfrozen, plain_fb, acc, targets, false);
+    if plain.clause_ids.len() != 0 { return 4; }
+    0
+}
+
+fn check_inline_budget_reason_round_trips() -> i64 {
+    let reason: String = vc_inline_budget_reason(200000);
+    if !vc_output_has_inline_budget(reason) { return 1; }
+    if vc_output_has_unwinding(reason) { return 2; }
+    let oc: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), reason));
+    let back: VcOutcome = match vc_wire_decode(vc_wire_encode(oc)) {
+        Option::Some(v) => { v },
+        Option::None => { return 3; },
+    };
+    if back.result.status != VERIFY_UNKNOWN() { return 4; }
+    if !vc_output_has_inline_budget(back.result.raw_output) { return 5; }
+    0
+}
+
+// The previous wire version has no clause section, so a worker of another
+// build can never be read as a result.
+fn check_stale_tag_never_decodes() -> i64 {
+    let full: String = vc_wire_encode(sample());
+    let stale: String = String::from("VOWRES2\n");
+    stale.push_str(full.substring(8, full.len()));
+    if !is_none(stale) { return 1; }
+    0
+}
+
+// A verdict other than 0/1 is corrupt, never read as a proof.
+fn check_clause_flag_is_checked() -> i64 {
+    let oc: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_PROVEN(), String::from("")));
+    oc.clause_ids.push(3);
+    oc.clause_proven.push(2);
+    if !is_none(vc_wire_encode(oc)) { return 1; }
+    oc.clause_proven[0] = 1;
+    if is_none(vc_wire_encode(oc)) { return 2; }
+    0
+}
+
+fn check_clause_mode_flag() -> i64 [read] {
+    let idx: Vec<i64> = Vec::new();
+    idx.push(0);
+    let names: Vec<String> = Vec::new();
+    names.push(String::from("f"));
+    let p: VcPool = vc_pool_new(String::from("vowc"), String::from("a.vow"), idx, names, 1, 1000);
+    let plain: Vec<String> = vc_worker_argv(p, 0);
+    let mut i: u64 = 0;
+    while i < plain.len() {
+        if plain[i] == String::from("--worker-clauses") { return 1; }
+        i = i + 1;
+    }
+    p.clauses = true;
+    let with: Vec<String> = vc_worker_argv(p, 0);
+    if with[with.len() - 1] != String::from("--worker-clauses") { return 2; }
+    if with.len() != plain.len() + 1 { return 3; }
+    0
+}
+
+fn argv_value(a: Vec<String>, flag: String) -> String {
+    let mut i: u64 = 0;
+    while i + 1 < a.len() {
+        if a[i] == flag { return a[i + 1]; }
+        i = i + 1;
+    }
+    String::from("")
+}
+
+fn argv_has_pair(a: Vec<String>, flag: String, val: String) -> bool {
+    let mut i: u64 = 0;
+    while i + 1 < a.len() {
+        if a[i] == flag && a[i + 1] == val { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+fn argv_has(a: Vec<String>, flag: String) -> bool {
+    let mut i: u64 = 0;
+    while i < a.len() {
+        if a[i] == flag { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// The worker is told the parent's cache only when both halves are known.
+fn check_cache_flags() -> i64 [read] {
+    let idx: Vec<i64> = Vec::new();
+    idx.push(0);
+    let names: Vec<String> = Vec::new();
+    names.push(String::from("f"));
+    let p: VcPool = vc_pool_new(String::from("vowc"), String::from("a.vow"), idx, names, 1, 1000);
+    let plain: Vec<String> = vc_worker_argv(p, 0);
+    if argv_has(plain, String::from("--worker-cache-dir")) || argv_has(plain, String::from("--worker-solver-id")) { return 1; }
+    p.cache = VcCache { dir: String::from("/c/verify-native"), solver_id: String::from("") };
+    let half: Vec<String> = vc_worker_argv(p, 0);
+    if argv_has(half, String::from("--worker-cache-dir")) || argv_has(half, String::from("--worker-solver-id")) { return 2; }
+    p.cache = VcCache { dir: String::from("/c/verify-native"), solver_id: String::from("0.7.0") };
+    let both: Vec<String> = vc_worker_argv(p, 0);
+    if argv_value(both, String::from("--worker-cache-dir")) != String::from("/c/verify-native") { return 3; }
+    if argv_value(both, String::from("--worker-solver-id")) != String::from("0.7.0") { return 4; }
+    if both.len() != plain.len() + 4 { return 5; }
+    0
+}
+
+fn one_task_pool(n: u64) -> VcPool [read] {
+    let idx: Vec<i64> = Vec::new();
+    let names: Vec<String> = Vec::new();
+    let mut k: u64 = 0;
+    while k < n {
+        idx.push(k as i64);
+        names.push(String::from("f"));
+        k = k + 1;
+    }
+    vc_pool_new(String::from("vowc"), String::from("a.vow"), idx, names, 2, 1000)
+}
+
+// Probe tasks run a rewritten function with the first failing claim ending the
+// check, so they never ask for per-clause verdicts, and a module root travels
+// to the worker only when the parent lowered with one.
+fn check_probe_argv() -> i64 [read] {
+    let p: VcPool = one_task_pool(3);
+    p.clauses = true;
+    p.kinds[1] = VC_TASK_KIND_VACUITY();
+    p.kinds[2] = VC_TASK_KIND_TRIVIAL();
+    let verify: Vec<String> = vc_worker_argv(p, 0);
+    if argv_has(verify, String::from("--worker-probe")) { return 1; }
+    if !argv_has(verify, String::from("--worker-clauses")) { return 2; }
+    if argv_has(verify, String::from("--worker-module-root")) { return 3; }
+    let vac: Vec<String> = vc_worker_argv(p, 1);
+    if !argv_has_pair(vac, String::from("--worker-probe"), String::from("vacuity")) { return 4; }
+    if argv_has(vac, String::from("--worker-clauses")) { return 5; }
+    let triv: Vec<String> = vc_worker_argv(p, 2);
+    if !argv_has_pair(triv, String::from("--worker-probe"), String::from("trivial")) { return 6; }
+    p.module_root = String::from("/src/mods");
+    let rooted: Vec<String> = vc_worker_argv(p, 1);
+    if !argv_has_pair(rooted, String::from("--worker-module-root"), String::from("/src/mods")) { return 7; }
+    0
+}
+
+// Reporting stops at the first function that is not proven for `verify`, but a
+// clause report spans functions, so a pool built for it keeps every task alive.
+fn check_pool_halt() -> i64 [io, read] {
+    let failed: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_FAILED(), String::from("")));
+    let halting: VcPool = one_task_pool(3);
+    halting.phase[1] = VC_TASK_PENDING();
+    vc_pool_finish(halting, 0, failed);
+    if halting.state[VC_ST_LIMIT()] != 0 { return 1; }
+    let open: VcPool = one_task_pool(3);
+    open.halt = false;
+    vc_pool_finish(open, 0, failed);
+    if open.state[VC_ST_LIMIT()] != 3 { return 2; }
+    if !vc_pool_ready(open, 0) { return 3; }
+    if open.results[0].result.status != VERIFY_FAILED() { return 4; }
+    0
+}
+
+// A halted pool is settled once the tasks below the limit are done, though the
+// ones above it were never started.
+fn check_pool_settled() -> i64 [io, read] {
+    let failed: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_FAILED(), String::from("")));
+    let p: VcPool = one_task_pool(3);
+    if vc_pool_settled(p) { return 1; }
+    p.state[VC_ST_NEXT()] = 3;
+    p.state[VC_ST_RUNNING()] = 1;
+    if vc_pool_settled(p) { return 2; }
+    p.phase[0] = VC_TASK_RUNNING();
+    vc_pool_finish(p, 0, failed);
+    if !vc_pool_settled(p) { return 3; }
+    let h: VcPool = one_task_pool(3);
+    h.state[VC_ST_NEXT()] = 1;
+    h.state[VC_ST_RUNNING()] = 1;
+    vc_pool_finish(h, 0, failed);
+    if !vc_pool_settled(h) { return 4; }
+    0
+}
+
+fn main() -> i32 [io, read] {
     let mut r: i64 = check_round_trip();
     if r == 0 { r = check_leading_noise_is_skipped(); }
     if r == 0 { r = check_truncation_never_decodes(); }
@@ -165,5 +444,17 @@ fn main() -> i32 {
     if r == 0 { r = check_crash_is_panicked(); }
     if r == 0 { r = check_signal_decoding(); }
     if r == 0 { r = check_tail_keeps_whole_characters(); }
+    if r == 0 { r = check_unwinding_reason_round_trips(); }
+    if r == 0 { r = check_unwind_schedule(); }
+    if r == 0 { r = check_chain_outcome(); }
+    if r == 0 { r = check_inline_budget_reason_round_trips(); }
+    if r == 0 { r = check_stopped_outcome_keeps_earlier_failure(); }
+    if r == 0 { r = check_stale_tag_never_decodes(); }
+    if r == 0 { r = check_clause_flag_is_checked(); }
+    if r == 0 { r = check_clause_mode_flag(); }
+    if r == 0 { r = check_cache_flags(); }
+    if r == 0 { r = check_probe_argv(); }
+    if r == 0 { r = check_pool_halt(); }
+    if r == 0 { r = check_pool_settled(); }
     i64_to_i32_wrap(r)
 }

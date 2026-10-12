@@ -1,0 +1,16 @@
+module SliceIndependentClauses
+
+fn scale(a: i64, b: i64) -> i64 vow {
+  requires: a > 0 && a < 1000000000
+  requires: b > 0 && b < 1000000000
+  ensures: a * 2 > a
+  ensures: b * 3 > b
+  ensures: result == a * 2 + b * 3
+} {
+  a * 2 + b * 3
+}
+
+fn main() -> i32 [io] {
+  print_i64(scale(1, 1));
+  0
+}

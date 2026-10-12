@@ -155,6 +155,10 @@ in CI" incident (#1291, a `span_len` postcondition violation caught by the first
 Bootstrap run) and found the actual cause to be a PR description written before the contract-breaking
 commit landed and never revisited, not a cache defect.
 
+The native verifier's result cache (`compiler/vc_cache.vow`, #1429) is different: it does store
+`unsat` answers, so a forged entry can make a run wrongly green. `--no-cache` therefore stays
+mandatory for "green locally" claims about the native verifier too.
+
 ## Canonical Source of Truth
 
 `docs/spec/` contains the authoritative specification for the Vow language and CLI:

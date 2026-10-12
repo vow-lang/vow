@@ -1,0 +1,19 @@
+// TEST: counterexample-fn "store_and_read"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+module VecSetWrongValue
+
+fn store_and_read(x: i64) -> i64 vow {
+  ensures: result == x
+} {
+  let v: Vec<i64> = Vec::new();
+  v.push(0);
+  v.push(0);
+  v[1] = x;
+  v[0]
+}
+
+fn main() -> i32 [io] {
+  print_i64(store_and_read(1));
+  0
+}

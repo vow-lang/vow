@@ -111,7 +111,7 @@ fn check_phi_input_missing() -> i64 {
     0
 }
 
-fn check_loop_rejected() -> i64 {
+fn check_entry_loop_rejected() -> i64 {
     let a: Vec<IrInst> = Vec::new();
     a.push(mk_inst_arg(0, ITY_I64(), 0));
     a.push(mk_inst(1, IOP_GT(), ITY_BOOL(), args2(0, 0)));
@@ -125,7 +125,61 @@ fn check_loop_rejected() -> i64 {
     blocks.push(mk_block(1, b));
     blocks.push(mk_block(2, c));
     let f: IrFunction = mk_function(1, String::from("lp"), mk_params1(), ITY_I64(), blocks);
-    if vc_skip_reason(f) != String::from("unsupported-opcode: loop (back edge in the control-flow graph)") { return 22; }
+    if vc_skip_reason(f) != String::from("unsupported-opcode: entry block is a loop header") { return 22; }
+    0
+}
+
+// while i < 8 { i = i + 1 }, loop-closed: the exit block reads only its Phi.
+fn counting_loop(read_header_value_after: bool) -> IrFunction {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_const_i64(0, 0));
+    e.push(mk_inst_upsilon(1, 0, 3));
+    e.push(mk_inst_jump(2, 1));
+    let h: Vec<IrInst> = Vec::new();
+    h.push(mk_inst_phi(3, ITY_I64()));
+    h.push(mk_inst_const_i64(4, 8));
+    h.push(mk_inst(5, IOP_LT(), ITY_BOOL(), args2(3, 4)));
+    h.push(mk_vow(6, IOP_VOW_INV(), 5, 0));
+    h.push(mk_inst_upsilon(7, 3, 20));
+    h.push(mk_inst_branch(8, 5, 2, 3));
+    let b: Vec<IrInst> = Vec::new();
+    b.push(mk_inst_const_i64(9, 1));
+    b.push(mk_inst_add(10, 3, 9));
+    b.push(mk_inst_upsilon(11, 10, 3));
+    b.push(mk_inst_jump(12, 1));
+    let x: Vec<IrInst> = Vec::new();
+    x.push(mk_inst_phi(20, ITY_I64()));
+    if read_header_value_after {
+        x.push(mk_inst_return(21, 3));
+    } else {
+        x.push(mk_inst_return(21, 20));
+    }
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, h));
+    blocks.push(mk_block(2, b));
+    blocks.push(mk_block(3, x));
+    mk_function(1, String::from("count_up"), Vec::new(), ITY_I64(), blocks)
+}
+
+fn check_loop_accepted() -> i64 {
+    if vc_skip_reason(counting_loop(false)).len() != 0 { return 26; }
+    0
+}
+
+// The exit block reads the header's value directly; the gate closes the loop
+// by routing it through a Phi, so the function is accepted.
+fn check_loop_value_escape_closed() -> i64 {
+    if vc_skip_reason(counting_loop(true)).len() != 0 { return 27; }
+    0
+}
+
+fn check_void_return_accepted() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(ir_inst_new(0, IOP_CONST_UNIT(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from("")));
+    i.push(mk_inst_return(1, 0));
+    let r: String = vc_skip_reason(one_block(String::from("v"), Vec::new(), ITY_UNIT(), i));
+    if r.len() != 0 { return 28; }
     0
 }
 
@@ -205,7 +259,7 @@ fn check_op_details() -> i64 {
     v.push(mk_inst(1, IOP_EQ(), ITY_BOOL(), args2(0, 0)));
     v.push(mk_vow(2, IOP_VOW_INV(), 1, 0));
     v.push(mk_inst_return(3, 0));
-    if vc_skip_reason(one_block(String::from("v"), Vec::new(), ITY_I64(), v)) != String::from("unsupported-opcode: VowInvariant") { return 34; }
+    if vc_skip_reason(one_block(String::from("v"), Vec::new(), ITY_I64(), v)).len() != 0 { return 34; }
 
     let unk: Vec<IrInst> = Vec::new();
     unk.push(mk_inst(0, 9999, ITY_I64(), Vec::new()));
@@ -440,20 +494,6 @@ fn check_reason_codes() -> i64 {
     let rc: String = vc_skip_reason(one_block(String::from("c"), Vec::new(), ITY_I64(), cat));
     if rc != String::from("unmodeled-builtin: __vow_fs_exists") { return 82; }
 
-    let wg: Vec<IrInst> = Vec::new();
-    wg.push(mk_inst_const_i64(0, 1));
-    wg.push(ir_inst_new(1, IOP_FIELD_GET(), ITY_I128(), args1(0), IDATA_FIELD(), 0, 0, String::from("")));
-    wg.push(mk_inst_return(2, 1));
-    let rw: String = vc_skip_reason(one_block(String::from("w"), Vec::new(), ITY_I128(), wg));
-    if rw != String::from("wide-aggregate-field: FieldGet[i128]") { return 83; }
-    let fs: Vec<IrInst> = Vec::new();
-    fs.push(mk_inst_const_i64(0, 1));
-    fs.push(ir_inst_new(1, IOP_CONST_I128(), ITY_I128(), Vec::new(), IDATA_NONE(), 0, 0, String::from("")));
-    fs.push(ir_inst_new(2, IOP_FIELD_SET(), ITY_UNIT(), args2(0, 1), IDATA_FIELD(), 0, 0, String::from("")));
-    fs.push(mk_inst_return(3, 0));
-    let rs: String = vc_skip_reason(one_block(String::from("s"), Vec::new(), ITY_I64(), fs));
-    if rs != String::from("wide-aggregate-field: FieldSet[i128]") { return 85; }
-
     let ng: Vec<IrInst> = Vec::new();
     ng.push(mk_inst_const_i64(0, 1));
     ng.push(ir_inst_new(1, IOP_FIELD_GET(), ITY_I64(), args1(0), IDATA_FIELD(), 0, 0, String::from("")));
@@ -463,12 +503,122 @@ fn check_reason_codes() -> i64 {
     0
 }
 
+// A call of a user function is accepted only when its arguments and result are
+// scalar, and only by the check that inlines it afterwards.
+fn check_scalar_calls() -> i64 {
+    let ok: Vec<IrInst> = Vec::new();
+    ok.push(mk_inst_arg(0, ITY_I64(), 0));
+    ok.push(mk_inst_call_target(1, ITY_I64(), args1(0), 7));
+    ok.push(mk_inst_return(2, 1));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    let f: IrFunction = one_block(String::from("c"), p, ITY_I64(), ok);
+    if vc_skip_reason(f) != String::from("unsupported-opcode: Call[i64]") { return 1; }
+    if vc_skip_reason_calls(f).len() != 0 { return 2; }
+
+    let unit: Vec<IrInst> = Vec::new();
+    unit.push(mk_inst_arg(0, ITY_I64(), 0));
+    unit.push(mk_inst_call_target(1, ITY_UNIT(), args1(0), 7));
+    unit.push(mk_inst_return(2, 0));
+    if vc_skip_reason_calls(one_block(String::from("u"), p, ITY_I64(), unit)).len() != 0 { return 3; }
+
+    let agg: Vec<IrInst> = Vec::new();
+    agg.push(mk_inst_alloc(0, 16));
+    agg.push(mk_inst_call_target(1, ITY_I64(), args1(0), 7));
+    agg.push(mk_inst_return(2, 1));
+    if vc_skip_reason_calls(one_block(String::from("a"), Vec::new(), ITY_I64(), agg)).len() == 0 { return 4; }
+
+    let ptr_result: Vec<IrInst> = Vec::new();
+    ptr_result.push(mk_inst_arg(0, ITY_I64(), 0));
+    ptr_result.push(mk_inst_call_target(1, ITY_PTR(), args1(0), 7));
+    ptr_result.push(mk_inst_return(2, 0));
+    if vc_skip_reason_calls(one_block(String::from("r"), p, ITY_I64(), ptr_result)).len() == 0 { return 5; }
+
+    let ext: Vec<IrInst> = Vec::new();
+    ext.push(mk_inst_arg(0, ITY_I64(), 0));
+    ext.push(mk_inst_call_extern(1, ITY_I64(), args1(0), String::from("__vow_abs_i64")));
+    ext.push(mk_inst_return(2, 1));
+    if vc_skip_reason_calls(one_block(String::from("e"), p, ITY_I64(), ext)).len() == 0 { return 6; }
+    0
+}
+
+fn args3(a: i64, b: i64, c: i64) -> Vec<i64> {
+    let v: Vec<i64> = args2(a, b);
+    v.push(c);
+    v
+}
+
+fn vec_new_insts() -> Vec<IrInst> {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_const_i64(0, 8));
+    insts.push(mk_inst_const_i64(1, 8));
+    insts.push(mk_inst_call_extern(2, ITY_PTR(), args2(0, 1), String::from("__vow_vec_new")));
+    insts
+}
+
+// let v = Vec::new(); v.push(7); v[0] = 9; let x = v[0]; v.pop(); return v.len()
+fn check_vec_ops_accepted() -> i64 {
+    let insts: Vec<IrInst> = vec_new_insts();
+    insts.push(mk_inst_const_i64(3, 7));
+    insts.push(mk_inst_call_extern(4, ITY_UNIT(), args2(2, 3), String::from("__vow_vec_push_val")));
+    insts.push(mk_inst_const_i64(5, 0));
+    insts.push(mk_inst_call_extern(6, ITY_UNIT(), args3(2, 5, 3), String::from("__vow_vec_set_val")));
+    insts.push(mk_inst_call_extern(7, ITY_I64(), args2(2, 5), String::from("__vow_vec_get_val")));
+    insts.push(mk_inst_call_extern(8, ITY_UNIT(), args1(2), String::from("__vow_vec_pop")));
+    insts.push(mk_inst_call_extern(9, ITY_U64(), args1(2), String::from("__vow_vec_len")));
+    insts.push(mk_inst_return(10, 9));
+    let f: IrFunction = one_block(String::from("v"), Vec::new(), ITY_U64(), insts);
+    let why: String = vc_skip_reason(f);
+    if why.len() != 0 { return 1; }
+    0
+}
+
+fn vec_fn_with(sym: String, ty: i64, args: Vec<i64>, extra: Vec<IrInst>) -> IrFunction {
+    let insts: Vec<IrInst> = vec_new_insts();
+    let mut k: u64 = 0;
+    while k < extra.len() {
+        insts.push(extra[k]);
+        k = k + 1;
+    }
+    insts.push(mk_inst_call_extern(20, ty, args, sym));
+    insts.push(mk_inst_const_i64(21, 0));
+    insts.push(mk_inst_return(22, 21));
+    one_block(String::from("v"), Vec::new(), ITY_I64(), insts)
+}
+
+fn check_vec_ops_rejected() -> i64 {
+    let none: Vec<IrInst> = Vec::new();
+    // A symbol outside the Vec table stays an unmodelled builtin.
+    let clear: IrFunction = vec_fn_with(String::from("__vow_vec_clear"), ITY_UNIT(), args1(2), none);
+    if vc_skip_reason(clear) != String::from("unmodeled-builtin: __vow_vec_clear") { return 10; }
+    let raw: IrFunction = vec_fn_with(String::from("__vow_vec_from_raw_parts_copy_val"), ITY_PTR(), args1(2), none);
+    if vc_reason_code(vc_skip_reason(raw)) != VC_SKIP_UNMODELED_BUILTIN() { return 11; }
+    // A pointer element (nested Vec, String, struct) is not one 8-byte slot of a scalar.
+    let ptr_push: IrFunction = vec_fn_with(String::from("__vow_vec_push_val"), ITY_UNIT(), args2(2, 2), none);
+    if vc_reason_code(vc_skip_reason(ptr_push)) != VC_SKIP_UNSUPPORTED_OPCODE() { return 12; }
+    // A 32-bit index is not read as a 64-bit one.
+    let narrow: Vec<IrInst> = Vec::new();
+    narrow.push(mk_inst(30, IOP_CONST_I32(), ITY_I32(), Vec::new()));
+    let idx32: IrFunction = vec_fn_with(String::from("__vow_vec_get_val"), ITY_I64(), args2(2, 30), narrow);
+    if vc_reason_code(vc_skip_reason(idx32)) != VC_SKIP_UNSUPPORTED_OPCODE() { return 13; }
+    // `len` yields u64.
+    let bad_len: IrFunction = vec_fn_with(String::from("__vow_vec_len"), ITY_I64(), args1(2), none);
+    if vc_reason_code(vc_skip_reason(bad_len)) != VC_SKIP_UNSUPPORTED_OPCODE() { return 14; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_accepted();
+    if r == 0 { r = check_vec_ops_accepted(); }
+    if r == 0 { r = check_vec_ops_rejected(); }
+    if r == 0 { r = check_scalar_calls(); }
     if r == 0 { r = check_effects(); }
     if r == 0 { r = check_branches_accepted(); }
     if r == 0 { r = check_phi_input_missing(); }
-    if r == 0 { r = check_loop_rejected(); }
+    if r == 0 { r = check_entry_loop_rejected(); }
+    if r == 0 { r = check_loop_accepted(); }
+    if r == 0 { r = check_loop_value_escape_closed(); }
+    if r == 0 { r = check_void_return_accepted(); }
     if r == 0 { r = check_branch_to_unknown_block(); }
     if r == 0 { r = check_unreachable_terminator(); }
     if r == 0 { r = check_op_details(); }

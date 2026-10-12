@@ -1,0 +1,31 @@
+module InlineCalleeWithLoop
+
+fn sum_to(n: i64) -> i64 vow {
+  requires: n >= 0 && n <= 8
+  ensures: result >= 0
+} {
+  let mut i: i64 = 0;
+  let mut acc: i64 = 0;
+  while i < n vow {
+    invariant: i >= 0 && i <= n,
+    invariant: acc >= 0
+  } {
+    acc = acc + i;
+    i = i + 1;
+  }
+  acc
+}
+
+fn twice(n: i64) -> i64 vow {
+  requires: n >= 0 && n <= 8
+  ensures: result >= 0
+} {
+  let a: i64 = sum_to(n);
+  let b: i64 = sum_to(n);
+  a + b
+}
+
+fn main() -> i32 [io] {
+  print_i64(twice(3));
+  0
+}

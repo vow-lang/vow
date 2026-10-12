@@ -1,0 +1,30 @@
+// TEST: counterexample-fn "outer"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Caller
+module InlineNestedRequires
+
+fn outer(y: i64) -> i64 vow {
+  requires: y > -100
+  ensures: result == y
+} {
+  middle(y)
+}
+
+fn middle(x: i64) -> i64 vow {
+  requires: x > -100
+  ensures: result == x
+} {
+  inner(x)
+}
+
+fn inner(x: i64) -> i64 vow {
+  requires: x > 0
+  ensures: result == x
+} {
+  x
+}
+
+fn main() -> i32 [io] {
+  print_i64(outer(3));
+  0
+}

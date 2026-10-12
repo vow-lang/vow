@@ -4,7 +4,7 @@
 Reads docs/spec/grammar.md and docs/spec/cli.md (the canonical specs),
 builds the help JSON structure, and writes it into:
   - vow/src/skill.rs (skill_json raw string literal, skill_human string literal)
-  - compiler/main.vow (skill_json push_str calls, skill_human push_str calls)
+  - compiler/main.vow (skill_json and skill_human as chunked string literals)
 
 Usage:
     python3 scripts/generate_help.py          # from repo root
@@ -311,9 +311,15 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
     # Collection model capacities (Vec/String/HashMap/BTreeMap) are deliberately
     # absent: they are internal verifier-model bounds, not language properties or
     # tunable CLI flags. See docs/design/verifier-model-bounds.md.
-    verification_defaults: dict[str, str | int] = {
+    # `strategy`/`max_k_step` describe the default ESBMC backend and stay as
+    # they are for agents that read them; `native` describes `--backend native`.
+    verification_defaults: dict[str, str | int | dict] = {
         "strategy": "incremental-bmc",
         "max_k_step": DEFAULT_MAX_K_STEP,
+        "native": {
+            "strategy": "bounded unwinding with invariant induction and k-induction",
+            "tuning_flags": ["--timeout"],
+        },
     }
 
     return {
@@ -472,7 +478,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
                 },
                 "notes": [
                     "runs frontend only by default",
-                    "use --verify for per-contract ESBMC status",
+                    "use --verify for per-contract verification status",
                 ],
             },
             "complexity": {
@@ -546,7 +552,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
             "diagnostics": "[array of {error_code, message, severity, span: {file, offset, length}}]",
             "message": "error detail (CompileFailed)",
             "function": "function name (VerifyFailed)",
-            "counterexample": "ESBMC counterexample description (VerifyFailed)",
+            "counterexample": "verifier counterexample description (VerifyFailed)",
         },
         "diagnostics": {
             "schema_ref": "schemas/diagnostic.schema.json",
@@ -755,7 +761,7 @@ def build_help_human(data: dict) -> str:
     )
     lines.append("  message     : error detail (CompileFailed)")
     lines.append("  function    : function name (VerifyFailed)")
-    lines.append("  counterexample: ESBMC counterexample (VerifyFailed)")
+    lines.append("  counterexample: verifier counterexample (VerifyFailed)")
     lines.append("")
 
     lines.append("EXIT CODES")
@@ -834,13 +840,18 @@ def build_help_human(data: dict) -> str:
 
     vdefaults = data.get("verification_defaults", {})
     if vdefaults:
-        lines.append("VERIFICATION DEFAULTS (--max-k-step)")
+        native = vdefaults.get("native", {})
+        lines.append("VERIFICATION DEFAULTS")
         lines.append(
-            f"  Strategy        : {vdefaults.get('strategy', 'incremental-bmc')} (incremental BMC up to --max-k-step; forward-condition completeness, no k-induction step)"
+            f"  ESBMC backend (default) : {vdefaults.get('strategy', 'incremental-bmc')} (incremental BMC up to --max-k-step; forward-condition completeness, no k-induction step)"
         )
         lines.append(
-            f"  Incremental BMC : {vdefaults.get('max_k_step', DEFAULT_MAX_K_STEP)} max iterations (--max-k-step)"
+            f"  Incremental BMC         : {vdefaults.get('max_k_step', DEFAULT_MAX_K_STEP)} max iterations (--max-k-step)"
         )
+        if native:
+            lines.append(
+                f"  Native backend          : {native.get('strategy', '')} (--backend native; no bound flag, {', '.join(native.get('tuning_flags', []))} is the only knob)"
+            )
 
     return "\n".join(lines)
 
@@ -889,24 +900,48 @@ def inject_rust(skill_rs: Path, json_str: str, human_str: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _vow_pushstr_body(text: str) -> tuple[str, str]:
-    """Convert a multiline string into Vow String::from first line + push_str rest.
-    Returns (first_line_escaped, rest_pushstr_lines)."""
-    vow_text = text.replace("\u2014", "--")
-    lines = vow_text.split("\n")
-    first_escaped = lines[0].replace("\\", "\\\\").replace('"', '\\"')
-    rest = []
-    for line in lines[1:]:
-        escaped = line.replace("\\", "\\\\").replace('"', '\\"')
-        rest.append(f'    r.push_str(String::from("{escaped}\\n"));')
-    return first_escaped, "\n".join(rest)
+# Upper bound, in bytes, for one emitted payload literal. Whole lines are packed
+# into a chunk up to this size, so chunking never produces a literal longer than
+# max(this cap, the longest source line). The verifier sizes its C string
+# buffers by the longest literal in the module; chunks therefore never raise it.
+VOW_LITERAL_CHUNK_BYTES = 2048
+
+
+def _vow_escape(chunk: str) -> str:
+    return chunk.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def _vow_payload_fn(name: str, text: str) -> str:
+    """Emit `fn name() -> String` building `text` from chunked string literals.
+
+    The payload is `text` (em dashes become `--`) plus a trailing newline, packed
+    into whole-line chunks of at most VOW_LITERAL_CHUNK_BYTES (a longer line is a
+    chunk of its own).
+    """
+    chunks: list[str] = []
+    current = ""
+    for line in text.replace("\u2014", "--").split("\n"):
+        line += "\n"
+        if current and len((current + line).encode()) > VOW_LITERAL_CHUNK_BYTES:
+            chunks.append(current)
+            current = ""
+        current += line
+    chunks.append(current)
+    body = [f'    let r: String = String::from("{_vow_escape(chunks[0])}");']
+    body += [
+        f'    r.push_str(String::from("{_vow_escape(chunk)}"));' for chunk in chunks[1:]
+    ]
+    return "\n".join([f"fn {name}() -> String {{", *body, "    r", "}"])
 
 
 def inject_vow(main_vow: Path, json_str: str, human_str: str) -> str:
     content = main_vow.read_text()
 
-    first_json, rest_json = _vow_pushstr_body(json_str)
-    json_fn = f'// GENERATE:SKILL_JSON:START\nfn skill_json() -> String {{\n    let r: String = String::from("{first_json}\\n");\n{rest_json}\n    r\n}}\n// GENERATE:SKILL_JSON:END'
+    json_fn = (
+        "// GENERATE:SKILL_JSON:START\n"
+        + _vow_payload_fn("skill_json", json_str)
+        + "\n// GENERATE:SKILL_JSON:END"
+    )
     content = _replace_between_markers(
         content,
         "// GENERATE:SKILL_JSON:START",
@@ -914,8 +949,11 @@ def inject_vow(main_vow: Path, json_str: str, human_str: str) -> str:
         json_fn,
     )
 
-    first_human, rest_human = _vow_pushstr_body(human_str)
-    human_fn = f'// GENERATE:SKILL_HUMAN:START\nfn skill_human() -> String {{\n    let r: String = String::from("{first_human}\\n");\n{rest_human}\n    r\n}}\n// GENERATE:SKILL_HUMAN:END'
+    human_fn = (
+        "// GENERATE:SKILL_HUMAN:START\n"
+        + _vow_payload_fn("skill_human", human_str)
+        + "\n// GENERATE:SKILL_HUMAN:END"
+    )
     content = _replace_between_markers(
         content,
         "// GENERATE:SKILL_HUMAN:START",
@@ -935,13 +973,22 @@ SKILL_FRONTMATTER = """\
 name: vow
 description: >-
   Write, compile, debug, and verify Vow programs (.vow files) with contracts,
-  CEGIS, ESBMC counterexamples, diagnostics, and vow build / vow verify.
+  CEGIS, verifier counterexamples, diagnostics, and vow build / vow verify.
 when_to_use: >-
   Use when the user edits or creates .vow files, says "write a Vow program",
   "fix this counterexample", "add contracts", "why did verification fail",
   "ESBMC", "vow build", or "vow verify".
 argument-hint: "[file.vow]"
 ---"""
+
+SKILL_DO_NOTS = [
+    "- Do not weaken, cap, or distort a contract to make verification pass; fix the code or report that the proof is out of reach.",
+    "- Do not add verifier-motivated bounds (`n <= 10`, length or capacity caps) to `requires`; keep only real domain constraints and use checked operators (`+!`) for overflow.",
+    "- Do not use `--no-verify` to get past a real verification failure; it only skips the proof (status `Unverified`).",
+    "- Do not report a program as verified unless `status` is `Verified`; `Unverified` means the proof never ran and `Skipped` means a function could not be modelled.",
+    "- Do not invent CLI flags, JSON fields, syntax, or builtins; check `--help` and the reference files first.",
+    "- Do not scrape terminal prose; parse the JSON result that `build` and `verify` print to stdout (`status`, `diagnostics`, `counterexamples`), not the human-readable text on stderr.",
+]
 
 
 def _index_for_skill() -> str:
@@ -971,6 +1018,10 @@ def build_skill_entrypoint() -> str:
             "Use this skill when writing, compiling, debugging, or verifying Vow programs.",
             "Keep the workflow tight: run the compiler, read the structured JSON, fix the",
             "program or contract, and repeat until the result is `Verified`.",
+            "",
+            "## Do nots",
+            "",
+            *SKILL_DO_NOTS,
             "",
             "## Installed toolchain (live)",
             "",
@@ -1004,6 +1055,8 @@ def build_skill_entrypoint() -> str:
             "- Standard library (math, heap, stack, geometry, bignum, gc): [reference/stdlib.md](reference/stdlib.md)",
             "- Worked examples: [examples/examples.md](examples/examples.md)",
             "- JSON schemas: [schemas/](schemas/)",
+            "",
+            "Outside Claude Code (raw API or custom agent harness that cannot load these files): run `build/vowc skill print --bundle` for one self-contained document with all of the above inlined.",
             "",
         ]
     )
@@ -1121,8 +1174,6 @@ def inject_skill_vow(
     content: str, entrypoint_md: str, bundle_md: str, support_files: dict[str, str]
 ) -> str:
     """Inject generated skill helpers into self-hosted main.vow."""
-    first_entrypoint, rest_entrypoint = _vow_pushstr_body(entrypoint_md)
-    first_bundle, rest_bundle = _vow_pushstr_body(bundle_md)
     support_entries = [
         (path, body, _vow_skill_support_content_fn_name(path))
         for path, body in support_files.items()
@@ -1130,17 +1181,9 @@ def inject_skill_vow(
 
     sections = [
         "// GENERATE:SKILL_FULL:START",
-        "fn skill_entrypoint() -> String {",
-        f'    let r: String = String::from("{first_entrypoint}\\n");',
-        rest_entrypoint,
-        "    r",
-        "}",
+        _vow_payload_fn("skill_entrypoint", entrypoint_md),
         "",
-        "fn skill_bundle() -> String {",
-        f'    let r: String = String::from("{first_bundle}\\n");',
-        rest_bundle,
-        "    r",
-        "}",
+        _vow_payload_fn("skill_bundle", bundle_md),
         "",
         "fn skill_support_count() -> u64 {",
         f"    {len(support_entries)}",
@@ -1151,24 +1194,14 @@ def inject_skill_vow(
         "} {",
     ]
     for idx, (path, _, _) in enumerate(support_entries):
-        escaped = path.replace("\\", "\\\\").replace('"', '\\"')
+        escaped = _vow_escape(path)
         sections.append(
             f'    if index == {idx} {{ return String::from("{escaped}"); }}'
         )
     sections.extend(['    String::from("")', "}", ""])
 
     for _, body, fn_name in support_entries:
-        first, rest = _vow_pushstr_body(body)
-        sections.extend(
-            [
-                f"fn {fn_name}() -> String {{",
-                f'    let r: String = String::from("{first}\\n");',
-                rest,
-                "    r",
-                "}",
-                "",
-            ]
-        )
+        sections.extend([_vow_payload_fn(fn_name, body), ""])
 
     sections.extend(
         [

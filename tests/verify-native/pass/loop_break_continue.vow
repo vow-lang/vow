@@ -1,0 +1,27 @@
+// TEST: category invariant
+module LoopBreakContinue
+
+fn skip_even() -> u64 vow {
+  ensures: result == 3
+} {
+  let mut i: u64 = 0;
+  let mut odd: u64 = 0;
+  while i < 10 vow {
+    invariant: i <= 10,
+    invariant: odd <= 3
+  } {
+    i = i + 1;
+    if i % 2 == 0 {
+      continue;
+    }
+    if i > 6 {
+      break;
+    }
+    odd = odd + 1;
+  }
+  odd
+}
+
+fn main() -> i32 [io] {
+  0
+}

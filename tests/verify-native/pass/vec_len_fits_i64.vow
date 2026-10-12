@@ -1,0 +1,16 @@
+// A parameter's length is below the runtime's capacity mask (2^63 - 1), so it
+// fits an `i64`: the representation invariant, not a bound of the verifier's.
+module VecLenFitsI64
+
+fn len_as_signed(v: Vec<i64>) -> i64 vow {
+  ensures: result >= 0,
+  ensures: result == v.len() as i64
+} {
+  v.len() as i64
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  print_i64(len_as_signed(v));
+  0
+}

@@ -1,6 +1,6 @@
 # Vow Language Reference
 
-Vow is a systems programming language with built-in contracts (preconditions, postconditions, loop invariants) that are statically verified by ESBMC bounded model checking. Programs compile to native executables via Cranelift. The compiler emits structured JSON for machine consumption.
+Vow is a systems programming language with built-in contracts (preconditions, postconditions, loop invariants) that are statically verified by a model-checking backend: ESBMC bounded model checking today (the default), or the native verifier with `--backend native`. Programs compile to native executables via Cranelift. The compiler emits structured JSON for machine consumption.
 
 In all documentation below, `vow` refers to the `build/vowc` binary.
 
@@ -17,7 +17,7 @@ The standard workflow for writing verified Vow programs:
 3. **Parse JSON** — Read the JSON object from stdout
 4. **Handle status:**
    - `Verified` → Done. Binary is at `executable`.
-   - `Unverified` → Compiled but ESBMC not available. Binary is at `executable`.
+   - `Unverified` → Compiled but verification was not run (`--no-verify` or `--dump-ir`). Binary is at `executable`.
    - `CompileFailed` → Read `diagnostics[]` for errors. Fix and retry.
    - `VerifyFailed` → Read `counterexamples[]`. Fix contracts or implementation. Retry.
 5. **Iterate** — Repeat steps 2–4 until `Verified`.

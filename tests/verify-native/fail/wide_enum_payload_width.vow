@@ -1,0 +1,19 @@
+// TEST: replay-skipped 128-bit parameter
+// TEST: counterexample-fn "classify"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+module WideEnumPayloadWidth
+
+// The payload is 128 bits wide: a model that kept only 64 of them would prove
+// this contract, because no 64-bit value exceeds the i64 maximum.
+enum Wide { Value(i128), Empty }
+
+fn classify(k: i64, v: i128) -> i64 vow {
+  ensures: result == 0
+} {
+  let w: Wide = if k == 0 { Wide::Value(v) } else { Wide::Empty };
+  match w {
+    Wide::Value(x) => { if x > 9223372036854775807 { 1 } else { 0 } },
+    Wide::Empty => { 0 },
+  }
+}

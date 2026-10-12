@@ -830,9 +830,25 @@ class ReviewReportTest(unittest.TestCase):
 
         self.assertTrue(all(p["coverage"] == 1.0 for p in report["pairs"]))
 
-    def test_paired_coverage_is_one_when_every_chunk_has_both_sides(self):
-        _, _, report = self.run_dry("--pair", "checker")
+    @staticmethod
+    def matched_chunk_sources():
+        # Same-named units on both sides, sized so each pair fills its own chunk.
+        names = ["alpha", "beta", "gamma"]
+        body = "x" * 4_000
+        rust = [pair_review.Unit(n, f"fn {n}() {{{body}}}\n", "a.rs") for n in names]
+        self_ = [pair_review.Unit(n, f"fn {n}() {{{body}}}\n", "a.vow") for n in names]
+        return pair_review.Preambles(), rust, self_
 
+    def run_dry_matched(self, *extra):
+        with mock.patch.object(
+            pair_review, "load_pair_units", return_value=self.matched_chunk_sources()
+        ):
+            return self.run_dry("--pair", "checker", "--chunk-bytes", "9500", *extra)
+
+    def test_paired_coverage_is_one_when_every_chunk_has_both_sides(self):
+        _, _, report = self.run_dry_matched()
+
+        self.assertGreater(len(report["pairs"][0]["plan"]["chunks"]), 1)
         self.assertEqual(1.0, report["pairs"][0]["paired_coverage"])
 
     def test_single_sided_chunks_lower_paired_coverage_and_are_reported(self):
@@ -852,12 +868,10 @@ class ReviewReportTest(unittest.TestCase):
         self.assertIn("unpaired", output)
 
     def test_a_cap_lowers_coverage_but_not_paired_coverage(self):
-        # Every checker chunk carries both sides, so a cap defers bytes without
+        # Every chunk carries both sides, so a cap defers bytes without
         # showing any of them one-sided. Folding deferral into this metric would
         # print the one-sided warning about chunks nobody was shown.
-        _, output, report = self.run_dry(
-            "--pair", "checker", "--max-chunks-per-pair", "1"
-        )
+        _, output, report = self.run_dry_matched("--max-chunks-per-pair", "1")
 
         result = report["pairs"][0]
         self.assertLess(result["coverage"], 1.0)

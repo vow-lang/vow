@@ -1,17 +1,23 @@
 module VcExec
 
 use ir
+use vc_ops
 use vc_term
 use vc_smt
 use vc_int
 use vc_gate
 use vc_flow
+use vc_agg
+use vc_vec
 use ir_dominance
 
 // Symbolic execution of an acyclic integer/Bool function (one that
-// `vc_skip_reason` accepts) into proof obligations. Blocks are walked in
-// reverse postorder (`vc_flow` holds the path conditions and merges). Each IR
-// value becomes a `define-fun`; each `requires` is an assumption for the claims
+// `vc_skip_reason` accepts, after `vc_unroll` removed its loops), with its
+// aggregates scalarised by `vc_agg`, into proof obligations. Blocks are walked in
+// reverse postorder (`vc_flow` holds the path conditions and merges). A value
+// that is a variable or a constant is used as it is; a composite one becomes a
+// `define-fun` the first time its term is built, and every later value with the
+// same term shares that name. Each `requires` is an assumption for the claims
 // that follow it. A claim is only asked on the paths that reach it: its query
 // asserts the block's path condition next to the negated goal, and an
 // assumption made in a block is the implication `path condition => assumption`.
@@ -21,20 +27,56 @@ use ir_dominance
 //
 //   hard  wrapping `/`, `%` (zero divisor, signed MIN / -1) and a shift count
 //         outside `0 <= count < width`: a counterexample fails the function.
+//   hard  the abort of `.unwrap()` on `None`/`Err`: the lowerer branches on the
+//         discriminant and calls the abort on the empty variant, so that call is
+//         a claim that its path is infeasible.
+//   hard  a `Vec` index at or past the length (`vc_vec`), on `get` and `set`.
 //   soft  checked `+! -! *! /! %!`: the language aborts on overflow, so the
 //         contract is judged on returning runs only. A counterexample to a soft
 //         claim is not a failure; it means the abort is reachable and the
 //         driver reports it as an `ArithOverflowReachable` warning.
+//
+// A loop reaches the executor already unrolled (`vc_unroll`): a back edge past
+// the bound ends in a sink block, and a path that reaches it is the unwinding
+// claim "no run needs more iterations than the bound". It is a claim only and
+// assumes nothing afterwards: a counterexample means the bound was too small,
+// not that the function is wrong. A loop `invariant` is checked like an
+// `ensures` at every iteration copy of its header, and assumed nowhere in an
+// unrolled function. In the inductive attempt (`vc_induct`) the loop is cut
+// instead: a header Phi is a havoc marker, a fresh unconstrained constant, and
+// the invariant of the havoc copy is a plain `requires`, an assumption.
+//
+// The step function of k-induction (`vc_unroll_step`) is the same acyclic walk
+// with a per-block hypothesis marking: in a hypothesis block no claim is asked
+// but every goal is still assumed (a guard, a callee clause, the target's own
+// `invariant`), and the invariant of the block that is not a hypothesis is
+// assumed once asked, so the exit continues under it.
+//
+// A call has been spliced into its caller before this point (`vc_inline`), and
+// the clauses of the copy carry the frame they came from (`vc_frame_of`). In a
+// frame a `requires` is a claim blamed on the caller and an `ensures` or loop
+// `invariant` one blamed on the callee, and both are assumed afterwards: the
+// first failing claim on a path is the one reported. A function without a `vow`
+// block is verified only for its callees' preconditions (`pre_only`): every
+// other claim is assumed instead, as the ESBMC pipeline demotes it.
 
 fn VC_CLAIM_ENSURES() -> i64 { 0 }
 fn VC_CLAIM_DIV_ZERO() -> i64 { 1 }
 fn VC_CLAIM_DIV_OVERFLOW() -> i64 { 2 }
 fn VC_CLAIM_SHIFT_COUNT() -> i64 { 3 }
 fn VC_CLAIM_ARITH() -> i64 { 4 }
+fn VC_CLAIM_UNWRAP_NONE() -> i64 { 5 }
+fn VC_CLAIM_UNWIND() -> i64 { 6 }
+fn VC_CLAIM_CALLER_PRE() -> i64 { 7 }
+fn VC_CLAIM_CALLEE_POST() -> i64 { 8 }
+fn VC_CLAIM_VEC_BOUNDS() -> i64 { 9 }
 
 fn VC_LABEL_DIV_ZERO() -> String { String::from("division by zero") }
 fn VC_LABEL_DIV_OVERFLOW() -> String { String::from("division overflow") }
 fn VC_LABEL_SHIFT_COUNT() -> String { String::from("integer shift count") }
+fn VC_LABEL_UNWRAP_NONE() -> String { String::from("unwrap-none") }
+fn VC_LABEL_UNWIND() -> String { String::from("unwinding assertion") }
+fn VC_LABEL_VEC_BOUNDS() -> String { String::from("vec bounds") }
 
 // One shared command list (`header`) and one append-only assumption list serve
 // every claim: claim `k` is the first `header_lens[k]` header commands, the
@@ -45,6 +87,11 @@ struct VcClaims {
     header: SmtScript,
     assumed: Vec<i64>,
     kinds: Vec<i64>,
+    frames: Vec<i64>,
+    fr: VcFrames,
+    pre_only: bool,
+    step: bool,
+    hyp_now: bool,
     vow_ids: Vec<i64>,
     labels: Vec<String>,
     ostarts: Vec<i64>,
@@ -56,6 +103,9 @@ struct VcClaims {
     model_params: Vec<i64>,
     model_tys: Vec<i64>,
     model_widths: Vec<i64>,
+    model_slots: Vec<i64>,
+    model_hdr: Vec<i64>,
+    model_ambig: Vec<i64>,
 }
 
 fn vc_value_name(id: i64) -> String {
@@ -70,29 +120,131 @@ fn vc_param_name(k: i64) -> String {
     out
 }
 
-fn vc_add_claim(cs: VcClaims, kind: i64, vow_id: i64, label: String, pc: i64, goal: i64, ostart: i64, olen: i64) {
+// Records the claim that `goal` holds on the paths satisfying `pc`, unless the
+// simplifier already decided it: the negated query is the constant `false`, or
+// `pc => goal` is itself an earlier assumption (the terms are hash-consed, so
+// equal formulas are one id). Both are `unsat` under any assumptions, so the
+// solver would only confirm what the claim list already says.
+fn vc_add_claim(cs: VcClaims, kind: i64, vow_id: i64, label: String, pc: i64, goal: i64, ostart: i64, olen: i64, frame: i64) {
+    if cs.hyp_now {
+        return;
+    }
+    if cs.pre_only && kind != VC_CLAIM_CALLER_PRE() && kind != VC_CLAIM_UNWIND() {
+        return;
+    }
+    let ar: VcArena = cs.arena;
+    let negated: i64 = vc_tm_and(ar, pc, vc_tm_app1(ar, VC_OP_NOT(), goal));
+    if vc_tm_is_false(ar, negated) {
+        return;
+    }
+    if cs.assumed.len() > 0 {
+        if ar.assumed[vc_tm_implies(ar, pc, goal) as u64] == 1 {
+            return;
+        }
+    }
     let hdr: SmtScript = cs.header;
     cs.kinds.push(kind);
+    cs.frames.push(frame);
     cs.vow_ids.push(vow_id);
     cs.labels.push(label);
     cs.ostarts.push(ostart);
     cs.olens.push(olen);
-    let ar: VcArena = cs.arena;
-    let negated: i64 = vc_tm_app1(ar, VC_OP_NOT(), goal);
-    cs.negated_goals.push(vc_tm_and(ar, pc, negated));
+    cs.negated_goals.push(negated);
     cs.header_lens.push(hdr.kinds.len() as i64);
     cs.assumed_lens.push(cs.assumed.len() as i64);
 }
 
 fn vc_assume(cs: VcClaims, pc: i64, t: i64) {
-    cs.assumed.push(vc_tm_implies(cs.arena, pc, t));
+    let ar: VcArena = cs.arena;
+    let fact: i64 = vc_tm_implies(ar, pc, t);
+    if vc_tm_is_true(ar, fact) {
+        return;
+    }
+    ar.assumed[fact as u64] = 1;
+    cs.assumed.push(fact);
 }
 
 // A claim that `goal` holds on the paths reaching `inst`, then the assumption
 // that it does.
 fn vc_guard(cs: VcClaims, kind: i64, label: String, pc: i64, goal: i64, inst: IrInst) {
-    vc_add_claim(cs, kind, -1, label, pc, goal, inst.ostart, inst.olen);
+    vc_add_claim(cs, kind, -1, label, pc, goal, inst.ostart, inst.olen, vc_frame_of(inst));
     vc_assume(cs, pc, goal);
+}
+
+// Number of model symbols claim `k`'s query declares: the header is only
+// declared up to `header_lens[k]`, and `get-value` of a symbol declared later
+// is a solver error. Symbols are listed in declaration order, so these are the
+// first entries of every `model_*` list.
+fn vc_claim_model_count(cs: VcClaims, k: u64) -> u64 {
+    let mut n: u64 = 0;
+    while n < cs.model_hdr.len() && cs.model_hdr[n] < cs.header_lens[k] {
+        n = n + 1;
+    }
+    n
+}
+
+fn vc_claim_model_names(cs: VcClaims, k: u64) -> Vec<String> {
+    let out: Vec<String> = Vec::new();
+    let n: u64 = vc_claim_model_count(cs, k);
+    let mut j: u64 = 0;
+    while j < n {
+        out.push(cs.model_names[j]);
+        j = j + 1;
+    }
+    out
+}
+
+fn vc_claim_model_widths(cs: VcClaims, k: u64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let n: u64 = vc_claim_model_count(cs, k);
+    let mut j: u64 = 0;
+    while j < n {
+        out.push(cs.model_widths[j]);
+        j = j + 1;
+    }
+    out
+}
+
+// Appends the scalar fields of aggregate parameters the walk read (declared
+// lazily, so only now are they all known) after the scalar parameters, with the
+// slot each came from (a symbol's width is its sort: 0 for Bool). A slot read
+// at two sorts is `ambig` in every entry so reporting and replay can tell the
+// symbols apart.
+fn vc_claims_harvest_fields(cs: VcClaims, ag: VcAgg) {
+    let mut i: u64 = 0;
+    while i < ag.ps_param.len() {
+        cs.model_names.push(vc_agg_symbol_name(ag.ps_param[i], ag.ps_slot[i], ag.ps_sort[i]));
+        cs.model_params.push(ag.ps_param[i]);
+        cs.model_tys.push(ag.ps_ty[i]);
+        cs.model_widths.push(ag.ps_sort[i]);
+        cs.model_slots.push(ag.ps_slot[i]);
+        cs.model_hdr.push(ag.ps_hdr[i]);
+        i = i + 1;
+    }
+    let mut j: u64 = 0;
+    while j < cs.model_slots.len() {
+        let mut amb: i64 = 0;
+        if cs.model_slots[j] >= 0 {
+            let mut o: u64 = 0;
+            while o < cs.model_slots.len() {
+                if o != j && cs.model_params[o] == cs.model_params[j] && cs.model_slots[o] == cs.model_slots[j] && cs.model_widths[o] != cs.model_widths[j] {
+                    amb = 1;
+                }
+                o = o + 1;
+            }
+        }
+        cs.model_ambig.push(amb);
+        j = j + 1;
+    }
+}
+
+// The tail every query of claim `k` ends in: its negated goal, the check and
+// the model request.
+fn vc_claim_script_finish(s: SmtScript, cs: VcClaims, k: u64) -> SmtScript {
+    vc_script_assert(s, cs.negated_goals[k]);
+    vc_script_check_sat(s);
+    vc_script_get_value(s, vc_claim_model_names(cs, k));
+    s
 }
 
 // The self-contained query that decides claim `k`.
@@ -105,29 +257,36 @@ fn vc_claim_script(cs: VcClaims, k: u64) -> SmtScript {
         vc_script_assert(s, cs.assumed[i]);
         i = i + 1;
     }
-    vc_script_assert(s, cs.negated_goals[k]);
-    vc_script_check_sat(s);
-    vc_script_get_value(s, cs.model_names);
-    s
+    vc_claim_script_finish(s, cs, k)
 }
 
 // Symbolic state shared by the block walk.
 struct VcWalk {
     cs: VcClaims,
     fl: VcFlow,
+    ag: VcAgg,
+    vv: VcVec,
     var_of: Vec<i64>,
-    def_of: Vec<i64>,
+    obj_of: Vec<i64>,
     tys: Vec<i64>,
     lits: Vec<i64>,
     dvs: Vec<i64>,
 }
 
+// Binds the value of `inst` to `t`: a leaf is used as it is, a composite gets
+// a `define-fun` once, so a second instruction computing the same term shares
+// the first one's name.
 fn vc_define(w: VcWalk, inst: IrInst, t: i64) {
     let cs: VcClaims = w.cs;
     let ar: VcArena = cs.arena;
-    vc_script_define_fun(cs.header, vc_value_name(inst.id), vc_ty_sort(inst.ty), t);
-    w.def_of[inst.id as u64] = t;
-    w.var_of[inst.id as u64] = vc_tm_var(ar, vc_value_name(inst.id));
+    let known: i64 = vc_tm_shared(ar, t);
+    if known >= 0 {
+        w.var_of[inst.id as u64] = known;
+        return;
+    }
+    let name: String = vc_value_name(inst.id);
+    vc_script_define_fun(cs.header, name, vc_ty_sort(inst.ty), t);
+    w.var_of[inst.id as u64] = vc_tm_bind(ar, t, name);
 }
 
 // The term for an operand read at type `at`: an `i64` literal against another
@@ -200,56 +359,109 @@ fn vc_exec_value(w: VcWalk, inst: IrInst, pc: i64) -> i64 {
     vc_exec_arith(w, inst, pc)
 }
 
-// Outcome of branching on `cond_id` at a block with path condition `pc` and
-// known outcomes `foff`/`flen`: 1 taken, 0 not taken, -1 undecided.
-fn vc_branch_outcome(w: VcWalk, cond_id: i64, foff: i64, flen: i64) -> i64 {
+// Aggregate instructions: pointers are objects (`obj_of`), never terms; a field
+// read defines a scalar value.
+fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
     let cs: VcClaims = w.cs;
-    let ar: VcArena = cs.arena;
-    let fl: VcFlow = w.fl;
-    let def: i64 = w.def_of[cond_id as u64];
-    if vc_tm_is_true(ar, def) { return 1; }
-    if vc_tm_is_false(ar, def) { return 0; }
-    if vc_flow_has_fact(fl, foff, flen, vc_flow_fact_lit(cond_id, true)) { return 1; }
-    if vc_flow_has_fact(fl, foff, flen, vc_flow_fact_lit(cond_id, false)) { return 0; }
-    -1
-}
-
-// Registers the edge of the branch at the end of block `bi` to block `dst`,
-// taken when the condition evaluates to `polarity`. With a decided condition
-// the edge keeps the block's path condition; otherwise it is conjoined with the
-// outcome, which is also recorded as a fact for the blocks it leads to.
-fn vc_branch_edge(w: VcWalk, bi: u64, cond_id: i64, outcome: bool, decided: bool, dst: i64) {
-    let cs: VcClaims = w.cs;
-    let ar: VcArena = cs.arena;
-    let fl: VcFlow = w.fl;
-    let hdr: SmtScript = cs.header;
-    let pc: i64 = fl.block_pc[bi];
-    let mut ec: i64 = pc;
-    let mut off: i64 = fl.block_foff[bi];
-    let mut len: i64 = fl.block_flen[bi];
-    if !decided {
-        let c: i64 = w.var_of[cond_id as u64];
-        if outcome {
-            ec = vc_flow_and(fl, ar, hdr, pc, c);
-        } else {
-            ec = vc_flow_and_not(fl, ar, hdr, pc, c);
+    let ag: VcAgg = w.ag;
+    let op: i64 = inst.op;
+    if op == IOP_GET_ARG() && inst.ty == ITY_PTR() {
+        w.obj_of[inst.id as u64] = vc_agg_param(ag, inst.dv);
+        return true;
+    }
+    if op == IOP_REGION_ALLOC() {
+        let obj: i64 = vc_agg_alloc(ag, w.fl.block_pc[bi]);
+        w.obj_of[inst.id as u64] = obj;
+        return true;
+    }
+    if op == IOP_FIELD_SET() {
+        let val: i64 = inst.args[1];
+        vc_agg_write(ag, cs.arena, cs.header, w.obj_of[inst.args[0] as u64], inst.dv, vc_ty_sort(w.tys[val as u64]), w.var_of[val as u64], w.fl.block_pc[bi]);
+        return true;
+    }
+    if op == IOP_FIELD_GET() {
+        let seen: u64 = ag.ps_param.len();
+        let t: i64 = vc_agg_get(ag, cs.arena, cs.header, w.obj_of[inst.args[0] as u64], inst.dv, vc_ty_sort(inst.ty));
+        let mut j: u64 = seen;
+        while j < ag.ps_param.len() {
+            ag.ps_ty[j] = inst.ty;
+            j = j + 1;
         }
-        off = vc_flow_extend_facts(fl, off, len, vc_flow_fact_lit(cond_id, outcome));
-        len = fl.pool.len() as i64 - off;
+        vc_define(w, inst, t);
+        return true;
     }
-    vc_flow_add_edge(fl, dst as u64, bi as i64, ec, off, len);
+    if op == IOP_PHI() && inst.ty == ITY_PTR() {
+        w.obj_of[inst.id as u64] = vc_agg_phi(ag, bi, inst.id);
+        return true;
+    }
+    if op == IOP_UPSILON() && w.tys[inst.args[0] as u64] == ITY_PTR() {
+        vc_flow_add_upsilon(w.fl, inst.dv, bi as i64, w.obj_of[inst.args[0] as u64]);
+        return true;
+    }
+    false
 }
 
-fn vc_walk_branch(w: VcWalk, inst: IrInst, bi: u64, then_idx: i64, else_idx: i64) {
-    let fl: VcFlow = w.fl;
-    let cond_id: i64 = inst.args[0];
-    let known: i64 = vc_branch_outcome(w, cond_id, fl.block_foff[bi], fl.block_flen[bi]);
-    if known != 0 {
-        vc_branch_edge(w, bi, cond_id, true, known == 1, then_idx);
+// A `Vec` call (`vc_vec`). `get` and `len` define a value, the rest change the
+// object's state in this block; an index out of bounds is a hard claim, assumed
+// afterwards like the other aborts.
+fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
+    let kind: i64 = vc_inst_vec_kind(inst);
+    if kind == VC_VEC_NONE() { return false; }
+    let cs: VcClaims = w.cs;
+    let ar: VcArena = cs.arena;
+    let hdr: SmtScript = cs.header;
+    let vv: VcVec = w.vv;
+    let b: i64 = bi as i64;
+    if kind == VC_VEC_NEW() {
+        let obj: i64 = vc_agg_alloc(w.ag, w.fl.block_pc[bi]);
+        w.obj_of[inst.id as u64] = obj;
+        vc_vec_create(vv, w.ag, ar, hdr, obj, b);
+        return true;
     }
-    if known != 1 {
-        vc_branch_edge(w, bi, cond_id, false, known == 0, else_idx);
+    let s: i64 = vc_vec_slot(vv, w.ag, ar, hdr, cs.assumed, w.obj_of[inst.args[0] as u64]);
+    if kind == VC_VEC_LEN() {
+        vc_define(w, inst, vc_vec_cur_len(vv, s, b));
+    } else if kind == VC_VEC_POP() {
+        vc_vec_pop(vv, ar, hdr, s, b);
+    } else if kind == VC_VEC_PUSH() {
+        let elem: i64 = vc_vec_elem64(ar, w.tys[inst.args[1] as u64], w.var_of[inst.args[1] as u64]);
+        vc_assume(cs, pc, vc_vec_push_guard(ar, vc_vec_cur_len(vv, s, b)));
+        vc_vec_push(vv, ar, hdr, s, b, elem);
+    } else {
+        let idx: i64 = w.var_of[inst.args[1] as u64];
+        vc_guard(cs, VC_CLAIM_VEC_BOUNDS(), VC_LABEL_VEC_BOUNDS(), pc, vc_vec_in_bounds(ar, idx, vc_vec_cur_len(vv, s, b)), inst);
+        if kind == VC_VEC_GET() {
+            vc_define(w, inst, vc_tm_app2(ar, VC_OP_SELECT(), vc_vec_cur_arr(vv, s, b), idx));
+        } else {
+            let elem: i64 = vc_vec_elem64(ar, w.tys[inst.args[2] as u64], w.var_of[inst.args[2] as u64]);
+            vc_vec_set(vv, ar, hdr, s, b, idx, elem);
+        }
     }
+    true
+}
+
+// A contract clause. The target's own `requires` is an assumption and its
+// `ensures`/`invariant` a claim; a spliced callee's clauses are claims blamed on
+// the caller and the callee, assumed once asked.
+fn vc_walk_clause(w: VcWalk, inst: IrInst, pc: i64) {
+    let cs: VcClaims = w.cs;
+    let goal: i64 = w.var_of[inst.args[0] as u64];
+    let frame: i64 = vc_frame_of(inst);
+    if frame < 0 {
+        if inst.op == IOP_VOW_REQ() {
+            vc_assume(cs, pc, goal);
+        } else {
+            vc_add_claim(cs, VC_CLAIM_ENSURES(), inst.dv, String::from(""), pc, goal, inst.ostart, inst.olen, -1);
+            if cs.step {
+                vc_assume(cs, pc, goal);
+            }
+        }
+        return;
+    }
+    let mut kind: i64 = VC_CLAIM_CALLEE_POST();
+    if inst.op == IOP_VOW_REQ() { kind = VC_CLAIM_CALLER_PRE(); }
+    vc_add_claim(cs, kind, inst.dv, String::from(""), pc, goal, inst.ostart, inst.olen, frame);
+    vc_assume(cs, pc, goal);
 }
 
 fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
@@ -265,18 +477,32 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
     if op == IOP_UPSILON() && w.tys[inst.args[0] as u64] == ITY_UNIT() {
         return;
     }
+    // Region markers only scope an allocation's lifetime; they change no value.
+    if op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE() {
+        return;
+    }
+    if vc_walk_agg(w, bi, inst) || vc_walk_vec(w, bi, inst, pc) {
+        return;
+    }
     if op == IOP_PHI() {
         vc_define(w, inst, vc_flow_phi_value(fl, cs.arena, bi, inst.id));
     } else if op == IOP_UPSILON() {
         vc_flow_add_upsilon(fl, inst.dv, bi as i64, w.var_of[inst.args[0] as u64]);
-    } else if op == IOP_VOW_REQ() {
-        vc_assume(cs, pc, w.var_of[inst.args[0] as u64]);
-    } else if op == IOP_VOW_ENS() {
-        vc_add_claim(cs, VC_CLAIM_ENSURES(), inst.dv, String::from(""), pc, w.var_of[inst.args[0] as u64], inst.ostart, inst.olen);
+    } else if op == IOP_VOW_REQ() || op == IOP_VOW_ENS() || op == IOP_VOW_INV() {
+        vc_walk_clause(w, inst, pc);
     } else if op == IOP_JUMP() {
-        vc_flow_add_edge(fl, succ[bi * 2] as u64, bi as i64, pc, fl.block_foff[bi], fl.block_flen[bi]);
+        vc_flow_jump(fl, bi, succ[bi * 2] as u64);
     } else if op == IOP_BRANCH() {
-        vc_walk_branch(w, inst, bi, succ[bi * 2], succ[bi * 2 + 1]);
+        let cond: i64 = w.var_of[inst.args[0] as u64];
+        vc_flow_branch(fl, cs.arena, cs.header, bi, cond, succ[bi * 2] as u64, succ[bi * 2 + 1] as u64);
+    } else if vc_is_havoc(inst) {
+        let name: String = String::from("h");
+        name.push_str(i64_to_string(inst.id));
+        vc_define(w, inst, vc_agg_declare(cs.arena, cs.header, name, vc_ty_sort(inst.ty)));
+    } else if vc_is_unwrap_abort(inst) {
+        vc_guard(cs, VC_CLAIM_UNWRAP_NONE(), VC_LABEL_UNWRAP_NONE(), pc, vc_tm_bool_const(cs.arena, false), inst);
+    } else if vc_is_unwind_sink(inst) {
+        vc_add_claim(cs, VC_CLAIM_UNWIND(), -1, VC_LABEL_UNWIND(), pc, vc_tm_bool_const(cs.arena, false), inst.ostart, inst.olen, -1);
     } else if op != IOP_RETURN() && op != IOP_UNREACHABLE() {
         vc_define(w, inst, vc_exec_value(w, inst, pc));
     }
@@ -284,6 +510,21 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
 
 // Obligations for a function inside the native subset, in walk order.
 fn vc_claims(f: IrFunction) -> VcClaims {
+    vc_claims_mode(f, vc_frames_new(), false)
+}
+
+// `vc_claims_step` with no hypothesis marking.
+fn vc_claims_mode(f: IrFunction, fr: VcFrames, pre_only: bool) -> VcClaims {
+    vc_claims_step(f, fr, pre_only, Vec::new())
+}
+
+// The same for the flattened function of a call tree: `fr` names the frames its
+// markers refer to, `pre_only` demotes every claim but the callees'
+// preconditions and the unwinding claim. `hyp` is the hypothesis marking of a
+// step function (`vc_unroll_step`), one 0/1 per block: the claims of a block
+// marked 1 are not asked, only assumed, and the function's own `invariant`s are
+// assumed once asked. Empty for every other function.
+fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) -> VcClaims {
     let ar: VcArena = vc_arena_new();
     let hdr: SmtScript = vc_script_new();
     let assumed: Vec<i64> = Vec::new();
@@ -292,6 +533,11 @@ fn vc_claims(f: IrFunction) -> VcClaims {
         header: hdr,
         assumed: assumed,
         kinds: Vec::new(),
+        frames: Vec::new(),
+        fr: fr,
+        pre_only: pre_only,
+        step: hyp.len() > 0,
+        hyp_now: false,
         vow_ids: Vec::new(),
         labels: Vec::new(),
         ostarts: Vec::new(),
@@ -303,12 +549,17 @@ fn vc_claims(f: IrFunction) -> VcClaims {
         model_params: Vec::new(),
         model_tys: Vec::new(),
         model_widths: Vec::new(),
+        model_slots: Vec::new(),
+        model_hdr: Vec::new(),
+        model_ambig: Vec::new(),
     };
     vc_script_set_logic(hdr, String::from("QF_BV"));
     vc_script_set_option(hdr, String::from(":produce-models"), String::from("true"));
     let mut pi: u64 = 0;
     while pi < f.params.len() {
         if vc_ty_is_int(f.params[pi]) {
+            cs.model_hdr.push(hdr.kinds.len() as i64);
+            cs.model_slots.push(-1);
             vc_script_declare_const(hdr, vc_param_name(pi as i64), vc_ty_sort(f.params[pi]));
             cs.model_names.push(vc_param_name(pi as i64));
             cs.model_params.push(pi as i64);
@@ -320,11 +571,14 @@ fn vc_claims(f: IrFunction) -> VcClaims {
 
     let tys: Vec<i64> = vc_ty_table(f);
     let nb: u64 = f.blocks.len();
+    let fl: VcFlow = vc_flow_new(nb, tys.len());
     let w: VcWalk = VcWalk {
         cs: cs,
-        fl: vc_flow_new(nb, tys.len()),
+        fl: fl,
+        ag: vc_agg_new(fl),
+        vv: vc_vec_new_state(fl, nb),
         var_of: dom_fill(tys.len(), -1),
-        def_of: dom_fill(tys.len(), -1),
+        obj_of: dom_fill(tys.len(), -1),
         tys: tys,
         lits: vc_literal_table(f, tys),
         dvs: dom_fill(tys.len(), 0),
@@ -332,7 +586,6 @@ fn vc_claims(f: IrFunction) -> VcClaims {
     let id_to_idx: Vec<i64> = dom_block_id_table(f);
     let succ: Vec<i64> = dom_successors(f, id_to_idx);
     let order: Vec<i64> = dom_rpo_order(dom_rpo_numbers(nb, succ));
-    let fl: VcFlow = w.fl;
 
     let mut oi: u64 = 0;
     while oi < order.len() {
@@ -342,8 +595,10 @@ fn vc_claims(f: IrFunction) -> VcClaims {
             fl.block_pc[0] = vc_tm_bool_const(ar, true);
         } else {
             live = vc_flow_enter(fl, ar, hdr, bi);
+            if live { vc_vec_enter(w.vv, ar, hdr, bi); }
         }
         if live {
+            cs.hyp_now = bi < hyp.len() && hyp[bi] == 1;
             let blk: IrBlock = f.blocks[bi];
             let mut ii: u64 = 0;
             while ii < blk.insts.len() {
@@ -353,6 +608,10 @@ fn vc_claims(f: IrFunction) -> VcClaims {
             }
         }
         oi = oi + 1;
+    }
+    vc_claims_harvest_fields(cs, w.ag);
+    if vc_vec_count(w.vv) > 0 {
+        vc_script_replace_logic(hdr, String::from("QF_ABV"));
     }
     cs
 }

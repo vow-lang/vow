@@ -1,0 +1,27 @@
+// TEST: category model-drift
+module WideStructNarrowFieldSlot
+
+// A narrow field declared after a 128-bit one lives in the shifted slot. The
+// function reads only the narrow field, so it stays modelable, and both
+// emitters must address the same heap slot for it.
+struct Padded {
+    wide: i128,
+    after: i64,
+}
+
+fn read_after(p: Padded) -> i64 vow {
+    ensures: result == p.after
+} {
+    p.after
+}
+
+fn bump_after(p: Padded) -> i64 vow {
+    requires: p.after < 1000
+    ensures: result == p.after + 1
+} {
+    p.after + 1
+}
+
+fn main() -> i32 [io] {
+    0
+}

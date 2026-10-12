@@ -1,0 +1,11 @@
+// TEST: error-code NarrowingCastNotAllowed
+// TEST: stderr "no narrowing intrinsic from u128 to u64 exists"
+module U128NarrowingCastToU64
+
+fn narrow(value: u128) -> u64 {
+    value as u64
+}
+
+fn main() -> i32 {
+    0
+}

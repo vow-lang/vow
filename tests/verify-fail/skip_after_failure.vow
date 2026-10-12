@@ -1,0 +1,34 @@
+// TEST: category callee-blame
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-fn "wrong_ensures"
+// TEST: counterexample-blame Callee
+// Regression for #1561: a VerificationSkipped warning is a static fact about
+// the program, so every non-modelable vowed function is reported even when an
+// earlier function fails verification. The warning set must not depend on the
+// verify cache or on --verify-jobs.
+module SkipAfterFailure
+
+fn wrong_ensures(x: i64) -> i64 vow {
+  ensures: result == x + 1
+} {
+  x
+}
+
+fn push_row_a(grid: Vec<Vec<i64>>, row: Vec<i64>) -> i64 vow {
+  ensures: result >= 0
+} {
+  grid.push(row);
+  grid.len() as i64
+}
+
+fn push_row_b(grid: Vec<Vec<i64>>, row: Vec<i64>) -> i64 vow {
+  ensures: result >= 0
+} {
+  grid.push(row);
+  grid.len() as i64
+}
+
+fn main() -> i32 [io] {
+  print_i64(wrong_ensures(1));
+  0
+}

@@ -81,5 +81,7 @@ fn main() -> i32 {
     if const_value_tag(String::from("const X: u8 = 200u8;\n")) != EXPR_LIT_INT() { return 11; }
     if const_value_tag(String::from("const X: i32 = -5i32;\n")) != EXPR_UNOP() { return 12; }
     if const_value_tag(String::from("const X: u32 = 5u8;\n")) != EXPR_CAST() { return 13; }
+    if const_value_tag(String::from("const X: i64 = -1 as i64;\n")) != EXPR_UNOP() { return 14; }
+    if const_value_tag(String::from("const X: i64 = -1 as i32;\n")) != EXPR_CAST() { return 15; }
     0
 }

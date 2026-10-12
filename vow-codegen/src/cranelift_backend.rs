@@ -24,9 +24,10 @@ use crate::return_materialization::{
 };
 use crate::{Backend, BuildMode, CodegenError, CompiledObject, TraceMode};
 
-const WIDE_SLOT_TYPE_MSG: &str = "internal error: a two-slot enum payload access must carry a 128-bit value, but lowering produced a narrower type";
-const WIDE_AGGREGATE_FIELD_MSG: &str = "128-bit struct fields are not supported yet (epic #526): an aggregate \
-     field slot is 8 bytes, so a 128-bit field would truncate or overwrite its neighbour";
+const WIDE_SLOT_TYPE_MSG: &str = "internal error: a two-slot aggregate access must carry a 128-bit value, but lowering produced a narrower type";
+const WIDE_AGGREGATE_FIELD_MSG: &str = "internal error: a 128-bit value reached a single-slot aggregate access \
+     (epic #526); lowering must emit the two-slot form, because an 8-byte slot would truncate it \
+     or overwrite its neighbour";
 
 pub struct CraneliftBackend;
 
@@ -438,11 +439,12 @@ fn coerce_call_argument(
         // The builtins that legitimately narrow (`i128_to_u8_*` and friends)
         // declare an I128 parameter, so they never reach this branch — a
         // 128-bit value arriving at a narrower slot means the callee has no
-        // 128-bit-aware ABI yet (e.g. the i64-only `Vec` element helpers).
+        // 128-bit-aware ABI. (`Vec<i128>` elements never reach here: they go
+        // through the two-slot element-address helpers.)
         // Refuse rather than hand back a truncated value.
         if actual_ty == types::I128 {
             return Err(CodegenError::UnsupportedOpcode(
-                "128-bit values are not supported in aggregates or by this builtin yet \
+                "128-bit values are not supported by this builtin yet \
                  (epic #526); narrowing here would silently drop the high 64 bits"
                     .to_string(),
             ));
@@ -2495,6 +2497,11 @@ fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool {
             sig.params.push(AbiParam::new(types::I64));
             true
         }
+        "__vow_try_eprintln_str" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
         "__vow_process_exit" => {
             sig.params.push(AbiParam::new(types::I64));
             true
@@ -2729,6 +2736,15 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // vec ptr
             sig.params.push(AbiParam::new(types::I64)); // index
             sig.params.push(AbiParam::new(types::I64)); // value
+        }
+        "__vow_vec_push_wide_ptr" => {
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+            sig.returns.push(AbiParam::new(types::I64)); // address of the new 16-byte element
+        }
+        "__vow_vec_get_wide_ptr" | "__vow_vec_set_wide_ptr" => {
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+            sig.params.push(AbiParam::new(types::I64)); // index
+            sig.returns.push(AbiParam::new(types::I64)); // address of the 16-byte element
         }
         "__vow_vec_pop" => {
             sig.params.push(AbiParam::new(types::I64)); // vec ptr
@@ -3810,6 +3826,7 @@ mod tests {
             "__vow_fs_remove_dir_all",
             "__vow_fs_is_dir",
             "__vow_fs_is_symlink",
+            "__vow_try_eprintln_str",
         ];
         for sym in one_param_returns_i64 {
             let sig = extern_sig(sym);
@@ -6342,7 +6359,10 @@ mod tests {
         let Err(CodegenError::UnsupportedOpcode(message)) = result else {
             panic!("128-bit field loads must be rejected before Cranelift verification");
         };
-        assert!(message.contains("128-bit struct fields"), "{message}");
+        assert!(
+            message.contains("single-slot aggregate access"),
+            "{message}"
+        );
     }
 
     #[test]
@@ -6386,7 +6406,10 @@ mod tests {
         let Err(CodegenError::UnsupportedOpcode(message)) = result else {
             panic!("128-bit field stores must be rejected before they can overwrite a slot");
         };
-        assert!(message.contains("128-bit struct fields"), "{message}");
+        assert!(
+            message.contains("single-slot aggregate access"),
+            "{message}"
+        );
     }
 
     fn wide_slot_module(ret: Ty, value: Inst, load_ty: Option<Ty>) -> Module {
@@ -6453,7 +6476,7 @@ mod tests {
         let Err(CodegenError::UnsupportedOpcode(message)) = result else {
             panic!("a narrow value must not be stored into a two-slot payload");
         };
-        assert!(message.contains("two-slot enum payload"), "{message}");
+        assert!(message.contains("two-slot aggregate access"), "{message}");
     }
 
     #[test]
@@ -6474,7 +6497,7 @@ mod tests {
         let Err(CodegenError::UnsupportedOpcode(message)) = result else {
             panic!("a two-slot payload must not be loaded at a narrow type");
         };
-        assert!(message.contains("two-slot enum payload"), "{message}");
+        assert!(message.contains("two-slot aggregate access"), "{message}");
     }
 
     #[test]

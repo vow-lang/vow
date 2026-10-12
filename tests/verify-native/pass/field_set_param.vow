@@ -1,0 +1,15 @@
+module FieldSetParam
+
+struct Cell { value: i64 }
+
+fn reset(c: Cell) -> i64 vow {
+  ensures: result == 0
+} {
+  c.value = 0;
+  c.value
+}
+
+fn main() -> i32 [io] {
+  print_i64(reset(Cell { value: 3 }));
+  0
+}

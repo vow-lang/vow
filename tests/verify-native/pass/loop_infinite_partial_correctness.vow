@@ -1,0 +1,19 @@
+// TEST: category invariant
+// A loop that never exits has no run that reaches the `ensures`, so the step
+// function has no claim and the proof is the partial-correctness one of
+// ADR-2026-10-08-1422, with no invariant needed.
+module LoopInfinitePartialCorrectness
+
+fn spin(x: u64) -> u64 vow {
+  ensures: result == x
+} {
+  let mut i: u64 = 0;
+  while true {
+    i = i + 1;
+  }
+  x
+}
+
+fn main() -> i32 [io] {
+  0
+}

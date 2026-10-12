@@ -4,56 +4,544 @@ use ir
 use verifier
 use vc_smt
 use vc_solver
+use vc_cache
+use vc_session
+use vc_ops
+use vc_gate
+use vc_inline
+use vc_cfg
+use vc_loops
 use vc_exec
+use vc_slice
+use vc_unroll
+use vc_induct
 use vc_cex
+use vc_clause
+use vc_term
 
 // Native verification of one function inside the subset accepted by
-// `vc_skip_reason`: every claim is decided by its own solver run, in IR order.
-// A hard claim that is not `unsat` decides the result; `unsat` is the only
-// outcome that counts as proof. A soft claim (a checked operator's abort) never
-// fails the function: `sat` records that the abort is reachable, `unsat` that it
-// is not, and only an undecided run (unknown, timeout, error) stops the check.
-// `timeout_ms` is the budget for the whole function; each claim gets what is
-// left of it. `scratch`, when not empty, is the directory for the query files. The solver is looked up only when there
-// is a claim to decide: a function without obligations is proven without one.
+// `vc_skip_reason`. A function with loops is unrolled to a bound taken from
+// `vc_unwind_bounds`, smallest first; each round decides every claim of the
+// unrolled function by its own solver run, in IR order. A hard claim that is not
+// `unsat` decides the result: a counterexample inside the unrolled prefix is a
+// real run, so it fails the function at once. `unsat` is the only outcome that
+// counts as proof, and only when the round's unwinding claim is `unsat` too. A
+// `sat` unwinding claim means some run needs more iterations than the bound: the
+// next round unrolls further, and after the last the result is `unknown`, never
+// `proven`. A soft claim (a checked operator's abort) never fails the function:
+// `sat` records that the abort is reachable, `unsat` that it is not, and only an
+// undecided run (unknown, timeout, error) stops the check. `timeout_ms` is the
+// budget for the whole function, shared by all rounds; each claim gets what is
+// left of it. `scratch`, when not empty, is the directory for the query files.
+// The solver is looked up only when there is a claim to decide: a function
+// without obligations is proven without one.
+//
+// A function whose loops all carry an `invariant` is first tried inductively
+// (`vc_induct`): each loop is cut at its header, its variables are havoc'd and
+// the invariant is assumed there, so one query set covers every trip count.
+// All claims `unsat` is a proof; anything else says nothing, because a
+// counterexample may be a state no run reaches, so the bounded schedule above
+// decides. A proof with no checked-arithmetic claim ends the check. With one,
+// the bounded rounds still run, so the warnings are the aborts they find, and
+// the proof is used where they end `unknown` (open at the largest bound, over
+// the size budget, or undecided). It never changes a counterexample.
+//
+// A round that is open (its base case holds, its unwinding claim does not) also
+// runs the k-induction step case at its own bound (`vc_step_attempt`), for a
+// function with exactly one loop and whatever invariants it has: the loop is
+// unrolled from an arbitrary header state with the earlier iterations as
+// hypotheses, so a property that is k-inductive but not 1-inductive, or has no
+// invariant at all, is still proven for every trip count. Its outcome is used
+// as an inductive proof is: all claims `unsat` proves, anything else is
+// silently "not proved" and the bounded schedule goes on. It is never `failed`.
 
 // A verdict plus the reachable checked-arithmetic aborts found on the way. The
-// sites are meaningful only when the result is `proven`.
+// sites are meaningful only when the result is `proven`. A failure inside an
+// inlined callee also carries the call chain that leads to it, outermost first:
+// per call the function it is made in and the source range of the call. In
+// all-claims mode (`vc_verify_function_mode`) `clause_ids`/`clause_proven` also
+// carry the verdict of each `ensures`/`invariant` clause that has one: `1`
+// proven, `0` failed (see `vc_clause`); both are empty otherwise.
 struct VcOutcome {
     result: VerifyResult,
     sites: Vec<ParsedArithSite>,
+    chain_funcs: Vec<i64>,
+    chain_starts: Vec<i64>,
+    chain_lens: Vec<i64>,
+    clause_ids: Vec<i64>,
+    clause_proven: Vec<i64>,
+}
+
+// Number of back edges a loop may take before the unwinding claim fails, per
+// round. The last bound is at least ESBMC's default `--max-k-step`, so every
+// loop ESBMC proves by unwinding is still proven. Internal: `--timeout` is the
+// only user knob.
+fn vc_unwind_bounds() -> Vec<i64> {
+    let b: Vec<i64> = Vec::new();
+    b.push(2);
+    b.push(4);
+    b.push(8);
+    b.push(16);
+    b.push(32);
+    b.push(64);
+    b
+}
+
+// Test-only switch, like `VOW_VERIFY_WORKER_MEM_KB`: `VOW_VERIFY_NO_SLICE=1`
+// sends every claim's full query, so the corpus can be run both ways to show
+// that slicing never changes a verdict.
+fn vc_slicing_enabled() -> bool [read] {
+    getenv(String::from("VOW_VERIFY_NO_SLICE")) != String::from("1")
+}
+
+// Test-only switch, like `VOW_VERIFY_NO_SLICE`: `VOW_VERIFY_NO_INCREMENTAL=1`
+// gives every claim its own solver process, so the corpus can be run both ways
+// to show that sharing a solver across the claims of a round never changes a
+// verdict or a counterexample.
+fn vc_incremental_enabled() -> bool [read] {
+    getenv(String::from("VOW_VERIFY_NO_INCREMENTAL")) != String::from("1")
 }
 
 fn vc_bare_outcome(result: VerifyResult) -> VcOutcome {
-    VcOutcome { result: result, sites: Vec::new() }
+    VcOutcome { result: result, sites: Vec::new(), chain_funcs: Vec::new(), chain_starts: Vec::new(), chain_lens: Vec::new(), clause_ids: Vec::new(), clause_proven: Vec::new() }
 }
 
-fn vc_check_claim(bin: String, cs: VcClaims, k: u64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+// `result` for a claim of frame `frame`: the calls from the target down to it.
+fn vc_chain_outcome(f: IrFunction, fr: VcFrames, frame: i64, result: VerifyResult) -> VcOutcome {
+    let oc: VcOutcome = vc_bare_outcome(result);
+    let up: Vec<i64> = Vec::new();
+    let mut k: i64 = frame;
+    while k >= 0 && k < fr.func_ids.len() as i64 {
+        up.push(k);
+        k = fr.parents[k as u64];
+    }
+    let mut i: i64 = up.len() as i64;
+    while i > 0 {
+        i = i - 1;
+        let j: i64 = up[i as u64];
+        oc.chain_funcs.push(vc_frame_func(fr, fr.parents[j as u64], f.id));
+        oc.chain_starts.push(fr.call_starts[j as u64]);
+        oc.chain_lens.push(fr.call_lens[j as u64]);
+    }
+    oc
+}
+
+// Asks claim `k`'s full query, prefix and all, in a standalone process.
+fn vc_check_claim_full(cache: VcCache, bin: String, cs: VcClaims, k: u64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
     let query: String = vc_smt_render(cs.arena, vc_claim_script(cs, k));
-    vc_solver_check(bin, query, cs.model_names, cs.model_widths, budget_ms, scratch)
+    vc_solver_check_cached(cache, bin, query, vc_claim_model_names(cs, k), vc_claim_model_widths(cs, k), budget_ms, scratch)
 }
 
-fn vc_verify_function(f: IrFunction, timeout_ms: i64, scratch: String) -> VcOutcome [io, read, write] {
-    let cs: VcClaims = vc_claims(f);
-    if cs.kinds.len() == 0 {
-        return vc_bare_outcome(vc_proven_result());
+// Decides claim `k` with standalone queries. With slicing on, the query holds
+// only the claim's cone of influence and an `unsat` answer to it is final: the
+// sliced query is a relaxation of the full one. Any other answer says nothing
+// about the full query (the dropped assumptions may be contradictory on their
+// own, which makes the claim vacuously proven), so the full query is asked in
+// what is left of the budget and alone decides. The one exception is a soft
+// claim from which only definitions were dropped: that query is equisatisfiable
+// with the full one and its answer carries no model, so it stands.
+fn vc_check_claim_oneshot(cache: VcCache, bin: String, cs: VcClaims, sx: VcSlicer, slicing: bool, k: u64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+    if slicing {
+        let sl: VcSlice = vc_slice_claim(sx, cs, k);
+        if sl.dropped_asserts || sl.dropped_defs {
+            let started: i64 = time_micros();
+            let small: String = vc_smt_render(cs.arena, vc_claim_script_sliced(cs, k, sl));
+            let ans: VcSolverAnswer = vc_solver_check_cached(cache, bin, small, vc_claim_model_names(cs, k), vc_claim_model_widths(cs, k), budget_ms, scratch);
+            if ans.verdict == VC_ANS_UNSAT() { return ans; }
+            if !sl.dropped_asserts && vc_claim_is_soft(cs, k) { return ans; }
+            let left_ms: i64 = budget_ms - (time_micros() - started) / 1000;
+            return vc_check_claim_full(cache, bin, cs, k, left_ms, scratch);
+        }
     }
-    let bin: String = vc_solver_locate();
-    if bin.len() == 0 {
-        return vc_bare_outcome(vc_claim_result(f, cs, 0, vc_answer_plain(VC_ANS_NOT_FOUND(), String::from("Bitwuzla not found"))));
-    }
-    let sites: Vec<ParsedArithSite> = Vec::new();
+    vc_check_claim_full(cache, bin, cs, k, budget_ms, scratch)
+}
+
+// Decides claim `k`. The result cache is consulted first under the claim's full
+// query text, the key a standalone query of the claim uses too, so a decision
+// made by a session or by a standalone process serves both. A hit is the
+// answer; a miss goes on. A live session is asked next, with at most half of the
+// budget so a hard full prefix cannot starve the standalone queries. Its `unsat`
+// is final (and stored), and so is its `sat` on a soft claim, whose model is
+// never read and so is not stored. A `sat` on a hard claim goes straight to the
+// full standalone query, which alone supplies the counterexample (the model of
+// an incremental solver is not promised to equal a fresh one's). Anything else
+// -- `unknown`, a timeout, a dead or absent session -- takes the standalone path
+// in the time that is left. A non-positive budget never reaches the cache.
+fn vc_check_claim(cache: VcCache, bin: String, cs: VcClaims, sx: VcSlicer, ss: VcSession, slicing: bool, k: u64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
     let started: i64 = time_micros();
+    let mut query: String = String::from("");
+    if budget_ms > 0 && vc_cache_on(cache) {
+        query = vc_smt_render(cs.arena, vc_claim_script(cs, k));
+        let hit: VcSolverAnswer = vc_cache_peek(cache, query, vc_claim_model_count(cs, k));
+        if hit.verdict != VC_ANS_NONE() { return hit; }
+    }
+    let said: i64 = vc_session_ask(ss, bin, cs, k, budget_ms / 2);
+    if said == VC_ANS_UNSAT() {
+        let proof: VcSolverAnswer = vc_answer_plain(VC_ANS_UNSAT(), String::from(""));
+        if query.len() > 0 { vc_cache_put(cache, query, proof); }
+        return proof;
+    }
+    if said == VC_ANS_SAT() && vc_claim_is_soft(cs, k) { return vc_answer_plain(VC_ANS_SAT(), String::from("")); }
+    let left_ms: i64 = budget_ms - (time_micros() - started) / 1000;
+    if said == VC_ANS_SAT() { return vc_check_claim_full(cache, bin, cs, k, left_ms, scratch); }
+    vc_check_claim_oneshot(cache, bin, cs, sx, slicing, k, left_ms, scratch)
+}
+
+// Every unrolled copy of a checked operator repeats one source site.
+fn vc_has_site(sites: Vec<ParsedArithSite>, site: ParsedArithSite) -> bool {
+    let mut i: u64 = 0;
+    while i < sites.len() {
+        let s: ParsedArithSite = sites[i];
+        if s.ostart == site.ostart && s.olen == site.olen && s.owner == site.owner && s.cause == site.cause {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+// `ended`: a hard claim was not `unsat` and `result` is the first such (or, in
+// all-claims mode with `halted`, the answer that stopped the round). `open`: the
+// unwinding claim was `sat`. `halted`: the round is not closed and no larger one
+// is asked: the solver gave an answer after which no further claim is asked
+// (timeout, memory, missing, error), or it could not decide the unwinding claim.
+// `soft`: the round has a checked-arithmetic claim (meaningful only for a round
+// that ran every claim).
+struct VcRound {
+    result: VerifyResult,
+    ended: bool,
+    open: bool,
+    frame: i64,
+    halted: bool,
+    soft: bool,
+}
+
+fn vc_round(result: VerifyResult, ended: bool, open: bool, frame: i64, halted: bool, soft: bool) -> VcRound {
+    VcRound { result: result, ended: ended, open: open, frame: frame, halted: halted, soft: soft }
+}
+
+fn vc_answer_halts(verdict: i64) -> bool {
+    verdict == VC_ANS_TIMEOUT() || verdict == VC_ANS_MEMORY() || verdict == VC_ANS_NOT_FOUND() || verdict == VC_ANS_ERROR()
+}
+
+// Feeds the answer to claim `k` to the clause accumulator when `k` is a claim of
+// one of the target's own clauses. A callee's clauses and aborts are not.
+fn vc_note_clause(acc: VcClauseAcc, cs: VcClaims, k: u64, verdict: i64) {
+    if cs.frames[k] < 0 && cs.kinds[k] == VC_CLAIM_ENSURES() && cs.vow_ids[k] >= 0 {
+        vc_clause_note(acc, cs.vow_ids[k], verdict);
+    }
+}
+
+// A soft claim is one whose `sat` is not a failure: a reachable checked-operator
+// abort, or an unwinding claim.
+fn vc_claim_is_soft(cs: VcClaims, k: u64) -> bool {
+    cs.kinds[k] == VC_CLAIM_ARITH() || cs.kinds[k] == VC_CLAIM_UNWIND()
+}
+
+// True when claim `k` is `sat` without a solver: its negated goal is the
+// constant `true` and nothing is assumed before it, so the query is the header
+// (declarations and definitions only, which any assignment satisfies) alone. A
+// hard claim still goes to the solver, which supplies its counterexample.
+fn vc_claim_is_static_sat(cs: VcClaims, k: u64) -> bool {
+    if !vc_claim_is_soft(cs, k) { return false; }
+    cs.assumed_lens[k] == 0 && vc_tm_is_true(cs.arena, cs.negated_goals[k])
+}
+
+// Records a `sat` verdict on a soft claim: the reachable abort of a checked
+// operator is a site, an unwinding claim leaves the round open. True when it
+// opens the round.
+fn vc_note_soft_sat(f: IrFunction, fr: VcFrames, cs: VcClaims, k: u64, sites: Vec<ParsedArithSite>) -> bool {
+    if cs.kinds[k] != VC_CLAIM_ARITH() { return true; }
+    let site: ParsedArithSite = ParsedArithSite { cause: cs.labels[k], owner: vc_frame_func(fr, cs.frames[k], f.id), ostart: cs.ostarts[k], olen: cs.olens[k] };
+    if !vc_has_site(sites, site) {
+        sites.push(site);
+    }
+    false
+}
+
+// One round: the claims of the unrolled function `g` of `f`. `sites` collects
+// the reachable soft aborts. Returns the verdict that ends the check (any
+// outcome but `unsat`/soft `sat`/open unwinding), or `proven` with `open` set
+// when only the unwinding claim was `sat`. The solver is located when the first
+// claim that needs it comes up. With `all_claims` a hard claim that is not
+// `unsat` is recorded and the round goes on (its first one is the result), so
+// the later claims can still be decided; only an answer that no later claim can
+// improve on halts it. `acc` receives the answer to every claim of a target
+// clause in that mode. `soft` tells whether `g` has a soft claim, and is
+// meaningful only for a round that ran every claim. `hyp` is the hypothesis
+// marking of a step function, empty otherwise.
+fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, hyp: Vec<i64>, sites: Vec<ParsedArithSite>, started: i64, timeout_ms: i64, scratch: String, cache: VcCache, slicing: bool, all_claims: bool, acc: VcClauseAcc) -> VcRound [io, read, write] {
+    let cs: VcClaims = vc_claims_step(g, fr, f.vows.len() == 0, hyp);
+    if cs.kinds.len() == 0 {
+        return vc_round(vc_proven_result(), false, false, -1, false, false);
+    }
+    let ss: VcSession = vc_session_new(vc_session_wanted(cs));
+    let r: VcRound = vc_run_claims(f, fr, cs, ss, sites, started, timeout_ms, scratch, cache, slicing, all_claims, acc);
+    vc_session_close(ss);
+    r
+}
+
+// Whether the claims of a round share one solver process: only when at least
+// two of them need a solver, and the test-only switch is not set.
+fn vc_session_wanted(cs: VcClaims) -> bool [read] {
+    if !vc_incremental_enabled() { return false; }
+    let mut needed: i64 = 0;
     let mut k: u64 = 0;
     while k < cs.kinds.len() {
-        let spent_ms: i64 = (time_micros() - started) / 1000;
-        let ans: VcSolverAnswer = vc_check_claim(bin, cs, k, timeout_ms - spent_ms, scratch);
-        if cs.kinds[k] == VC_CLAIM_ARITH() && ans.verdict == VC_ANS_SAT() {
-            sites.push(ParsedArithSite { cause: cs.labels[k], owner: f.id, ostart: cs.ostarts[k], olen: cs.olens[k] });
-        } else if ans.verdict != VC_ANS_UNSAT() {
-            return vc_bare_outcome(vc_claim_result(f, cs, k, ans));
+        if !vc_claim_is_static_sat(cs, k) { needed = needed + 1; }
+        k = k + 1;
+    }
+    needed >= 2
+}
+
+// The claims of `cs` in order; `ss` is closed by the caller on every return.
+fn vc_run_claims(f: IrFunction, fr: VcFrames, cs: VcClaims, ss: VcSession, sites: Vec<ParsedArithSite>, started: i64, timeout_ms: i64, scratch: String, cache: VcCache, slicing: bool, all_claims: bool, acc: VcClauseAcc) -> VcRound [io, read, write] {
+    let sx: VcSlicer = vc_slicer_new(cs);
+    let mut bin: String = String::from("");
+    let mut located: bool = false;
+    let mut open: bool = false;
+    let mut failed: bool = false;
+    let mut stuck: bool = false;
+    let mut first: VerifyResult = vc_proven_result();
+    let mut first_frame: i64 = -1;
+    let mut soft: bool = false;
+    let mut k: u64 = 0;
+    while k < cs.kinds.len() {
+        if cs.kinds[k] == VC_CLAIM_ARITH() {
+            soft = true;
+        }
+        if vc_claim_is_static_sat(cs, k) {
+            if vc_note_soft_sat(f, fr, cs, k, sites) { open = true; }
+        } else {
+            if !located {
+                bin = vc_solver_locate();
+                located = true;
+            }
+            if bin.len() == 0 {
+                let nf: VerifyResult = vc_claim_result(f, cs, k, vc_answer_plain(VC_ANS_NOT_FOUND(), String::from("Bitwuzla not found")));
+                return vc_round(nf, true, false, -1, true, false);
+            }
+            let spent_ms: i64 = (time_micros() - started) / 1000;
+            let ans: VcSolverAnswer = vc_check_claim(cache, bin, cs, sx, ss, slicing, k, timeout_ms - spent_ms, scratch);
+            if ans.verdict == VC_ANS_UNSAT() {
+                vc_note_clause(acc, cs, k, VC_CLAUSE_UNSAT());
+            } else if vc_claim_is_soft(cs, k) && ans.verdict == VC_ANS_SAT() {
+                if vc_note_soft_sat(f, fr, cs, k, sites) { open = true; }
+            } else {
+                if !all_claims {
+                    return vc_round(vc_claim_result(f, cs, k, ans), true, false, cs.frames[k], false, soft);
+                }
+                let mut verdict: i64 = VC_CLAUSE_UNDECIDED();
+                if ans.verdict == VC_ANS_SAT() { verdict = VC_CLAUSE_FAILED(); }
+                vc_note_clause(acc, cs, k, verdict);
+                if cs.kinds[k] == VC_CLAIM_UNWIND() { stuck = true; }
+                if !failed {
+                    first = vc_claim_result(f, cs, k, ans);
+                    first_frame = cs.frames[k];
+                    failed = true;
+                }
+                if vc_answer_halts(ans.verdict) {
+                    return vc_round(first, true, false, first_frame, true, soft);
+                }
+            }
         }
         k = k + 1;
     }
-    VcOutcome { result: vc_proven_result(), sites: sites }
+    if failed {
+        return vc_round(first, true, open, first_frame, stuck, soft);
+    }
+    vc_round(vc_proven_result(), false, open, -1, false, soft)
+}
+
+// The inductive attempt on `closed` (the loop-closed function of target `f`):
+// `proves` when every claim of the cut function is `unsat`, `soft` when that
+// function has a checked-arithmetic claim. Only `proves` is ever acted on: a
+// counterexample to an inductive claim may be a state no run reaches, so a
+// failure here says nothing and the bounded verdict stands. Its claim answers
+// go to a scratch accumulator of their own: they say nothing about the clauses
+// of the bounded rounds.
+struct VcInduction {
+    proves: bool,
+    soft: bool,
+}
+
+// A round proves the target when it ran every claim to `unsat`.
+fn vc_round_proves(r: VcRound) -> VcInduction {
+    VcInduction { proves: !r.ended && !r.open, soft: r.soft }
+}
+
+fn vc_induction_attempt(f: IrFunction, closed: IrFunction, fr: VcFrames, started: i64, timeout_ms: i64, scratch: String, cache: VcCache, slicing: bool) -> VcInduction [io, read, write] {
+    let none: VcInduction = VcInduction { proves: false, soft: false };
+    let c: VcInduct = vc_induct_cut(closed);
+    if c.status != VC_INDUCT_OK() {
+        return none;
+    }
+    let g: IrFunction = c.f;
+    let sites: Vec<ParsedArithSite> = Vec::new();
+    let r: VcRound = vc_run_round(f, g, fr, Vec::new(), sites, started, timeout_ms, scratch, cache, slicing, false, vc_clause_acc_new());
+    vc_round_proves(r)
+}
+
+// The k-induction step case at `bound` = k, run only after the bounded round at
+// the same bound found its base case `unsat` and its unwinding claim open: the
+// copies 0..k of that round are the base, so a step function with every claim
+// `unsat` proves the target for every trip count. `proves` is the only thing
+// acted on, as for `vc_induction_attempt`: a counterexample to the step may be a
+// state no run reaches, so a failing step is never a verdict.
+fn vc_step_attempt(f: IrFunction, closed: IrFunction, fr: VcFrames, bound: i64, started: i64, timeout_ms: i64, scratch: String, cache: VcCache, slicing: bool) -> VcInduction [io, read, write] {
+    let none: VcInduction = VcInduction { proves: false, soft: false };
+    let u: VcUnrolled = vc_unroll_step(closed, bound);
+    if u.status != VC_UNROLL_OK() {
+        return none;
+    }
+    let g: IrFunction = u.f;
+    if vc_unrolled_detail(g, vc_ty_table(g)).len() > 0 {
+        return none;
+    }
+    let sites: Vec<ParsedArithSite> = Vec::new();
+    let r: VcRound = vc_run_round(f, g, fr, u.hyp, sites, started, timeout_ms, scratch, cache, slicing, false, vc_clause_acc_new());
+    vc_round_proves(r)
+}
+
+fn vc_proven_with(sites: Vec<ParsedArithSite>) -> VcOutcome {
+    let proven: VcOutcome = vc_bare_outcome(vc_proven_result());
+    proven.sites = sites;
+    proven
+}
+
+// The sites of an incomplete round (it ended undecided part way) plus those the
+// last completed round found: the incomplete round must not lose a warning.
+fn vc_merge_sites(sites: Vec<ParsedArithSite>, earlier: Vec<ParsedArithSite>) -> Vec<ParsedArithSite> {
+    let mut i: u64 = 0;
+    while i < earlier.len() {
+        if !vc_has_site(sites, earlier[i]) {
+            sites.push(earlier[i]);
+        }
+        i = i + 1;
+    }
+    sites
+}
+
+// A bounded round that ends undecided (solver unknown, timeout) cannot overturn
+// an inductive proof; a counterexample or an error does.
+fn vc_undecided(r: VcRound) -> bool {
+    r.result.status == VERIFY_TIMEOUT() || r.result.status == VERIFY_UNKNOWN()
+}
+
+// The outcome with the clause verdicts of `acc` attached, in all-claims mode.
+// `closed` says whether the last round's unwinding claim was `unsat`.
+fn vc_with_clauses(oc: VcOutcome, acc: VcClauseAcc, targets: Vec<i64>, all_claims: bool, closed: bool) -> VcOutcome {
+    if !all_claims { return oc; }
+    let vd: VcClauseVerdicts = vc_clause_finish(acc, targets, closed);
+    oc.clause_ids = vd.ids;
+    oc.clause_proven = vd.proven;
+    oc
+}
+
+// The outcome of a check that stops with its last round open (a larger
+// unrolling that cannot be built, or the schedule's end): the failure an earlier
+// round found when there is one, else `fallback`. The failing clauses of the
+// earlier rounds keep their verdicts, nothing is proven.
+fn vc_stopped_outcome(f: IrFunction, fr: VcFrames, frozen: VcRound, fallback: VcOutcome, acc: VcClauseAcc, targets: Vec<i64>, all_claims: bool) -> VcOutcome {
+    let mut oc: VcOutcome = fallback;
+    if frozen.ended { oc = vc_chain_outcome(f, fr, frozen.frame, frozen.result); }
+    vc_with_clauses(oc, acc, targets, all_claims, false)
+}
+
+// The outcome of a check that stops with its last round open (a larger unrolling
+// that cannot be built, or the schedule's end). An inductive proof stands unless
+// an earlier round found a failure that is not merely undecided; every clause is
+// then proven, and `last_sites` are the warnings. Otherwise it is
+// `vc_stopped_outcome` with `unknown` for `reason` as the fallback.
+fn vc_open_stop(f: IrFunction, fr: VcFrames, ind: VcInduction, frozen: VcRound, last_sites: Vec<ParsedArithSite>, reason: String, acc: VcClauseAcc, targets: Vec<i64>, all_claims: bool) -> VcOutcome {
+    if ind.proves && (!frozen.ended || vc_undecided(frozen)) {
+        return vc_with_clauses(vc_proven_with(last_sites), vc_clause_acc_new(), targets, all_claims, true);
+    }
+    let open: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), reason));
+    vc_stopped_outcome(f, fr, frozen, open, acc, targets, all_claims)
+}
+
+// The outcome of a round that ended with the failure `frozen`: the failure,
+// with the clause verdicts of `acc` (`closed` says whether the round's unwinding
+// claim was `unsat`), unless an inductive proof stands and the failure is only
+// undecided: then it is proven, with the sites of this and the last round.
+fn vc_decided_outcome(f: IrFunction, fr: VcFrames, ind: VcInduction, frozen: VcRound, sites: Vec<ParsedArithSite>, last_sites: Vec<ParsedArithSite>, acc: VcClauseAcc, targets: Vec<i64>, all_claims: bool, closed: bool) -> VcOutcome {
+    if ind.proves && vc_undecided(frozen) {
+        return vc_with_clauses(vc_proven_with(vc_merge_sites(sites, last_sites)), vc_clause_acc_new(), targets, all_claims, true);
+    }
+    let oc: VcOutcome = vc_chain_outcome(f, fr, frozen.frame, frozen.result);
+    vc_with_clauses(oc, acc, targets, all_claims, closed)
+}
+
+// The engine. Without `all_claims` the first hard claim that is not `unsat`
+// ends the check. With it every claim of a round is decided (see
+// `vc_run_round`), the overall result is still the first failure in claim order
+// (from the first round that has one), and the outcome also carries a verdict
+// per `ensures`/`invariant` clause. A round with a failure is followed by larger
+// ones while its unwinding claim is open, since only a closed round can prove
+// the clauses that did not fail.
+fn vc_verify_function_mode(f: IrFunction, m: IrModule, timeout_ms: i64, scratch: String, cache: VcCache, all_claims: bool) -> VcOutcome [io, read, write] {
+    let bounds: Vec<i64> = vc_unwind_bounds();
+    let inl: VcInlined = vc_inline(f, m, VC_INLINE_INST_CAP());
+    if inl.status == VC_INLINE_TOO_LARGE() {
+        return vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), vc_inline_budget_reason(VC_INLINE_INST_CAP())));
+    }
+    if inl.status != VC_INLINE_OK() {
+        return vc_bare_outcome(vc_plain_result(VERIFY_ERROR(), String::from("internal error: call inlining failed")));
+    }
+    let closed: IrFunction = vc_close_loops(inl.f);
+    let started: i64 = time_micros();
+    let slicing: bool = vc_slicing_enabled();
+    let acc: VcClauseAcc = vc_clause_acc_new();
+    let mut targets: Vec<i64> = Vec::new();
+    if all_claims { targets = vc_clause_targets(f); }
+    let mut ind: VcInduction = vc_induction_attempt(f, closed, inl.frames, started, timeout_ms, scratch, cache, slicing);
+    if ind.proves && !ind.soft {
+        return vc_with_clauses(vc_proven_with(Vec::new()), acc, targets, all_claims, true);
+    }
+    let mut last_sites: Vec<ParsedArithSite> = Vec::new();
+    let mut frozen: VcRound = vc_round(vc_proven_result(), false, false, -1, false, false);
+    let mut round: u64 = 0;
+    while round < bounds.len() {
+        let bound: i64 = bounds[round];
+        let u: VcUnrolled = vc_unroll(closed, bound);
+        if u.status == VC_UNROLL_TOO_LARGE() {
+            return vc_open_stop(f, inl.frames, ind, frozen, last_sites, vc_unwinding_budget_reason(bound), acc, targets, all_claims);
+        }
+        let g: IrFunction = u.f;
+        if u.status != VC_UNROLL_OK() || (u.looped && vc_unrolled_detail(g, vc_ty_table(g)).len() > 0) {
+            let bad: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_ERROR(), String::from("internal error: loop unrolling produced an unsupported control-flow graph")));
+            return vc_stopped_outcome(f, inl.frames, frozen, bad, acc, targets, all_claims);
+        }
+        let sites: Vec<ParsedArithSite> = Vec::new();
+        let r: VcRound = vc_run_round(f, g, inl.frames, Vec::new(), sites, started, timeout_ms, scratch, cache, slicing, all_claims, acc);
+        if r.ended && !frozen.ended {
+            frozen = r;
+        }
+        if r.ended && (!all_claims || r.halted || !r.open || round + 1 == bounds.len()) {
+            return vc_decided_outcome(f, inl.frames, ind, frozen, sites, last_sites, acc, targets, all_claims, !r.halted && !r.open);
+        }
+        if !r.ended && !r.open {
+            if frozen.ended {
+                return vc_decided_outcome(f, inl.frames, ind, frozen, sites, last_sites, acc, targets, all_claims, true);
+            }
+            return vc_with_clauses(vc_proven_with(sites), acc, targets, all_claims, true);
+        }
+        last_sites = sites;
+        if !r.ended && !ind.proves {
+            let st: VcInduction = vc_step_attempt(f, closed, inl.frames, bound, started, timeout_ms, scratch, cache, slicing);
+            if st.proves {
+                ind = VcInduction { proves: true, soft: st.soft || r.soft };
+                if !ind.soft && (!frozen.ended || vc_undecided(frozen)) {
+                    return vc_with_clauses(vc_proven_with(Vec::new()), vc_clause_acc_new(), targets, all_claims, true);
+                }
+            }
+        }
+        if !r.ended && round + 1 == bounds.len() {
+            return vc_open_stop(f, inl.frames, ind, frozen, last_sites, vc_unwinding_reason(bound), acc, targets, all_claims);
+        }
+        if all_claims { vc_clause_next_round(acc); }
+        round = round + 1;
+    }
+    vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), vc_unwinding_reason(bounds[bounds.len() - 1])))
 }

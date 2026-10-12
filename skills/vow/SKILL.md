@@ -2,7 +2,7 @@
 name: vow
 description: >-
   Write, compile, debug, and verify Vow programs (.vow files) with contracts,
-  CEGIS, ESBMC counterexamples, diagnostics, and vow build / vow verify.
+  CEGIS, verifier counterexamples, diagnostics, and vow build / vow verify.
 when_to_use: >-
   Use when the user edits or creates .vow files, says "write a Vow program",
   "fix this counterexample", "add contracts", "why did verification fail",
@@ -15,6 +15,15 @@ argument-hint: "[file.vow]"
 Use this skill when writing, compiling, debugging, or verifying Vow programs.
 Keep the workflow tight: run the compiler, read the structured JSON, fix the
 program or contract, and repeat until the result is `Verified`.
+
+## Do nots
+
+- Do not weaken, cap, or distort a contract to make verification pass; fix the code or report that the proof is out of reach.
+- Do not add verifier-motivated bounds (`n <= 10`, length or capacity caps) to `requires`; keep only real domain constraints and use checked operators (`+!`) for overflow.
+- Do not use `--no-verify` to get past a real verification failure; it only skips the proof (status `Unverified`).
+- Do not report a program as verified unless `status` is `Verified`; `Unverified` means the proof never ran and `Skipped` means a function could not be modelled.
+- Do not invent CLI flags, JSON fields, syntax, or builtins; check `--help` and the reference files first.
+- Do not scrape terminal prose; parse the JSON result that `build` and `verify` print to stdout (`status`, `diagnostics`, `counterexamples`), not the human-readable text on stderr.
 
 ## Installed toolchain (live)
 
@@ -48,3 +57,5 @@ fn main() -> i32 [io] {
 - Standard library (math, heap, stack, geometry, bignum, gc): [reference/stdlib.md](reference/stdlib.md)
 - Worked examples: [examples/examples.md](examples/examples.md)
 - JSON schemas: [schemas/](schemas/)
+
+Outside Claude Code (raw API or custom agent harness that cannot load these files): run `build/vowc skill print --bundle` for one self-contained document with all of the above inlined.

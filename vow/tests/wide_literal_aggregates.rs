@@ -372,85 +372,208 @@ fn wide_codegen_produces_an_executable() {
     );
 }
 
-/// Drives `vow build` over a source that must be refused, and asserts the
-/// refusal is structured: exit 1, `CompileFailed`, a `message` naming the
-/// limitation, and no executable left behind.
-fn assert_build_fails_closed(stem: &str, source: &str, expected_message: &str, why: &str) {
+/// 128-bit `Vec` elements are 16 bytes wide, so both limbs must survive a
+/// push/index/assign round trip, neighbouring elements must not overlap, and a
+/// buffer that regrows must keep every element intact.
+#[test]
+fn wide_vec_elements_round_trip_both_limbs() {
+    ensure_runtime_archive();
     let dir = tempfile::TempDir::new().unwrap();
-    let source_path = dir.path().join(format!("{stem}.vow"));
-    let output_path = dir.path().join(stem);
-    fs::write(&source_path, source).unwrap();
+    let source_path = dir.path().join("wide_vec.vow");
+    let output_path = dir.path().join("wide_vec");
+    fs::write(
+        &source_path,
+        r#"module WideVec
+fn main() -> () [io] {
+    let v: Vec<u128> = Vec::new();
+    let mut i: u64 = 0;
+    while i < 40 {
+        v.push(340282366920938463463374607431768211454 - (i as u128));
+        i = i + 1;
+    }
+    v[3] = 7;
+    let mut total: u128 = 0;
+    for x in v {
+        total = total + x;
+    }
+    let first: u128 = v[0];
+    let fourth: u128 = v[3];
+    let last: u128 = v[39];
+    print_i64(u128_to_u8_wrap(first >> 120) as i64);
+    print_str(" ");
+    print_i64(u128_to_u8_wrap(first) as i64);
+    print_str(" ");
+    print_i64(u128_to_u8_wrap(fourth) as i64);
+    print_str(" ");
+    print_i64(u128_to_u8_wrap(last) as i64);
+    print_str(" ");
+    print_i64(u128_to_u8_wrap(total) as i64);
+}
+"#,
+    )
+    .unwrap();
 
     let output = Command::new(vow_bin())
         .args([
             "build",
             "--no-verify",
-            "--no-cache",
             source_path.to_str().unwrap(),
             "-o",
             output_path.to_str().unwrap(),
         ])
         .output()
         .expect("failed to run vow");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: serde_json::Value = serde_json::from_str(&stdout)
-        .unwrap_or_else(|error| panic!("invalid JSON from build: {error}\nstdout: {stdout}"));
-
     assert_eq!(
         output.status.code(),
-        Some(1),
-        "{why} must fail closed\nstdout: {stdout}\nstderr: {stderr}"
+        Some(0),
+        "build failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(json["status"], "CompileFailed");
-    assert_eq!(json["diagnostics"].as_array().map(Vec::len), Some(1));
-    assert_eq!(json["diagnostics"][0]["error_code"], "CodegenUnsupported");
-    assert!(
-        json["message"]
-            .as_str()
-            .is_some_and(|message| message.contains(expected_message)),
-        "build must explain why it refused {why}: {json}"
+    let run = Command::new(&output_path)
+        .output()
+        .expect("failed to run compiled program");
+    assert_eq!(run.status.code(), Some(0), "program aborted");
+    // Element `i` is 2^128 - 2 - i, except element 3, which was set to 7. The
+    // sum of all 40 wraps modulo 2^128 to a value whose low byte is 176.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "255 254 7 215 176");
+}
+
+/// Text of one function in a `--dump-ir` listing.
+fn ir_function<'a>(dump: &'a str, name: &str) -> &'a str {
+    let header = format!("fn {name}(");
+    let start = dump
+        .find(&header)
+        .unwrap_or_else(|| panic!("missing function `{name}` in:\n{dump}"));
+    let rest = &dump[start..];
+    let end = rest[1..].find("\nfn ").map_or(rest.len(), |i| i + 1);
+    &rest[..end]
+}
+
+/// A `Vec<u128>` element is two slots wide, so `push`, index read, index
+/// write, and `for` go through the element-address helpers and the two-slot
+/// `WideSlot` access instead of the 8-byte `*_val` helpers. The element width
+/// comes from the checker, so a parameter-typed `Vec` works, and a narrow
+/// `Vec` keeps the 8-byte helper.
+#[test]
+fn wide_vec_accesses_use_element_address_helpers() {
+    ensure_runtime_archive();
+    let dir = tempfile::TempDir::new().unwrap();
+    let source_path = dir.path().join("wide_vec_layout.vow");
+    let output_path = dir.path().join("wide_vec_layout");
+    fs::write(
+        &source_path,
+        fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/wide_vec_layout.vow"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let output = Command::new(vow_bin())
+        .args([
+            "build",
+            "--no-verify",
+            "--no-cache",
+            "--dump-ir",
+            source_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run vow");
+    let dump = String::from_utf8_lossy(&output.stdout).into_owned()
+        + &String::from_utf8_lossy(&output.stderr);
+
+    let expect = |name: &str, present: &[&str], absent: &[&str]| {
+        let body = ir_function(&dump, name);
+        for needle in present {
+            assert!(
+                body.contains(needle),
+                "`{name}` must contain {needle}:\n{body}"
+            );
+        }
+        for needle in absent {
+            assert!(
+                !body.contains(needle),
+                "`{name}` must not contain {needle}:\n{body}"
+            );
+        }
+    };
+    expect(
+        "push_one",
+        &["extern:__vow_vec_push_wide_ptr", "FieldSet[wide_slot_0]"],
+        &["__vow_vec_push_val"],
     );
-    assert!(
-        !output_path.exists(),
-        "refused {why} must not leave an executable"
+    expect(
+        "read_one",
+        &["extern:__vow_vec_get_wide_ptr", "FieldGet[wide_slot_0]"],
+        &["__vow_vec_get_val"],
+    );
+    expect(
+        "write_one",
+        &["extern:__vow_vec_set_wide_ptr", "FieldSet[wide_slot_0]"],
+        &["__vow_vec_set_val"],
+    );
+    expect(
+        "sum",
+        &["extern:__vow_vec_get_wide_ptr", "FieldGet[wide_slot_0]"],
+        &["__vow_vec_get_val"],
+    );
+    expect(
+        "narrow",
+        &["extern:__vow_vec_get_val"],
+        &["__vow_vec_get_wide_ptr", "wide_slot"],
     );
 }
 
-/// A 128-bit value handed to an i64-only builtin (the `Vec` element helpers)
-/// must fail closed. Before the guard it compiled and silently returned the
-/// low limb — worse than the hard Cranelift panic it replaced.
+/// 128-bit struct fields occupy two consecutive slots, so both limbs must
+/// survive a store/load round trip and the narrow fields around the wide one
+/// must not overlap it.
 #[test]
-fn wide_values_in_aggregates_fail_closed() {
-    assert_build_fails_closed(
-        "wide_vec",
-        "module WideVec\n\
-         fn main() -> i32 {\n\
-         let v: Vec<i128> = Vec::new();\n\
-         v.push(3154393236604333326345);\n\
-         v[0];\n\
-         0\n\
-         }\n",
-        "silently drop the high 64 bits",
-        "128-bit Vec elements",
-    );
-}
-
-#[test]
-fn wide_struct_fields_fail_closed_with_a_named_limitation() {
-    assert_build_fails_closed(
-        "wide_struct",
+fn wide_struct_fields_round_trip_both_limbs() {
+    ensure_runtime_archive();
+    let dir = tempfile::TempDir::new().unwrap();
+    let source_path = dir.path().join("wide_struct.vow");
+    let output_path = dir.path().join("wide_struct");
+    fs::write(
+        &source_path,
         r#"module WideStruct
-struct Box { v: i128 }
+struct S { a: i64, w: u128, c: i64 }
 fn main() -> () [io] {
-    let b: Box = Box { v: 3154393236604333326336 };
-    let got: i128 = b.v;
-    print_i64(u128_to_u8_wrap((got as u128) >> 64) as i64);
+    let s: S = S { a: 1, w: 340282366920938463463374607431768211454, c: 2 };
+    s.a = 3;
+    s.c = 4;
+    let r: u128 = s.w - (s.a as u128) - (s.c as u128);
+    print_i64(u128_to_u8_wrap(r >> 120) as i64);
+    print_str(" ");
+    print_i64(u128_to_u8_wrap(r) as i64);
 }
 "#,
-        "128-bit struct fields",
-        "128-bit struct fields",
+    )
+    .unwrap();
+
+    let output = Command::new(vow_bin())
+        .args([
+            "build",
+            "--no-verify",
+            source_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run vow");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "build failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
+    let run = Command::new(&output_path)
+        .output()
+        .expect("failed to run compiled program");
+    assert_eq!(run.status.code(), Some(0), "program aborted");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "255 247");
 }
 
 /// 128-bit enum payloads occupy two consecutive slots, so the high limb must

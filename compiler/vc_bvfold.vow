@@ -1,0 +1,178 @@
+module VcBvfold
+
+// Two's-complement bit-vector arithmetic on constants of at most 64 bits, with
+// SMT-LIB semantics (division and shifts are total). A `w`-bit value is the
+// `i64` holding its bit pattern with every bit at or above `w` clear; a 64-bit
+// value uses all 64 bits, so unsigned comparison goes through a sign flip and
+// no helper ever relies on a negative `i64` meaning a negative number except
+// through `vc_bvfold_sext`. Every operand is a masked pattern and every result
+// is one. The term simplifier calls these only when both operands are constants.
+
+fn VC_BVFOLD_MIN() -> i64 { -9223372036854775807 - 1 }
+
+// The low `w` bits of `x`.
+fn vc_bvfold_mask(w: i64, x: i64) -> i64 {
+    if w <= 0 { return 0; }
+    if w >= 64 { return x; }
+    x & ((1 << w) - 1)
+}
+
+// The signed value of the `w`-bit pattern `x`.
+fn vc_bvfold_sext(w: i64, x: i64) -> i64 {
+    if w <= 0 { return 0; }
+    if w >= 64 { return x; }
+    let sign: i64 = 1 << (w - 1);
+    (x ^ sign) - sign
+}
+
+fn vc_bvfold_ult(a: i64, b: i64) -> bool {
+    (a ^ VC_BVFOLD_MIN()) < (b ^ VC_BVFOLD_MIN())
+}
+
+fn vc_bvfold_ule(a: i64, b: i64) -> bool {
+    (a ^ VC_BVFOLD_MIN()) <= (b ^ VC_BVFOLD_MIN())
+}
+
+fn vc_bvfold_slt(w: i64, a: i64, b: i64) -> bool {
+    vc_bvfold_sext(w, a) < vc_bvfold_sext(w, b)
+}
+
+fn vc_bvfold_sle(w: i64, a: i64, b: i64) -> bool {
+    vc_bvfold_sext(w, a) <= vc_bvfold_sext(w, b)
+}
+
+fn vc_bvfold_add(w: i64, a: i64, b: i64) -> i64 {
+    vc_bvfold_mask(w, a + b)
+}
+
+fn vc_bvfold_sub(w: i64, a: i64, b: i64) -> i64 {
+    vc_bvfold_mask(w, a - b)
+}
+
+fn vc_bvfold_mul(w: i64, a: i64, b: i64) -> i64 {
+    vc_bvfold_mask(w, a * b)
+}
+
+// True when the shift count `c` (a pattern of the same width as the value) is
+// below the width. For `w == 64` a negative `c` is a huge unsigned count.
+fn vc_bvfold_shift_in_range(w: i64, c: i64) -> bool {
+    c >= 0 && c < w
+}
+
+fn vc_bvfold_shl(w: i64, a: i64, c: i64) -> i64 {
+    if !vc_bvfold_shift_in_range(w, c) { return 0; }
+    vc_bvfold_mask(w, a << c)
+}
+
+fn vc_bvfold_lshr(w: i64, a: i64, c: i64) -> i64 {
+    if !vc_bvfold_shift_in_range(w, c) { return 0; }
+    if c == 0 { return a; }
+    let keep: i64 = (1 << (64 - c)) - 1;
+    (a >> c) & keep
+}
+
+fn vc_bvfold_ashr(w: i64, a: i64, c: i64) -> i64 {
+    let s: i64 = vc_bvfold_sext(w, a);
+    if !vc_bvfold_shift_in_range(w, c) {
+        if s < 0 { return vc_bvfold_mask(w, -1); }
+        return 0;
+    }
+    vc_bvfold_mask(w, s >> c)
+}
+
+// Unsigned division and remainder; division by zero follows SMT-LIB
+// (`bvudiv x 0` is all ones, `bvurem x 0` is `x`).
+fn vc_bvfold_udiv(w: i64, a: i64, b: i64) -> i64 {
+    if b == 0 { return vc_bvfold_mask(w, -1); }
+    if b < 0 {
+        if vc_bvfold_ult(a, b) { return 0; }
+        return 1;
+    }
+    if a >= 0 { return a / b; }
+    let half: i64 = ((a >> 1) & 9223372036854775807) / b;
+    let q: i64 = half << 1;
+    let r: i64 = a - q * b;
+    if vc_bvfold_ule(b, r) { return q + 1; }
+    q
+}
+
+fn vc_bvfold_urem(w: i64, a: i64, b: i64) -> i64 {
+    if b == 0 { return a; }
+    a - vc_bvfold_udiv(w, a, b) * b
+}
+
+// Signed division and remainder; the quotient of `MIN / -1` wraps to `MIN` and
+// the remainder is 0, a zero divisor follows SMT-LIB (`bvsdiv x 0` is 1 for a
+// negative `x` and all ones otherwise, `bvsrem x 0` is `x`).
+fn vc_bvfold_sdiv(w: i64, a: i64, b: i64) -> i64 {
+    let x: i64 = vc_bvfold_sext(w, a);
+    let y: i64 = vc_bvfold_sext(w, b);
+    if y == 0 {
+        if x < 0 { return 1; }
+        return vc_bvfold_mask(w, -1);
+    }
+    if y == -1 { return vc_bvfold_mask(w, 0 - x); }
+    vc_bvfold_mask(w, x / y)
+}
+
+fn vc_bvfold_srem(w: i64, a: i64, b: i64) -> i64 {
+    let x: i64 = vc_bvfold_sext(w, a);
+    let y: i64 = vc_bvfold_sext(w, b);
+    if y == 0 { return a; }
+    if y == -1 { return 0; }
+    vc_bvfold_mask(w, x % y)
+}
+
+// Whether `bvsmulo`/`bvumulo` of two `w`-bit constants can be folded: the
+// product of two operands below 2^32 fits 64 bits, and at 64 bits the check
+// divides back.
+fn vc_bvfold_mulo_ok(w: i64) -> bool {
+    (w >= 1 && w <= 32) || w == 64
+}
+
+fn vc_bvfold_saddo(w: i64, a: i64, b: i64) -> bool {
+    let x: i64 = vc_bvfold_sext(w, a);
+    let y: i64 = vc_bvfold_sext(w, b);
+    let s: i64 = x + y;
+    if w >= 64 { return ((x ^ s) & (y ^ s)) < 0; }
+    s != vc_bvfold_sext(w, vc_bvfold_mask(w, s))
+}
+
+fn vc_bvfold_uaddo(w: i64, a: i64, b: i64) -> bool {
+    let s: i64 = a + b;
+    if w >= 64 { return vc_bvfold_ult(s, a); }
+    s != vc_bvfold_mask(w, s)
+}
+
+fn vc_bvfold_ssubo(w: i64, a: i64, b: i64) -> bool {
+    let x: i64 = vc_bvfold_sext(w, a);
+    let y: i64 = vc_bvfold_sext(w, b);
+    let d: i64 = x - y;
+    if w >= 64 { return ((x ^ y) & (x ^ d)) < 0; }
+    d != vc_bvfold_sext(w, vc_bvfold_mask(w, d))
+}
+
+fn vc_bvfold_usubo(w: i64, a: i64, b: i64) -> bool {
+    vc_bvfold_ult(a, b)
+}
+
+// Callers check `vc_bvfold_mulo_ok(w)` first.
+fn vc_bvfold_umulo(w: i64, a: i64, b: i64) -> bool {
+    if a == 0 || b == 0 { return false; }
+    let p: i64 = a * b;
+    if w >= 64 { return vc_bvfold_udiv(w, p, b) != a; }
+    p != vc_bvfold_mask(w, p)
+}
+
+fn vc_bvfold_smulo(w: i64, a: i64, b: i64) -> bool {
+    let x: i64 = vc_bvfold_sext(w, a);
+    let y: i64 = vc_bvfold_sext(w, b);
+    if x == 0 || y == 0 { return false; }
+    let p: i64 = x * y;
+    if w >= 64 {
+        if x == -1 { return y == VC_BVFOLD_MIN(); }
+        if y == -1 { return x == VC_BVFOLD_MIN(); }
+        return p / x != y;
+    }
+    p != vc_bvfold_sext(w, vc_bvfold_mask(w, p))
+}

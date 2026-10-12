@@ -41,6 +41,7 @@ fn check_extern_symbols() -> i64 {
     if r == 0 { r = expect_extern(String::from("stdin_ready"), String::from("__vow_stdin_ready"), 18); }
     if r == 0 { r = expect_extern(String::from("eprintln_str"), String::from("__vow_eprintln_str"), 19); }
     if r == 0 { r = expect_extern(String::from("fs_remove_dir_all"), String::from("__vow_fs_remove_dir_all"), 39); }
+    if r == 0 { r = expect_extern(String::from("try_eprintln_str"), String::from("__vow_try_eprintln_str"), 41); }
     r
 }
 
@@ -67,6 +68,7 @@ fn check_ret_tys() -> i64 {
     if r == 0 { r = expect_ret_ty(String::from("stdin_ready"), ITY_BOOL(), 37); }
     if r == 0 { r = expect_ret_ty(String::from("eprintln_str"), ITY_UNIT(), 38); }
     if r == 0 { r = expect_ret_ty(String::from("fs_remove_dir_all"), ITY_I64(), 40); }
+    if r == 0 { r = expect_ret_ty(String::from("try_eprintln_str"), ITY_I64(), 42); }
     r
 }
 

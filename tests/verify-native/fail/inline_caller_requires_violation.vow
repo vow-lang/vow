@@ -1,0 +1,21 @@
+// TEST: counterexample-fn "caller"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Caller
+module InlineCallerRequires
+
+fn positive_half(x: i64) -> i64 vow {
+  requires: x > 0
+} {
+  x / 2
+}
+
+fn caller(y: i64) -> i64 vow {
+  ensures: result >= 0
+} {
+  positive_half(y)
+}
+
+fn main() -> i32 [io] {
+  print_i64(caller(4));
+  0
+}

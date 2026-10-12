@@ -1,0 +1,14 @@
+// TEST: category unverifiable
+module WideVecElementSkipped
+
+fn first(v: Vec<i128>) -> i128 vow {
+  requires: v.len() > 0
+  ensures: result == v[0]
+} {
+  v[0]
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

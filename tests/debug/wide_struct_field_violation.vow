@@ -1,0 +1,25 @@
+// TEST: exit 134
+// TEST: stderr "VowViolation"
+// TEST: stderr ""x":3154393236604333326336"
+module WideStructFieldViolation
+
+// 3154393236604333326336 is 171 * 2^64, so its low 64 bits are exactly zero.
+// The value reaches the contract through a struct field stored in two slots; a
+// read that kept only the low limb would report "x":0 and satisfy `x < 1`.
+struct Padded {
+    before: i64,
+    wide: u128,
+    after: i64,
+}
+
+fn requires_small(x: u128) -> u128 vow {
+    requires: x < 1
+} {
+    x
+}
+
+fn main() -> i32 [io] {
+    let p: Padded = Padded { before: 1, wide: 3154393236604333326336, after: 2 };
+    requires_small(p.wide);
+    0
+}

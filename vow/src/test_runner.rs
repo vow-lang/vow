@@ -148,19 +148,7 @@ pub(crate) fn run_test_command(
     test_workers: usize,
 ) {
     if !path.exists() {
-        let result = TestResult {
-            status: "CompileFailed".to_string(),
-            total: 0,
-            passed: 0,
-            failed: 0,
-            skipped: 0,
-            tests: vec![],
-            contract_density: ContractDensity {
-                functions_total: 0,
-                functions_with_vows: 0,
-                density_pct: 0.0,
-            },
-        };
+        let result = missing_path_result(path);
         println!("{}", serde_json::to_string(&result).unwrap());
         eprintln!("error: test path '{}' does not exist", path.display());
         std::process::exit(1);
@@ -181,6 +169,35 @@ pub(crate) fn run_test_command(
     if test_result.failed > 0 {
         std::process::exit(1);
     }
+}
+
+/// The result for a test path that does not exist: one synthetic `failed`
+/// entry (naming the path) so the run is never mistaken for a pass.
+fn missing_path_result(path: &Path) -> TestResult {
+    let file = path.to_string_lossy().into_owned();
+    let name = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| file.clone());
+    let entry = TestEntry {
+        file,
+        name,
+        status: "failed".to_string(),
+        exit_code: None,
+        stdout: String::new(),
+        stderr: format!("test path '{}' does not exist", path.display()),
+        duration_ms: 0,
+        diagnostics: vec![],
+        counterexamples: vec![],
+    };
+    build_test_result(
+        vec![entry],
+        ContractDensity {
+            functions_total: 0,
+            functions_with_vows: 0,
+            density_pct: 0.0,
+        },
+    )
 }
 
 struct RunSettings<'a> {
@@ -508,7 +525,8 @@ fn run_one_test(test_file: &Path, index: usize, cfg: &RunConfig) -> (TestEntry, 
 /// Finalizes `density_pct` (integer math matching the self-hosted compiler),
 /// tallies pass/fail/skip, and gates the overall status. A file counts as
 /// `failed` when its status is any of `failed`, `compile_error`,
-/// `verify_failed`, or `contract_skipped` — all fail-closed (#386).
+/// `verify_failed`, `contract_skipped`, or `timeout` — all fail-closed (#386,
+/// #415).
 fn build_test_result(entries: Vec<TestEntry>, mut density: ContractDensity) -> TestResult {
     // Compute final density (integer math matching self-hosted compiler)
     if let Some(tenths) = (density.functions_with_vows * 1000).checked_div(density.functions_total)
@@ -522,7 +540,7 @@ fn build_test_result(entries: Vec<TestEntry>, mut density: ContractDensity) -> T
         .filter(|e| {
             matches!(
                 e.status.as_str(),
-                "failed" | "compile_error" | "verify_failed" | "contract_skipped"
+                "failed" | "compile_error" | "verify_failed" | "contract_skipped" | "timeout"
             )
         })
         .count();
@@ -1015,6 +1033,7 @@ mod tests {
             "compile_error",
             "verify_failed",
             "contract_skipped",
+            "timeout",
         ] {
             let result = build_test_result(
                 vec![test_entry("passed"), test_entry(status)],
@@ -1025,6 +1044,27 @@ mod tests {
             assert_eq!(result.passed, 1, "status={status}");
             assert_eq!(result.skipped, 0, "status={status}");
         }
+    }
+
+    #[test]
+    fn missing_path_result_is_one_failed_entry_naming_the_path() {
+        let result = missing_path_result(Path::new("no/such/dir/t.vow"));
+        assert_eq!(result.status, "TestsFailed");
+        assert_eq!(result.total, 1);
+        assert_eq!(result.tests.len(), 1);
+        assert_eq!(result.passed, 0);
+        assert_eq!(result.failed, 1);
+        assert_eq!(result.skipped, 0);
+        let entry = &result.tests[0];
+        assert_eq!(entry.status, "failed");
+        assert_eq!(entry.file, "no/such/dir/t.vow");
+        assert_eq!(entry.name, "t");
+        assert_eq!(entry.exit_code, None);
+        assert!(
+            entry.stderr.contains("no/such/dir/t.vow"),
+            "stderr={}",
+            entry.stderr
+        );
     }
 
     #[test]

@@ -1,0 +1,15 @@
+// Native-only: ESBMC marks every `[panic]` function non-modelable, so this
+// proof has no ESBMC counterpart.
+module UnwrapSome
+
+fn roundtrip(x: i64) -> i64 [panic] vow {
+  ensures: result == x
+} {
+  let o: Option<i64> = Option::Some(x);
+  o.unwrap()
+}
+
+fn main() -> i32 [io, panic] {
+  print_i64(roundtrip(1));
+  0
+}

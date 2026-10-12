@@ -1,0 +1,21 @@
+// TEST: counterexample-fn "wrapper"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Caller
+module InlineCallerPreconditionRole
+
+fn guarded_half(x: i64) -> i64 vow {
+  requires: x > 0
+  ensures: result >= 0
+} {
+  x / 2
+}
+
+fn wrapper(a: i64, b: i64) -> i64 {
+  let ratio: i64 = a / b;
+  guarded_half(ratio)
+}
+
+fn main() -> i32 [io] {
+  print_i64(wrapper(8, 2));
+  0
+}

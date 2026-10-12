@@ -1,0 +1,26 @@
+// TEST: category invariant
+// The header exit is provable (`i >= n >= 0`), the `break` exit is only true of
+// reachable states: from an arbitrary header state `i` may be negative. The step
+// case keeps that exit, so it finds the violation for every k and proves
+// nothing; the bounded rounds stay open on the symbolic bound, so the result is
+// unknown, never Verified and never failed.
+module LoopKInductionBreakNotInductive
+
+fn count(n: i64, stop: i64) -> i64 vow {
+  requires: n >= 0
+  ensures: result >= 0
+} {
+  let mut i: i64 = 0;
+  while i < n {
+    if i == stop {
+      break;
+    }
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  print_i64(count(5, 3));
+  0
+}

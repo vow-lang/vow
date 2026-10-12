@@ -1,0 +1,14 @@
+module VecIndexInBounds
+
+fn at(v: Vec<i64>, i: u64) -> i64 vow {
+  requires: i < v.len()
+} {
+  v[i]
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(7);
+  print_i64(at(v, 0));
+  0
+}

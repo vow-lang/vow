@@ -1,0 +1,18 @@
+// TEST: category invariant
+module LoopU128Count
+
+fn count_five() -> u128 vow {
+  ensures: result == 5
+} {
+  let mut i: u128 = 0;
+  while i < 5 vow {
+    invariant: i <= 5
+  } {
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  0
+}

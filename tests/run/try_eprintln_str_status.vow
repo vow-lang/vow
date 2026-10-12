@@ -1,0 +1,11 @@
+// TEST: stdout "status=0\n"
+// TEST: stderr "try_eprintln_str marker"
+module TryEprintlnStrStatus
+
+fn main() -> i32 [io] {
+    let status: i64 = try_eprintln_str(String::from("try_eprintln_str marker"));
+    print_str(String::from("status="));
+    print_i64(status);
+    print_str(String::from("\n"));
+    0
+}

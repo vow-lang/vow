@@ -1,0 +1,134 @@
+module TestVcClause
+
+use ir
+use vc_clause
+use tests.builders
+
+fn ids3() -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(3);
+    v.push(4);
+    v.push(5);
+    v
+}
+
+fn proven_of(vd: VcClauseVerdicts, id: i64) -> i64 {
+    let mut i: u64 = 0;
+    while i < vd.ids.len() {
+        if vd.ids[i] == id { return vd.proven[i]; }
+        i = i + 1;
+    }
+    -1
+}
+
+fn check_unsat_in_closed_round_is_proven() -> i64 {
+    let acc: VcClauseAcc = vc_clause_acc_new();
+    vc_clause_note(acc, 3, VC_CLAUSE_UNSAT());
+    vc_clause_note(acc, 4, VC_CLAUSE_UNSAT());
+    vc_clause_note(acc, 5, VC_CLAUSE_UNSAT());
+    let vd: VcClauseVerdicts = vc_clause_finish(acc, ids3(), true);
+    if vd.ids.len() != 3 { return 1; }
+    if proven_of(vd, 3) != 1 || proven_of(vd, 4) != 1 || proven_of(vd, 5) != 1 { return 2; }
+    0
+}
+
+fn check_open_round_proves_nothing() -> i64 {
+    let acc: VcClauseAcc = vc_clause_acc_new();
+    vc_clause_note(acc, 3, VC_CLAUSE_UNSAT());
+    vc_clause_note(acc, 4, VC_CLAUSE_FAILED());
+    let vd: VcClauseVerdicts = vc_clause_finish(acc, ids3(), false);
+    if proven_of(vd, 3) != -1 { return 1; }
+    if proven_of(vd, 4) != 0 { return 2; }
+    if proven_of(vd, 5) != -1 { return 3; }
+    0
+}
+
+// A clause that unrolling repeats is failed when any copy is, proven only when
+// every copy is unsat.
+fn check_repeated_clause_folds_over_copies() -> i64 {
+    let acc: VcClauseAcc = vc_clause_acc_new();
+    vc_clause_note(acc, 3, VC_CLAUSE_UNSAT());
+    vc_clause_note(acc, 3, VC_CLAUSE_UNSAT());
+    vc_clause_note(acc, 4, VC_CLAUSE_UNSAT());
+    vc_clause_note(acc, 4, VC_CLAUSE_FAILED());
+    vc_clause_note(acc, 4, VC_CLAUSE_UNSAT());
+    vc_clause_note(acc, 5, VC_CLAUSE_UNSAT());
+    vc_clause_note(acc, 5, VC_CLAUSE_UNDECIDED());
+    let vd: VcClauseVerdicts = vc_clause_finish(acc, ids3(), true);
+    if proven_of(vd, 3) != 1 { return 1; }
+    if proven_of(vd, 4) != 0 { return 2; }
+    if proven_of(vd, 5) != -1 { return 3; }
+    0
+}
+
+// A clause with no claim at all had every claim point decided statically or
+// unreachable: proven in a closed round, undecided in an open one.
+fn check_clause_without_claims() -> i64 {
+    let acc: VcClauseAcc = vc_clause_acc_new();
+    vc_clause_note(acc, 4, VC_CLAUSE_FAILED());
+    let closed: VcClauseVerdicts = vc_clause_finish(acc, ids3(), true);
+    if proven_of(closed, 3) != 1 || proven_of(closed, 5) != 1 { return 1; }
+    if proven_of(closed, 4) != 0 { return 2; }
+    let open: VcClauseVerdicts = vc_clause_finish(acc, ids3(), false);
+    if proven_of(open, 3) != -1 || proven_of(open, 5) != -1 { return 3; }
+    0
+}
+
+// A failure of an earlier round is a real run and survives the next round; the
+// verdicts that were only "no failure yet" do not.
+fn check_next_round_keeps_failures_only() -> i64 {
+    let acc: VcClauseAcc = vc_clause_acc_new();
+    vc_clause_note(acc, 3, VC_CLAUSE_FAILED());
+    vc_clause_note(acc, 4, VC_CLAUSE_UNDECIDED());
+    vc_clause_note(acc, 5, VC_CLAUSE_UNSAT());
+    vc_clause_next_round(acc);
+    vc_clause_note(acc, 4, VC_CLAUSE_UNSAT());
+    let vd: VcClauseVerdicts = vc_clause_finish(acc, ids3(), true);
+    if proven_of(vd, 3) != 0 { return 1; }
+    if proven_of(vd, 4) != 1 { return 2; }
+    if proven_of(vd, 5) != 1 { return 3; }
+    0
+}
+
+fn check_only_targets_are_reported() -> i64 {
+    let acc: VcClauseAcc = vc_clause_acc_new();
+    vc_clause_note(acc, 99, VC_CLAUSE_FAILED());
+    let vd: VcClauseVerdicts = vc_clause_finish(acc, ids3(), true);
+    if vd.ids.len() != 3 { return 1; }
+    if proven_of(vd, 99) != -1 { return 2; }
+    0
+}
+
+fn mk_vow(id: i64, op: i64, pred: i64, vow_id: i64) -> IrInst {
+    let a: Vec<i64> = Vec::new();
+    a.push(pred);
+    ir_inst_new(id, op, ITY_UNIT(), a, IDATA_VOW_ID(), vow_id, 0, String::from(""))
+}
+
+fn check_targets_are_ensures_and_invariants() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_const_bool(0, 1));
+    i.push(mk_vow(1, IOP_VOW_REQ(), 0, 7));
+    i.push(mk_vow(2, IOP_VOW_ENS(), 0, 8));
+    i.push(mk_vow(3, IOP_VOW_INV(), 0, 9));
+    i.push(mk_vow(4, IOP_VOW_ENS(), 0, 8));
+    i.push(mk_inst_return(5, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, i));
+    let f: IrFunction = mk_function(1, String::from("t"), Vec::new(), ITY_BOOL(), blocks);
+    let t: Vec<i64> = vc_clause_targets(f);
+    if t.len() != 2 { return 1; }
+    if t[0] != 8 || t[1] != 9 { return 2; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_unsat_in_closed_round_is_proven();
+    if r == 0 { r = check_open_round_proves_nothing(); }
+    if r == 0 { r = check_repeated_clause_folds_over_copies(); }
+    if r == 0 { r = check_clause_without_claims(); }
+    if r == 0 { r = check_next_round_keeps_failures_only(); }
+    if r == 0 { r = check_only_targets_are_reported(); }
+    if r == 0 { r = check_targets_are_ensures_and_invariants(); }
+    i64_to_i32_wrap(r)
+}

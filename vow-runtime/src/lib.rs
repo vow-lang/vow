@@ -1682,6 +1682,24 @@ pub unsafe extern "C" fn __vow_vec_push(
     }
 }
 
+unsafe fn vec_push_slot_no_sanitize_in_arena(
+    arena: *mut VowArena,
+    vec: *mut u8,
+    elem_size: usize,
+    elem_align: usize,
+    op: &'static str,
+) -> *mut u8 {
+    let v = unsafe { &*(vec as *const VowVec) };
+    if v.cap == VOW_CAP_RODATA {
+        region_literal_mutation_trap(op);
+    }
+    unsafe { vec_reserve_in_arena_no_null_check(arena, vec, 1, elem_size, elem_align) };
+    let v = unsafe { &mut *(vec as *mut VowVec) };
+    let dest = unsafe { v.ptr.add(v.len * elem_size) };
+    v.len += 1;
+    dest
+}
+
 unsafe fn vec_push_no_sanitize_in_arena(
     arena: *mut VowArena,
     vec: *mut u8,
@@ -1690,15 +1708,8 @@ unsafe fn vec_push_no_sanitize_in_arena(
     elem_align: usize,
     op: &'static str,
 ) {
-    let v = unsafe { &*(vec as *const VowVec) };
-    if v.cap == VOW_CAP_RODATA {
-        region_literal_mutation_trap(op);
-    }
-    unsafe { vec_reserve_in_arena_no_null_check(arena, vec, 1, elem_size, elem_align) };
-    let v = unsafe { &mut *(vec as *mut VowVec) };
-    let dest = unsafe { v.ptr.add(v.len * elem_size) };
+    let dest = unsafe { vec_push_slot_no_sanitize_in_arena(arena, vec, elem_size, elem_align, op) };
     unsafe { std::ptr::copy_nonoverlapping(elem, dest, elem_size) };
-    v.len += 1;
 }
 
 #[unsafe(no_mangle)]
@@ -1785,8 +1796,9 @@ pub unsafe extern "C" fn __vow_vec_truncate(vec: *mut u8, new_len: usize) {
     v.len = new_len;
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_vec_set_val(vec: *mut u8, index: usize, value: i64) {
+/// Address of element `index` for a write: the sanitizer, rodata and bounds
+/// checks every `Vec` element store shares, parameterised by element stride.
+unsafe fn vec_set_slot_ptr(vec: *mut u8, index: usize, elem_size: usize) -> *mut u8 {
     sanitize_check_live(vec as usize, "set");
     let v = unsafe { &*(vec as *const VowVec) };
     if v.cap == VOW_CAP_RODATA {
@@ -1798,8 +1810,42 @@ pub unsafe extern "C" fn __vow_vec_set_val(vec: *mut u8, index: usize, value: i6
         let _ = writeln!(std::io::stderr(), "index out of bounds");
         std::process::exit(VOW_RUNTIME_ABORT_EXIT);
     }
-    let elem_ptr = unsafe { v.ptr.add(index * 8) as *mut i64 };
+    unsafe { v.ptr.add(index * elem_size) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_set_val(vec: *mut u8, index: usize, value: i64) {
+    let elem_ptr = unsafe { vec_set_slot_ptr(vec, index, 8) as *mut i64 };
     unsafe { *elem_ptr = value };
+}
+
+/// Byte stride of a `Vec<i128>` / `Vec<u128>` element: two 8-byte slots, low
+/// limb first (ADR 0001 decision 9). `len` and `cap` still count elements.
+const VEC_WIDE_ELEM_SIZE: usize = 16;
+
+/// Appends one 128-bit element and returns the address of its two slots, which
+/// the caller fills with a `WideSlot` store. The slots are uninitialised until
+/// that store, which the lowering emits immediately after the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_push_wide_ptr(vec: *mut u8) -> *mut u8 {
+    unsafe {
+        with_growth_arena(vec, |arena| {
+            sanitize_check_live(vec as usize, "push");
+            vec_push_slot_no_sanitize_in_arena(arena, vec, VEC_WIDE_ELEM_SIZE, 8, "Vec::push")
+        })
+    }
+}
+
+/// Bounds-checked address of a 128-bit element, for a `WideSlot` read.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_get_wide_ptr(vec: *const u8, index: usize) -> *const u8 {
+    unsafe { __vow_vec_get_ptr(vec, index, VEC_WIDE_ELEM_SIZE) }
+}
+
+/// Bounds-checked address of a 128-bit element, for a `WideSlot` write.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_set_wide_ptr(vec: *mut u8, index: usize) -> *mut u8 {
+    unsafe { vec_set_slot_ptr(vec, index, VEC_WIDE_ELEM_SIZE) }
 }
 
 #[unsafe(no_mangle)]
@@ -4245,6 +4291,41 @@ pub unsafe extern "C" fn __vow_eprintln_str(s: *const u8) {
     }
 }
 
+const STDERR_WRITE_OK: i64 = 0;
+const STDERR_WRITE_BROKEN_PIPE: i64 = 1;
+const STDERR_WRITE_FAILED: i64 = 2;
+
+/// Classifies one `bytes + "\n"` write: a broken pipe is `1`, any other failure
+/// `2`. `EBADF` is `0` because Rust std treats a closed stderr as a successful
+/// write, so `2>&-` behaves the same under both compilers.
+fn stderr_write_status(write: impl FnOnce(&[u8]) -> std::io::Result<()>, bytes: &[u8]) -> i64 {
+    let mut line = Vec::with_capacity(bytes.len() + 1);
+    line.extend_from_slice(bytes);
+    line.push(b'\n');
+    match write(&line) {
+        Ok(()) => STDERR_WRITE_OK,
+        Err(e) if e.raw_os_error() == Some(libc::EBADF) => STDERR_WRITE_OK,
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => STDERR_WRITE_BROKEN_PIPE,
+        Err(_) => STDERR_WRITE_FAILED,
+    }
+}
+
+/// Writes `s` and a newline to stderr and reports the outcome: `0` written,
+/// `1` broken pipe, `2` any other failure. SIGPIPE is suppressed for the call
+/// so a closed pipe returns `1` instead of terminating the process.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_try_eprintln_str(s: *const u8) -> i64 {
+    if s.is_null() {
+        return STDERR_WRITE_OK;
+    }
+    sanitize_on_read(s as usize, 0);
+    let v = unsafe { &*(s as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    piped::with_sigpipe_suppressed(libc::STDERR_FILENO, || {
+        stderr_write_status(|line| std::io::stderr().write_all(line), bytes)
+    })
+}
+
 /// All of stdin; blocks until EOF, so callers read it before locking an arena.
 fn read_all_stdin() -> Vec<u8> {
     use std::io::Read;
@@ -5404,6 +5485,72 @@ fn sanitize_on_read(vec_addr: usize, _index: usize) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn stderr_write_status_classifies_each_failure() {
+        use std::io::ErrorKind;
+        for (kind, want) in [
+            (ErrorKind::BrokenPipe, 1),
+            (ErrorKind::PermissionDenied, 2),
+            (ErrorKind::StorageFull, 2),
+            (ErrorKind::WriteZero, 2),
+        ] {
+            let got = stderr_write_status(|_| Err(std::io::Error::from(kind)), b"x");
+            assert_eq!(got, want, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn stderr_write_status_treats_a_closed_descriptor_as_written() {
+        let ebadf = |_: &[u8]| Err(std::io::Error::from_raw_os_error(libc::EBADF));
+        assert_eq!(stderr_write_status(ebadf, b"x"), 0);
+    }
+
+    #[test]
+    fn stderr_write_status_appends_exactly_one_newline() {
+        let mut out: Vec<u8> = Vec::new();
+        let status = stderr_write_status(
+            |line| {
+                out.extend_from_slice(line);
+                Ok(())
+            },
+            b"hello",
+        );
+        assert_eq!(status, 0);
+        assert_eq!(out, b"hello\n");
+    }
+
+    #[test]
+    fn try_eprintln_str_reports_written_for_null_and_real_strings() {
+        assert_eq!(unsafe { __vow_try_eprintln_str(std::ptr::null()) }, 0);
+        let mut bytes = *b"try_eprintln_str test line";
+        let s = VowVec {
+            ptr: bytes.as_mut_ptr(),
+            len: bytes.len(),
+            cap: bytes.len(),
+        };
+        assert_eq!(
+            unsafe { __vow_try_eprintln_str(&s as *const VowVec as *const u8) },
+            0
+        );
+    }
+
+    #[test]
+    fn broken_pipe_is_reported_without_raising_sigpipe() {
+        let mut fds = [0 as libc::c_int; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        unsafe { libc::close(fds[0]) };
+        let mut w = unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(fds[1]) };
+        let inherited = unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+        let status = piped::with_sigpipe_suppressed(fds[1], || {
+            stderr_write_status(|line| w.write_all(line), b"x")
+        });
+        unsafe { libc::signal(libc::SIGPIPE, inherited) };
+        assert_eq!(status, 1);
+        let mut pending: libc::sigset_t = unsafe { std::mem::zeroed() };
+        unsafe { libc::sigpending(&mut pending) };
+        assert_ne!(unsafe { libc::sigismember(&pending, libc::SIGPIPE) }, 1);
+    }
+
     /// The 128-bit division helpers must agree with native Rust `i128`/`u128`
     /// arithmetic across both limbs, including the sign rules that differ
     /// between the signed and unsigned symbol.
@@ -6310,6 +6457,69 @@ mod tests {
         unsafe { __vow_vec_push_val(v, 42) };
         unsafe { __vow_vec_pop(v) };
         assert_eq!(unsafe { &*(v as *const VowVec) }.len, 0);
+    }
+
+    /// Writes a 128-bit value through the two-slot address a wide helper
+    /// returns, low limb first. Unaligned writes keep the test independent of
+    /// the buffer's 8-byte alignment.
+    unsafe fn write_wide(slot: *mut u8, value: u128) {
+        unsafe { std::ptr::write_unaligned(slot as *mut u128, value) };
+    }
+
+    unsafe fn read_wide(slot: *const u8) -> u128 {
+        unsafe { std::ptr::read_unaligned(slot as *const u128) }
+    }
+
+    #[test]
+    fn wide_vec_elements_are_sixteen_bytes_and_survive_regrowth() {
+        let v = __vow_vec_new_val();
+        let values: Vec<u128> = (0..100u128)
+            .map(|i| (i << 64) | (0xDEAD_BEEF_0000_0000 + i))
+            .collect();
+        for value in &values {
+            let slot = unsafe { __vow_vec_push_wide_ptr(v) };
+            unsafe { write_wide(slot, *value) };
+        }
+        let desc = unsafe { &*(v as *const VowVec) };
+        assert_eq!(desc.len, values.len());
+        for (i, value) in values.iter().enumerate() {
+            let slot = unsafe { __vow_vec_get_wide_ptr(v, i) };
+            assert_eq!(unsafe { read_wide(slot) }, *value, "element {i}");
+        }
+    }
+
+    #[test]
+    fn wide_vec_set_overwrites_only_its_own_element() {
+        let v = __vow_vec_new_val();
+        for value in [1u128 << 100, 2u128 << 100, 3u128 << 100] {
+            unsafe { write_wide(__vow_vec_push_wide_ptr(v), value) };
+        }
+        unsafe { write_wide(__vow_vec_set_wide_ptr(v, 1), u128::MAX) };
+        let read = |i| unsafe { read_wide(__vow_vec_get_wide_ptr(v, i)) };
+        assert_eq!(read(0), 1u128 << 100);
+        assert_eq!(read(1), u128::MAX);
+        assert_eq!(read(2), 3u128 << 100);
+    }
+
+    #[test]
+    fn wide_vec_pop_truncate_and_push_reuse_the_element_stride() {
+        let v = __vow_vec_new_val();
+        for i in 0..4u128 {
+            unsafe { write_wide(__vow_vec_push_wide_ptr(v), (i + 1) << 70) };
+        }
+        unsafe { __vow_vec_truncate(v, 2) };
+        unsafe { __vow_vec_pop(v) };
+        unsafe { write_wide(__vow_vec_push_wide_ptr(v), 9u128 << 90) };
+        let desc = unsafe { &*(v as *const VowVec) };
+        assert_eq!(desc.len, 2);
+        assert_eq!(
+            unsafe { read_wide(__vow_vec_get_wide_ptr(v, 0)) },
+            1u128 << 70
+        );
+        assert_eq!(
+            unsafe { read_wide(__vow_vec_get_wide_ptr(v, 1)) },
+            9u128 << 90
+        );
     }
 
     #[test]

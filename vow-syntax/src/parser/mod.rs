@@ -60,6 +60,9 @@ struct Parser {
     source: String,
     file: String,
     diagnostics: Vec<Diagnostic>,
+    // Set while parsing the head of `if` / `while` / `for … in` / `match`,
+    // where `Name {` opens the body rather than a struct literal.
+    no_struct: bool,
 }
 
 impl Parser {
@@ -70,7 +73,15 @@ impl Parser {
             source,
             file,
             diagnostics: Vec::new(),
+            no_struct: false,
         }
+    }
+
+    fn with_no_struct<T>(&mut self, value: bool, f: impl FnOnce(&mut Self) -> T) -> T {
+        let saved = std::mem::replace(&mut self.no_struct, value);
+        let result = f(self);
+        self.no_struct = saved;
+        result
     }
 
     fn peek(&self) -> &Token {
@@ -451,6 +462,10 @@ impl Parser {
     }
 
     fn parse_vow_block(&mut self) -> Option<VowBlock> {
+        self.with_no_struct(false, Self::parse_vow_block_body)
+    }
+
+    fn parse_vow_block_body(&mut self) -> Option<VowBlock> {
         let start = self.current_span();
         self.expect(TokenKind::KwVow)?;
         self.expect(TokenKind::LBrace)?;
@@ -519,6 +534,10 @@ impl Parser {
     }
 
     fn parse_block(&mut self) -> Option<Block> {
+        self.with_no_struct(false, Self::parse_block_body)
+    }
+
+    fn parse_block_body(&mut self) -> Option<Block> {
         let start = self.current_span();
         self.expect(TokenKind::LBrace)?;
 
@@ -735,10 +754,22 @@ pub fn parse_module(source: &str, file: &str) -> (Module, Vec<Diagnostic>) {
     (module, parser.diagnostics)
 }
 
-/// Drops an integer-literal suffix that merely restates the declared `const`
-/// type (`const X: u8 = 200u8;`, `const Y: i32 = -5i32;`), leaving the bare
-/// literal that const registration and lowering expect. A suffix naming a
-/// different type is kept so the checker still rejects it.
+fn is_int_literal_or_negation(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Lit(crate::ast::Lit::Int(_)) => true,
+        ExprKind::UnaryOp {
+            op: crate::ast::UnOp::Neg,
+            operand,
+        } => matches!(operand.kind, ExprKind::Lit(crate::ast::Lit::Int(_))),
+        _ => false,
+    }
+}
+
+/// Drops an integer-literal suffix or cast that merely restates the declared
+/// `const` type (`const X: u8 = 200u8;`, `const Y: i32 = -5i32;`,
+/// `const Z: i64 = -1 as i64;`), leaving the bare literal that const
+/// registration and lowering expect. A suffix naming a different type is kept
+/// so the checker still rejects it.
 fn strip_const_suffix_matching(value: Expr, declared: &Type) -> Expr {
     let Type::Named {
         name: declared_name,
@@ -749,7 +780,7 @@ fn strip_const_suffix_matching(value: Expr, declared: &Type) -> Expr {
     };
     match value.kind {
         ExprKind::Cast { expr, target_ty }
-            if matches!(expr.kind, ExprKind::Lit(crate::ast::Lit::Int(_)))
+            if is_int_literal_or_negation(&expr)
                 && matches!(target_ty.as_ref(), Type::Named { name, .. } if name == declared_name) =>
         {
             *expr

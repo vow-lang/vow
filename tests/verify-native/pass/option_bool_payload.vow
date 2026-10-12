@@ -1,0 +1,12 @@
+module OptionBoolPayload
+
+fn is_pos(x: i64) -> Option<bool> vow {
+  ensures: match result { Option::Some(b) => b == (x > 0), Option::None => false }
+} {
+  Option::Some(x > 0)
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

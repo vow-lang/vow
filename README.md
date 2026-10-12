@@ -115,9 +115,22 @@ build/vowc skill install --global
 ```
 
 The installed skill is split into `SKILL.md` plus `reference/`, `examples/`, and
-`schemas/` support files. Commit the resulting `.claude/skills/vow/`
+`schemas/` support files. The tree is staged next to its target
+and renamed into place, so an install that fails never leaves a `SKILL.md`
+without its support files. Commit the resulting `.claude/skills/vow/`
 tree to your repository so collaborators (human and agent) get the same skill
 version on checkout.
+
+**Upgrading an existing install.** Auto-install never touches an existing
+`.claude/skills/vow/SKILL.md`, so an older single-file skill keeps working but
+does not gain the split-layout support files. Re-run
+`build/vowc skill install --local` (project install) or `--global` (machine-wide
+install), matching the install you are replacing, to migrate or refresh it; this
+overwrites `SKILL.md` and the support files, so review the diff before
+committing. In a project without `.git`, delete `.claude/skills/vow/SKILL.md` and
+run a build instead. A leftover `.claude/skills/vow-toolchain/` directory from
+before the rename is not touched and will sit next to the new `vow` skill —
+delete it by hand.
 
 ### Outside Claude Code (raw API harnesses)
 
@@ -152,4 +165,4 @@ Results are compared against paper baselines: Dafny 82%, Verus/Rust 44%, Lean 27
 
 ## Self-Hosted Compiler
 
-The `compiler/` directory contains a complete Vow implementation of the compiler (13 modules). `build/vowc` is the primary compiler for day-to-day development — a verified fixed-point binary with full feature parity: subcommands, flags, structured diagnostics, verification pipeline, and parallel codegen+verify. The Rust compiler (`./target/release/vow`) serves only as the stage 0 bootstrap.
+The `compiler/` directory contains a complete Vow implementation of the compiler (13 modules). `build/vowc` is the primary compiler for day-to-day development — a verified fixed-point binary with full feature parity: subcommands, flags, structured diagnostics, verification pipeline, and staged codegen then bounded-parallel verify. The Rust compiler (`./target/release/vow`) serves only as the stage 0 bootstrap.

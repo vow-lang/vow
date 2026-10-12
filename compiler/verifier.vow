@@ -642,7 +642,7 @@ fn start_esbmc(esbmc_bin: String, c_source: String, max_k_step: String, tmp_path
     append_timeout_arg(esbmc_args, timeout_secs);
     append_memlimit_arg(esbmc_args, memlimit_arg);
     if esbmc_bin.len() == 0 {
-        // Cleanup is handled by the caller: verify_collect or run_test's sentinel branch.
+        // Cleanup is handled by the caller: verify_collect or run_test's sentinel branch (see verify_start).
         return -3;
     }
     let handle: i64 = process_start(esbmc_bin, esbmc_args);
@@ -730,6 +730,10 @@ fn output_has_memory_limit(combined: String) -> bool {
         // Vow programs compile to C, so this C++ allocator diagnostic can only
         // come from ESBMC itself, not from the program being verified.
         || str_find_str(lower, String::from("bad_alloc")) >= 0
+}
+
+fn bv_resource_limited(st: i64, raw_output: String) -> bool {
+    st == VERIFY_TIMEOUT() || (st == VERIFY_UNKNOWN() && output_has_memory_limit(raw_output))
 }
 
 // Extract the first `ERROR:`-prefixed line from ESBMC's combined output, or
@@ -1823,9 +1827,7 @@ fn verify_function_contracts_only(esbmc_bin: String, f: IrFunction, m: IrModule,
     // generic BV->IR path handle this instead would re-emit the un-suppressed
     // model, whose `arith:` assert IR can never violate — unbounded integers do
     // not overflow — so a timeout would launder into a proof.
-    let resource_limited: bool = st == VERIFY_TIMEOUT() ||
-        (st == VERIFY_UNKNOWN() && output_has_memory_limit(bv.raw_output));
-    if !resource_limited {
+    if !bv_resource_limited(st, bv.raw_output) {
         return bv;
     }
     let bv_solver: String = resolve_auto_bv_solver(solver);
@@ -1844,6 +1846,14 @@ fn verify_function_contracts_only(esbmc_bin: String, f: IrFunction, m: IrModule,
     bv
 }
 
+// verify_start never removes tmp_path, even when it returns a -1 (process_start
+// failed) or -3 (esbmc_bin empty) handle: by then verify_tmp_path has created
+// the mktemp directory and start_esbmc has written the C source into it. The
+// caller owns cleanup: every handle must reach verify_collect (which cleans up
+// on all of its arms) or cleanup_verify_tmp_path(tmp_path) directly, as run_test
+// does for -1/-3 where it skips verify_collect. An empty tmp_path (no-contracts
+// early return, or a failed mktemp) makes cleanup a no-op. A consumer that does
+// neither leaks the mktemp directory.
 fn verify_start(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
                 vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> EsbmcStart [io, write] {
     if f.vows.len() == 0 && requires_callee_names(f, m).len() == 0 {

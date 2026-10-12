@@ -1,0 +1,444 @@
+module ReplayMain
+
+use lexer
+use ast
+use diag
+use mutants_patch
+use contract_text
+
+// Entry-`main` handling for `--replay-cex` (#1550). A replay harness is the
+// entry file's own text plus a synthesized `fn main`, so a file that already
+// defines `main` must have that definition renamed out of the way first. The
+// definition is located in the merged AST, never by text search, so `fn main(`
+// inside a comment or string literal is not mistaken for it. Only the span
+// start is used: packed spans clamp their length to 65535 bytes, so removing
+// the definition by span would truncate a long `main`.
+
+// Byte offset of the `fn` keyword of the `main` defined in `path` itself, or
+// -1 when the entry file defines none. A `main` from a `use`d dependency is not
+// the entry file's `main`, so only items whose originating file is `path` count.
+fn replay_entry_main_start(m: Module, item_files: Vec<String>, path: String) -> i64 {
+    let a: AstArena = m.arena;
+    let n: u64 = m.items.len();
+    let mut i: u64 = 0u64;
+    while i < n {
+        let it: i64 = m.items[i];
+        if i < item_files.len() && item_files[i] == path && it >= 0 && item_kind(it) == ITEM_FN() {
+            let fid: i64 = item_id(it);
+            if !fn_is_declaration(a, fid) && arena_str(a, fn_name_sid(a, fid)) == String::from("main") {
+                return span_unpack_start(fn_span(a, fid));
+            }
+        }
+        i = i + 1u64;
+    }
+    -1
+}
+
+fn replay_is_space(b: i64) -> bool {
+    b == 32 || b == 9 || b == 10 || b == 13
+}
+
+// `src` with the `main` whose `fn` keyword sits at byte `start` renamed to
+// `__replay_orig_main`. Returns "" when `src` does not hold `fn`, whitespace and
+// exactly the identifier `main` at that offset, so a stale offset can never
+// corrupt a harness silently.
+fn replay_rename_main(src: String, start: i64) -> String {
+    let n: i64 = src.len() as i64;
+    if start < 0 || start + 2 > n { return String::from(""); }
+    if src.byte_at(start as u64) != 102 || src.byte_at((start + 1) as u64) != 110 {
+        return String::from("");
+    }
+    let mut p: i64 = start + 2;
+    while p < n && replay_is_space(src.byte_at(p as u64)) {
+        p = p + 1;
+    }
+    let name: String = String::from("main");
+    let nl: i64 = name.len() as i64;
+    if p + nl > n { return String::from(""); }
+    if src.substring(p as u64, (p + nl) as u64) != name { return String::from(""); }
+    let end: i64 = p + nl;
+    if end < n {
+        let after: i64 = src.byte_at(end as u64);
+        if after >= 0 && after <= 255 && is_ident_cont(after) { return String::from(""); }
+    }
+    splice(src, p as u64, nl as u64, String::from("__replay_orig_main"))
+}
+
+// Aggregate arguments for the native backend's `--replay-cex`. The native
+// counterexample lists an aggregate parameter's scalar slots as `<param>.<slot>`
+// (see `vc_model_symbol_name`): a struct's fields from slot 0, an enum's
+// discriminant at slot 0 and the chosen variant's payload from slot 1, one slot
+// per scalar. A slot the function reads at two sorts carries a `:bool` or
+// `:<bits>` suffix. The IR has no field names, so the slots are mapped back to
+// fields here from the declaration in the source.
+
+struct ReplayArg {
+    lit: String,
+    ty_text: String,
+    reason: String,
+}
+
+fn replay_arg_skip(reason: String) -> ReplayArg {
+    ReplayArg { lit: String::from(""), ty_text: String::from(""), reason: reason }
+}
+
+fn replay_arg_ok(lit: String, ty_text: String) -> ReplayArg {
+    ReplayArg { lit: lit, ty_text: ty_text, reason: String::from("") }
+}
+
+// True if `s` is a plain decimal integer literal (optional leading `-`).
+fn replay_is_int_literal(s: String) -> bool {
+    let n: u64 = s.len();
+    if n == 0 { return false; }
+    let mut i: u64 = 0;
+    if s.byte_at(0) == 45 {
+        if n == 1 { return false; }
+        i = 1;
+    }
+    while i < n {
+        let b: i64 = s.byte_at(i);
+        if b < 48 || b > 57 { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn replay_cex_value(names: Vec<String>, vals: Vec<String>, key: String) -> String {
+    let mut i: u64 = 0u64;
+    while i < names.len() && i < vals.len() {
+        if names[i] == key { return vals[i]; }
+        i = i + 1u64;
+    }
+    String::from("")
+}
+
+// Ids of the items of `kind`, in declaration order. Kept apart from the name
+// lookups below on purpose: this is the only code here that calls the contracted
+// `item_kind`/`item_id`, so it is the only code the C verifier model sees, and
+// that model cannot type the `String` `arena_str` reads out of a `Vec`.
+fn replay_item_ids(m: Module, kind: i64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let items: Vec<i64> = m.items;
+    let mut i: u64 = 0u64;
+    while i < items.len() {
+        let it: i64 = items[i];
+        if it >= 0 && item_kind(it) == kind {
+            out.push(item_id(it));
+        }
+        i = i + 1u64;
+    }
+    out
+}
+
+fn replay_find_fn_item(m: Module, name: String) -> i64 {
+    let a: AstArena = m.arena;
+    let ids: Vec<i64> = replay_item_ids(m, ITEM_FN());
+    let mut i: u64 = 0u64;
+    while i < ids.len() {
+        let fid: i64 = ids[i];
+        if !fn_is_declaration(a, fid) && arena_str(a, fn_name_sid(a, fid)) == name {
+            return fid;
+        }
+        i = i + 1u64;
+    }
+    -1
+}
+
+fn replay_find_struct(m: Module, name: String) -> i64 {
+    let a: AstArena = m.arena;
+    let ids: Vec<i64> = replay_item_ids(m, ITEM_STRUCT());
+    let mut i: u64 = 0u64;
+    while i < ids.len() {
+        if arena_str(a, sdef_name_sid(a, ids[i])) == name { return ids[i]; }
+        i = i + 1u64;
+    }
+    -1
+}
+
+fn replay_find_enum(m: Module, name: String) -> i64 {
+    let a: AstArena = m.arena;
+    let ids: Vec<i64> = replay_item_ids(m, ITEM_ENUM());
+    let mut i: u64 = 0u64;
+    while i < ids.len() {
+        if arena_str(a, edef_name_sid(a, ids[i])) == name { return ids[i]; }
+        i = i + 1u64;
+    }
+    -1
+}
+
+// Bit width of a scalar integer type name; 0 for any other name.
+fn replay_int_bits(name: String) -> i64 {
+    if name == String::from("i8") || name == String::from("u8") { return 8; }
+    if name == String::from("i16") || name == String::from("u16") { return 16; }
+    if name == String::from("i32") || name == String::from("u32") { return 32; }
+    if name == String::from("i64") || name == String::from("u64") { return 64; }
+    0
+}
+
+fn replay_int_signed(name: String) -> bool {
+    name.byte_at(0) == 105
+}
+
+// True if the integer text `raw` is a value of the integer type `name`.
+fn replay_int_fits(name: String, raw: String) -> bool {
+    let bits: i64 = replay_int_bits(name);
+    if replay_int_signed(name) {
+        if bits == 64 && raw == String::from("-9223372036854775808") { return true; }
+        match parse_i64(raw) {
+            Option::Some(v) => {
+                if bits == 64 { return true; }
+                let lim: i64 = 1 << (bits - 1);
+                v >= 0 - lim && v < lim
+            },
+            Option::None => { false },
+        }
+    } else {
+        if raw.byte_at(0) == 45 { return false; }
+        match raw.parse_u64() {
+            Option::Some(v) => {
+                if bits == 64 { return true; }
+                v < (1u64 << (bits as u64))
+            },
+            Option::None => { false },
+        }
+    }
+}
+
+// Source text of an integer value of type `name`. The most negative value has
+// no literal of its own (its magnitude is out of range), so it is spelled as
+// one more than the minimum, less one; a `u64` carries its suffix because its
+// magnitude may exceed `i64`.
+fn replay_int_literal(name: String, raw: String) -> String {
+    if raw == String::from("-128") { return String::from("(-127 - 1)"); }
+    if raw == String::from("-32768") { return String::from("(-32767 - 1)"); }
+    if raw == String::from("-2147483648") { return String::from("(-2147483647 - 1)"); }
+    if raw == String::from("-9223372036854775808") { return String::from("(-9223372036854775807 - 1)"); }
+    if name == String::from("u64") {
+        let out: String = String::from(raw);
+        out.push_str(String::from("u64"));
+        return out;
+    }
+    raw
+}
+
+fn replay_slot_key(pname: String, slot: i64) -> String {
+    let out: String = String::from(pname);
+    out.push_str(String::from("."));
+    out.push_str(i64_to_string(slot));
+    out
+}
+
+// The counterexample value of slot `slot` of `pname` viewed at `label`
+// (`bool` or a bit width), or "" when the model never read it. The suffixed
+// name is the one used when the slot has two views; the plain name is never
+// emitted for such a slot, so the plain lookup goes first.
+fn replay_slot_value(pname: String, slot: i64, label: String, names: Vec<String>, vals: Vec<String>) -> String {
+    let key: String = replay_slot_key(pname, slot);
+    let hit: String = replay_cex_value(names, vals, key);
+    if hit.len() > 0 { return hit; }
+    let suffixed: String = String::from(key);
+    suffixed.push_str(String::from(":"));
+    suffixed.push_str(label);
+    replay_cex_value(names, vals, suffixed)
+}
+
+// Literal of the scalar (or `()`) a field of AST type `tid` holds at `slot`. A
+// slot the model never read cannot have influenced the path to the claim, so it
+// takes the zero value.
+fn replay_field_arg(a: AstArena, tid: i64, pname: String, slot: i64, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
+    let shown: String = print_type_text(a, tid);
+    if type_tag(a, tid) == TY_UNIT() {
+        return replay_arg_ok(String::from("()"), shown);
+    }
+    if type_tag(a, tid) != TY_NAMED() {
+        return replay_arg_skip(str3r(String::from("field of type `"), shown, String::from("` is not a scalar")));
+    }
+    let name: String = arena_str(a, type_a(a, tid));
+    if name == String::from("i128") || name == String::from("u128") {
+        return replay_arg_skip(str3r(String::from("field of type `"), name, String::from("` is 128-bit; replay does not rebuild it")));
+    }
+    if name == String::from("bool") {
+        let raw: String = replay_slot_value(pname, slot, String::from("bool"), names, vals);
+        if raw.len() == 0 || raw == String::from("false") { return replay_arg_ok(String::from("false"), shown); }
+        if raw == String::from("true") { return replay_arg_ok(String::from("true"), shown); }
+        return replay_arg_skip(str3r(String::from("slot value `"), raw, String::from("` is not a bool")));
+    }
+    let bits: i64 = replay_int_bits(name);
+    if bits == 0 {
+        return replay_arg_skip(str3r(String::from("field of type `"), shown, String::from("` is not a scalar")));
+    }
+    let mut raw: String = replay_slot_value(pname, slot, i64_to_string(bits), names, vals);
+    if raw.len() == 0 { raw = String::from("0"); }
+    if !replay_is_int_literal(raw) || !replay_int_fits(name, raw) {
+        return replay_arg_skip(str3r(String::from("slot value `"), raw, str3r(String::from("` is not a `"), name, String::from("`"))));
+    }
+    replay_arg_ok(replay_int_literal(name, raw), shown)
+}
+
+fn str3r(a: String, b: String, c: String) -> String {
+    let out: String = String::from(a);
+    out.push_str(b);
+    out.push_str(c);
+    out
+}
+
+// `(f0, f1, ...)` or "" for no payload, from slot `first` on.
+fn replay_payload_args(a: AstArena, tids: Vec<i64>, pname: String, first: i64, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
+    let out: String = String::from("");
+    let mut i: u64 = 0u64;
+    while i < tids.len() {
+        let f: ReplayArg = replay_field_arg(a, tids[i], pname, first + i as i64, names, vals);
+        if f.reason.len() > 0 { return f; }
+        if i > 0u64 { out.push_str(String::from(", ")); }
+        out.push_str(f.lit);
+        i = i + 1u64;
+    }
+    replay_arg_ok(out, String::from(""))
+}
+
+fn replay_struct_arg(a: AstArena, sid: i64, pname: String, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
+    let sname: String = arena_str(a, sdef_name_sid(a, sid));
+    let fields_lid: i64 = sdef_fields_lid(a, sid);
+    let n: i64 = list_len(a, fields_lid) / 2;
+    if n == 0 {
+        return replay_arg_skip(str3r(String::from("struct `"), sname, String::from("` has no fields")));
+    }
+    let lit: String = String::from(sname);
+    lit.push_str(String::from(" { "));
+    let mut i: i64 = 0;
+    while i < n {
+        let f: ReplayArg = replay_field_arg(a, list_get(a, fields_lid, i * 2 + 1), pname, i, names, vals);
+        if f.reason.len() > 0 {
+            let fname: String = arena_str(a, list_get(a, fields_lid, i * 2));
+            return replay_arg_skip(str3r(String::from("field `"), fname, str3r(String::from("` of `"), sname, str3r(String::from("`: "), f.reason, String::from("")))));
+        }
+        if i > 0 { lit.push_str(String::from(", ")); }
+        lit.push_str(arena_str(a, list_get(a, fields_lid, i * 2)));
+        lit.push_str(String::from(": "));
+        lit.push_str(f.lit);
+        i = i + 1;
+    }
+    lit.push_str(String::from(" }"));
+    replay_arg_ok(lit, sname)
+}
+
+// The variant whose discriminant the model chose, built as `Enum::Variant(...)`.
+// `payloads[v]` holds the AST types of variant `v`'s payload.
+fn replay_variant_arg(a: AstArena, ename: String, variants: Vec<String>, payloads: Vec<Vec<i64>>, pname: String, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
+    let mut tag: i64 = 0;
+    let raw: String = replay_slot_value(pname, 0, String::from("64"), names, vals);
+    if raw.len() > 0 {
+        match parse_i64(raw) {
+            Option::Some(v) => { tag = v; },
+            Option::None => {
+                return replay_arg_skip(str3r(String::from("discriminant `"), raw, String::from("` is not an integer")));
+            },
+        }
+    }
+    if tag < 0 || tag >= variants.len() as i64 {
+        let why: String = String::from("discriminant ");
+        why.push_str(i64_to_string(tag));
+        why.push_str(String::from(" outside "));
+        why.push_str(ename);
+        why.push_str(String::from(" ("));
+        why.push_str(i64_to_string(variants.len() as i64));
+        why.push_str(String::from(" variants)"));
+        return replay_arg_skip(why);
+    }
+    let lit: String = String::from(ename);
+    lit.push_str(String::from("::"));
+    lit.push_str(variants[tag as u64]);
+    let tids: Vec<i64> = payloads[tag as u64];
+    if tids.len() > 0 {
+        let p: ReplayArg = replay_payload_args(a, tids, pname, 1, names, vals);
+        if p.reason.len() > 0 {
+            return replay_arg_skip(str3r(String::from("variant `"), variants[tag as u64], str3r(String::from("` of `"), ename, str3r(String::from("`: "), p.reason, String::from("")))));
+        }
+        lit.push_str(String::from("("));
+        lit.push_str(p.lit);
+        lit.push_str(String::from(")"));
+    }
+    replay_arg_ok(lit, ename)
+}
+
+fn replay_enum_arg(a: AstArena, eid: i64, pname: String, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
+    let variants_lid: i64 = edef_variants_lid(a, eid);
+    let n: i64 = list_len(a, variants_lid) / 2;
+    let variants: Vec<String> = Vec::new();
+    let payloads: Vec<Vec<i64>> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n {
+        variants.push(arena_str(a, list_get(a, variants_lid, i * 2)));
+        let plid: i64 = list_get(a, variants_lid, i * 2 + 1);
+        let tids: Vec<i64> = Vec::new();
+        let mut j: i64 = 0;
+        while j < list_len(a, plid) {
+            tids.push(list_get(a, plid, j));
+            j = j + 1;
+        }
+        payloads.push(tids);
+        i = i + 1;
+    }
+    replay_variant_arg(a, arena_str(a, edef_name_sid(a, eid)), variants, payloads, pname, names, vals)
+}
+
+// `Option<T>` (`None`, `Some`) and `Result<T, E>` (`Ok`, `Err`), in the
+// lowerer's variant order.
+fn replay_builtin_enum_arg(a: AstArena, tid: i64, pname: String, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
+    let name: String = arena_str(a, type_a(a, tid));
+    let args_lid: i64 = type_b(a, tid);
+    let variants: Vec<String> = Vec::new();
+    let payloads: Vec<Vec<i64>> = Vec::new();
+    if name == String::from("Option") && list_len(a, args_lid) == 1 {
+        variants.push(String::from("None"));
+        payloads.push(Vec::new());
+        variants.push(String::from("Some"));
+        let some: Vec<i64> = Vec::new();
+        some.push(list_get(a, args_lid, 0));
+        payloads.push(some);
+    } else if name == String::from("Result") && list_len(a, args_lid) == 2 {
+        variants.push(String::from("Ok"));
+        let ok: Vec<i64> = Vec::new();
+        ok.push(list_get(a, args_lid, 0));
+        payloads.push(ok);
+        variants.push(String::from("Err"));
+        let err: Vec<i64> = Vec::new();
+        err.push(list_get(a, args_lid, 1));
+        payloads.push(err);
+    } else {
+        return replay_arg_skip(str3r(String::from("parameter type `"), print_type_text(a, tid), String::from("` is not rebuilt by replay")));
+    }
+    let r: ReplayArg = replay_variant_arg(a, name, variants, payloads, pname, names, vals);
+    if r.reason.len() > 0 { return r; }
+    replay_arg_ok(r.lit, print_type_text(a, tid))
+}
+
+// Source expression and type for argument `pi` of the function `fn_name`
+// declared in `m`, rebuilt from the counterexample's `<param>.<slot>` values.
+// `reason` says why it cannot be (nested aggregates, 128-bit fields, references,
+// aliases, an out-of-range discriminant ...); the caller then skips the replay.
+fn replay_agg_arg(m: Module, fn_name: String, pi: i64, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
+    let a: AstArena = m.arena;
+    let fid: i64 = replay_find_fn_item(m, fn_name);
+    if fid < 0 {
+        return replay_arg_skip(str3r(String::from("no source definition of function `"), fn_name, String::from("`")));
+    }
+    let lid: i64 = fn_params_lid(a, fid);
+    if pi < 0 || pi >= list_len(a, lid) / 4 {
+        return replay_arg_skip(String::from("parameter index outside the source signature"));
+    }
+    let pname: String = arena_str(a, list_get(a, lid, pi * 4));
+    let tid: i64 = list_get(a, lid, pi * 4 + 1);
+    let tag: i64 = type_tag(a, tid);
+    if tag == TY_NAMED() {
+        let tname: String = arena_str(a, type_a(a, tid));
+        let sid: i64 = replay_find_struct(m, tname);
+        if sid >= 0 { return replay_struct_arg(a, sid, pname, names, vals); }
+        let eid: i64 = replay_find_enum(m, tname);
+        if eid >= 0 { return replay_enum_arg(a, eid, pname, names, vals); }
+    }
+    if tag == TY_GENERIC() {
+        return replay_builtin_enum_arg(a, tid, pname, names, vals);
+    }
+    replay_arg_skip(str3r(String::from("parameter type `"), print_type_text(a, tid), String::from("` is not a struct, enum, Option or Result declared in this program")))
+}

@@ -6,13 +6,20 @@ use ir_dominance
 use vc_ops
 use vc_int
 use vc_cfg
+use vc_loops
+use vc_agg
+use vc_vec
+use ast
 
 // Fail-closed subset gate for the native verifier. `vc_skip_reason` returns ""
-// only for a pure, loop-free function built from the integer (8 to 128 bits) and
-// Bool operations the symbolic executor models, with the control-flow shape
-// `vc_cfg_detail` accepts; every other function is `Skipped` with
-// "<code>: <detail>" using the closed codes of ADR-1430 (listed in `vc_ops`).
-// An unknown opcode is never accepted.
+// only for a function whose only effect is `panic` (the effect of `.unwrap()`)
+// and whose loops are reducible and unrollable (`vc_loops`), built from the
+// integer (8 to 128 bits) and Bool operations the
+// symbolic executor models and the struct, enum and `Option` values it
+// scalarises (`vc_agg`) and the `Vec`s of Bool and integers up to 64 bits it
+// models as an array plus a length (`vc_vec`), with the control-flow shape `vc_cfg_detail` accepts;
+// every other function is `Skipped` with "<code>: <detail>" using the closed
+// codes of ADR-1430 (listed in `vc_ops`). An unknown opcode is never accepted.
 
 fn vc_reason(code: String, detail: String) -> String {
     let out: String = String::from(code);
@@ -118,9 +125,27 @@ fn vc_operand_ok(inst: IrInst, tys: Vec<i64>, lits: Vec<i64>, k: u64, want: i64)
 }
 
 // Types a Phi may carry. Unit is accepted for the statement-position `if`,
-// whose arms each feed a Unit Phi; the executor models no value for it.
+// whose arms each feed a Unit Phi; the executor models no value for it. A
+// pointer is an aggregate object.
 fn vc_is_merge_ty(ty: i64) -> bool {
-    vc_ty_is_int(ty) || ty == ITY_BOOL() || ty == ITY_UNIT()
+    vc_ty_is_int(ty) || ty == ITY_BOOL() || ty == ITY_UNIT() || ty == ITY_PTR()
+}
+
+// A struct field or enum payload slot holds Bool or an integer up to 64 bits
+// in one slot (`IDATA_FIELD`), and a 128-bit integer in two (`IDATA_WIDE_SLOT`).
+// The slot kind and the value's width must agree: the lowerer never pairs them
+// otherwise, so a mismatch is IR the executor does not guess at.
+fn vc_field_access_ok(dk: i64, ty: i64) -> bool {
+    if dk == IDATA_FIELD() {
+        return ty == ITY_BOOL() || (vc_ty_is_int(ty) && vc_ty_bits(ty) <= 64);
+    }
+    dk == IDATA_WIDE_SLOT() && vc_ty_bits(ty) == 128
+}
+
+// The function's only effect may be `panic`: `.unwrap()` needs it, and the
+// abort is the claim the executor makes of it.
+fn vc_effects_modeled(effects: i64) -> bool {
+    effects == 0 || effects == EFF_PANIC()
 }
 
 fn vc_arg_ty(tys: Vec<i64>, inst: IrInst, k: u64) -> i64 {
@@ -157,11 +182,58 @@ fn vc_is_const_int_op(op: i64) -> bool {
         || op == IOP_CONST_I128() || op == IOP_CONST_U128()
 }
 
+// A call of a user function the splicer can inline: every argument and the
+// result are integer or Bool (or the result is Unit). Aggregates do not cross a
+// call yet.
+fn vc_call_scalar(inst: IrInst, tys: Vec<i64>) -> bool {
+    if inst.dk != IDATA_CALL_TARGET() { return false; }
+    if inst.ty != ITY_UNIT() && inst.ty != ITY_BOOL() && !vc_ty_is_int(inst.ty) { return false; }
+    let mut k: u64 = 0;
+    while k < inst.args.len() {
+        let t: i64 = vc_arg_ty(tys, inst, k);
+        if t != ITY_BOOL() && !vc_ty_is_int(t) { return false; }
+        k = k + 1;
+    }
+    true
+}
+
+// A bit-vector or Bool element a `Vec` slot holds: one 8-byte slot, so up to 64
+// bits. Wider integers and every pointer element (nested `Vec`, `String`,
+// struct) are not modelled.
+fn vc_vec_elem_ok(ty: i64) -> bool {
+    ty == ITY_BOOL() || (vc_ty_is_int(ty) && vc_ty_bits(ty) <= 64)
+}
+
+fn vc_vec_index_ok(ty: i64) -> bool {
+    vc_ty_is_int(ty) && vc_ty_bits(ty) == 64
+}
+
+// Operand and result types of a `Vec` call. `get` yields the raw 8-byte slot as
+// `i64`; the lowerer narrows it with its own cast.
+fn vc_vec_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
+    let n: u64 = inst.args.len();
+    let t0: i64 = vc_arg_ty(tys, inst, 0);
+    let t1: i64 = vc_arg_ty(tys, inst, 1);
+    if kind == VC_VEC_NEW() {
+        return n == 2 && inst.ty == ITY_PTR() && vc_ty_is_int(t0) && vc_ty_is_int(t1);
+    }
+    if t0 != ITY_PTR() { return false; }
+    if kind == VC_VEC_PUSH() { return n == 2 && inst.ty == ITY_UNIT() && vc_vec_elem_ok(t1); }
+    if kind == VC_VEC_GET() { return n == 2 && inst.ty == ITY_I64() && vc_vec_index_ok(t1); }
+    if kind == VC_VEC_SET() {
+        return n == 3 && inst.ty == ITY_UNIT() && vc_vec_index_ok(t1) && vc_vec_elem_ok(vc_arg_ty(tys, inst, 2));
+    }
+    if kind == VC_VEC_LEN() { return n == 1 && inst.ty == ITY_U64(); }
+    if kind == VC_VEC_POP() { return n == 1 && inst.ty == ITY_UNIT(); }
+    false
+}
+
 // True when the instruction is one the symbolic executor models, given the
-// types of the values it reads.
-fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>) -> bool {
+// types of the values it reads. `calls` admits a scalar call of a user function
+// (inlined before execution); without it only the unwrap abort is a call.
+fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>, calls: bool) -> bool {
     let op: i64 = inst.op;
-    if !vc_op_modeled(op) { return false; }
+    if !vc_op_gate_candidate(op) { return false; }
     let n: u64 = inst.args.len();
     let t0: i64 = vc_arg_ty(tys, inst, 0);
     let t1: i64 = vc_arg_ty(tys, inst, 1);
@@ -174,8 +246,25 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>)
     if op == IOP_PHI() { return n == 0 && vc_is_merge_ty(inst.ty); }
     if op == IOP_UPSILON() { return n == 1 && inst.dk == IDATA_PHI_TARGET() && vc_is_merge_ty(t0); }
     if op == IOP_GET_ARG() {
-        return vc_ty_is_int(inst.ty) && n == 0 && inst.dv >= 0 && inst.dv < f.params.len() as i64
-            && f.params[inst.dv as u64] == inst.ty;
+        return (vc_ty_is_int(inst.ty) || inst.ty == ITY_PTR()) && n == 0 && inst.dv >= 0
+            && inst.dv < f.params.len() as i64 && f.params[inst.dv as u64] == inst.ty;
+    }
+    if op == IOP_REGION_ALLOC() {
+        return inst.ty == ITY_PTR() && n == 0 && inst.dk == IDATA_ALLOC_SIZE() && inst.dv >= 8;
+    }
+    if op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE() { return n == 0; }
+    if op == IOP_FIELD_GET() {
+        return n == 1 && t0 == ITY_PTR() && inst.dv >= 0 && vc_field_access_ok(inst.dk, inst.ty);
+    }
+    if op == IOP_FIELD_SET() {
+        return n == 2 && t0 == ITY_PTR() && inst.dv >= 0 && inst.ty == ITY_UNIT()
+            && vc_field_access_ok(inst.dk, t1);
+    }
+    if op == IOP_CALL() {
+        if vc_is_unwrap_abort(inst) { return n == 0 && inst.ty == ITY_UNIT(); }
+        let vk: i64 = vc_inst_vec_kind(inst);
+        if vk != VC_VEC_NONE() { return vc_vec_call_ok(inst, tys, vk); }
+        return calls && vc_call_scalar(inst, tys);
     }
     if vc_is_arith_op(op) {
         return vc_ty_is_int(inst.ty) && n == 2 && vc_operand_ok(inst, tys, lits, 0, inst.ty)
@@ -199,40 +288,30 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>)
     if op == IOP_AND() || op == IOP_OR() {
         return inst.ty == ITY_BOOL() && n == 2 && t0 == ITY_BOOL() && t1 == ITY_BOOL();
     }
-    if op == IOP_VOW_REQ() || op == IOP_VOW_ENS() {
+    if op == IOP_VOW_REQ() || op == IOP_VOW_ENS() || op == IOP_VOW_INV() {
         return n == 1 && t0 == ITY_BOOL() && inst.dk == IDATA_VOW_ID();
     }
     if op == IOP_RETURN() {
-        if f.return_ty == ITY_UNIT() { return n == 0; }
-        return n == 1 && t0 == f.return_ty && (vc_ty_is_int(f.return_ty) || f.return_ty == ITY_BOOL());
+        if f.return_ty == ITY_UNIT() { return n == 0 || (n == 1 && t0 == ITY_UNIT()); }
+        return n == 1 && t0 == f.return_ty
+            && (vc_ty_is_int(f.return_ty) || f.return_ty == ITY_BOOL() || f.return_ty == ITY_PTR());
     }
     false
 }
 
-// Width of the value a FieldGet reads or a FieldSet writes.
-fn vc_field_ty(inst: IrInst, tys: Vec<i64>) -> i64 {
-    if inst.op == IOP_FIELD_SET() { return vc_arg_ty(tys, inst, 1); }
-    inst.ty
-}
-
-// The specific reason (float remainder, unmodelled builtin, wide field) for an
-// instruction `vc_inst_supported` rejected, or "" when it is only generically
-// unsupported. Only the three per-instruction classes of the op-model table can
-// have one, so every other opcode costs a single table lookup.
-fn vc_inst_specific_reason(inst: IrInst, tys: Vec<i64>) -> String {
+// The specific reason (float remainder, unmodelled builtin) for an instruction
+// `vc_inst_supported` rejected, or "" when it is only generically unsupported.
+// Only the two per-instruction classes of the op-model table can have one, so
+// every other opcode costs a single table lookup.
+fn vc_inst_specific_reason(inst: IrInst) -> String {
     let model: i64 = vc_op_model(inst.op);
     if model == VC_OPM_FLOAT_REM() { return vc_reason(VC_SKIP_FLOAT_REM(), opcode_name(inst.op)); }
     if model == VC_OPM_CALL() {
-        if inst.dk == IDATA_CALL_EXTERN() && !catalogue_verifier_known(inst.ds) {
+        if inst.dk == IDATA_CALL_EXTERN() && !vc_is_unwrap_abort(inst) && vc_inst_vec_kind(inst) == VC_VEC_NONE()
+            && !catalogue_verifier_known(inst.ds) {
             return vc_reason(VC_SKIP_UNMODELED_BUILTIN(), inst.ds);
         }
         return String::from("");
-    }
-    if model == VC_OPM_FIELD() {
-        let width_ty: i64 = vc_field_ty(inst, tys);
-        if width_ty == ITY_I128() || width_ty == ITY_U128() {
-            return vc_reason(VC_SKIP_WIDE_AGGREGATE_FIELD(), vc_name_with_ty(inst.op, width_ty));
-        }
     }
     String::from("")
 }
@@ -255,24 +334,41 @@ fn vc_unsupported_detail(inst: IrInst, tys: Vec<i64>) -> String {
 }
 
 // "" when `f` is inside the native subset, else "<code>: <detail>".
-fn vc_skip_reason(f: IrFunction) -> String {
-    if f.effects != 0 {
-        return vc_reason(VC_SKIP_FUNCTION_HAS_EFFECTS(), effects_str(f.effects));
+fn vc_skip_reason(src: IrFunction) -> String {
+    vc_skip_reason_with(src, false)
+}
+
+// The same with scalar calls of user functions allowed: the check of one
+// function of a call tree before `vc_inline` flattens it.
+fn vc_skip_reason_calls(src: IrFunction) -> String {
+    vc_skip_reason_with(src, true)
+}
+
+fn vc_skip_reason_with(src: IrFunction, calls: bool) -> String {
+    if !vc_effects_modeled(src.effects) {
+        return vc_reason(VC_SKIP_FUNCTION_HAS_EFFECTS(), effects_str(src.effects));
     }
-    let dom: String = ir_non_dominating_read(f);
+    let dom: String = ir_non_dominating_read(src);
     if dom.len() > 0 {
         return dom;
     }
-    if f.blocks.len() == 0 {
+    if src.blocks.len() == 0 {
         return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), String::from("empty function body"));
+    }
+    // The verifier unrolls the loop-closed form, so that is what is vetted.
+    let f: IrFunction = vc_close_loops(src);
+    let closed_dom: String = ir_non_dominating_read(f);
+    if closed_dom.len() > 0 {
+        return closed_dom;
     }
     let tys: Vec<i64> = vc_ty_table(f);
     let lits: Vec<i64> = vc_literal_table(f, tys);
-    // A specific reason (float remainder, unmodelled builtin, wide field) beats
+    // A specific reason (float remainder, unmodelled builtin) beats
     // the generic `unsupported-opcode` of an earlier instruction: it names what
     // has to be modelled, and the generic one would hide it behind a parameter
     // or constant that precedes it.
     let mut have_generic: bool = false;
+    let mut has_vec: bool = false;
     let mut generic: String = String::from("");
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
@@ -280,8 +376,9 @@ fn vc_skip_reason(f: IrFunction) -> String {
         let mut ii: u64 = 0;
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
-            if !vc_inst_supported(f, inst, tys, lits) {
-                let specific: String = vc_inst_specific_reason(inst, tys);
+            if inst.op == IOP_CALL() && vc_inst_vec_kind(inst) != VC_VEC_NONE() { has_vec = true; }
+            if !vc_inst_supported(f, inst, tys, lits, calls) {
+                let specific: String = vc_inst_specific_reason(inst);
                 if specific.len() > 0 { return specific; }
                 if !have_generic {
                     have_generic = true;
@@ -293,6 +390,16 @@ fn vc_skip_reason(f: IrFunction) -> String {
         bi = bi + 1;
     }
     if have_generic { return generic; }
+    let shape: String = vc_agg_shape_detail(f, tys.len());
+    if shape.len() > 0 {
+        return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), shape);
+    }
+    if has_vec {
+        let vec_shape: String = vc_vec_shape_detail(f, tys.len());
+        if vec_shape.len() > 0 {
+            return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), vec_shape);
+        }
+    }
     let cfg: String = vc_cfg_detail(f, tys);
     if cfg.len() > 0 {
         return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), cfg);

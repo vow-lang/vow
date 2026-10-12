@@ -46,8 +46,9 @@ fn check_golden_script() -> i64 {
 fn check_constants() -> i64 {
     let ar: VcArena = vc_arena_new();
     let s: SmtScript = vc_script_new();
-    vc_script_assert(s, vc_tm_app2(ar, VC_OP_EQ(), vc_tm_bv(ar, 64, -1, 0), vc_tm_bv(ar, 64, 7, 0)));
-    vc_script_assert(s, vc_tm_app2(ar, VC_OP_EQ(), vc_tm_bv(ar, 64, -9223372036854775807 - 1, 0), vc_tm_bv(ar, 64, 9223372036854775807, 0)));
+    // Raw nodes: the writer is under test, not the simplifier that would fold these.
+    vc_script_assert(s, vc_arena_push(ar, VC_T_APP(), vc_tm_bv(ar, 64, -1, 0), vc_tm_bv(ar, 64, 7, 0), -1, VC_OP_EQ()));
+    vc_script_assert(s, vc_arena_push(ar, VC_T_APP(), vc_tm_bv(ar, 64, -9223372036854775807 - 1, 0), vc_tm_bv(ar, 64, 9223372036854775807, 0), -1, VC_OP_EQ()));
     vc_script_assert(s, vc_tm_bool_const(ar, true));
     vc_script_assert(s, vc_tm_bool_const(ar, false));
     let want: String = String::from("(assert (= #xffffffffffffffff #x0000000000000007))\n");
@@ -193,13 +194,62 @@ fn check_widths_and_extensions() -> i64 {
     0
 }
 
+fn check_array_vocabulary() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let s: SmtScript = vc_script_new();
+    vc_script_declare_const(s, String::from("a"), VC_SORT_ARRAY64());
+    vc_script_declare_const(s, String::from("i"), 64);
+    vc_script_declare_const(s, String::from("c"), VC_SORT_BOOL());
+    let a: i64 = vc_tm_var(ar, String::from("a"));
+    let i: i64 = vc_tm_var(ar, String::from("i"));
+    let c: i64 = vc_tm_var(ar, String::from("c"));
+    let st: i64 = vc_tm_app3(ar, VC_OP_STORE(), a, i, vc_tm_bv(ar, 64, 2, 0));
+    vc_script_define_fun(s, String::from("g0"), VC_SORT_ARRAY64(), st);
+    let g0: i64 = vc_tm_var(ar, String::from("g0"));
+    let merged: i64 = vc_tm_app3(ar, VC_OP_ITE(), c, g0, a);
+    vc_script_define_fun(s, String::from("g1"), VC_SORT_ARRAY64(), merged);
+    vc_script_assert(s, vc_tm_app2(ar, VC_OP_EQ(), vc_tm_app2(ar, VC_OP_SELECT(), vc_tm_var(ar, String::from("g1")), i), vc_tm_bv(ar, 64, 2, 0)));
+    let want: String = String::from("(declare-const a (Array (_ BitVec 64) (_ BitVec 64)))\n");
+    want.push_str(String::from("(declare-const i (_ BitVec 64))\n"));
+    want.push_str(String::from("(declare-const c Bool)\n"));
+    want.push_str(String::from("(define-fun g0 () (Array (_ BitVec 64) (_ BitVec 64)) (store a i #x0000000000000002))\n"));
+    want.push_str(String::from("(define-fun g1 () (Array (_ BitVec 64) (_ BitVec 64)) (ite c g0 a))\n"));
+    want.push_str(String::from("(assert (= (select g1 i) #x0000000000000002))\n"));
+    if vc_smt_render(ar, s) != want { return 100; }
+    0
+}
+
+fn check_render_range() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let s: SmtScript = vc_script_new();
+    vc_script_set_logic(s, String::from("QF_BV"));
+    vc_script_declare_const(s, String::from("p0"), 64);
+    vc_script_assert(s, vc_tm_bool_const(ar, true));
+    vc_script_assert(s, vc_tm_bool_const(ar, false));
+    vc_script_check_sat(s);
+    let n: u64 = s.kinds.len();
+    if vc_smt_render_cmds(ar, s, 0, n) != vc_smt_render(ar, s) { return 1000; }
+    let mid: String = String::from("(declare-const p0 (_ BitVec 64))\n");
+    mid.push_str(String::from("(assert true)\n"));
+    if vc_smt_render_cmds(ar, s, 1, 3) != mid { return 1001; }
+    if vc_smt_render_cmds(ar, s, 2, 2) != String::from("") { return 1002; }
+    if vc_smt_render_cmds(ar, s, 3, 1) != String::from("") { return 1003; }
+    if vc_smt_render_cmds(ar, s, 4, 99) != String::from("(check-sat)\n") { return 1004; }
+    let asserted: String = String::from("");
+    vc_smt_push_assert(asserted, ar, vc_tm_bool_const(ar, false));
+    if asserted != String::from("(assert false)") { return 1005; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_golden_script();
     if r == 0 { r = check_constants(); }
     if r == 0 { r = check_widths_and_extensions(); }
     if r == 0 { r = check_every_operator_has_a_symbol(); }
+    if r == 0 { r = check_array_vocabulary(); }
     if r == 0 { r = check_prefix_is_independent(); }
     if r == 0 { r = check_get_value_without_names_is_omitted(); }
     if r == 0 { r = check_unmapped_operator_is_not_a_known_symbol(); }
+    if r == 0 { r = check_render_range(); }
     i64_to_i32_wrap(r)
 }

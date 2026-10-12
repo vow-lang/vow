@@ -511,8 +511,52 @@ fn expr_precedence(expr: &Expr) -> u8 {
     }
 }
 
+// True when printing `expr` leaves a struct literal outside every delimiter, i.e.
+// where the parser, inside an `if` / `while` / `for … in` / `match` head, would
+// read `Name {` as the start of the body. Deliberately an over-approximation: it
+// ignores parentheses the printer already adds around some operands.
+fn head_exposes_struct_literal(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::StructLiteral { .. } => true,
+        ExprKind::BinaryOp { lhs, rhs, .. } | ExprKind::Assign { lhs, rhs } => {
+            head_exposes_struct_literal(lhs) || head_exposes_struct_literal(rhs)
+        }
+        ExprKind::UnaryOp { operand, .. } => head_exposes_struct_literal(operand),
+        ExprKind::Cast { expr, .. } | ExprKind::Question { expr } => {
+            head_exposes_struct_literal(expr)
+        }
+        ExprKind::FieldAccess { base, .. } | ExprKind::Index { base, .. } => {
+            head_exposes_struct_literal(base)
+        }
+        ExprKind::MethodCall { receiver, .. } => head_exposes_struct_literal(receiver),
+        ExprKind::Call { callee, .. } => head_exposes_struct_literal(callee),
+        ExprKind::Break { value } | ExprKind::Return { value } => {
+            value.as_deref().is_some_and(head_exposes_struct_literal)
+        }
+        _ => false,
+    }
+}
+
+fn print_head(expr: &Expr, level: usize) -> String {
+    if head_exposes_struct_literal(expr) {
+        format!("({})", print_expr_at(expr, level))
+    } else {
+        print_expr_at(expr, level)
+    }
+}
+
 // An unparenthesised block-like expression ends the expression, so it needs
 // parentheses before any postfix operator and as a left binary operand.
+/// `-x as T?` parses as `((-x) as T)?`, so a unary operand whose `?` chain
+/// wraps a cast must keep its parentheses.
+fn question_chain_ends_in_cast(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Cast { .. } => true,
+        ExprKind::Question { expr } => question_chain_ends_in_cast(expr),
+        _ => false,
+    }
+}
+
 fn print_postfix_base(expr: &Expr, level: usize) -> String {
     if expr.kind.is_block_like()
         || matches!(
@@ -570,7 +614,8 @@ fn print_expr_at(expr: &Expr, level: usize) -> String {
             };
             // `-!` would lex as the checked-subtraction token.
             let needs_parens = match &operand.kind {
-                ExprKind::BinaryOp { .. } => true,
+                ExprKind::BinaryOp { .. } | ExprKind::Cast { .. } => true,
+                ExprKind::Question { expr } => question_chain_ends_in_cast(expr),
                 ExprKind::UnaryOp { op: inner_op, .. } => {
                     matches!((op, inner_op), (UnOp::Neg, UnOp::Not))
                 }
@@ -615,7 +660,7 @@ fn print_expr_at(expr: &Expr, level: usize) -> String {
             )
         }
         ExprKind::Match { scrutinee, arms } => {
-            let mut out = format!("match {} {{\n", print_expr_at(scrutinee, level));
+            let mut out = format!("match {} {{\n", print_head(scrutinee, level));
             for arm in arms {
                 out.push_str(&print_match_arm(arm, level + 1));
             }
@@ -630,7 +675,7 @@ fn print_expr_at(expr: &Expr, level: usize) -> String {
         } => {
             let mut out = format!(
                 "if {} {}",
-                print_expr_at(condition, level),
+                print_head(condition, level),
                 print_block(then_branch, level)
             );
             if let Some(else_expr) = else_branch {
@@ -653,7 +698,7 @@ fn print_expr_at(expr: &Expr, level: usize) -> String {
             vow,
             body,
         } => {
-            let mut out = format!("while {}", print_expr_at(condition, level));
+            let mut out = format!("while {}", print_head(condition, level));
             if let Some(v) = vow {
                 push_vow_block_inline(&mut out, v, level);
             }
@@ -667,7 +712,7 @@ fn print_expr_at(expr: &Expr, level: usize) -> String {
             vow,
             body,
         } => {
-            let mut out = format!("for {} in {}", binding, print_expr_at(iterable, level));
+            let mut out = format!("for {} in {}", binding, print_head(iterable, level));
             if let Some(v) = vow {
                 push_vow_block_inline(&mut out, v, level);
             }
@@ -1275,6 +1320,50 @@ mod tests {
     }
 
     #[test]
+    fn test_unary_of_question_of_cast_is_parenthesised() {
+        let cast = Expr {
+            kind: ExprKind::Cast {
+                expr: Box::new(ident_expr("a")),
+                target_ty: Box::new(named_ty("i8")),
+            },
+            span: s(),
+        };
+        let question = Expr {
+            kind: ExprKind::Question {
+                expr: Box::new(cast),
+            },
+            span: s(),
+        };
+        let neg = unary_expr(UnOp::Neg, question.clone());
+        assert_eq!(print_expr(&neg), "-(a as i8?)");
+        let not = unary_expr(UnOp::Not, question);
+        assert_eq!(print_expr(&not), "!(a as i8?)");
+    }
+
+    #[test]
+    fn test_unary_of_nested_question_of_cast_is_parenthesised() {
+        let cast = cast_expr(ident_expr("a"), "u64");
+        let nested = question_expr(question_expr(cast));
+        assert_eq!(
+            print_expr(&unary_expr(UnOp::Neg, nested.clone())),
+            "-(a as u64??)"
+        );
+        assert_eq!(print_expr(&unary_expr(UnOp::Not, nested)), "!(a as u64??)");
+
+        let neg_question = unary_expr(UnOp::Neg, question_expr(ident_expr("a")));
+        assert_eq!(print_expr(&neg_question), "-a?");
+
+        let question_cast = cast_expr(question_expr(ident_expr("a")), "u64");
+        assert_eq!(
+            print_expr(&unary_expr(UnOp::Neg, question_cast)),
+            "-(a? as u64)"
+        );
+
+        let cast_of_neg_question = cast_expr(neg_question, "u64");
+        assert_eq!(print_expr(&cast_of_neg_question), "(-a?) as u64");
+    }
+
+    #[test]
     fn test_neg_of_not_is_parenthesized() {
         let expr = unary_expr(UnOp::Neg, unary_expr(UnOp::Not, ident_expr("a")));
         assert_eq!(print_expr(&expr), "-(!a)");
@@ -1291,7 +1380,7 @@ mod tests {
     }
 
     #[test]
-    fn test_neg_of_cast_needs_no_parens() {
+    fn test_unary_of_cast_is_parenthesised() {
         let cast = Expr {
             kind: ExprKind::Cast {
                 expr: Box::new(ident_expr("a")),
@@ -1299,7 +1388,34 @@ mod tests {
             },
             span: s(),
         };
-        assert_eq!(print_expr(&unary_expr(UnOp::Neg, cast)), "-a as u64");
+        assert_eq!(
+            print_expr(&unary_expr(UnOp::Neg, cast.clone())),
+            "-(a as u64)"
+        );
+        assert_eq!(print_expr(&unary_expr(UnOp::Not, cast)), "!(a as u64)");
+    }
+
+    #[test]
+    fn test_cast_of_unary_is_parenthesised() {
+        let neg = unary_expr(UnOp::Neg, ident_expr("a"));
+        let cast = Expr {
+            kind: ExprKind::Cast {
+                expr: Box::new(neg),
+                target_ty: Box::new(named_ty("u64")),
+            },
+            span: s(),
+        };
+        assert_eq!(print_expr(&cast), "(-a) as u64");
+    }
+
+    fn cast_expr(inner: Expr, ty: &str) -> Expr {
+        Expr {
+            kind: ExprKind::Cast {
+                expr: Box::new(inner),
+                target_ty: Box::new(named_ty(ty)),
+            },
+            span: s(),
+        }
     }
 
     fn question_expr(inner: Expr) -> Expr {
@@ -1594,5 +1710,71 @@ mod tests {
             out
         );
         assert!(out.contains("pub fn new() -> Self {"), "method: {}", out);
+    }
+
+    const HEAD_PRELUDE: &str = "module M\nstruct S { a: i64 }\n";
+
+    fn print_fn_body(body: &str) -> String {
+        let src = format!("{HEAD_PRELUDE}fn f() -> i64 {{\n    {body}\n    0\n}}\n");
+        let (module, diagnostics) = crate::parser::parse_module(&src, "t.vow");
+        assert!(diagnostics.is_empty(), "{body:?}: {diagnostics:?}");
+        print_module(&module)
+    }
+
+    fn assert_head_round_trips(body: &str) -> String {
+        let first = print_fn_body(body);
+        let (module, diagnostics) = crate::parser::parse_module(&first, "t.vow");
+        assert!(
+            diagnostics.is_empty(),
+            "{body:?} reprint:\n{first}\n{diagnostics:?}"
+        );
+        let second = print_module(&module);
+        assert_eq!(first, second, "{body:?}: not idempotent");
+        first
+    }
+
+    #[test]
+    fn head_struct_literal_is_parenthesised_so_it_reparses() {
+        for (body, expected) in [
+            ("if (S { a: 1 }).a == 1 { }", "if (S { a: 1 }.a == 1) {"),
+            (
+                "while (S { a: 1 }).a == 1 { }",
+                "while (S { a: 1 }.a == 1) {",
+            ),
+            ("for i in (S { a: 1 }).a { }", "for i in (S { a: 1 }.a) {"),
+            ("match (S { a: 1 }) { }", "match (S { a: 1 }) {"),
+            ("if 1 == (S { a: 1 }).a { }", "if (1 == S { a: 1 }.a) {"),
+            ("if !(S { a: 1 }).b { }", "if (!S { a: 1 }.b) {"),
+            ("if (S { a: 1 }).a? { }", "if (S { a: 1 }.a?) {"),
+            ("if (S { a: 1 }).m() { }", "if (S { a: 1 }.m()) {"),
+            ("if (S { a: 1 })(x) { }", "if (S { a: 1 }(x)) {"),
+            ("if (S { a: 1 }).v[0] { }", "if (S { a: 1 }.v[0]) {"),
+            (
+                "if (S { a: 1 }) as i64 == 1 { }",
+                "if ((S { a: 1 }) as i64 == 1) {",
+            ),
+            ("if (x = S { a: 1 }) { }", "if (x = S { a: 1 }) {"),
+            ("if { break S { a: 1 } } { }", "break S { a: 1 }"),
+            ("if (return S { a: 1 }) { }", "if (return S { a: 1 }) {"),
+        ] {
+            let out = assert_head_round_trips(body);
+            assert!(out.contains(expected), "{body:?}: {out}");
+        }
+    }
+
+    #[test]
+    fn struct_literal_behind_a_delimiter_in_a_head_is_not_parenthesised() {
+        for (body, expected) in [
+            ("if f(S { a: 1 }) { }", "if f(S { a: 1 }) {"),
+            ("if v[S { a: 1 }.a] == 1 { }", "if v[S { a: 1 }.a] == 1 {"),
+            ("if (S { a: 1 }, 2) == t { }", "if (S { a: 1 }, 2) == t {"),
+            ("if { S { a: 1 }.a == 1 } { }", "S { a: 1 }.a == 1"),
+            ("if h.m(S { a: 1 }) { }", "if h.m(S { a: 1 }) {"),
+            ("let s = S { a: 1 };", "let s = S { a: 1 };"),
+            ("if c { S { a: 1 } } else { S { a: 2 } }", "if c {"),
+        ] {
+            let out = assert_head_round_trips(body);
+            assert!(out.contains(expected), "{body:?}: {out}");
+        }
     }
 }

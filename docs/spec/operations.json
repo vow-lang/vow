@@ -208,6 +208,15 @@
       "verifier_model": "unmodeled"
     },
     {
+      "name": "try_eprintln_str",
+      "runtime_symbol": "__vow_try_eprintln_str",
+      "params": ["ptr"],
+      "return": "i64",
+      "doc_signature": "fn(s: String) -> i64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
       "name": "process_exit",
       "runtime_symbol": "__vow_process_exit",
       "params": ["i64"],

@@ -1,0 +1,25 @@
+// Native-only: ESBMC reports 128-bit struct fields as Skipped, so this proof has
+// no ESBMC counterpart.
+module WideStructRoundtrip
+
+struct Wide { value: i128 }
+struct UWide { value: u128 }
+
+fn roundtrip(x: i128) -> i128 vow {
+  ensures: result == x
+} {
+  let w: Wide = Wide { value: x };
+  w.value
+}
+
+fn uroundtrip(x: u128) -> u128 vow {
+  ensures: result == x
+} {
+  let w: UWide = UWide { value: x };
+  w.value
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

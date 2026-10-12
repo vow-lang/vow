@@ -1,0 +1,9 @@
+// TEST: error-code LiteralOutOfRange
+// TEST: stderr "literal -1 does not fit in u64"
+module NegLiteralCastUnsigned
+
+// `-1 as u64` is `(-1) as u64`: the negative literal is out of range for the
+// cast target, matching the suffixed form `-1u64`.
+fn bad() -> u64 {
+    -1 as u64
+}

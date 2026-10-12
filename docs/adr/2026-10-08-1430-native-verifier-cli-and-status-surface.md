@@ -43,10 +43,10 @@ Every verification-related flag in `docs/spec/cli.md`, for `build`, `verify`,
 
 | Flag / env | Commands | Verdict | Notes |
 |---|---|---|---|
-| `--backend` | build, verify, contracts `--verify`, test `--verify` | **new, transitional** | See section 1. |
+| `--backend` | build, verify, contracts `--verify`, test `--verify` | **new, transitional** | See section 1. Addendum (#1427, [ADR-2026-10-11-1500](2026-10-11-1500-native-contract-probes-and-pool-independence.md)): `contracts` and `test` accept `--backend native` only together with `--verify`; without it they reject it. |
 | `--no-verify` | build | kept, text changed | "Skip ESBMC static verification" becomes "skip static verification". Result is still `Unverified`. |
 | `--verify` | contracts, test | kept, text changed | Same wording change. |
-| `--no-cache` | build, verify, contracts | kept | Still disables the verification-result cache and, for `--no-verify` builds, the compile-object cache. The native cache key is the canonical sliced query plus the Bitwuzla pin (P4). |
+| `--no-cache` | build, verify, contracts | kept | Still disables the verification-result cache and, for `--no-verify` builds, the compile-object cache. The native cache key is the exact query text asked plus the Bitwuzla version (P4, landed in #1429; see [ADR-2026-10-11-1500](2026-10-11-1500-native-result-cache.md)). |
 | `--timeout <N>` | build, verify, contracts | **changed** | Seconds, per function. Remains the only user-facing resource knob. The default is one fixed 300 s; the 30 s `--encoding auto` special case goes away with `--encoding`. `--timeout 0` stays "kill immediately". Enforced by killing the `verify-worker` process group (D11). Expiry yields `timeout`. Both compilers already accept it on `contracts`, but `docs/spec/cli.md` does not list it there; P3 documents it. |
 | `--timeout <ms>` | test | kept, unrelated | Per-test execution timeout in milliseconds, unrelated to the verification `--timeout` despite the shared name. `test --verify` gets no separate verification-timeout knob. |
 | `--verify-jobs <N>` | build, verify, contracts, test | kept | Caps concurrent `verify-worker` subprocesses (was ESBMC processes). Default `num_cpus/2`. Still a no-op for `contracts`. |
@@ -58,6 +58,8 @@ Every verification-related flag in `docs/spec/cli.md`, for `build`, `verify`,
 | `VOW_VERIFY_DEBUG` (Rust driver env) | env | removed with the ESBMC driver (`vow-verify/src/esbmc.rs` reads it; the self-hosted driver never wired it) | The native replacement (retained `.smt2` under `VOW_CACHE_DIR`, perfetto) is decided in the P1 solver-driver child. |
 | `VOW_VERIFY_RUN_MEMLIMIT_RSS` (test-only env) | env | removed with ESBMC | Not part of the CLI contract. |
 | `VOW_VERIFY_WORKER_MEM_KB` (test-only env) | env | new, test-only | Lowers the internal address-space cap of a `verify-worker` (KiB) so tests can force an out-of-memory worker. Not part of the CLI contract and not a user-facing memory flag; the default cap is fixed (issue #1410). |
+| `VOW_VERIFY_NO_SLICE` (test-only env) | env | new, test-only | `1` sends every claim's full query instead of its cone of influence, so the corpus can be run both ways to show slicing never changes a verdict. Not a user flag and not in `--help` (issue #1424, [ADR-2026-10-11-1200](2026-10-11-1200-query-slicing-and-per-clause-verdicts.md)). |
+| `VOW_VERIFY_NO_INCREMENTAL` (test-only env) | env | new, test-only | `1` gives every claim its own solver process instead of one interactive session per round, so the corpus can be run both ways to show sharing a solver never changes a verdict or a counterexample. Not a user flag and not in `--help` (issue #1428, [ADR-2026-10-11-1500](2026-10-11-1500-incremental-solver-sessions.md)). |
 | `verify-worker` subcommand, `--worker-entry` | internal | not CLI contract | Output and flags are unstable. |
 
 Not verification-related, therefore out of scope for this classification:
@@ -150,15 +152,14 @@ opcode or builtin name); `detail` is never part of the enumerated set.
 
 | Code | When | Lifetime |
 |---|---|---|
-| `function-has-effects` | The function has a non-empty effect set (D10). | Permanent. |
-| `recursion-unsupported` | The function is directly or mutually recursive in the inlined call graph (D10). | Permanent here; modular verification is a separate decision. |
+| `function-has-effects` | The function has an effect other than `panic` (D10). `panic`, the effect of `.unwrap()`, is modelled: the abort is a claim (#1417). | Permanent. |
+| `recursion-unsupported` | The function is directly or mutually recursive in the inlined call graph (D10). `detail` is the cycle, `a -> b -> a`; a target that only reaches a recursive function gets the same code (#1416). | Permanent here; modular verification is a separate decision. |
 | `float-rem-unsupported` | The body uses `RemF32` or `RemF64` (D7). | Until codegen defines float `%`. |
 | `ir-non-dominating-read` | The dominance validator rejects the IR (D13). | Kept as a defensive gate after the lowerer fix. |
 | `unmodeled-builtin` | An extern call whose runtime symbol has no entry with `verifier_model: known` in `docs/spec/operations.json`: the entry is absent or says `unmodeled` (D10). `detail` is the builtin. | Shrinks as builtins are modelled. |
 | `unsupported-opcode` | An opcode absent from `compiler/vc_ops.vow`, a module the `vc_ops` child introduces (today `Load`, `Store`, `LinearBorrow`). `detail` is the opcode (D10). | Shrinks. |
-| `non-modelable-callee` | An inlined callee is itself `Skipped`. `detail` carries the callee's code. | Permanent. |
+| `non-modelable-callee` | An inlined callee is itself `Skipped`. `detail` is `<callee> (<code>)`, the callee's own code (#1416). | Permanent. |
 | `reserved-verifier-symbol` | The function name collides with a reserved checker symbol. | Permanent; the reserved set is fixed in P1. |
-| `wide-aggregate-field` | `FieldGet`/`FieldSet` at 128-bit width. | Transitional: removed when the 128-bit aggregate work (D12) lands. |
 
 **Prerequisite for `unmodeled-builtin`.** Absent stays fail-closed, so the gate
 can only be enabled once the catalogue says which builtins are modelled. Today
@@ -228,15 +229,25 @@ builtins are `unmodeled` for now: the symbolic executor encodes no call, so a
 `known` entry alone would still be skipped as `unsupported-opcode`. The
 collection runtime symbols are not catalogued, so they are absent, which is
 `unmodeled-builtin` as well. When a function has several unsupported
-instructions, a specific code (`float-rem-unsupported`, `unmodeled-builtin`,
-`wide-aggregate-field`) is reported in preference to a generic
+instructions, a specific code (`float-rem-unsupported`, `unmodeled-builtin`) is
+reported in preference to a generic
 `unsupported-opcode` that happens to come earlier. The per-function gate emits
 `function-has-effects`, `ir-non-dominating-read`, `float-rem-unsupported`,
-`unmodeled-builtin`, `wide-aggregate-field` and `unsupported-opcode`. Three codes
-need information the per-function gate does not have and are defined but not yet
-emitted: `recursion-unsupported` and `non-modelable-callee` arrive with call
-inlining (P2), where a call graph exists, and `reserved-verifier-symbol` waits for
-the reserved set to be fixed (no native query contains a user function name).
+`unmodeled-builtin` and `unsupported-opcode`. `recursion-unsupported` and
+`non-modelable-callee` need the call graph the per-function gate does not have;
+the module-level check that inlines calls emits them (#1416).
+`reserved-verifier-symbol` is defined but not yet emitted: it waits for the
+reserved set to be fixed (no native query contains a user function name).
+
+**Addendum (issue #1421, 128-bit aggregates).** The transitional
+`wide-aggregate-field` code is removed: the native verifier models a 128-bit
+struct field or enum payload as one 128-bit term over two slots, so `FieldGet`
+and `FieldSet` of a 128-bit value are modelled like any other field access. The
+gate accepts a `FieldGet`/`FieldSet` only when the slot kind and the value width
+agree (a 128-bit value in a `WideSlot`, anything narrower in a plain field slot);
+a mismatch is a generic `unsupported-opcode`. The reason table and the two lists
+above no longer mention the code. A `Vec<i128>` element is still `Skipped`, as
+`unmodeled-builtin`, until the collection model (#1423).
 
 ### 5. Timeline
 
@@ -297,3 +308,51 @@ terminal Ctrl-C no longer reaches them; they stop at their own budget.
 - **Encode the code in the message prefix.** Rejected: see section 4.
 - **A separate verification timeout for `test --verify`.** Out of scope; file a
   follow-up if wanted.
+
+## Addendum (#1418): loops leave the `Skipped` set
+
+- Reducible loops, `break`, `continue` and loop `invariant` clauses are modelled
+  and no longer `Skipped`. The code list of section 4 is unchanged: a loop the
+  verifier cannot unroll stays `unsupported-opcode`, with the details
+  `irreducible loop (...)`, `loop value used outside its loop`,
+  `entry block is a loop header` and `loop nest deeper than 8`.
+- A function whose unwinding assertion cannot be discharged is not skipped. It is
+  `verify_status: "unknown"` and its `verify_message` starts `unwinding
+  assertion:` (the largest bound was reached, or the unrolled program exceeded
+  the size budget).
+- Provenance (`proven-ir`) and `ModelCapacityAssumed` are untouched.
+
+## Addendum (#1430, P3): what the spec documents
+
+P3 rewrote `docs/spec/` and the embedded help and skill to this surface. Both
+backends are documented, ESBMC text is labelled "ESBMC backend", and the spec
+states what the compiler does today where it differs from the targets above:
+
+- **`reason_code` is not emitted.** The code appears only in the message
+  (``skipped verification of `f`: <code>: <detail>``); the spec lists the closed
+  code table in `errors.md` and says the field is not yet emitted. The schemas do
+  not declare it.
+- **`build` and the bare form** accept `--backend esbmc` and reject
+  `--backend native` with a usage error (exit 1); the build option table lists
+  the flag with that behaviour.
+- **Native flag rejection text** is
+  `error: --max-k-step is not supported with --backend native` (also `--solver`,
+  `--encoding`), exit 1, and does not say the bound is internal.
+- **`--perfetto` under native** records the frontend phase spans and one
+  `verification` span, not per-claim worker or solver spans or per-worker RSS.
+- **`--timeout 0`** is a zero budget natively (no solver spawn) and an immediate
+  watchdog kill under ESBMC.
+- **Floats** are `unsupported-opcode` natively; IEEE semantics are a target.
+- **`esbmc error: <message>`** remains the legacy `counterexample` text for
+  `verify_status: "error"` under both backends.
+- **Uncontracted callers** keep ESBMC's selection and its Note form; a native
+  timeout or `unknown` for such a caller is a hard `VerifyFailed`.
+- **`test --verify` skip** is a fixed-message `VerificationSkipped` diagnostic
+  of severity `error` without a reason code.
+- `--no-cache` disables the native result cache of `verify` and is a no-op for
+  `contracts` and `test`; the Bitwuzla binary is not hash-pinned (its
+  `--version` output is part of the cache key).
+
+`scripts/test_spec_surface.py` checks that every flag the driver accepts has a
+row in its command table, that the contracts status vocabulary matches the
+schema, and that every `Skipped` code is documented.

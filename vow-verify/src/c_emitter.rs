@@ -293,6 +293,14 @@ fn operand_ty(id: u32, inst_by_id: &HashMap<u32, &Inst>) -> Ty {
     inst_by_id.get(&id).map_or(Ty::I64, |i| i.ty)
 }
 
+fn build_inst_by_id(func: &Function) -> HashMap<u32, &Inst> {
+    func.blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .map(|inst| (inst.id.0, inst))
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Typed variable analysis (Vec, String, HashMap)
 // ---------------------------------------------------------------------------
@@ -2146,7 +2154,8 @@ fn emit_inst(
             };
             let base = inst.args.first().map_or(0, |a| a.0);
             let val = inst.args.get(1).map_or(0, |a| a.0);
-            out.push_str(&format!("  __vow_heap[v{base} + {idx}] = v{val};\n"));
+            let stored = float_slot_encode(operand_ty(val, inst_by_id), &format!("v{val}"));
+            out.push_str(&format!("  __vow_heap[v{base} + {idx}] = {stored};\n"));
         }
         Opcode::FieldGet => {
             if let Some(kind) =
@@ -2167,7 +2176,11 @@ fn emit_inst(
                     }
                 } else if let InstData::FieldIndex(idx) = inst.data {
                     // User-struct heap model: load base's field slot.
-                    out.push_str(&format!("  v{id} = __vow_heap[v{} + {idx}];\n", src_id.0));
+                    let slot = format!("__vow_heap[v{} + {idx}]", src_id.0);
+                    out.push_str(&format!(
+                        "  v{id} = {};\n",
+                        float_slot_decode(inst.ty, &slot)
+                    ));
                 } else {
                     emit_unmodelled(inst, out);
                 }
@@ -2589,6 +2602,7 @@ pub fn emit_c_function_full(
         ));
     }
 
+    let inst_by_id = build_inst_by_id(func);
     // Pre-declare Upsilon temporaries at function scope
     {
         let mut ups_sources: Vec<u32> = Vec::new();
@@ -2616,7 +2630,14 @@ pub fn emit_c_function_full(
             } else if btreemap_vars.contains(&src) {
                 out.push_str(&format!("  __vow_btreemap_t __ups_{};\n", src));
             } else {
-                out.push_str(&format!("  int64_t __ups_{};\n", src));
+                // A float phi value is carried in its own type: an int64_t temp would truncate it.
+                let src_ty = operand_ty(src, &inst_by_id);
+                let c_ty = if float_slot_name(src_ty).is_some() {
+                    ir_ty_to_c(src_ty)
+                } else {
+                    "int64_t"
+                };
+                out.push_str(&format!("  {c_ty} __ups_{};\n", src));
             }
         }
     }
@@ -2632,12 +2653,6 @@ pub fn emit_c_function_full(
         out.push_str(&format!(
             "  _Bool __str_eq_{lo}_{hi} = __VERIFIER_nondet_bool();\n"
         ));
-    }
-    let mut inst_by_id: HashMap<u32, &Inst> = HashMap::new();
-    for block in &func.blocks {
-        for inst in &block.insts {
-            inst_by_id.insert(inst.id.0, inst);
-        }
     }
     let const_bits = LazyConstBits::new(func, const_fns);
 
@@ -2774,6 +2789,7 @@ fn scan_shift_needs(funcs: &[&Function]) -> ShiftNeeds {
 struct ModelHelpers {
     shifts: ShiftNeeds,
     arith: ArithNeeds,
+    float_slots: FloatSlotNeeds,
 }
 
 impl ModelHelpers {
@@ -2781,7 +2797,87 @@ impl ModelHelpers {
         Self {
             shifts: scan_shift_needs(funcs),
             arith: scan_arith_needs(funcs),
+            float_slots: scan_float_slot_needs(funcs),
         }
+    }
+}
+
+/// Floats travel through the model's `int64_t` aggregate slots by IEEE-754
+/// bit pattern, as native codegen stores them: `f64` as its raw 64 bits, `f32`
+/// as its 32 bits zero-extended. A plain C conversion would truncate `2.5` to
+/// `2`, so every slot store/load of a float goes through these helpers.
+fn float_slot_name(ty: Ty) -> Option<&'static str> {
+    match ty {
+        Ty::F32 => Some("f32"),
+        Ty::F64 => Some("f64"),
+        _ => None,
+    }
+}
+
+/// `value` as the `int64_t` a slot stores: unchanged for non-floats.
+fn float_slot_encode(ty: Ty, value: &str) -> String {
+    match float_slot_name(ty) {
+        Some(name) => format!("__vow_{name}_to_slot({value})"),
+        None => value.to_string(),
+    }
+}
+
+/// The `ty` value held in `slot`: unchanged for non-floats.
+fn float_slot_decode(ty: Ty, slot: &str) -> String {
+    match float_slot_name(ty) {
+        Some(name) => format!("__vow_{name}_from_slot({slot})"),
+        None => slot.to_string(),
+    }
+}
+
+#[derive(Default)]
+struct FloatSlotNeeds {
+    f32: bool,
+    f64: bool,
+}
+
+impl FloatSlotNeeds {
+    fn note(&mut self, ty: Ty) {
+        match ty {
+            Ty::F32 => self.f32 = true,
+            Ty::F64 => self.f64 = true,
+            _ => {}
+        }
+    }
+
+    fn any(&self) -> bool {
+        self.f32 || self.f64
+    }
+}
+
+fn scan_float_slot_needs(funcs: &[&Function]) -> FloatSlotNeeds {
+    let mut needs = FloatSlotNeeds::default();
+    for func in funcs {
+        let mut by_id = None;
+        for inst in func.blocks.iter().flat_map(|b| &b.insts) {
+            match inst.opcode {
+                Opcode::FieldGet => needs.note(inst.ty),
+                Opcode::FieldSet => {
+                    if let Some(val) = inst.args.get(1) {
+                        let by_id = by_id.get_or_insert_with(|| build_inst_by_id(func));
+                        needs.note(operand_ty(val.0, by_id));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    needs
+}
+
+fn emit_float_slot_helpers(out: &mut String, needs: &FloatSlotNeeds) {
+    if needs.f64 {
+        out.push_str("static inline int64_t __vow_f64_to_slot(double value) { union { double f; int64_t i; } u; u.f = value; return u.i; }\n");
+        out.push_str("static inline double __vow_f64_from_slot(int64_t slot) { union { double f; int64_t i; } u; u.i = slot; return u.f; }\n");
+    }
+    if needs.f32 {
+        out.push_str("static inline int64_t __vow_f32_to_slot(float value) { union { float f; uint32_t i; } u; u.f = value; return (int64_t)u.i; }\n");
+        out.push_str("static inline float __vow_f32_from_slot(int64_t slot) { union { float f; uint32_t i; } u; u.i = (uint32_t)slot; return u.f; }\n");
     }
 }
 
@@ -3271,7 +3367,8 @@ fn emit_c_preamble(out: &mut String, helpers: &ModelHelpers, limits: &VerifyLimi
     for &(width, signedness, abort) in &helpers.arith {
         emit_arith_helper(out, abort, signedness, width);
     }
-    if !helpers.shifts.is_empty() || !helpers.arith.is_empty() {
+    emit_float_slot_helpers(out, &helpers.float_slots);
+    if !helpers.shifts.is_empty() || !helpers.arith.is_empty() || helpers.float_slots.any() {
         out.push('\n');
     }
 }
@@ -5380,6 +5477,101 @@ mod tests {
         assert!(c.contains("v0 / v1"), "fdiv: {c}");
         assert!(c.contains("float rem not modelled"), "frem32: {c}");
         assert!(c.contains("float rem not modelled"), "frem64: {c}");
+    }
+
+    fn field_roundtrip_func(ty: Ty) -> Function {
+        make_func(
+            "field_roundtrip",
+            vec![ty],
+            ty,
+            vec![
+                inst(0, Opcode::GetArg, ty, vec![], InstData::ArgIndex(0)),
+                inst(
+                    1,
+                    Opcode::RegionAlloc,
+                    Ty::Ptr,
+                    vec![],
+                    InstData::AllocSize { size: 16, align: 8 },
+                ),
+                inst(
+                    2,
+                    Opcode::FieldSet,
+                    Ty::Unit,
+                    vec![1, 0],
+                    InstData::FieldIndex(1),
+                ),
+                inst(3, Opcode::FieldGet, ty, vec![1], InstData::FieldIndex(1)),
+                inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+            ],
+        )
+    }
+
+    #[test]
+    fn float_field_slots_move_by_bit_pattern() {
+        for (ty, name, other) in [(Ty::F64, "f64", "f32"), (Ty::F32, "f32", "f64")] {
+            let func = field_roundtrip_func(ty);
+            let c = emit_c_module(&[&func], &HashMap::new(), &VerifyLimits::default());
+            assert!(
+                c.contains(&format!("__vow_heap[v1 + 1] = __vow_{name}_to_slot(v0);")),
+                "{name} store must encode by bits: {c}"
+            );
+            assert!(
+                c.contains(&format!("v3 = __vow_{name}_from_slot(__vow_heap[v1 + 1]);")),
+                "{name} load must decode by bits: {c}"
+            );
+            assert!(
+                c.contains(&format!("static inline int64_t __vow_{name}_to_slot(")),
+                "{name} encode helper must be defined: {c}"
+            );
+            assert!(
+                c.contains(&format!("__vow_{name}_from_slot(int64_t slot)")),
+                "{name} decode helper must be defined: {c}"
+            );
+            assert!(
+                !c.contains(&format!("__vow_{other}_")),
+                "{other} helpers unused: {c}"
+            );
+        }
+    }
+
+    #[test]
+    fn float_phi_temporaries_keep_their_float_type() {
+        for (ty, const_op, data, c_ty) in [
+            (Ty::F64, Opcode::ConstF64, InstData::ConstF64(2.5), "double"),
+            (Ty::F32, Opcode::ConstF32, InstData::ConstF32(2.5), "float"),
+        ] {
+            let func = make_func(
+                "phi_float",
+                vec![],
+                ty,
+                vec![
+                    inst(0, Opcode::Phi, ty, vec![], InstData::None),
+                    inst(1, const_op, ty, vec![], data),
+                    inst(
+                        2,
+                        Opcode::Upsilon,
+                        Ty::Unit,
+                        vec![1],
+                        InstData::PhiTarget(InstId(0)),
+                    ),
+                    inst(3, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            );
+            let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+            assert!(
+                c.contains(&format!("  {c_ty} __ups_1;")),
+                "{ty:?} upsilon temp must not truncate through int64_t: {c}"
+            );
+        }
+    }
+
+    #[test]
+    fn integer_field_slots_stay_unconverted() {
+        let func = field_roundtrip_func(Ty::I64);
+        let c = emit_c_module(&[&func], &HashMap::new(), &VerifyLimits::default());
+        assert!(c.contains("__vow_heap[v1 + 1] = v0;"), "int store: {c}");
+        assert!(c.contains("v3 = __vow_heap[v1 + 1];"), "int load: {c}");
+        assert!(!c.contains("_slot("), "no float helpers for ints: {c}");
     }
 
     #[test]

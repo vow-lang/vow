@@ -1,0 +1,31 @@
+module ModuloIdentity
+
+fn mod_positive(x: i64, m: i64) -> i64 vow {
+  requires: x >= 0
+  requires: m > 0
+  ensures: result >= 0
+} {
+  x - (x / m) * m
+}
+
+fn mod_in_range(x: i64, m: i64) -> i64 vow {
+  requires: x >= 0
+  requires: m > 0
+  ensures: result >= 0 && result < m
+} {
+  x - (x / m) * m
+}
+
+fn mod_u64(x: u64, m: u64) -> u64 vow {
+  requires: m > 0
+  ensures: result < m
+} {
+  x - (x / m) * m
+}
+
+fn main() -> i32 [io] {
+  print_i64(mod_positive(7, 3));
+  print_i64(mod_in_range(7, 3));
+  print_u64(mod_u64(7, 3));
+  0
+}

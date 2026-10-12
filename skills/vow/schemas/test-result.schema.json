@@ -47,7 +47,7 @@
         "status": {
           "type": "string",
           "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed", "contract_skipped"],
-          "description": "Per-test outcome (`contract_skipped`: ESBMC never invoked because a vowed function is non-modelable; fail-closed, counts toward `failed`)"
+          "description": "Per-test outcome (`contract_skipped`: no proof was attempted because a vowed function is non-modelable; fail-closed, counts toward `failed`)"
         },
         "exit_code": {
           "type": ["integer", "null"],
@@ -64,7 +64,7 @@
         "counterexamples": {
           "type": "array",
           "items": { "$ref": "counterexample.schema.json" },
-          "description": "ESBMC counterexamples (on verify_failed)"
+          "description": "Verifier counterexamples (on verify_failed)"
         }
       }
     },

@@ -1,0 +1,27 @@
+// TEST: category invariant
+// The invariant is correct but the loop body mishandles one iteration
+// (`i == 100`), far beyond the largest unrolling bound. Induction must not close
+// this: with the loop's exit left feasible, the postcondition fails from the
+// havoc'd state, so the result is unknown, never Verified.
+module LoopBugBeyondBound
+
+fn count(n: u64) -> u64 vow {
+  ensures: result == n
+} {
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n
+  } {
+    if i == 100 {
+      i = i + 2;
+    } else {
+      i = i + 1;
+    }
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  print_u64(count(3));
+  0
+}

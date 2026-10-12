@@ -1,0 +1,120 @@
+module VcClause
+
+use ir
+
+// Per-clause verdicts for the native verifier. A solver run decides claims, and
+// one `ensures` or loop `invariant` clause can own several of them (one per
+// unrolled copy of a loop body, one per path that reaches it) or none (every
+// claim point was decided by the simplifier or sits on an unreachable path).
+// This module folds the claim answers into one verdict per clause, in the
+// vocabulary of an ESBMC `--multi-property` run (`MultiPropertyResult`): a
+// clause id with 1 (proven) or 0 (failed), absent when undecided, which the
+// caller maps through `resolve_clause_status` onto the function's overall
+// outcome.
+//
+// The rules (ADR-2026-10-08-1422 rule 2 governs proof):
+//   - failed: any copy of the clause is `sat`. A counterexample inside the
+//     unrolled prefix is a real run, whether or not the round is closed.
+//   - proven: every copy is `unsat` and the round is closed, i.e. its
+//     unwinding claim is `unsat` too, so no run needs more iterations than the
+//     bound. A clause with no claim at all is proven by the same condition.
+//   - undecided: anything else (a copy that is unknown, timed out or errored,
+//     or an open round). It gets no entry.
+// A `requires` is an assumption, never a claim, and is never given a verdict.
+// No solver and no I/O here, so the rules are unit-tested directly.
+
+fn VC_CLAUSE_UNSAT() -> i64 { 0 }
+fn VC_CLAUSE_UNDECIDED() -> i64 { 1 }
+fn VC_CLAUSE_FAILED() -> i64 { 2 }
+
+// `states[i]` is the strongest answer seen for clause `ids[i]`, in the order
+// unsat < undecided < failed.
+struct VcClauseAcc {
+    ids: Vec<i64>,
+    states: Vec<i64>,
+}
+
+struct VcClauseVerdicts {
+    ids: Vec<i64>,
+    proven: Vec<i64>,
+}
+
+fn vc_clause_acc_new() -> VcClauseAcc {
+    VcClauseAcc { ids: Vec::new(), states: Vec::new() }
+}
+
+fn vc_clause_index(ids: Vec<i64>, vow_id: i64) -> i64 {
+    let mut i: u64 = 0;
+    while i < ids.len() {
+        if ids[i] == vow_id { return i as i64; }
+        i = i + 1;
+    }
+    -1
+}
+
+fn vc_clause_note(acc: VcClauseAcc, vow_id: i64, verdict: i64) {
+    let at: i64 = vc_clause_index(acc.ids, vow_id);
+    if at < 0 {
+        acc.ids.push(vow_id);
+        acc.states.push(verdict);
+        return;
+    }
+    if verdict > acc.states[at as u64] {
+        acc.states[at as u64] = verdict;
+    }
+}
+
+// Starts the next, larger unrolling: a failure stays (the run it found exists in
+// the larger unrolling too), everything else is decided afresh.
+fn vc_clause_next_round(acc: VcClauseAcc) {
+    let mut i: u64 = 0;
+    while i < acc.ids.len() {
+        if acc.states[i] != VC_CLAUSE_FAILED() {
+            acc.states[i] = VC_CLAUSE_UNSAT();
+        }
+        i = i + 1;
+    }
+}
+
+// The verdicts of the clauses in `targets` (distinct ids, as `vc_clause_targets`
+// returns them), in order, given whether the last round was closed.
+fn vc_clause_finish(acc: VcClauseAcc, targets: Vec<i64>, round_closed: bool) -> VcClauseVerdicts {
+    let out: VcClauseVerdicts = VcClauseVerdicts { ids: Vec::new(), proven: Vec::new() };
+    let mut t: u64 = 0;
+    while t < targets.len() {
+        let id: i64 = targets[t];
+        let at: i64 = vc_clause_index(acc.ids, id);
+        let mut state: i64 = VC_CLAUSE_UNSAT();
+        if at >= 0 { state = acc.states[at as u64]; }
+        if state == VC_CLAUSE_FAILED() {
+            out.ids.push(id);
+            out.proven.push(0);
+        } else if state == VC_CLAUSE_UNSAT() && round_closed {
+            out.ids.push(id);
+            out.proven.push(1);
+        }
+        t = t + 1;
+    }
+    out
+}
+
+// Ids of the `ensures` and loop `invariant` clauses of `f`, each once, in IR
+// order. Taken from the function as written, before calls are inlined and loops
+// unrolled, so a clause appears here whether or not it has a claim left.
+fn vc_clause_targets(f: IrFunction) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_VOW_ENS() || inst.op == IOP_VOW_INV() {
+                if vc_clause_index(out, inst.dv) < 0 { out.push(inst.dv); }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    out
+}

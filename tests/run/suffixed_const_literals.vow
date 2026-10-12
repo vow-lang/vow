@@ -5,11 +5,13 @@ const STEP: u8 = 200u8;
 const BIAS: i32 = -5i32;
 const WIDE: u32 = 4000000000u32;
 const FLOOR: i8 = -128i8;
+const CAST_FLOOR: i64 = -9223372036854775808 as i64;
 
 fn main() -> i32 {
     if STEP != 200u8 { return 1; }
     if BIAS != -5i32 { return 2; }
     if WIDE != 4000000000u32 { return 3; }
     if FLOOR != -128i8 { return 4; }
+    if CAST_FLOOR != -9223372036854775807 - 1 { return 5; }
     0
 }

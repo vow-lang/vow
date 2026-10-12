@@ -1,0 +1,81 @@
+// TEST: stdout "171 5\n0 0\n7\n171 5\n9\n3 1\n255 255\n17\n171 5\n171 5\n"
+module WideStructField
+
+// 128-bit struct fields occupy two consecutive 8-byte slots, so every field
+// after a wide one moves up. Each read prints both limbs separately: a backend
+// that truncates fails the high-limb column, and a narrow field that shares a
+// slot with a wide limb fails the i64 / u8 lines.
+struct Mix {
+    a: i128,
+    b: i64,
+    c: u128,
+    d: u8,
+}
+
+struct Lone {
+    v: u128,
+}
+
+fn high_seed() -> i128 {
+    3154393236604333326336
+}
+
+fn hi_byte(v: i128) -> u8 {
+    u128_to_u8_wrap((v as u128) >> 64)
+}
+
+fn lo_byte(v: i128) -> u8 {
+    u128_to_u8_wrap(v as u128)
+}
+
+fn show(v: i128) -> () [io] {
+    print_i64(hi_byte(v) as i64);
+    print_str(" ");
+    print_i64(lo_byte(v) as i64);
+    print_str("\n");
+}
+
+fn show_u(v: u128) -> () [io] {
+    show(v as i128);
+}
+
+fn sum_b_d(m: Mix) -> i64 {
+    m.b + (m.d as i64)
+}
+
+fn build() -> Mix {
+    Mix { a: high_seed() + 5, b: 7, c: 0 as u128, d: 9 }
+}
+
+fn main() -> i32 [io] {
+    let m: Mix = build();
+    show(m.a);
+    show_u(m.c);
+    print_i64(m.b);
+    print_str("\n");
+
+    m.c = (high_seed() + 5) as u128;
+    show_u(m.c);
+    print_i64(m.d as i64);
+    print_str("\n");
+
+    m.b = 3;
+    m.d = 1;
+    m.a = 0 - 1;
+    m.c = 1;
+    print_i64(m.b);
+    print_str(" ");
+    print_i64(m.d as i64);
+    print_str("\n");
+    show(m.a);
+    print_i64(sum_b_d(m) * 4 + 1);
+    print_str("\n");
+
+    m.a = high_seed() + 5;
+    m.c = m.c + (high_seed() as u128) + 4;
+    show(m.a);
+    show_u(m.c);
+
+    let l: Lone = Lone { v: 18446744073709551616 };
+    if l.v == 18446744073709551616 { 0 } else { 1 }
+}

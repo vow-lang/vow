@@ -1,0 +1,27 @@
+module InlineNestedCalls
+
+fn add_one(x: i64) -> i64 vow {
+  requires: x < 1000000
+  ensures: result == x + 1
+} {
+  x + 1
+}
+
+fn add_two(x: i64) -> i64 vow {
+  requires: x < 999999
+  ensures: result == x + 2
+} {
+  add_one(add_one(x))
+}
+
+fn caller(y: i64) -> i64 vow {
+  requires: y > 0 && y < 1000
+  ensures: result == y + 4
+} {
+  add_two(add_two(y))
+}
+
+fn main() -> i32 [io] {
+  print_i64(caller(1));
+  0
+}

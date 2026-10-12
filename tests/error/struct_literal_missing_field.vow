@@ -1,0 +1,10 @@
+// TEST: error-code TypeMismatch
+// TEST: error-count 1
+module StructLiteralMissingField
+
+struct Pair { a: i64, b: i64, c: i64 }
+
+fn main() -> i32 {
+  let p: Pair = Pair { a: 1, b: 2 };
+  0
+}

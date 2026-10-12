@@ -1,0 +1,24 @@
+module VecPopLen
+
+fn push_pop() -> u64 vow {
+  ensures: result == 1
+} {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v.push(2);
+  v.pop();
+  v.len()
+}
+
+fn pop_empty() -> u64 vow {
+  ensures: result == 0
+} {
+  let v: Vec<i64> = Vec::new();
+  v.pop();
+  v.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(push_pop());
+  0
+}

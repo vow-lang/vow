@@ -1,0 +1,23 @@
+// TEST: category invariant
+// TEST: warning ArithOverflowReachable
+// The checked `+!` sits in a loop body that is unrolled many times; the abort
+// is one source site and is reported once.
+module LoopCheckedAddWarning
+
+fn sum_to(n: u64) -> u64 vow {
+  ensures: result == n * 4
+} {
+  let mut acc: u64 = 0;
+  let mut i: u64 = 0;
+  while i < 4 vow {
+    invariant: i <= 4
+  } {
+    acc = acc +! n;
+    i = i + 1;
+  }
+  acc
+}
+
+fn main() -> i32 [io] {
+  0
+}

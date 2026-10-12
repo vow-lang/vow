@@ -853,6 +853,21 @@ else
     fail "verifier/esbmc-path-cache" "$(tail -10 "$TMPDIR/esbmc-path-cache.log")"
 fi
 
+if VOWC_BIN="$SELF" bash tests/verify-bv-fallback/tests.sh >"$TMPDIR/verify-bv-fallback.log" 2>&1; then
+    pass "verifier/bv-fallback"
+else
+    fail "verifier/bv-fallback" "$(tail -10 "$TMPDIR/verify-bv-fallback.log")"
+fi
+
+for stage_compiler in rust self; do
+    if [ "$stage_compiler" = rust ]; then stage_bin="$RUST"; else stage_bin="$SELF"; fi
+    if VOWC_BIN="$stage_bin" bash tests/build-staging/tests.sh >"$TMPDIR/build-staging-$stage_compiler.log" 2>&1; then
+        pass "build-staging/$stage_compiler"
+    else
+        fail "build-staging/$stage_compiler" "$(tail -10 "$TMPDIR/build-staging-$stage_compiler.log")"
+    fi
+done
+
 if command -v esbmc >/dev/null 2>&1; then
     if VOWC_BIN="$RUST" bash tests/verify-cache-stale-pass/tests.sh >"$TMPDIR/verify-cache-stale-pass.log" 2>&1; then
         pass "verifier/verify-cache-stale-pass"
@@ -988,6 +1003,34 @@ print(cx[0].get('violation', '') if cx else '')
             fail "${name}/verify-fail-violation" "expected '$expected_violation'; $(IFS='; '; echo "${violation_errors[*]}")"
         fi
     fi
+
+    # `// TEST: replay <status>` pins the `replay` status of every counterexample
+    # under `verify --replay-cex` on both compilers. Only the status is compared:
+    # `replay_reason` wording differs between the compilers by design.
+    expected_replay=$(sed -n 's|^// TEST: replay \([a-z,]*\)$|\1|p' "$vow_file" | head -1)
+    if [ -n "$expected_replay" ]; then
+        replay_errors=()
+        for replay_side in rust self; do
+            if [ "$replay_side" = "rust" ]; then
+                replay_json=$($RUST verify --replay-cex --no-cache "$vow_file" 2>/dev/null) || true
+            else
+                replay_json=$(run_self verify --replay-cex --no-cache "$vow_file" 2>/dev/null) || true
+            fi
+            actual_replays=$(python3 -c "
+import json, sys
+cx = json.loads(sys.stdin.read()).get('counterexamples') or []
+print(','.join(sorted(set(c.get('replay', '') for c in cx))) if cx else '<none>')
+" <<< "$replay_json" 2>/dev/null) || actual_replays="<unparseable>"
+            if [ "$actual_replays" != "$expected_replay" ]; then
+                replay_errors+=("$replay_side replay='$actual_replays'")
+            fi
+        done
+        if [ ${#replay_errors[@]} -eq 0 ]; then
+            pass "${name}/verify-fail-replay"
+        else
+            fail "${name}/verify-fail-replay" "expected '$expected_replay'; $(IFS='; '; echo "${replay_errors[*]}")"
+        fi
+    fi
 done
 echo ""
 
@@ -1071,6 +1114,79 @@ if [ ${#errors[@]} -eq 0 ]; then
 else
     fail "$name/policy" "$(IFS='; '; echo "${errors[*]}")"
 fi
+echo ""
+
+# ─── Skip set independent of cache and --verify-jobs (#1561) ──────
+#
+# A VerificationSkipped warning is a static fact about the program, so the set
+# of skipped functions and the verdict must not depend on how fast a failing
+# function came back: a cold cache, a warm cache and any job count agree.
+# Only the verdict and the skip set are compared; other warnings produced
+# inside the verifier pool can still vary on a halted parallel run.
+
+section_begin "Skip set independent of cache and --verify-jobs (#1561)"
+
+skip_set_summary() {
+    python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])
+skips = sorted(x.get('message', '') for x in d.get('diagnostics', [])
+               if x.get('error_code') == 'VerificationSkipped' and x.get('severity') == 'warning')
+print(d.get('status', ''), len(skips), *skips, sep='\\n')
+" "$1" 2>/dev/null || echo "<unparseable>"
+}
+
+for fixture in tests/verify-fail/skip_after_failure.vow stdlib/heap/main.vow tests/verify-fail/clamp_wrong_op.vow; do
+    name="verify_skip_set_scheduling_independent/$(basename "$(dirname "$fixture")")-$(basename "$fixture" .vow)"
+    errors=()
+    skip_cache_dir=$(mktemp -d "$TMPDIR/skip-cache.XXXXXX")
+
+    base_json=$($RUST verify --no-cache --verify-jobs 1 "$fixture" 2>/dev/null) || true
+    base=$(skip_set_summary "$base_json")
+    if [ "$base" = "<unparseable>" ]; then
+        errors+=("baseline produced no parseable verify JSON; the comparisons below would be vacuous")
+    fi
+    for pass in "no-cache-jobs4" "cold-jobs4" "warm-jobs4" "warm-jobs1"; do
+        case "$pass" in
+            no-cache-jobs4) pass_json=$($RUST verify --no-cache --verify-jobs 4 "$fixture" 2>/dev/null) || true ;;
+            cold-jobs4|warm-jobs4) pass_json=$(VOW_CACHE_DIR="$skip_cache_dir" $RUST verify --verify-jobs 4 "$fixture" 2>/dev/null) || true ;;
+            warm-jobs1) pass_json=$(VOW_CACHE_DIR="$skip_cache_dir" $RUST verify --verify-jobs 1 "$fixture" 2>/dev/null) || true ;;
+        esac
+        if [ "$(skip_set_summary "$pass_json")" != "$base" ]; then
+            errors+=("rust $pass differs from --no-cache --verify-jobs 1")
+        fi
+    done
+
+    self_base_json=$(run_self verify --no-cache --verify-jobs 1 "$fixture" 2>/dev/null) || true
+    self_jobs4_json=$(run_self verify --no-cache --verify-jobs 4 "$fixture" 2>/dev/null) || true
+    if [ "$(skip_set_summary "$self_base_json")" != "$base" ]; then
+        errors+=("self --verify-jobs 1 differs from rust")
+    fi
+    if [ "$(skip_set_summary "$self_jobs4_json")" != "$base" ]; then
+        errors+=("self --verify-jobs 4 differs from rust")
+    fi
+
+    case "$fixture" in
+        tests/verify-fail/skip_after_failure.vow)
+            if [ "$(printf '%s' "$base" | sed -n 2p)" != "2" ]; then
+                errors+=("expected 2 VerificationSkipped warnings, got: $(printf '%s' "$base" | sed -n 2p)")
+            fi
+            ;;
+        tests/verify-fail/clamp_wrong_op.vow)
+            # Non-vacuity: the warm passes only exercise the cache if it stored a failure.
+            if [ -z "$(find "$skip_cache_dir" -name '*.vr' 2>/dev/null | head -1)" ]; then
+                errors+=("verify cache stored no entry; the cold/warm comparison was vacuous")
+            fi
+            ;;
+    esac
+    rm -rf "$skip_cache_dir"
+
+    if [ ${#errors[@]} -eq 0 ]; then
+        pass "$name"
+    else
+        fail "$name" "$(IFS='; '; echo "${errors[*]}")"
+    fi
+done
 echo ""
 
 # ─── Checked-arithmetic abort model (#585) ────────────────────────
@@ -1381,8 +1497,12 @@ echo ""
 # #1398, ADR-2026-10-08-1421), so there is no Rust twin and no parity check:
 # each fixture is asserted against its directory (pass/ -> Verified, fail/ ->
 # VerifyFailed with the `counterexample-*` directives, skip/ -> Skipped, never
-# Verified). The wiring tier uses a fake Bitwuzla and always runs; the
-# real-solver tier is skipped, not passed, when `bitwuzla` is not on PATH.
+# Verified, unknown/ -> VerifyFailed with `verify_status: "unknown"`, no
+# counterexample and an `unwinding assertion:` message, never Verified; each
+# fixture is also run with VOW_VERIFY_NO_SLICE=1 and VOW_VERIFY_NO_INCREMENTAL=1
+# and must report byte-identical JSON). The
+# wiring tier uses a fake Bitwuzla and always runs; the real-solver tier is
+# skipped, not passed, when `bitwuzla` is not on PATH.
 # tests/verify-native/ is deliberately outside Section 2c's explicit globs.
 
 section_begin "Section 4g: Native Verifier (self-hosted only)"
@@ -1394,13 +1514,14 @@ else
 fi
 
 native_have_solver=0
+native_cache_total=0
 command -v bitwuzla >/dev/null 2>&1 && native_have_solver=1
 if [ "$native_have_solver" -eq 0 ]; then
     skip "verify-native/pass+fail fixtures" "bitwuzla not on PATH"
 fi
 # skip/ fixtures contain only functions outside the subset, so they need no
 # solver and keep guarding "never Verified" even without one.
-for vow_file in tests/verify-native/pass/*.vow tests/verify-native/fail/*.vow tests/verify-native/skip/*.vow; do
+for vow_file in tests/verify-native/pass/*.vow tests/verify-native/fail/*.vow tests/verify-native/unknown/*.vow tests/verify-native/skip/*.vow; do
     [ -f "$vow_file" ] || continue
     name=$(basename "$vow_file" .vow)
     native_dir=$(basename "$(dirname "$vow_file")")
@@ -1409,7 +1530,7 @@ for vow_file in tests/verify-native/pass/*.vow tests/verify-native/fail/*.vow te
     fi
     case "$native_dir" in
         pass) native_want_status="Verified"; native_want_exit=0 ;;
-        fail) native_want_status="VerifyFailed"; native_want_exit=1 ;;
+        fail|unknown) native_want_status="VerifyFailed"; native_want_exit=1 ;;
         *) native_want_status="Skipped"; native_want_exit=1 ;;
     esac
     native_json="" native_exit=0
@@ -1431,6 +1552,20 @@ skipped = [m for m in msgs if m.startswith('skipped verification of')]
 sys.exit(0 if skipped and all(': ' + sys.argv[2] + ': ' in m for m in skipped) else 1)
 " "$native_json" "$native_reason" 2>/dev/null; then
             native_errors+=("skip-reason: not every skipped-verification message carries code '$native_reason'")
+        fi
+    fi
+    if [ "$native_dir" = "unknown" ]; then
+        # An open unwinding assertion is inconclusive: `unknown`, never a proof
+        # and never a counterexample.
+        if ! python3 -c "
+import json, sys
+j = json.loads(sys.argv[1])
+ok = (j.get('verify_status') == 'unknown'
+      and not (j.get('counterexamples') or [])
+      and 'unwinding assertion' in (j.get('verify_message') or ''))
+sys.exit(0 if ok else 1)
+" "$native_json" 2>/dev/null; then
+            native_errors+=("expected verify_status unknown with an 'unwinding assertion' message and no counterexample")
         fi
     fi
     if [ "$native_dir" = "fail" ]; then
@@ -1466,8 +1601,9 @@ cx = j.get('counterexamples') or []
 bad = [c.get('function', '?') + '=' + str(c.get('replay', '')) for c in cx if c.get('replay') != 'confirmed']
 print(','.join(bad) if bad else ('confirmed' if cx else 'none'))
 " "$native_replay_json" 2>/dev/null) || native_replay=""
-        # `// TEST: replay-skipped <reason>`: the self-hosted harness replays only
-        # i64/u64/bool scalars and shift counts are not runtime aborts, so a fixture
+        # `// TEST: replay-skipped <reason>`: the self-hosted harness rebuilds only
+        # i64/u64/bool scalars and struct, enum, Option and Result parameters of
+        # such scalars, and shift counts are not runtime aborts, so a fixture
         # outside that must say why its counterexample cannot be confirmed.
         native_replay_want="confirmed"
         if grep -q '^// TEST: replay-skipped ' "$vow_file"; then native_replay_want="skipped"; fi
@@ -1499,12 +1635,106 @@ print(sum(1 for d in ds if d.get('error_code') == sys.argv[2]))
             fi
         done < <(sed -nE 's#^// TEST: (warning|no-warning) (.*)$#\1 \2#p' "$vow_file")
     fi
+    if [ "$native_dir" != "skip" ]; then
+        # Query slicing (#1424) and incremental solver sessions (#1428) must
+        # never change what the verifier reports: the run with each switched off
+        # (test-only knobs; one solver process per claim for the latter) is
+        # byte-identical.
+        for native_knob in VOW_VERIFY_NO_SLICE VOW_VERIFY_NO_INCREMENTAL; do
+            native_alt_json="" native_alt_exit=0
+            native_alt_json=$(export "$native_knob=1"; run_self verify --backend native --no-cache "$vow_file" 2>/dev/null) || native_alt_exit=$?
+            if [ "$native_alt_json" != "$native_json" ] || [ "$native_alt_exit" -ne "$native_exit" ]; then
+                native_errors+=("$native_knob=1 changed the result: runs with and without it differ")
+            fi
+        done
+        # The result cache (#1429) must never change what the verifier reports:
+        # a cold run on an empty cache and a warm run that replays it equal the
+        # --no-cache baseline in JSON and exit status.
+        native_cache_dir=$(mktemp -d "$TMPDIR/native-cache.XXXXXX")
+        for native_pass in cold warm; do
+            native_cache_json="" native_cache_exit=0
+            native_cache_json=$(VOW_CACHE_DIR="$native_cache_dir" run_self verify --backend native "$vow_file" 2>/dev/null) || native_cache_exit=$?
+            if [ "$native_cache_json" != "$native_json" ] || [ "$native_cache_exit" -ne "$native_exit" ]; then
+                native_errors+=("result cache changed the result: $native_pass run differs from --no-cache")
+            fi
+        done
+        native_cache_entries=$(find "$native_cache_dir" -type f 2>/dev/null | wc -l | tr -d ' ')
+        native_cache_total=$((native_cache_total + native_cache_entries))
+        rm -rf "$native_cache_dir"
+    fi
     if [ ${#native_errors[@]} -eq 0 ]; then
         pass "verify-native/${native_dir}/${name}"
     else
         fail "verify-native/${native_dir}/${name}" "$(IFS='; '; echo "${native_errors[*]}")"
     fi
 done
+# Non-vacuity of the cache comparison above: a solver whose `--version` probe
+# yields nothing silently disables the cache, which would make cold == warm
+# trivially. With a real solver the corpus must have stored something.
+if [ "$native_have_solver" -eq 1 ]; then
+    if [ -z "$(bitwuzla --version 2>/dev/null | tr -d '[:space:]')" ]; then
+        fail "verify-native/cache-probe" "bitwuzla --version printed nothing, so the result cache is disabled"
+    elif [ "$native_cache_total" -eq 0 ]; then
+        fail "verify-native/cache-stored" "no fixture stored a cache entry; the cold/warm comparison was vacuous"
+    else
+        pass "verify-native/cache-stored"
+    fi
+fi
+
+
+# `vowc contracts --verify --backend native` (#1427): each fixture in
+# tests/verify-native/contracts/ pins the clause statuses and the weak-contract
+# probes (`vacuous`, `trivially_satisfiable`) the native pool must report.
+#   // TEST: contract-exit <n>
+#   // TEST: contract-status <fn> <kind> <status>   (some clause has that status)
+#   // TEST: contract-trivial <fn> <true|false>     (every `ensures` of fn)
+# Every fixture needs the solver, so the tier is skipped without one.
+if [ "$native_have_solver" -eq 0 ]; then
+    skip "verify-native/contracts fixtures" "bitwuzla not on PATH"
+else
+    for vow_file in tests/verify-native/contracts/*.vow; do
+        [ -f "$vow_file" ] || continue
+        name=$(basename "$vow_file" .vow)
+        native_json="" native_exit=0
+        native_json=$(run_self contracts --verify --backend native --no-cache "$vow_file" 2>/dev/null) || native_exit=$?
+        native_errors=()
+        native_want_exit=$(sed -n 's|^// TEST: contract-exit \(.*\)$|\1|p' "$vow_file" | head -1)
+        if [ -z "$native_want_exit" ]; then
+            native_errors+=("missing '// TEST: contract-exit <n>' directive")
+        elif [ "$native_exit" != "$native_want_exit" ]; then
+            native_errors+=("exit: expected $native_want_exit, got $native_exit")
+        fi
+        while read -r native_fn native_kind native_want; do
+            [ -n "$native_fn" ] || continue
+            native_hit=$(python3 -c "
+import json, sys
+cs = json.loads(sys.argv[1])['contracts']
+print(sum(1 for c in cs if c['function'] == sys.argv[2] and c['kind'] == sys.argv[3] and c['status'] == sys.argv[4]))
+" "$native_json" "$native_fn" "$native_kind" "$native_want" 2>/dev/null) || native_hit=-1
+            if [ "$native_hit" -lt 1 ]; then
+                native_errors+=("contract-status ${native_fn} ${native_kind}: no clause is '$native_want'")
+            fi
+        done < <(sed -n 's|^// TEST: contract-status \(.*\)$|\1|p' "$vow_file")
+        while read -r native_fn native_want; do
+            [ -n "$native_fn" ] || continue
+            native_bad=$(python3 -c "
+import json, sys
+cs = json.loads(sys.argv[1])['contracts']
+want = sys.argv[3] == 'true'
+rows = [c for c in cs if c['function'] == sys.argv[2] and c['kind'] == 'ensures']
+print(len([c for c in rows if c['trivially_satisfiable'] != want]) if rows else -1)
+" "$native_json" "$native_fn" "$native_want" 2>/dev/null) || native_bad=-1
+            if [ "$native_bad" -ne 0 ]; then
+                native_errors+=("contract-trivial ${native_fn}: expected every ensures clause to be $native_want")
+            fi
+        done < <(sed -n 's|^// TEST: contract-trivial \(.*\)$|\1|p' "$vow_file")
+        if [ ${#native_errors[@]} -eq 0 ]; then
+            pass "verify-native/contracts/${name}"
+        else
+            fail "verify-native/contracts/${name}" "$(IFS='; '; echo "${native_errors[*]}")"
+        fi
+    done
+fi
 echo ""
 
 # ─── Section 4h: Unknown CLI flags (tests/cli-flags/, #580) ────────
@@ -1545,6 +1775,51 @@ if VOWC_BIN="$SELF" VOWC_KIND=self bash tests/decl/tests.sh >"$decl_self_log" 2>
     pass "decl/self-hosted"
 else
     fail "decl/self-hosted" "$(tail -20 "$decl_self_log")"
+fi
+echo ""
+
+# ─── Section 4j: Frontend diagnostic I/O failures (tests/diag-io/, #957) ──
+#
+# A stderr that cannot be written (full disk, closed pipe) must leave the
+# frontend result unchanged for BrokenPipe and become a structured
+# CompileFailed otherwise, identically in both compilers.
+
+section_begin "Section 4j: Frontend diagnostic I/O failures"
+diag_io_rust_log="$TMPDIR/diag-io-rust.log"
+if VOWC_BIN="$RUST" VOWC_KIND=rust bash tests/diag-io/tests.sh >"$diag_io_rust_log" 2>&1; then
+    pass "diag-io/rust"
+else
+    fail "diag-io/rust" "$(tail -20 "$diag_io_rust_log")"
+fi
+diag_io_self_log="$TMPDIR/diag-io-self.log"
+if VOWC_BIN="$SELF" VOWC_KIND=self bash tests/diag-io/tests.sh >"$diag_io_self_log" 2>&1; then
+    pass "diag-io/self-hosted"
+else
+    fail "diag-io/self-hosted" "$(tail -20 "$diag_io_self_log")"
+fi
+echo ""
+
+# ─── Section 4k: Skill installs (tests/skill-install/, #358 and #361) ─
+#
+# Auto-install must leave an existing SKILL.md (including the old monolithic
+# layout) untouched; an explicit `skill install --local` migrates it to the
+# split layout. Both compilers stage the skill tree next to its target and
+# rename it into place, so a failed install never leaves a SKILL.md without its
+# support files and auto-install stays silent. Both compilers implement this
+# independently.
+
+section_begin "Section 4k: Skill installs"
+skill_install_rust_log="$TMPDIR/skill-install-rust.log"
+if VOWC_BIN="$RUST" VOWC_KIND=rust bash tests/skill-install/tests.sh >"$skill_install_rust_log" 2>&1; then
+    pass "skill-install/rust"
+else
+    fail "skill-install/rust" "$(tail -20 "$skill_install_rust_log")"
+fi
+skill_install_self_log="$TMPDIR/skill-install-self.log"
+if VOWC_BIN="$SELF" VOWC_KIND=self bash tests/skill-install/tests.sh >"$skill_install_self_log" 2>&1; then
+    pass "skill-install/self-hosted"
+else
+    fail "skill-install/self-hosted" "$(tail -20 "$skill_install_self_log")"
 fi
 echo ""
 
@@ -1777,10 +2052,12 @@ for multi in stack geometry bignum gc math heap; do
         compare_json "${multi}/build-no-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$main_file"
     fi
 
-    # verify
+    # verify (isolated cache: a shared ~/.cache/vow must not influence the result)
     rust_json="" self_json="" rust_exit=0 self_exit=0
-    rust_json=$($RUST verify "$main_file" 2>/dev/null) || rust_exit=$?
+    multi_cache_dir=$(mktemp -d "$TMPDIR/multi-cache.XXXXXX")
+    rust_json=$(VOW_CACHE_DIR="$multi_cache_dir" $RUST verify "$main_file" 2>/dev/null) || rust_exit=$?
     self_json=$(run_self verify "$main_file" 2>/dev/null) || self_exit=$?
+    rm -rf "$multi_cache_dir"
 
     if ! check_empty_output "${multi}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
         compare_full_json "${multi}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$main_file"
@@ -2296,6 +2573,39 @@ if ! check_empty_output "test/subcommand" "$rust_test_json" "$self_test_json" "$
     else
         fail "test/single-file-module-root" "rust=$rust_single_status self=$self_single_status"
     fi
+
+    # A nonexistent path and a hung test must both fail closed in both
+    # compilers: TestsFailed, exit 1, exactly one failed/timeout entry (#415).
+    hang_dir="$TMPDIR/test_hang"
+    mkdir -p "$hang_dir"
+    printf 'module M\nfn main() -> i32 [io] {\n    while true {\n    }\n    0\n}\n' >"$hang_dir/test_hang.vow"
+    for who in rust self; do
+        for case in missing-path timeout; do
+            if [ "$case" = "missing-path" ]; then
+                case_args=("$hang_dir/does_not_exist.vow"); want_status="failed"
+            else
+                case_args=("$hang_dir/test_hang.vow" --timeout 1000); want_status="timeout"
+            fi
+            case_exit=0
+            if [ "$who" = "rust" ]; then
+                case_json=$($RUST test "${case_args[@]}" 2>/dev/null) || case_exit=$?
+            else
+                case_json=$(run_self test "${case_args[@]}" 2>/dev/null) || case_exit=$?
+            fi
+            case_ok=$(printf '%s' "$case_json" | uv run python -c "
+import json,sys
+d=json.load(sys.stdin)
+t=d['tests']
+ok=(d['status']=='TestsFailed' and d['total']==1 and d['passed']==0 and d['failed']==1
+    and len(t)==1 and t[0]['status']==sys.argv[1])
+print('ok' if ok else 'bad')" "$want_status" 2>/dev/null) || case_ok=""
+            if [ "$case_ok" = "ok" ] && [ "$case_exit" = "1" ]; then
+                pass "test/$case-$who"
+            else
+                fail "test/$case-$who" "exit=$case_exit result=$case_ok json=$case_json"
+            fi
+        done
+    done
 
     # --jobs 1 (strictly sequential) must report the same suite as the
     # concurrent default: same per-file statuses in the same order.

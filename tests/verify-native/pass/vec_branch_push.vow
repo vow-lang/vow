@@ -1,0 +1,31 @@
+module VecBranchPush
+
+fn maybe_push(c: i64) -> u64 vow {
+  ensures: result == 1 || result == 2
+} {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  if c > 0 {
+    v.push(2);
+  }
+  v.len()
+}
+
+fn arms_differ(c: i64) -> u64 vow {
+  ensures: result == 1
+} {
+  let v: Vec<i64> = Vec::new();
+  if c > 0 {
+    v.push(1);
+    v.push(2);
+    v.pop();
+  } else {
+    v.push(3);
+  }
+  v.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(maybe_push(1));
+  0
+}

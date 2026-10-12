@@ -1,0 +1,21 @@
+// TEST: counterexample-fn "count"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The bug is visible only through the join: one arm pushes, the other does not.
+module VecConditionalPushVisible
+
+fn count(c: i64) -> u64 vow {
+  ensures: result == 1
+} {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  if c > 0 {
+    v.push(2);
+  }
+  v.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(count(0));
+  0
+}

@@ -1,0 +1,19 @@
+// TEST: category callee-blame
+// TEST: counterexample-fn "pinned"
+// TEST: counterexample-blame Callee
+// TEST: counterexample-vow-id 1
+// TEST: replay confirmed
+//
+// Counterexample-replay fixture (#1550). This file defines no `main`; the
+// only mentions of one are in comments: fn main() -> i32 [io] { 0 }
+// A text search for `fn main(` would take the comment for a definition and skip
+// the replay. The self-hosted compiler locates `main` in the AST, so both
+// compilers build the harness and confirm.
+module ReplayConfirmMainTextOnly
+
+fn pinned(x: i64) -> i64 vow {
+  requires: x == 3,
+  ensures: result == 0
+} {
+  x
+}

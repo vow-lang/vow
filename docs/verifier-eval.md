@@ -100,15 +100,15 @@ Exit code is non-zero on any bucket except known-gaps. A machine-readable
 ## Category coverage
 
 <!-- GENERATE:CORPUS_COUNTS:START -->
-All 7 categories are represented (150 programs):
+All 7 categories are represented (158 programs):
 
 | Category | Count |
 | --- | --- |
-| callee-blame | 48 |
+| callee-blame | 53 |
+| model-drift | 29 |
 | bounds | 28 |
-| model-drift | 27 |
 | overflow | 19 |
-| unverifiable | 14 |
+| unverifiable | 15 |
 | caller-blame | 10 |
 | invariant | 4 |
 <!-- GENERATE:CORPUS_COUNTS:END -->
@@ -134,7 +134,7 @@ cargo build --release -p vow
 python3 scripts/verify_eval.py
 
 # Local, against the fixed-point self-hosted compiler:
-scripts/bootstrap.sh --stage3-no-verify
+scripts/bootstrap.sh
 python3 scripts/verify_eval.py --verifier build/vowc --output-dir /tmp/verify-eval-self
 
 # Authoring aid — print actual outcomes for every program:
@@ -190,3 +190,176 @@ python3 scripts/verify_diff.py --filter max   # one fixture family
 It is a developer and acceptance-gate tool (epic #1398, gate item 1), not a
 `full_test.sh` section: the native backend covers a growing subset, so most
 fixtures are `weaker` until it catches up.
+
+`--command contracts` and `--command test` (issue #1427) run the same corpus
+under `vowc contracts --verify` and `vowc test --verify` instead, with the same
+four classes and exit codes. `contracts` compares every clause by
+`(function, kind, vow_id)`: its status and its `trivially_satisfiable` flag. A
+clause is `soundness` when native proves what ESBMC refutes, `more_precise` when
+native proves what ESBMC leaves `unknown`/`skipped`, and `weaker` when native is
+less conclusive, reports `vacuous` where ESBMC does not, or the flags differ.
+ESBMC's `vacuous` for a function whose `requires` uses `&&`/`||` is
+`more_precise`, because its vacuity label is only planted in the entry block
+(see `cli.md`, "Native backend: `contracts` and `test`"). `test` compares the
+file's test status: `passed`/`failed`/`timeout` read as verified,
+`verify_failed` as refuted, `contract_skipped` as skipped; a fixture without
+`fn main` is left out, since `test` has nothing to run. The ESBMC test path fails
+a file for a reachable checked-arithmetic abort that `verify` only warns about,
+so a native pass of a program the corpus labels correct is `more_precise`. A
+fixture takes the most severe class of its clauses, and the report carries
+`command`.
+
+```bash
+python3 scripts/verify_diff.py --command contracts --output /tmp/contracts-diff.json
+python3 scripts/verify_diff.py --command test --jobs 4
+```
+
+The acceptance criterion for the native `contracts`/`test` backends is zero
+`soundness` rows, and every `weaker` row also non-`match` under
+`--command verify` (the native subset legitimately skips what ESBMC models) or
+listed in `cli.md` under "Verdict divergence from ESBMC". A clause that ESBMC
+calls `proven` or `failed` and native `unknown`, in a function the native
+`verify` refutes without any clause of its own failing (an abort, or a callee's
+precondition), is `more_precise`: the native report proves no clause of a
+function that can abort, where ESBMC judges the clause on the executions that
+continue past it. The two rows of the corpus left on the allow-list are
+`verify-fail/callee_ensures_wrong_function` (`verify` stops at the callee, so
+the caller is never refuted there) and `verify-fail/verify_jobs_ce_before_soft`
+(an unbounded loop without an `invariant`, which ESBMC's k-induction closes).
+
+## Performance gate: native verifier vs ESBMC
+
+[`scripts/verify_perf.py`](../scripts/verify_perf.py) (epic #1398, issue #1420)
+encodes acceptance gate item 3. It times `vowc verify --backend esbmc` against
+`--backend native` with the cache off (`--no-cache`, fresh `VOW_CACHE_DIR` per
+run), one fixture at a time on one machine, and reports the median of five runs
+per backend. The harness asserts that the cache directory is still empty after
+each run, so a native result cache (#1429) can never answer a timed run.
+
+**Corpus** (read-only, enumerated at start; a benchmark count other than 23 is
+corpus drift and exits `2`):
+
+- the 23 non-stretch `benchmarks/*/reference.vow` files from `benchmarks/manifest.toml`;
+- `tests/verify`, `tests/verify-fail`, `tests/verify-skip` (honouring `// TEST: skip`);
+- `tests/verify-fail-multi/*/main.vow`;
+- `tests/verify-native/{pass,fail,skip,unknown}` (truth from the directory);
+- the float fixtures, which live inside the sets above;
+- `tests/verify-stress` only with `--include-stress`. Its rows are reported with
+  `gating: false` and never enter the ratios or the timeout criterion (times out
+  by design).
+
+**Metrics.** Wall-clock is the process wall time. Peak RSS is the larger of the
+sampled sum over the whole process tree (driver plus solver children, 20 ms
+interval) and the kernel's `ru_maxrss` for the run. Linux seeds a child's
+`ru_maxrss` with the parent's high-water mark, so a kernel value at or below the
+harness's own peak is ignored. One discarded warm-up run per backend precedes
+the timed runs, and the timed runs alternate between backends so host drift hits
+both.
+
+**Gate.** A ratio is `native / esbmc` of the per-backend medians.
+
+| Criterion | Threshold |
+| --- | --- |
+| Geometric mean of the ratios, wall-clock and RSS | `<= 1.0` on both |
+| Worst single fixture, wall-clock and RSS | `<= 1.25` |
+| Timeouts | native times out on no fixture where ESBMC finishes |
+| Comparable rows | at least one |
+
+Only rows classed `match` by `verify_diff.py` (same verdict and counterexamples,
+so the same work) enter the ratios. `more_precise`, `weaker`, `soundness`,
+`harness`, a verdict that changes between runs of one backend (`unstable`) and
+rows where either backend timed out are listed with their reason and left out of
+the ratios. Verdict parity is gate item 1 and stays with `verify_diff.py`. The
+timeout criterion looks at every row, so a native timeout still counts when the
+row is otherwise excluded. A fixture times out on a backend when more than half
+of its runs did (`verify_status` `timeout` or the watchdog fired).
+
+By default neither backend gets `--timeout`, so each runs at its shipped
+budget (an explicit `--timeout` suppresses ESBMC's BV phase and its fallback).
+`--timeout N` passes the same budget to both and is recorded in the report.
+Both backends run with `--verify-jobs 1` unless overridden.
+
+**Report.** One JSON document (`schema_version`, `vowc`, `esbmc_version`,
+`bitwuzla_version`, `host`, `runs`, `budget`, `timeout_s`, `verify_jobs`,
+`corpus`, `rows[]`, `gate`) on stdout or in `--output FILE`, plus a human
+summary on stderr. Each row carries both backends' medians, raw samples,
+verdicts, `timeout_runs`, the `verify_diff` class, the ratios and the reason a
+row was excluded. `gate` carries the criteria, per-metric geometric mean and
+worst fixture, and the timeout lists (`native_only`, `esbmc_only`, `both`). A
+run with `--runs` below 5, or with `--filter`, sets `gate.provisional`; the exit
+code does not distinguish a provisional pass, so read `gate.provisional` before
+treating `0` as the gate.
+
+Exit codes: `0` gate passed, `1` gate failed, `2` the harness could not run
+(missing `vowc`, `esbmc` or `bitwuzla`; ESBMC that is not 8.5; non-Linux host;
+corpus drift; no fixture selected; an I/O error).
+
+```bash
+python3 scripts/verify_perf.py --vowc build/vowc --output /tmp/verify-perf.json
+python3 scripts/verify_perf.py --filter benchmarks/E01 --runs 1   # smoke run
+```
+
+Run it on an idle host with ESBMC 8.5 and the pinned Bitwuzla on `PATH`. The
+full run measures hundreds of fixtures six times per backend and takes hours. It
+is an acceptance-gate tool, not a `full_test.sh` section: it is host-dependent
+and its thresholds only become meaningful once native covers the corpus.
+
+## Native oracles: runtime differential and Z3 cross-check
+
+Two CI-only checks hold `vowc verify --backend native` to a second opinion
+(epic #1398, issue #1431). Both run from
+[`native-oracle.yml`](../.github/workflows/native-oracle.yml) on every push to
+`main` and nightly, sharded four ways, over `tests/verify`, `tests/verify-fail`,
+`tests/verify-native/{pass,fail,unknown}`, `examples/` and a `gen_corpus.py`
+corpus (seed `1431` on pushes, the UTC date on the nightly, echoed in the log).
+The decision record is
+[ADR-2026-10-11-0510](adr/2026-10-11-0510-native-z3-cross-check.md).
+
+**Verifier versus runtime**,
+[`scripts/verifier_runtime.py`](../scripts/verifier_runtime.py) `--backend native`:
+
+| Class | Meaning | Exit |
+|-------|---------|------|
+| `SOUNDNESS` | `Verified`, but the `--mode debug` binary reports a `VowViolation` | 1 |
+| `PRECISION` | a counterexample replays `diverged` or `aborted`, or a `VerifierBug` diagnostic is emitted | 1 |
+| `REPLAY-GAP` | a replay was `skipped` for a reason other than "not a runtime abort", and the fixture carries no `// TEST: replay-skipped <why>` | 1 |
+| `unverified-call-site` | a Caller violation of a `requires` whose function a `VerificationSkipped` note names as not verified (calls from `main`); counted, not a failure | 0 |
+
+`--min-checked N` exits 2 if fewer than N fixtures reached an `ok` verdict.
+`results.json` carries `replay_skipped_by_reason`. Add a
+`// TEST: replay-skipped <why>` line (at the end of the file, so spans do not
+move) only when the replay harness genuinely cannot model the fixture; the
+reason is then reported rather than failed.
+
+**Z3 cross-check**, [`scripts/z3_crosscheck.py`](../scripts/z3_crosscheck.py):
+`vowc verify --backend native --no-cache` runs with a `bitwuzla` shim first on
+`PATH` that copies each `.smt2` file it is handed and then `exec`s the real
+solver, with `VOW_VERIFY_NO_INCREMENTAL=1` so every claim is a standalone file.
+Each captured query is re-run under Bitwuzla (`--bv-output-format 2`) and Z3
+(`-smt2 -T:N`).
+
+| Class | Bitwuzla / Z3 | Exit |
+|-------|---------------|------|
+| `agree` | `sat`/`sat` or `unsat`/`unsat` | 0 |
+| `SOUNDNESS` | `unsat` / `sat`: a false proof | 1 |
+| `PRECISION` | `sat` / `unsat`: a spurious counterexample | 1 |
+| `inconclusive` | `unknown` or a timeout on either side, or a Bitwuzla error | 0 |
+| harness | a Z3 error, no query captured, a solver session bypassing capture, fewer than `--min-agreed` agreements, an unusable verifier | 2 |
+
+A disagreement leaves the query under `queries/` in `--output-dir`, which is
+the repro:
+
+```bash
+bitwuzla --bv-output-format 2 z3-crosscheck.out/queries/<fixture>.<n>.smt2
+z3 -smt2 z3-crosscheck.out/queries/<fixture>.<n>.smt2
+```
+
+```bash
+scripts/bootstrap.sh --skip-cargo --no-verify           # build/vowc
+python3 scripts/verifier_runtime.py --backend native --shard 0/4
+python3 scripts/z3_crosscheck.py --shard 0/4 --extra-root /path/to/generated
+```
+
+Not covered: incremental-session streams (a session `unsat` is not re-decided
+by the product), and runtime soundness depth beyond each program's own `main`
+until the generated-corpus axis of #1473 lands.

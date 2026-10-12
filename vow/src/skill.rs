@@ -37,33 +37,173 @@ pub(crate) fn bundle_markdown() -> String {
 
 // --- install mechanics -------------------------------------------------------
 
-fn install_skill_tree_to(root: &Path) -> std::io::Result<PathBuf> {
-    let dir = root.join(".claude/skills/vow");
-    std::fs::create_dir_all(&dir).map_err(|e| {
-        std::io::Error::new(e.kind(), format!("cannot create {}: {}", dir.display(), e))
-    })?;
-    let path = dir.join("SKILL.md");
-    std::fs::write(&path, skill_entrypoint_markdown()).map_err(|e| {
-        std::io::Error::new(e.kind(), format!("cannot write {}: {}", path.display(), e))
-    })?;
-    for (relative_path, contents) in skill_support_files() {
-        let support_path = dir.join(relative_path);
-        if let Some(parent) = support_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                std::io::Error::new(
-                    e.kind(),
-                    format!("cannot create {}: {}", parent.display(), e),
-                )
-            })?;
+const RESERVE_ATTEMPTS: u32 = 8;
+
+type RenameFn<'a> = &'a dyn Fn(&Path, &Path) -> std::io::Result<()>;
+
+fn io_ctx(op: &str, path: &Path, e: std::io::Error) -> std::io::Error {
+    std::io::Error::new(e.kind(), format!("cannot {op} {}: {e}", path.display()))
+}
+
+fn unique_token(attempt: u32) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    format!("{}-{nanos}-{attempt}", std::process::id())
+}
+
+/// Exclusively create `<parent>/.<stem>-<token>`: `create_dir` fails when the
+/// name is taken, so two concurrent installers never share a directory.
+fn reserve_unique_dir(
+    parent: &Path,
+    stem: &str,
+    token: &dyn Fn(u32) -> String,
+) -> std::io::Result<PathBuf> {
+    for attempt in 0..RESERVE_ATTEMPTS {
+        let candidate = parent.join(format!(".{stem}-{}", token(attempt)));
+        match std::fs::create_dir(&candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(io_ctx("create", &candidate, e)),
         }
-        std::fs::write(&support_path, contents).map_err(|e| {
-            std::io::Error::new(
-                e.kind(),
-                format!("cannot write {}: {}", support_path.display(), e),
-            )
-        })?;
     }
-    Ok(path)
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!(
+            "cannot create {}: no unused name after {RESERVE_ATTEMPTS} attempts",
+            parent.join(stem).display()
+        ),
+    ))
+}
+
+/// Writes every support file, then the entrypoint, so a directory that holds
+/// `SKILL.md` always holds the files it links to.
+fn write_skill_files(dir: &Path, entrypoint: &str, files: &[(&str, &str)]) -> std::io::Result<()> {
+    for (relative_path, contents) in files {
+        let path = dir.join(relative_path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| io_ctx("create", parent, e))?;
+        }
+        std::fs::write(&path, contents).map_err(|e| io_ctx("write", &path, e))?;
+    }
+    let path = dir.join("SKILL.md");
+    std::fs::write(&path, entrypoint).map_err(|e| io_ctx("write", &path, e))
+}
+
+/// Copies every entry of `from` that `into` does not already hold, so files the
+/// installer does not own (local notes, stale files in owned directories) survive
+/// the swap while owned files always come from the freshly written stage.
+fn carry_over_foreign(from: &Path, into: &Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(from).map_err(|e| io_ctx("read", from, e))? {
+        let entry = entry.map_err(|e| io_ctx("read", from, e))?;
+        let (src, dst) = (entry.path(), into.join(entry.file_name()));
+        let kind = entry.file_type().map_err(|e| io_ctx("read", &src, e))?;
+        if dst.symlink_metadata().is_ok() {
+            if kind.is_dir() && dst.is_dir() {
+                carry_over_foreign(&src, &dst)?;
+            }
+        } else if kind.is_dir() {
+            std::fs::create_dir(&dst).map_err(|e| io_ctx("create", &dst, e))?;
+            carry_over_foreign(&src, &dst)?;
+        } else if kind.is_symlink() {
+            let link = std::fs::read_link(&src).map_err(|e| io_ctx("read", &src, e))?;
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&link, &dst).map_err(|e| io_ctx("write", &dst, e))?;
+            #[cfg(not(unix))]
+            let _ = link;
+        } else {
+            std::fs::copy(&src, &dst).map_err(|e| io_ctx("write", &dst, e))?;
+        }
+    }
+    Ok(())
+}
+
+/// Moves a fully written `stage` to `target`. An existing `target` is swapped
+/// out through a backup, since a directory cannot be renamed over a non-empty
+/// one, and put back when the final rename fails.
+fn commit_stage(
+    parent: &Path,
+    stage: &Path,
+    target: &Path,
+    token: &dyn Fn(u32) -> String,
+    rename: RenameFn,
+) -> std::io::Result<()> {
+    if target.symlink_metadata().is_err() {
+        return rename(stage, target).map_err(|e| io_ctx("install", target, e));
+    }
+    let backup = reserve_unique_dir(parent, "vow-backup", token)?;
+    if let Err(e) = rename(target, &backup) {
+        let _ = std::fs::remove_dir(&backup);
+        return Err(io_ctx("install", target, e));
+    }
+    if let Err(e) = rename(stage, target) {
+        return Err(match rename(&backup, target) {
+            Ok(()) => io_ctx("install", target, e),
+            Err(_) => std::io::Error::new(
+                e.kind(),
+                format!(
+                    "cannot install {}: {e}; previous tree kept at {}",
+                    target.display(),
+                    backup.display()
+                ),
+            ),
+        });
+    }
+    let _ = std::fs::remove_dir_all(&backup);
+    Ok(())
+}
+
+fn install_tree_with(
+    root: &Path,
+    entrypoint: &str,
+    files: &[(&str, &str)],
+    token: &dyn Fn(u32) -> String,
+    rename: RenameFn,
+) -> std::io::Result<PathBuf> {
+    let parent = root.join(".claude/skills");
+    let target = parent.join("vow");
+    std::fs::create_dir_all(&parent).map_err(|e| io_ctx("create", &parent, e))?;
+
+    let is_link = target
+        .symlink_metadata()
+        .is_ok_and(|m| m.file_type().is_symlink());
+    if is_link {
+        write_skill_files(&target, entrypoint, files)?;
+        return Ok(target.join("SKILL.md"));
+    }
+
+    let stage = reserve_unique_dir(&parent, "vow-install", token)?;
+    let committed = write_skill_files(&stage, entrypoint, files)
+        .and_then(|()| {
+            if target.is_dir() {
+                carry_over_foreign(&target, &stage)
+            } else {
+                Ok(())
+            }
+        })
+        .and_then(|()| commit_stage(&parent, &stage, &target, token, rename));
+    if let Err(e) = committed {
+        let _ = std::fs::remove_dir_all(&stage);
+        return Err(e);
+    }
+    Ok(target.join("SKILL.md"))
+}
+
+/// Builds the skill tree in a sibling staging directory and renames it into
+/// `<root>/.claude/skills/vow`, so a failure never leaves a `SKILL.md` that
+/// links to missing files. A symlinked `vow` directory is written in place.
+fn install_tree_atomic(
+    root: &Path,
+    entrypoint: &str,
+    files: &[(&str, &str)],
+) -> std::io::Result<PathBuf> {
+    install_tree_with(root, entrypoint, files, &unique_token, &|from, to| {
+        std::fs::rename(from, to)
+    })
+}
+
+fn install_skill_tree_to(root: &Path) -> std::io::Result<PathBuf> {
+    install_tree_atomic(root, &skill_entrypoint_markdown(), skill_support_files())
 }
 
 fn run_skill_install_scoped<R: std::io::BufRead, W: std::io::Write>(
@@ -254,7 +394,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--no-verify",
-          "description": "Skip ESBMC static verification",
+          "description": "Skip static verification",
           "long": "--no-verify",
           "value_kind": "flag"
         },
@@ -285,7 +425,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--max-k-step <N>",
-          "description": "ESBMC incremental BMC max iterations (default: 50)",
+          "description": "ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (default: 50)",
           "long": "--max-k-step",
           "value_name": "N",
           "value_kind": "integer",
@@ -293,7 +433,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--solver <boolector|z3|bitwuzla|auto>",
-          "description": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
+          "description": "ESBMC backend only; a usage error under --backend native. ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
           "long": "--solver",
           "value_name": "boolector|z3|bitwuzla|auto",
           "value_kind": "enum",
@@ -307,7 +447,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--encoding <bv|ir|auto>",
-          "description": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
+          "description": "ESBMC backend only; a usage error under --backend native. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
           "long": "--encoding",
           "value_name": "bv|ir|auto",
           "value_kind": "enum",
@@ -320,7 +460,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--timeout <N>",
-          "description": "ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))",
+          "description": "Per-function verification timeout in seconds; the only resource knob of the native backend, where the default is a fixed 300. ESBMC backend: under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is an immediate watchdog kill under ESBMC and a zero budget (no solver is spawned; statically decided claims still resolve) under --backend native (default: 300 (or 30 when --encoding is auto))",
           "long": "--timeout",
           "value_name": "N",
           "value_kind": "integer",
@@ -328,11 +468,23 @@ fn skill_json() -> String {
         },
         {
           "form": "--verify-jobs <N>",
-          "description": "Max concurrent ESBMC verification jobs (default: num_cpus/2)",
+          "description": "Max concurrent verification jobs (ESBMC processes, or verify-worker subprocesses under --backend native)",
           "long": "--verify-jobs",
           "value_name": "N",
           "value_kind": "integer",
           "default": "num_cpus/2"
+        },
+        {
+          "form": "--backend <esbmc|native>",
+          "description": "Verification backend. native is accepted only by vowc verify, contracts --verify and test --verify; on build and the bare form it is a usage error (exit 1) that points at vowc verify, and esbmc is accepted silently (default: esbmc)",
+          "long": "--backend",
+          "value_name": "esbmc|native",
+          "value_kind": "enum",
+          "values": [
+            "esbmc",
+            "native"
+          ],
+          "default": "esbmc"
         },
         {
           "form": "--replay-cex",
@@ -342,7 +494,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--perfetto <path>",
-          "description": "Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache.",
+          "description": "Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link and, under the ESBMC backend, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache.",
           "long": "--perfetto",
           "value_name": "path",
           "value_kind": "string"
@@ -381,13 +533,13 @@ fn skill_json() -> String {
       "options": [
         {
           "form": "--no-cache",
-          "description": "Disable verification result caching",
+          "description": "Disable verification result caching; under --backend native it disables the native result cache of verify (see \"Result cache\" below)",
           "long": "--no-cache",
           "value_kind": "flag"
         },
         {
           "form": "--max-k-step <N>",
-          "description": "ESBMC incremental BMC max iterations (default: 50)",
+          "description": "ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (default: 50)",
           "long": "--max-k-step",
           "value_name": "N",
           "value_kind": "integer",
@@ -395,7 +547,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--solver <boolector|z3|bitwuzla|auto>",
-          "description": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
+          "description": "ESBMC backend only; a usage error under --backend native. ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
           "long": "--solver",
           "value_name": "boolector|z3|bitwuzla|auto",
           "value_kind": "enum",
@@ -409,7 +561,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--encoding <bv|ir|auto>",
-          "description": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
+          "description": "ESBMC backend only; a usage error under --backend native. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
           "long": "--encoding",
           "value_name": "bv|ir|auto",
           "value_kind": "enum",
@@ -422,7 +574,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--timeout <N>",
-          "description": "ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))",
+          "description": "Per-function verification timeout in seconds; the only resource knob of the native backend, where the default is a fixed 300. ESBMC backend: under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is an immediate watchdog kill under ESBMC and a zero budget (no solver is spawned; statically decided claims still resolve) under --backend native (default: 300 (or 30 when --encoding is auto))",
           "long": "--timeout",
           "value_name": "N",
           "value_kind": "integer",
@@ -438,7 +590,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--backend <esbmc|native>",
-          "description": "Verification backend. native is the symbolic checker with Bitwuzla, run in per-function worker subprocesses (epic #1398); self-hosted vowc only, see \"Native backend\" below. Accepted by verify only: build, contracts, test and the bare vowc <file> form (identical to build) reject --backend native with a usage error (exit 1) instead of silently running ESBMC. Any value other than esbmc or native is a usage error (default: esbmc)",
+          "description": "Verification backend. native is the symbolic checker with Bitwuzla, run in per-function worker subprocesses (epic #1398); self-hosted vowc only, see \"Native backend\" below. Accepted by verify, contracts --verify and test --verify; contracts and test without --verify, build and the bare vowc <file> form (identical to build) reject --backend native with a usage error (exit 1) instead of silently running ESBMC or reporting not_verified as if the native backend had run. Any value other than esbmc or native is a usage error (default: esbmc)",
           "long": "--backend",
           "value_name": "esbmc|native",
           "value_kind": "enum",
@@ -450,13 +602,13 @@ fn skill_json() -> String {
         },
         {
           "form": "--replay-cex",
-          "description": "Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see \"Counterexample replay\" below). Opt-in, off by default; also accepted by vow build.",
+          "description": "Differential test of the verifier model against runtime semantics. After the verifier reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see \"Counterexample replay\" below). Opt-in, off by default; also accepted by vow build.",
           "long": "--replay-cex",
           "value_kind": "flag"
         },
         {
           "form": "--perfetto <path>",
-          "description": "Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact.",
+          "description": "Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans and, under the ESBMC backend, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process; under --backend native it records the frontend phase spans (module-load, parse, typecheck, lower, ...) and one verification span (no per-claim worker or solver spans, no per-worker RSS yet). Accepted only by build and verify. Pure side artifact.",
           "long": "--perfetto",
           "value_name": "path",
           "value_kind": "string"
@@ -488,9 +640,21 @@ fn skill_json() -> String {
       "options": [
         {
           "form": "--verify",
-          "description": "Run ESBMC verification on test files",
+          "description": "Run verification (ESBMC, or the native backend with --backend native) on test files",
           "long": "--verify",
           "value_kind": "flag"
+        },
+        {
+          "form": "--backend <esbmc|native>",
+          "description": "Verification backend; native requires --verify (see \"Native backend: contracts and test\")",
+          "long": "--backend",
+          "value_name": "esbmc|native",
+          "value_kind": "enum",
+          "values": [
+            "esbmc",
+            "native"
+          ],
+          "default": "esbmc"
         },
         {
           "form": "--filter <pat>",
@@ -538,7 +702,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--max-k-step <N>",
-          "description": "ESBMC incremental BMC max iterations (with --verify)",
+          "description": "ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (with --verify)",
           "long": "--max-k-step",
           "value_name": "N",
           "value_kind": "integer",
@@ -546,7 +710,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--verify-jobs <N>",
-          "description": "Max concurrent ESBMC verification jobs (with --verify)",
+          "description": "Max concurrent verification jobs (with --verify)",
           "long": "--verify-jobs",
           "value_name": "N",
           "value_kind": "integer",
@@ -608,7 +772,7 @@ fn skill_json() -> String {
       "options": [
         {
           "form": "--verify",
-          "description": "Run ESBMC verification and report per-contract status",
+          "description": "Run verification (the ESBMC backend by default, or the native backend with --backend native) and report per-contract status",
           "long": "--verify",
           "value_kind": "flag"
         },
@@ -620,7 +784,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--max-k-step <N>",
-          "description": "ESBMC incremental BMC max iterations (default: 50)",
+          "description": "ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (with --verify)",
           "long": "--max-k-step",
           "value_name": "N",
           "value_kind": "integer",
@@ -628,7 +792,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--solver <boolector|z3|bitwuzla|auto>",
-          "description": "ESBMC SMT solver (with --verify)",
+          "description": "ESBMC backend only; a usage error under --backend native. ESBMC SMT solver (with --verify)",
           "long": "--solver",
           "value_name": "boolector|z3|bitwuzla|auto",
           "value_kind": "enum",
@@ -642,7 +806,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--encoding <bv|ir|auto>",
-          "description": "ESBMC encoding mode (with --verify); ir requires z3 (default: auto)",
+          "description": "ESBMC backend only; a usage error under --backend native. ESBMC encoding mode (with --verify); ir requires z3 (default: auto)",
           "long": "--encoding",
           "value_name": "bv|ir|auto",
           "value_kind": "enum",
@@ -655,11 +819,31 @@ fn skill_json() -> String {
         },
         {
           "form": "--verify-jobs <N>",
-          "description": "Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial)",
+          "description": "Max concurrent verify-worker subprocesses under --backend native; a no-op under ESBMC (the ESBMC loop is serial)",
           "long": "--verify-jobs",
           "value_name": "N",
           "value_kind": "integer",
           "default": "num_cpus/2"
+        },
+        {
+          "form": "--backend <esbmc|native>",
+          "description": "Verification backend; native requires --verify (see \"Native backend: contracts and test\")",
+          "long": "--backend",
+          "value_name": "esbmc|native",
+          "value_kind": "enum",
+          "values": [
+            "esbmc",
+            "native"
+          ],
+          "default": "esbmc"
+        },
+        {
+          "form": "--timeout <N>",
+          "description": "Seconds per function (and per probe) under --backend native; ESBMC's own timeout otherwise (default: 300 (native))",
+          "long": "--timeout",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": "300 (native)"
         }
       ],
       "stdout": {
@@ -668,7 +852,7 @@ fn skill_json() -> String {
       },
       "notes": [
         "runs frontend only by default",
-        "use --verify for per-contract ESBMC status"
+        "use --verify for per-contract verification status"
       ]
     },
     "complexity": {
@@ -738,49 +922,53 @@ fn skill_json() -> String {
   "build_options": {
     "-o, --output <path>": "Output executable path (default: build/<stem>)",
     "--mode <debug|release|profile|sanitize>": "Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + use-after-region-close detection for Vecs (default: release)",
-    "--no-verify": "Skip ESBMC static verification",
+    "--no-verify": "Skip static verification",
     "--dump-ir": "Print IR text to stdout and exit (no JSON output, no codegen)",
     "--debug-trace <off|calls|full>": "Emit JSON trace lines to stderr at runtime (default: off)",
     "--no-cache": "Disable verification result caching, and (for --no-verify builds) the compile-object cache. See \"Compile-object cache behavior\" below",
-    "--max-k-step <N>": "ESBMC incremental BMC max iterations (default: 50)",
-    "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
-    "--encoding <bv|ir|auto>": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
-    "--timeout <N>": "ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))",
-    "--verify-jobs <N>": "Max concurrent ESBMC verification jobs (default: num_cpus/2)",
+    "--max-k-step <N>": "ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (default: 50)",
+    "--solver <boolector|z3|bitwuzla|auto>": "ESBMC backend only; a usage error under --backend native. ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
+    "--encoding <bv|ir|auto>": "ESBMC backend only; a usage error under --backend native. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
+    "--timeout <N>": "Per-function verification timeout in seconds; the only resource knob of the native backend, where the default is a fixed 300. ESBMC backend: under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is an immediate watchdog kill under ESBMC and a zero budget (no solver is spawned; statically decided claims still resolve) under --backend native (default: 300 (or 30 when --encoding is auto))",
+    "--verify-jobs <N>": "Max concurrent verification jobs (ESBMC processes, or verify-worker subprocesses under --backend native)",
+    "--backend <esbmc|native>": "Verification backend. native is accepted only by vowc verify, contracts --verify and test --verify; on build and the bare form it is a usage error (exit 1) that points at vowc verify, and esbmc is accepted silently (default: esbmc)",
     "--replay-cex": "Differential test the verifier model against runtime semantics (same as vow verify --replay-cex; see below)",
-    "--perfetto <path>": "Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache."
+    "--perfetto <path>": "Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link and, under the ESBMC backend, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache."
   },
   "verify_options": {
-    "--no-cache": "Disable verification result caching",
-    "--max-k-step <N>": "ESBMC incremental BMC max iterations (default: 50)",
-    "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
-    "--encoding <bv|ir|auto>": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
-    "--timeout <N>": "ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))",
+    "--no-cache": "Disable verification result caching; under --backend native it disables the native result cache of verify (see \"Result cache\" below)",
+    "--max-k-step <N>": "ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (default: 50)",
+    "--solver <boolector|z3|bitwuzla|auto>": "ESBMC backend only; a usage error under --backend native. ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
+    "--encoding <bv|ir|auto>": "ESBMC backend only; a usage error under --backend native. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
+    "--timeout <N>": "Per-function verification timeout in seconds; the only resource knob of the native backend, where the default is a fixed 300. ESBMC backend: under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is an immediate watchdog kill under ESBMC and a zero budget (no solver is spawned; statically decided claims still resolve) under --backend native (default: 300 (or 30 when --encoding is auto))",
     "--verify-jobs <N>": "Max concurrent verification jobs (ESBMC processes, or verify-worker subprocesses under --backend native)",
-    "--backend <esbmc|native>": "Verification backend. native is the symbolic checker with Bitwuzla, run in per-function worker subprocesses (epic #1398); self-hosted vowc only, see \"Native backend\" below. Accepted by verify only: build, contracts, test and the bare vowc <file> form (identical to build) reject --backend native with a usage error (exit 1) instead of silently running ESBMC. Any value other than esbmc or native is a usage error (default: esbmc)",
-    "--replay-cex": "Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see \"Counterexample replay\" below). Opt-in, off by default; also accepted by vow build.",
-    "--perfetto <path>": "Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact."
+    "--backend <esbmc|native>": "Verification backend. native is the symbolic checker with Bitwuzla, run in per-function worker subprocesses (epic #1398); self-hosted vowc only, see \"Native backend\" below. Accepted by verify, contracts --verify and test --verify; contracts and test without --verify, build and the bare vowc <file> form (identical to build) reject --backend native with a usage error (exit 1) instead of silently running ESBMC or reporting not_verified as if the native backend had run. Any value other than esbmc or native is a usage error (default: esbmc)",
+    "--replay-cex": "Differential test of the verifier model against runtime semantics. After the verifier reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see \"Counterexample replay\" below). Opt-in, off by default; also accepted by vow build.",
+    "--perfetto <path>": "Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans and, under the ESBMC backend, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process; under --backend native it records the frontend phase spans (module-load, parse, typecheck, lower, ...) and one verification span (no per-claim worker or solver spans, no per-worker RSS yet). Accepted only by build and verify. Pure side artifact."
   },
   "test_options": {
-    "--verify": "Run ESBMC verification on test files",
+    "--verify": "Run verification (ESBMC, or the native backend with --backend native) on test files",
+    "--backend <esbmc|native>": "Verification backend; native requires --verify (see \"Native backend: contracts and test\")",
     "--filter <pat>": "Only run tests whose file stem contains pat (default: (none))",
     "--module-root <path>": "Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the nearest ancestor of the entry file that resolves all of its use declarations. (default: (auto))",
     "--jobs <N>": "Max test files compiled and run concurrently (default: min(num_cpus/2, 8) (1 with --verify))",
     "--mode <debug|release>": "Build mode; debug inserts runtime vow checks (default: (default))",
     "--timeout <ms>": "Per-test execution timeout in milliseconds (default: 30000)",
-    "--max-k-step <N>": "ESBMC incremental BMC max iterations (with --verify)",
-    "--verify-jobs <N>": "Max concurrent ESBMC verification jobs (with --verify)"
+    "--max-k-step <N>": "ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (with --verify)",
+    "--verify-jobs <N>": "Max concurrent verification jobs (with --verify)"
   },
   "decl_options": {
     "-o, --output <path>": "Output declaration file path (default: <source>.vow.d)"
   },
   "contracts_options": {
-    "--verify": "Run ESBMC verification and report per-contract status",
+    "--verify": "Run verification (the ESBMC backend by default, or the native backend with --backend native) and report per-contract status",
     "--no-cache": "Disable verification result caching",
-    "--max-k-step <N>": "ESBMC incremental BMC max iterations (default: 50)",
-    "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver (with --verify)",
-    "--encoding <bv|ir|auto>": "ESBMC encoding mode (with --verify); ir requires z3 (default: auto)",
-    "--verify-jobs <N>": "Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial)"
+    "--max-k-step <N>": "ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (with --verify)",
+    "--solver <boolector|z3|bitwuzla|auto>": "ESBMC backend only; a usage error under --backend native. ESBMC SMT solver (with --verify)",
+    "--encoding <bv|ir|auto>": "ESBMC backend only; a usage error under --backend native. ESBMC encoding mode (with --verify); ir requires z3 (default: auto)",
+    "--verify-jobs <N>": "Max concurrent verify-worker subprocesses under --backend native; a no-op under ESBMC (the ESBMC loop is serial)",
+    "--backend <esbmc|native>": "Verification backend; native requires --verify (see \"Native backend: contracts and test\")",
+    "--timeout <N>": "Seconds per function (and per probe) under --backend native; ESBMC's own timeout otherwise (default: 300 (native))"
   },
   "complexity_options": {
     "--cog-anchor <N>": "Cognitive-complexity value mapped to sub-score 0.800 (SonarQube's default flag line). (default: 15)",
@@ -838,7 +1026,7 @@ fn skill_json() -> String {
     "diagnostics": "[array of {error_code, message, severity, span: {file, offset, length}}]",
     "message": "error detail (CompileFailed)",
     "function": "function name (VerifyFailed)",
-    "counterexample": "ESBMC counterexample description (VerifyFailed)"
+    "counterexample": "verifier counterexample description (VerifyFailed)"
   },
   "diagnostics": {
     "schema_ref": "schemas/diagnostic.schema.json",
@@ -903,12 +1091,13 @@ fn skill_json() -> String {
       "unsafe"
     ],
     "builtins": {
-      "pin_to_root": "fn(value: String) -> String and fn<T>(value: Vec<T>) -> Vec<T> for flat scalar T []",
+      "pin_to_root": "fn(value: String) -> String and fn<T>(value: Vec<T>) -> Vec<T> for one-slot scalar T []",
       "drop": "fn(value: L) -> () for a linear owner L []",
       "print_str": "fn(s: String) -> () [io]",
       "print_i64": "fn(v: i64) -> () [io]",
       "print_u64": "fn(v: u64) -> () [io]",
       "eprintln_str": "fn(s: String) -> () [io]",
+      "try_eprintln_str": "fn(s: String) -> i64 [io]",
       "debug_str": "fn(s: String) -> () []",
       "debug_i64": "fn(v: i64) -> () []",
       "debug_u64": "fn(v: u64) -> () []",
@@ -1141,7 +1330,13 @@ fn skill_json() -> String {
   },
   "verification_defaults": {
     "strategy": "incremental-bmc",
-    "max_k_step": 50
+    "max_k_step": 50,
+    "native": {
+      "strategy": "bounded unwinding with invariant induction and k-induction",
+      "tuning_flags": [
+        "--timeout"
+      ]
+    }
   }
 }"##
     .to_string()
@@ -1166,46 +1361,50 @@ USAGE
 BUILD OPTIONS
   -o, --output <path>     Output executable path (default: build/<stem>)
   --mode <debug|release|profile|sanitize>  Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + use-after-region-close detection for Vecs (default: release)
-  --no-verify             Skip ESBMC static verification
+  --no-verify             Skip static verification
   --dump-ir               Print IR text to stdout and exit (no JSON output, no codegen)
   --debug-trace <off|calls|full>  Emit JSON trace lines to stderr at runtime (default: off)
   --no-cache              Disable verification result caching, and (for --no-verify builds) the compile-object cache. See "Compile-object cache behavior" below
-  --max-k-step <N>        ESBMC incremental BMC max iterations (default: 50)
-  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)
-  --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
-  --timeout <N>           ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))
-  --verify-jobs <N>       Max concurrent ESBMC verification jobs (default: num_cpus/2)
+  --max-k-step <N>        ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (default: 50)
+  --solver <boolector|z3|bitwuzla|auto>  ESBMC backend only; a usage error under --backend native. ESBMC SMT solver; auto selects per-function via heuristic (default: auto)
+  --encoding <bv|ir|auto>  ESBMC backend only; a usage error under --backend native. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
+  --timeout <N>           Per-function verification timeout in seconds; the only resource knob of the native backend, where the default is a fixed 300. ESBMC backend: under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is an immediate watchdog kill under ESBMC and a zero budget (no solver is spawned; statically decided claims still resolve) under --backend native (default: 300 (or 30 when --encoding is auto))
+  --verify-jobs <N>       Max concurrent verification jobs (ESBMC processes, or verify-worker subprocesses under --backend native)
+  --backend <esbmc|native>  Verification backend. native is accepted only by vowc verify, contracts --verify and test --verify; on build and the bare form it is a usage error (exit 1) that points at vowc verify, and esbmc is accepted silently (default: esbmc)
   --replay-cex            Differential test the verifier model against runtime semantics (same as vow verify --replay-cex; see below)
-  --perfetto <path>       Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache.
+  --perfetto <path>       Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link and, under the ESBMC backend, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache.
 
 VERIFY OPTIONS
-  --no-cache              Disable verification result caching
-  --max-k-step <N>        ESBMC incremental BMC max iterations (default: 50)
-  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)
-  --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
-  --timeout <N>           ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))
+  --no-cache              Disable verification result caching; under --backend native it disables the native result cache of verify (see "Result cache" below)
+  --max-k-step <N>        ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (default: 50)
+  --solver <boolector|z3|bitwuzla|auto>  ESBMC backend only; a usage error under --backend native. ESBMC SMT solver; auto selects per-function via heuristic (default: auto)
+  --encoding <bv|ir|auto>  ESBMC backend only; a usage error under --backend native. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
+  --timeout <N>           Per-function verification timeout in seconds; the only resource knob of the native backend, where the default is a fixed 300. ESBMC backend: under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is an immediate watchdog kill under ESBMC and a zero budget (no solver is spawned; statically decided claims still resolve) under --backend native (default: 300 (or 30 when --encoding is auto))
   --verify-jobs <N>       Max concurrent verification jobs (ESBMC processes, or verify-worker subprocesses under --backend native)
-  --backend <esbmc|native>  Verification backend. native is the symbolic checker with Bitwuzla, run in per-function worker subprocesses (epic #1398); self-hosted vowc only, see "Native backend" below. Accepted by verify only: build, contracts, test and the bare vowc <file> form (identical to build) reject --backend native with a usage error (exit 1) instead of silently running ESBMC. Any value other than esbmc or native is a usage error (default: esbmc)
-  --replay-cex            Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by vow build.
-  --perfetto <path>       Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact.
+  --backend <esbmc|native>  Verification backend. native is the symbolic checker with Bitwuzla, run in per-function worker subprocesses (epic #1398); self-hosted vowc only, see "Native backend" below. Accepted by verify, contracts --verify and test --verify; contracts and test without --verify, build and the bare vowc <file> form (identical to build) reject --backend native with a usage error (exit 1) instead of silently running ESBMC or reporting not_verified as if the native backend had run. Any value other than esbmc or native is a usage error (default: esbmc)
+  --replay-cex            Differential test of the verifier model against runtime semantics. After the verifier reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by vow build.
+  --perfetto <path>       Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans and, under the ESBMC backend, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process; under --backend native it records the frontend phase spans (module-load, parse, typecheck, lower, ...) and one verification span (no per-claim worker or solver spans, no per-worker RSS yet). Accepted only by build and verify. Pure side artifact.
 
 TEST OPTIONS
-  --verify                Run ESBMC verification on test files
+  --verify                Run verification (ESBMC, or the native backend with --backend native) on test files
+  --backend <esbmc|native>  Verification backend; native requires --verify (see "Native backend: contracts and test")
   --filter <pat>          Only run tests whose file stem contains pat (default: (none))
   --module-root <path>    Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the nearest ancestor of the entry file that resolves all of its use declarations. (default: (auto))
   --jobs <N>              Max test files compiled and run concurrently (default: min(num_cpus/2, 8) (1 with --verify))
   --mode <debug|release>  Build mode; debug inserts runtime vow checks (default: (default))
   --timeout <ms>          Per-test execution timeout in milliseconds (default: 30000)
-  --max-k-step <N>        ESBMC incremental BMC max iterations (with --verify)
-  --verify-jobs <N>       Max concurrent ESBMC verification jobs (with --verify)
+  --max-k-step <N>        ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (with --verify)
+  --verify-jobs <N>       Max concurrent verification jobs (with --verify)
 
 CONTRACTS OPTIONS
-  --verify                Run ESBMC verification and report per-contract status
+  --verify                Run verification (the ESBMC backend by default, or the native backend with --backend native) and report per-contract status
   --no-cache              Disable verification result caching
-  --max-k-step <N>        ESBMC incremental BMC max iterations (default: 50)
-  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver (with --verify)
-  --encoding <bv|ir|auto>  ESBMC encoding mode (with --verify); ir requires z3 (default: auto)
-  --verify-jobs <N>       Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial)
+  --max-k-step <N>        ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (with --verify)
+  --solver <boolector|z3|bitwuzla|auto>  ESBMC backend only; a usage error under --backend native. ESBMC SMT solver (with --verify)
+  --encoding <bv|ir|auto>  ESBMC backend only; a usage error under --backend native. ESBMC encoding mode (with --verify); ir requires z3 (default: auto)
+  --verify-jobs <N>       Max concurrent verify-worker subprocesses under --backend native; a no-op under ESBMC (the ESBMC loop is serial)
+  --backend <esbmc|native>  Verification backend; native requires --verify (see "Native backend: contracts and test")
+  --timeout <N>           Seconds per function (and per probe) under --backend native; ESBMC's own timeout otherwise (default: 300 (native))
 
 COMPLEXITY OPTIONS
   --cog-anchor <N>        Cognitive-complexity value mapped to sub-score 0.800 (SonarQube's default flag line). (default: 15)
@@ -1227,7 +1426,7 @@ OUTPUT (JSON on stdout)
   diagnostics : array of {error_code, message, severity, span: {file, offset, length}}
   message     : error detail (CompileFailed)
   function    : function name (VerifyFailed)
-  counterexample: ESBMC counterexample (VerifyFailed)
+  counterexample: verifier counterexample (VerifyFailed)
 
 EXIT CODES
   0  success (Verified or Unverified)
@@ -1259,15 +1458,16 @@ LANGUAGE SUMMARY
 
 TYPES     : i8  i16  i32  i64  i128  u8  u16  u32  u64  u128  f32  f64  bool  ()  !  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>  BTreeMap<K, V>
 EFFECTS   : io  read  write  panic  unsafe
-BUILTINS  : pin_to_root: fn(value: String) -> String and fn<T>(value: Vec<T>) -> Vec<T> for flat scalar T []   drop: fn(value: L) -> () for a linear owner L []   print_str: fn(s: String) -> () [io]
-            print_i64: fn(v: i64) -> () [io]   print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_read_status: fn() -> i64 [read]   getenv: fn(name: String) -> String [read]   path_lookup: fn(name: String) -> String [read]   mktemp_dir: fn(prefix: String) -> String [io]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_remove_dir_all: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: u64, len: u64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: u64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   int_to_string: fn(v: i64) -> String []   uint_to_string: fn(v: u64) -> String []   i64_to_string: fn(v: i64) -> String (alias of int_to_string) []   int128_to_string: fn(v: i128) -> String []   uint128_to_string: fn(v: u128) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   hash_u64: fn(x: u64) -> u64 []   hash_str: fn(s: String) -> u64 []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_start_capped: fn(cmd: String, args: Vec<String>, mem_kb: i64) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_poll_wait: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]   process_start_piped: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_write_stdin: fn(pid: i64, data: String) -> i64 [io]   process_close_stdin: fn(pid: i64) -> i64 [io]   process_read_line: fn(pid: i64, timeout_ms: i64) -> String [io]   process_read_status: fn(pid: i64) -> i64 [io]
+BUILTINS  : pin_to_root: fn(value: String) -> String and fn<T>(value: Vec<T>) -> Vec<T> for one-slot scalar T []   drop: fn(value: L) -> () for a linear owner L []   print_str: fn(s: String) -> () [io]
+            print_i64: fn(v: i64) -> () [io]   print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   try_eprintln_str: fn(s: String) -> i64 [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_read_status: fn() -> i64 [read]   getenv: fn(name: String) -> String [read]   path_lookup: fn(name: String) -> String [read]   mktemp_dir: fn(prefix: String) -> String [io]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_remove_dir_all: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: u64, len: u64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: u64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   int_to_string: fn(v: i64) -> String []   uint_to_string: fn(v: u64) -> String []   i64_to_string: fn(v: i64) -> String (alias of int_to_string) []   int128_to_string: fn(v: i128) -> String []   uint128_to_string: fn(v: u128) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   hash_u64: fn(x: u64) -> u64 []   hash_str: fn(s: String) -> u64 []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_start_capped: fn(cmd: String, args: Vec<String>, mem_kb: i64) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_poll_wait: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]   process_start_piped: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_write_stdin: fn(pid: i64, data: String) -> i64 [io]   process_close_stdin: fn(pid: i64) -> i64 [io]   process_read_line: fn(pid: i64, timeout_ms: i64) -> String [io]   process_read_status: fn(pid: i64) -> i64 [io]
 METHODS   : Vec: Vec::new/Vec::from_raw_parts_copy/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/String::new/String::from_raw_parts_copy/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64
             HashMap: HashMap::new/insert/get/contains_key/remove/len   BTreeMap: BTreeMap::new/insert/get/contains/len   Option: unwrap
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! ?
 
-VERIFICATION DEFAULTS (--max-k-step)
-  Strategy        : incremental-bmc (incremental BMC up to --max-k-step; forward-condition completeness, no k-induction step)
-  Incremental BMC : 50 max iterations (--max-k-step)"##
+VERIFICATION DEFAULTS
+  ESBMC backend (default) : incremental-bmc (incremental BMC up to --max-k-step; forward-condition completeness, no k-induction step)
+  Incremental BMC         : 50 max iterations (--max-k-step)
+  Native backend          : bounded unwinding with invariant induction and k-induction (--backend native; no bound flag, --timeout is the only knob)"##
         .to_string()
 }
 // GENERATE:SKILL_HUMAN:END
@@ -1278,7 +1478,7 @@ fn skill_entrypoint_markdown() -> String {
 name: vow
 description: >-
   Write, compile, debug, and verify Vow programs (.vow files) with contracts,
-  CEGIS, ESBMC counterexamples, diagnostics, and vow build / vow verify.
+  CEGIS, verifier counterexamples, diagnostics, and vow build / vow verify.
 when_to_use: >-
   Use when the user edits or creates .vow files, says "write a Vow program",
   "fix this counterexample", "add contracts", "why did verification fail",
@@ -1291,6 +1491,15 @@ argument-hint: "[file.vow]"
 Use this skill when writing, compiling, debugging, or verifying Vow programs.
 Keep the workflow tight: run the compiler, read the structured JSON, fix the
 program or contract, and repeat until the result is `Verified`.
+
+## Do nots
+
+- Do not weaken, cap, or distort a contract to make verification pass; fix the code or report that the proof is out of reach.
+- Do not add verifier-motivated bounds (`n <= 10`, length or capacity caps) to `requires`; keep only real domain constraints and use checked operators (`+!`) for overflow.
+- Do not use `--no-verify` to get past a real verification failure; it only skips the proof (status `Unverified`).
+- Do not report a program as verified unless `status` is `Verified`; `Unverified` means the proof never ran and `Skipped` means a function could not be modelled.
+- Do not invent CLI flags, JSON fields, syntax, or builtins; check `--help` and the reference files first.
+- Do not scrape terminal prose; parse the JSON result that `build` and `verify` print to stdout (`status`, `diagnostics`, `counterexamples`), not the human-readable text on stderr.
 
 ## Installed toolchain (live)
 
@@ -1324,6 +1533,8 @@ fn main() -> i32 [io] {
 - Standard library (math, heap, stack, geometry, bignum, gc): [reference/stdlib.md](reference/stdlib.md)
 - Worked examples: [examples/examples.md](examples/examples.md)
 - JSON schemas: [schemas/](schemas/)
+
+Outside Claude Code (raw API or custom agent harness that cannot load these files): run `build/vowc skill print --bundle` for one self-contained document with all of the above inlined.
 "#
     .to_string()
 }
@@ -1333,7 +1544,7 @@ fn skill_bundle_markdown() -> String {
 name: vow
 description: >-
   Write, compile, debug, and verify Vow programs (.vow files) with contracts,
-  CEGIS, ESBMC counterexamples, diagnostics, and vow build / vow verify.
+  CEGIS, verifier counterexamples, diagnostics, and vow build / vow verify.
 when_to_use: >-
   Use when the user edits or creates .vow files, says "write a Vow program",
   "fix this counterexample", "add contracts", "why did verification fail",
@@ -1343,7 +1554,7 @@ argument-hint: "[file.vow]"
 
 # Vow Language Reference
 
-Vow is a systems programming language with built-in contracts (preconditions, postconditions, loop invariants) that are statically verified by ESBMC bounded model checking. Programs compile to native executables via Cranelift. The compiler emits structured JSON for machine consumption.
+Vow is a systems programming language with built-in contracts (preconditions, postconditions, loop invariants) that are statically verified by a model-checking backend: ESBMC bounded model checking today (the default), or the native verifier with `--backend native`. Programs compile to native executables via Cranelift. The compiler emits structured JSON for machine consumption.
 
 In all documentation below, `vow` refers to the `build/vowc` binary.
 
@@ -1360,7 +1571,7 @@ The standard workflow for writing verified Vow programs:
 3. **Parse JSON** — Read the JSON object from stdout
 4. **Handle status:**
    - `Verified` → Done. Binary is at `executable`.
-   - `Unverified` → Compiled but ESBMC not available. Binary is at `executable`.
+   - `Unverified` → Compiled but verification was not run (`--no-verify` or `--dump-ir`). Binary is at `executable`.
    - `CompileFailed` → Read `diagnostics[]` for errors. Fix and retry.
    - `VerifyFailed` → Read `counterexamples[]`. Fix contracts or implementation. Retry.
 5. **Iterate** — Repeat steps 2–4 until `Verified`.
@@ -1550,8 +1761,8 @@ pub fn api_function(x: i64) -> i64 {
 | `u32`  | 32-bit unsigned integer  |
 | `u64`  | 64-bit unsigned integer  |
 | `u128` | 128-bit unsigned integer (verifier may time out; see below) |
-| `f32`  | 32-bit float (limited support — avoid in contracts) |
-| `f64`  | 64-bit float (limited support — avoid in contracts) |
+| `f32`  | 32-bit float (limited support — avoid in contracts; `--backend native` does not model float operations yet, so a contracted function using them is `Skipped`) |
+| `f64`  | 64-bit float (limited support — avoid in contracts; `--backend native` does not model float operations yet, so a contracted function using them is `Skipped`) |
 | `bool` | Boolean                  |
 | `()`   | Unit type; its only value is also written `()` (not allowed as a parameter type) |
 | `!`    | Never type (diverges)    |
@@ -1571,21 +1782,21 @@ index expression has exactly the type `u64` (see [Indexing](#indexing)), so
 **128-bit implementation status:** `i128`/`u128` are executable end to end:
 full-range literals, arithmetic, casts, narrowing, and `parse_i128`/`parse_u128`
 compile natively. A 128-bit value may be an `Option`, `Result`, or `enum`
-payload; it may not yet be a struct field or a `Vec` element (see the layout
-below). ESBMC modelling of 128-bit aggregates and constants is not available, so
-verification reports `Skipped` rather than an unsound result. Never weaken
+payload, a struct field, or a `Vec` element (see the layout below). The ESBMC backend does not model 128-bit aggregates and constants, so
+it reports `Skipped` rather than an unsound result; the native backend
+(`--backend native`) models them exactly. Never weaken
 contracts to fit the verifier.
 
 **Aggregate layout:** every struct field and enum payload occupies one 8-byte
 slot regardless of declared type (narrow ints are padded). An `i128`/`u128`
-**enum payload** occupies two consecutive 8-byte slots, low limb first
-([ADR 0001](../adr/0001-numeric-tower-narrow-ints.md) decision 9), so every
-payload after it moves up by one slot. The two-slot layout is not implemented
-for struct fields or `Vec` elements: the compiler refuses reads and writes of
-128-bit struct fields and `Vec<i128>`/`Vec<u128>` elements instead of storing
-them in an undersized slot. There is no packing or natural-alignment layout
-today; FFI structs that need a specific C layout must shim through `Vec<u8>` or
-extern wrappers.
+struct field or enum payload occupies two consecutive 8-byte slots, low limb
+first ([ADR 0001](../adr/0001-numeric-tower-narrow-ints.md) decision 9), so
+every field or payload after it moves up by one slot and the allocation grows
+with it. A struct has no tag, so its first field is slot 0; an enum's tag takes
+slot 0 and payloads start at slot 1. A `Vec<i128>`/`Vec<u128>` element is 16
+bytes (two slots, low limb first); `len` and `cap` still count elements. There
+is no packing or natural-alignment layout today; FFI structs that need a
+specific C layout must shim through `Vec<u8>` or extern wrappers.
 
 ### Built-in Parameterized Types
 
@@ -1783,31 +1994,32 @@ remainder by zero aborts at every width, as does signed `/` and `/!` on
 not abort.
 
 128-bit values carry both limbs through locals, parameters, returns,
-temporaries, and the payloads of `enum`, `Option`, and `Result` values (stored
-in two consecutive slots, see the aggregate layout above). The payload width
-comes from the checker, so it holds wherever the value came from: built in the
-same function, received as a parameter, handed back by a call, or read out of a
-`Vec` element or a struct field holding the enum; through a `match` arm, `?`, or
-`.unwrap()`; and at every payload position.
+temporaries, struct fields, `Vec` elements, and the payloads of `enum`,
+`Option`, and `Result` values (stored in two consecutive slots, see the
+aggregate layout above). The width comes from the checker, so it holds wherever
+the value came from: built in the same function, received as a parameter,
+handed back by a call, or read out of a `Vec` element or a struct field; through
+a `match` arm, `?`, or `.unwrap()`; at every payload position; and at every
+`Vec` index read or write, `push`, and `for` loop. `pin_to_root` and
+`Vec::from_raw_parts_copy` copy one 8-byte slot per element, so they reject
+`Vec<i128>`/`Vec<u128>` with a `TypeMismatch`; build such a `Vec` with `push`.
 
-Two aggregate positions are not supported yet: `Vec<i128>`/`Vec<u128>`
-elements (the element helpers are i64-only) and `i128`/`u128` struct fields.
-Reading or writing either fails codegen with `CodegenUnsupported` and a named
-limitation rather than a raw backend verifier dump, before an 8-byte slot can
-truncate the value or a 16-byte store can overwrite its neighbour. The refusal
-is at the access, not the declaration: a struct may declare a 128-bit member
-and still compile as long as nothing touches it. These are backend gaps, not
-language rules; the type checker accepts both at 128-bit width. Verification
-is a separate matter: 128-bit literals (in a body or in
+Verification is a separate matter. 128-bit literals (in a body or in
 `requires`/`ensures`/`invariant`) are verifiable, and are modelled exactly under
-the bit-vector encoding, `i128::MIN`, `i128::MAX` and `u128::MAX` included; a
-proof obtained by the `--encoding ir` timeout fallback is reported as `ProvenIr`
-and is weaker. A contracted function that reads or writes a 128-bit aggregate field or enum payload is
-likewise reported `Skipped`, with `FieldGet at 128-bit width` or `FieldSet at
-128-bit width`, rather than being modelled through the verifier's 8-byte heap
-slot; so is a call to `parse_i128` or `parse_u128`, whose `Option` result the
-verifier's 64-bit `Option` model cannot represent. Contracts over 128-bit
-parameters alone do verify.
+the bit-vector encoding (both backends), `i128::MIN`, `i128::MAX` and `u128::MAX` included; under
+ESBMC a proof obtained by the `--encoding ir` timeout fallback is weaker (it is
+reported as plain `proven`). Under the default ESBMC backend every 128-bit aggregate access
+is `Skipped` rather than modelled: a contracted function that reads or writes a
+128-bit aggregate field or enum payload is reported `Skipped`, with `FieldGet at
+128-bit width` or `FieldSet at 128-bit width`, rather than being modelled through
+the verifier's 8-byte heap slot. `--backend native` models a 128-bit struct
+field or enum payload exactly, as one 128-bit term (it occupies two slots, and a
+narrow field declared after it lives in the shifted slot). A function that
+reads, writes, or pushes a `Vec<i128>` or `Vec<u128>` element is `Skipped`
+under both backends (an unsupported `Call extern` opcode under ESBMC,
+`unmodeled-builtin` under native); so is a call to `parse_i128` or
+`parse_u128`, whose `Option` result the verifier's 64-bit `Option` model cannot
+represent. Contracts over 128-bit parameters alone do verify.
 
 Runtime violation values are *not* one of those gaps: a scalar `i128`/`u128`
 binding captured by a `vow` block reports its full value in the runtime
@@ -1881,7 +2093,7 @@ the count's type.
 `>= bit-width(LHS)` is a compile-time error (`ShiftCountOutOfRange`), at every
 width: `(x: u8) << 8` and `(x: i64) << 64` do not compile. Dynamic shift counts
 (`x << n` where `n` is not a const expression) get a check on the operation
-that ESBMC proves: the count must satisfy `0 <= count < width(LHS)` at the point
+that the verifier proves: the count must satisfy `0 <= count < width(LHS)` at the point
 of the shift, so a negative signed count is rejected as well. At runtime only
 8-bit shifts trap (`i8`/`u8` with count `>= 8` aborts with `ArithmeticOverflow`);
 wider shifts mask the count to the operand width, like the hardware shift.
@@ -1906,10 +2118,12 @@ From loosest to tightest, Vow follows the usual C/Rust precedence for logical an
 
 `||`, `&&`, comparisons (`== != < <= > >=`), `|`, `^`, `&`, `<< >>`, `+ -`, `* / %`
 
-Unary `-` and `!` bind tighter than every binary operator. The postfix forms
-(`.field`, `.method()`, `[index]`, `(args)`, `?`, and `as Type`) bind tighter
-still, so `-x as u64` is `-(x as u64)` and `a.len() as i64 + 1` is
-`(a.len() as i64) + 1`.
+Unary `-` and `!` bind tighter than every binary operator and tighter than
+`as Type`, matching Rust: `-x as u64` is `(-x) as u64`; write `-(x as i64)` to
+negate a cast result. The other postfix forms (`.field`, `.method()`,
+`[index]`, `(args)`, `?`) bind tighter than unary, so `-v.len()` is
+`-(v.len())`. `as Type` binds tighter than every binary operator, so
+`a.len() as i64 + 1` is `(a.len() as i64) + 1`.
 
 `&` is only the infix bitwise AND operator (`lhs & rhs`). There is no prefix
 `&expr`: Vow has no borrow expressions, so `&x`, `&mut x`, `&&x` (and `x & &y`)
@@ -2010,8 +2224,8 @@ match i64_to_u8_try(big) {
 }
 ```
 
-These intrinsics are emitted by the compiler so ESBMC sees their semantics
-directly in the verification C model.
+These intrinsics are emitted by the compiler so the verifier sees their semantics
+directly in its model (the C model under ESBMC).
 
 For the `u8` target, the available narrowing source types are `i16`, `i32`,
 `i64`, `i128`, `u16`, `u32`, `u64`, and `u128`. Each source provides all three
@@ -2033,7 +2247,9 @@ The remaining executable sub-64-bit targets expose these complete families:
 | `u32`  | `i64`, `u64`, `i128`, `u128` |
 
 Every listed source/target pair provides `_try`, `_wrap`, and `_sat`. Same-width
-signedness changes use `as`; they are bit reinterpretations, not narrowing.
+signedness changes use `as`, which reinterprets the bits and is not narrowing;
+`i128`/`u128` additionally have the explicit same-width intrinsics described
+below.
 
 `i128` and `u128` appear in these tables only as sources: they are the widest
 integer types, so no other width narrows into them. The one conversion between
@@ -2172,9 +2388,12 @@ A `print_*` call inside a contracted function gives that function an effect,
 and the verifier model is restricted to pure functions, so the contract is
 reported as `VerificationSkipped` rather than checked.
 
-This idiom does not by itself make a length-bounded loop provable. ESBMC's
-unwind bound sits below the modelled collection capacity, so this form and the
-signed `while i >= 0` form both return `unknown`. What the idiom buys is a
+This idiom does not by itself make a length-bounded loop provable. A loop
+without an `invariant` that runs longer than the verifier's unwind bound
+(ESBMC's `--max-k-step`, or the native backend's internal bound of 64) returns
+`unknown` unless the native backend closes it by induction (`docs/spec/cli.md` →
+"Native backend", "Loops"), for this form and the signed `while i >= 0` form
+alike. What the idiom buys is a
 *writable* invariant rather than a stronger proof: `i <= n` is expressible on
 an unsigned index, whereas the signed form's companion clause `i >= -1` is not
 — a negative literal does not fit `u64` at all.
@@ -2197,22 +2416,25 @@ first index read runs far out of bounds.
 
 Plain wrapping `-` is the correct decrement in the canonical form. The guard
 `i > 0` has already discharged the underflow obligation, so no check is
-needed, and plain `-` is exactly what ESBMC's bitvector encoding models — a
+needed, and plain `-` is exactly what the verifier's bit-vector encoding models — a
 *wrong* guard therefore stays observable through `invariant: i <= n`. Reserve
 `-!` for decrements whose non-negativity the guard does not establish.
 
-Note one asymmetry while reading that advice. `-!` does trap at runtime under
-`--mode debug`, reporting `{"error":"ArithmeticOverflow"}`, but the verifier
-does not model checked arithmetic at all: `n -! 1` and `n - 1` emit the same C
-and yield byte-identical counterexamples. Do not reach for `-!` expecting it
-to make an underflow statically visible.
+Note one asymmetry while reading that advice. `-!` traps at runtime under
+`--mode debug`, reporting `{"error":"ArithmeticOverflow"}`, and the verifier
+models that abort: an aborting execution never returns, so it cannot witness a
+violated `ensures`, and a reachable abort adds an `ArithOverflowReachable`
+warning instead of failing the build. `n -! 1` and `n - 1` are therefore
+different obligations. Do not reach for `-!` expecting it to turn an underflow
+into a failed proof.
 
 #### Why there is no reverse-range syntax
 
 Vow has no numeric range form, and adding one is rejected rather than pending:
 
 - `loop` is not an escape hatch. `break value` is restricted to `loop`, and
-  ESBMC cannot verify an unbounded `loop` at all.
+  an unbounded `loop` is verifiable only through its `invariant` and `break`
+  structure (the native backend models `loop`; ESBMC does not).
 - A reverse for-each would cover very little. Most reverse scans need the
   *index*, not the element — they read a parallel array at `i`, or write a
   second collection at the same `i`.
@@ -2256,7 +2478,7 @@ let idx: i64 = loop {
 };
 ```
 
-ESBMC cannot verify unbounded `loop` constructs — use `while` with invariants for verifiable loops.
+Under the ESBMC backend an unbounded `loop` cannot be verified; the native backend models `loop` with `break` and `continue`. Use `while` with invariants for loops that verify under both.
 
 ### Break
 
@@ -2345,8 +2567,27 @@ Struct literal names must be PascalCase:
 let p: Point = Point { x: 1, y: 2 };
 ```
 
-Because of that, an identifier that does not start with an upper-case letter is
-never a struct literal: in `while c { }` and `if c { }` the `{` opens the body.
+A struct literal must initialise every declared field. An omitted field is a
+`TypeMismatch` (``struct `Point` literal is missing field `y` ``, one per missing
+field in declaration order, at the literal's span), never zero-initialised.
+
+An identifier that does not start with an upper-case letter is never a struct
+literal: in `while c { }` and `if c { }` the `{` opens the body.
+
+In the head of `if`, `while`, `for … in` and `match`, a `Name {` or
+`Path::Variant {` is never a struct literal or brace-form enum constructor; the
+`{` always opens the body. This is what lets `if DEBUG { }` and
+`if c == Color::Red { }` parse. To use a struct literal there, parenthesise it
+or bind it to a `let` first:
+
+```vow
+if (Point { x: 1, y: 2 }).x == 1 { }
+```
+
+Delimiters re-enable literals inside a head: `(…)`, call and method-call
+arguments, `[…]`, blocks, `match` arms and `vow { … }` blocks. The canonical
+printer parenthesises a head that would otherwise expose a struct literal, so
+`parse → print → parse` stays idempotent.
 
 ### Field Access
 
@@ -2411,10 +2652,13 @@ let some: Option<i64> = Option::Some(42);
 `Result<T, E>` has variants `Ok(T)` and `Err(E)`.
 For scalar payloads supported by native aggregate codegen, `match` and
 `.unwrap()` extract the declared type, including `f32` and `f64`; `?`
-currently propagates `Option` payloads only. The ESBMC C model still
-uses integer slots for enum payloads and does not preserve float bits on a
-store and load. Verification of contracts involving float enum payloads is
-therefore unsupported until that model represents float payloads faithfully.
+currently propagates `Option` payloads only. The ESBMC backend's C model moves `f32`
+and `f64` enum payloads and struct fields through its integer slots by
+IEEE-754 bit pattern (an `f64` as its raw 64 bits, an `f32` as its 32 bits
+zero-extended), as native codegen does, so contracts over float payloads
+verify under the default bit-vector encoding; `--encoding ir` does not
+model the reinterpretation and can report a spurious counterexample.
+Float equality follows IEEE-754: a NaN payload does not equal itself.
 
 ## Pattern Matching
 
@@ -2472,7 +2716,7 @@ m.contains_key(k)
 | Method         | Signature                        |
 |----------------|----------------------------------|
 | `Vec::new()`   | `() -> Vec<T>`                   |
-| `Vec::from_raw_parts_copy(ptr, len)` | `(i64, u64) -> Vec<T>` for flat scalar `T` |
+| `Vec::from_raw_parts_copy(ptr, len)` | `(i64, u64) -> Vec<T>` for one-slot scalar `T` (not `i128`/`u128`) |
 | `.push(val)`   | `(T) -> ()`                      |
 | `.pop()`       | `() -> ()`                       |
 | `.len()`       | `() -> u64`                      |
@@ -2518,7 +2762,7 @@ m.contains_key(k)
 | `.remove(k)`        | `(K) -> ()`                 |
 | `.len()`            | `() -> u64`                 |
 
-**Key and value types.** The runtime stores each key and each value in one 64-bit slot and compares keys by value. A `HashMap` key must therefore be `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, or `bool`; every other key type is an `UnsupportedFeature` error in both compilers. `String`, `Vec`, struct, enum, `Option`, and tuple keys are heap-backed handles that would compare by pointer, so a lookup with an equal-but-distinct `String` would silently miss (and a mutable `String` mutated after insertion would corrupt the map). `i128`/`u128` keys would be truncated, and `f32`/`f64` have no total equality. Hash or intern such keys to a `u64` at the call site (`hash_str` / `hash_u64`, see [Hashing](#hashing)) and keep a side table for the originals. A `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64` is likewise an `UnsupportedFeature` error: map values occupy a single 64-bit integer slot, so a 128-bit value would lose its high word and a float has no slot encoding. A `HashMap` value that is or transitively contains a `linear struct` is an `UnsupportedFeature` error for the same reason `BTreeMap` rejects it (`BTreeMapValueMustBeNonLinear`): the map copies values bitwise and `get` would hand out a second copy of the linear obligation. Narrow integer values (`i8` … `u32`) are stored widened and read back at their declared width. The check applies wherever the map type is written (annotations, parameters, returns, fields, aliases, constants), including nested inside `Vec`, `Option`, tuples, and other maps. A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: no aggregate can hold a 128-bit field yet (epic #526), so codegen rejects it with `CodegenUnsupported` wherever it appears.
+**Key and value types.** The runtime stores each key and each value in one 64-bit slot and compares keys by value. A `HashMap` key must therefore be `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, or `bool`; every other key type is an `UnsupportedFeature` error in both compilers. `String`, `Vec`, struct, enum, `Option`, and tuple keys are heap-backed handles that would compare by pointer, so a lookup with an equal-but-distinct `String` would silently miss (and a mutable `String` mutated after insertion would corrupt the map). `i128`/`u128` keys would be truncated, and `f32`/`f64` have no total equality. Hash or intern such keys to a `u64` at the call site (`hash_str` / `hash_u64`, see [Hashing](#hashing)) and keep a side table for the originals. A `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64` is likewise an `UnsupportedFeature` error: map values occupy a single 64-bit integer slot, so a 128-bit value would lose its high word and a float has no slot encoding. A `HashMap` value that is or transitively contains a `linear struct` is an `UnsupportedFeature` error for the same reason `BTreeMap` rejects it (`BTreeMapValueMustBeNonLinear`): the map copies values bitwise and `get` would hand out a second copy of the linear obligation. Narrow integer values (`i8` … `u32`) are stored widened and read back at their declared width. The check applies wherever the map type is written (annotations, parameters, returns, fields, aliases, constants), including nested inside `Vec`, `Option`, tuples, and other maps. A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: aggregates hold 128-bit fields in two slots, so only a bare 128-bit map value is rejected.
 
 **Set idiom.** The unit type `()` is a valid map value, so `HashMap<K, ()>` and `BTreeMap<K, ()>` are sets: `s.insert(k, ());` adds a member, `s.contains_key(k)` (`s.contains(k)` for `BTreeMap`) tests membership, `s.remove(k)` deletes it, and `s.get(k)` returns `Option<()>`. The value `()` has type `()` (it checks against a `()` annotation or return type), and the runtime stores it in the usual 64-bit slot as `0`. A function cannot take a `()` parameter (`UnsupportedFeature`: the argument carries no information and has no ABI slot), so pass the set itself or a key instead.
 
@@ -2710,9 +2954,9 @@ vow {
 
 | Function         | Signature                                  | Effects    |
 |------------------|--------------------------------------------|------------|
-| `pin_to_root`    | `fn(value: String) -> String` and `fn<T>(value: Vec<T>) -> Vec<T>` for flat scalar `T` | `[]` |
+| `pin_to_root`    | `fn(value: String) -> String` and `fn<T>(value: Vec<T>) -> Vec<T>` for one-slot scalar `T` | `[]` |
 
-`pin_to_root` is a compiler intrinsic, not a user-defined generic. Each call site is monomorphised from the argument type. It always deep-copies the supported heap value into root storage; it does not inspect descriptor tags and does not claim idempotency. The current supported forms are `String` and `Vec<T>` where `T` is a flat scalar slot type (`i*`, `u*`, `f32`, `f64`, `bool`). Pointer-containing payloads, user structs, enums, and maps require hand-written deep-copy wrappers at the FFI boundary.
+`pin_to_root` is a compiler intrinsic, not a user-defined generic. Each call site is monomorphised from the argument type. It always deep-copies the supported heap value into root storage; it does not inspect descriptor tags and does not claim idempotency. The current supported forms are `String` and `Vec<T>` where `T` is a one-slot scalar type (`i8`..`i64`, `u8`..`u64`, `f32`, `f64`, `bool`; not `i128`/`u128`, whose elements take two slots). Pointer-containing payloads, user structs, enums, and maps require hand-written deep-copy wrappers at the FFI boundary.
 
 #### Linear Intrinsics
 
@@ -2722,7 +2966,7 @@ vow {
 
 `drop` is a compiler intrinsic, not a user-defined generic. `L` must be a linear owner: a `linear struct`, or an owned enum wrapper (`Option`, `Result`, or a user enum) that contains one. Any other argument type, or an argument count other than one, is a `TypeMismatch`. `drop` consumes the value exactly once (a second use is `LinearTypeViolation`) and discharges its obligation. It has no runtime effect beyond that: it runs no destructor, frees nothing, and lowers to no instruction other than the consume marker the type and region passes already track. It is verifier-neutral: the consume marker is a no-op in the C model, so a function that drops a linear value is verified exactly as if the call were absent. A user-defined function named `drop` takes precedence over the intrinsic.
 
-`String::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` bytes from a raw C pointer into a fresh `String`. `Vec::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` flat scalar slots into a fresh `Vec<T>`. The pointer is `i64` and the length is `u64`, so a signed length must be converted explicitly (`n as u64`); the code generator converts pointer and length values to the platform pointer-sized ABI type at the FFI boundary. Both helpers have a `FreshInCaller` return summary.
+`String::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` bytes from a raw C pointer into a fresh `String`. `Vec::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` one-slot scalars into a fresh `Vec<T>` (`T` is not `i128`/`u128`). The pointer is `i64` and the length is `u64`, so a signed length must be converted explicitly (`n as u64`); the code generator converts pointer and length values to the platform pointer-sized ABI type at the FFI boundary. Both helpers have a `FreshInCaller` return summary.
 
 For pointer-containing C payloads, a wrapper must be written per type: call the extern, recursively copy every Vow-owned heap subobject into the target region, free every C-owned pointer according to the extern's ownership contract, then return the Vow-placed value. A bytewise copy of a pointer-containing payload is unsound because it preserves stale pointers into C-owned storage.
 
@@ -2734,6 +2978,9 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 | `print_i64`      | `fn(v: i64) -> ()`                         | `[io]`     |
 | `print_u64`      | `fn(v: u64) -> ()`                         | `[io]`     |
 | `eprintln_str`   | `fn(s: String) -> ()`                      | `[io]`     |
+| `try_eprintln_str` | `fn(s: String) -> i64`                   | `[io]`     |
+
+`try_eprintln_str` writes `s` and a newline to stderr and reports the outcome instead of ignoring it: `0` when written, `1` when stderr is a closed pipe (`BrokenPipe`), `2` for any other write failure. A closed stderr descriptor (`EBADF`) counts as `0`, matching Rust's standard library. SIGPIPE is blocked for the duration of the call, so a closed pipe returns `1` instead of terminating the process. `eprintln_str` ignores write failures entirely.
 
 #### Debug
 
@@ -3020,19 +3267,20 @@ The bare `vow <source.vow>` form is exactly `vow build`: it verifies by default,
 |-------------------|-------------|--------------------------------------------|
 | `-o, --output`    | `build/<stem>` | Output executable path                  |
 | `--mode <debug\|release\|profile\|sanitize>` | `release` | Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + use-after-region-close detection for Vecs |
-| `--no-verify`     | (off)       | Skip ESBMC static verification            |
+| `--no-verify`     | (off)       | Skip static verification                  |
 | `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |
 | `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
 | `--no-cache`    | (off)       | Disable verification result caching, and (for `--no-verify` builds) the compile-object cache. See "Compile-object cache behavior" below |
-| `--max-k-step <N>` | `50`     | ESBMC incremental BMC max iterations          |
-| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
-| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
-| `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
-| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
+| `--max-k-step <N>` | `50`     | ESBMC backend only; a usage error under `--backend native`. ESBMC incremental BMC max iterations |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC SMT solver; auto selects per-function via heuristic |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
+| `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | Per-function verification timeout in seconds; the only resource knob of the native backend, where the default is a fixed `300`. ESBMC backend: under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is an immediate watchdog kill under ESBMC and a zero budget (no solver is spawned; statically decided claims still resolve) under `--backend native` |
+| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent verification jobs (ESBMC processes, or `verify-worker` subprocesses under `--backend native`) |
+| `--backend <esbmc\|native>` | `esbmc` | Verification backend. `native` is accepted only by `vowc verify`, `contracts --verify` and `test --verify`; on `build` and the bare form it is a usage error (exit 1) that points at `vowc verify`, and `esbmc` is accepted silently |
 | `--replay-cex`    | (off)       | Differential test the verifier model against runtime semantics (same as `vow verify --replay-cex`; see below) |
-| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this compilation to `<path>` (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from `--mode profile`, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. |
+| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this compilation to `<path>` (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link and, under the ESBMC backend, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from `--mode profile`, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. |
 
-**Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
+**Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever static verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
 
 ### `vow verify`
 
@@ -3046,31 +3294,49 @@ vow verify [OPTIONS] <source.vow>
 
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
-| `--no-cache`      | (off)       | Disable verification result caching        |
-| `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations       |
-| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
-| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
-| `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
+| `--no-cache`      | (off)       | Disable verification result caching; under `--backend native` it disables the native result cache of `verify` (see "Result cache" below) |
+| `--max-k-step <N>` | `50`       | ESBMC backend only; a usage error under `--backend native`. ESBMC incremental BMC max iterations |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC SMT solver; auto selects per-function via heuristic |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
+| `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | Per-function verification timeout in seconds; the only resource knob of the native backend, where the default is a fixed `300`. ESBMC backend: under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is an immediate watchdog kill under ESBMC and a zero budget (no solver is spawned; statically decided claims still resolve) under `--backend native` |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent verification jobs (ESBMC processes, or `verify-worker` subprocesses under `--backend native`) |
-| `--backend <esbmc\|native>` | `esbmc` | Verification backend. `native` is the symbolic checker with Bitwuzla, run in per-function worker subprocesses (epic #1398); self-hosted `vowc` only, see "Native backend" below. Accepted by `verify` only: `build`, `contracts`, `test` and the bare `vowc <file>` form (identical to `build`) reject `--backend native` with a usage error (exit 1) instead of silently running ESBMC. Any value other than `esbmc` or `native` is a usage error |
-| `--replay-cex`    | (off)       | Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a `--mode debug` harness that calls the failing function with the counterexample's concrete inputs and check that the runtime `VowViolation` agrees (same `vow_id` and blame). Adds a `replay` field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by `vow build`. |
-| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this verification run to `<path>` (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. |
+| `--backend <esbmc\|native>` | `esbmc` | Verification backend. `native` is the symbolic checker with Bitwuzla, run in per-function worker subprocesses (epic #1398); self-hosted `vowc` only, see "Native backend" below. Accepted by `verify`, `contracts --verify` and `test --verify`; `contracts` and `test` without `--verify`, `build` and the bare `vowc <file>` form (identical to `build`) reject `--backend native` with a usage error (exit 1) instead of silently running ESBMC or reporting `not_verified` as if the native backend had run. Any value other than `esbmc` or `native` is a usage error |
+| `--replay-cex`    | (off)       | Differential test of the verifier model against runtime semantics. After the verifier reports a counterexample, build a `--mode debug` harness that calls the failing function with the counterexample's concrete inputs and check that the runtime `VowViolation` agrees (same `vow_id` and blame). Adds a `replay` field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by `vow build`. |
+| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this verification run to `<path>` (load directly at ui.perfetto.dev). Captures frontend phase spans and, under the ESBMC backend, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process; under `--backend native` it records the frontend phase spans (`module-load`, `parse`, `typecheck`, `lower`, ...) and one `verification` span (no per-claim worker or solver spans, no per-worker RSS yet). Accepted only by `build` and `verify`. Pure side artifact. |
 
-#### Native backend (`vowc verify --backend native`)
+#### Native backend (`vowc verify --backend native`; also `contracts --verify` and `test --verify`, see "Native backend: `contracts` and `test`" below)
 
 Opt-in; the default stays `esbmc`. Implemented only by the self-hosted `vowc`: the Rust `vow` does not accept `--backend` until verification is delegated to a pinned seed `vowc`. Scope (issues #1408, #1411):
 
-- **Subset.** A function is verified when it is pure, its control flow is acyclic, and it uses only these operations on integers of every width (`i8`..`i128`, `u8`..`u128`) and `bool`: constants, integer parameters, wrapping `+ - * / %`, the checked `+! -! *! /! %!`, `& | ^`, `<<` and `>>` (the shifted type's signedness picks arithmetic or logical `>>`), integer `as` casts (widening, same-width, and the truncating casts the lowerer emits for coerced literals), comparisons (`==`/`!=` also on `bool`), `!`, `if`/`else` (including nested, early `return`, and the `&&`/`||` that lower to branches) with the variables they update, and `requires`/`ensures` clauses. Integers are fixed-width bit-vectors, so wrapping, signedness and 128-bit values are exact. Everything else (loops, calls (so the narrowing intrinsics such as `i64_to_u8_wrap`), effects, `bool` parameters, floats, collections, enum and struct values and so the `match` over them, `invariant`) is **`Skipped`**, never `Verified`. The diagnostic is a `VerificationSkipped` warning whose message is ``skipped verification of `f`: <code>: <detail>`` with a code from ADR-1430 (`function-has-effects`, `ir-non-dominating-read`, `float-rem-unsupported`, `unmodeled-builtin` with detail the runtime symbol, `wide-aggregate-field`, `unsupported-opcode` with detail `Op[type]`, or a control-flow shape such as `loop (back edge in the control-flow graph)`). A machine-readable `reason_code` field is not emitted yet.
-- **Proof obligations.** One query per `ensures` clause and per abort site, in walk order (blocks in reverse postorder); a `requires` is an assumption only for the obligations after it, and so is every earlier abort guard on the same path (an aborting run never reaches a later obligation). An obligation is asked only on the paths that reach it: its query asserts the block's path condition, and an assumption made inside a branch holds only under that branch's condition. A variable updated in a branch is merged with one `ite` over the incoming edges, and only when the arms supply different values; a branch whose condition is constant, or was already decided by an enclosing branch on the same value, leaves the other arm unexecuted. The query grows with the number of branches and updated variables, not with the number of paths. Two kinds of abort follow the language:
+- **Subset.** A function is verified when its only effect is `panic` (or it has none), its loops are reducible `while`/`loop` loops (see "Loops" below), and it uses only these operations on integers of every width (`i8`..`i128`, `u8`..`u128`) and `bool`: constants, integer parameters, wrapping `+ - * / %`, the checked `+! -! *! /! %!`, `& | ^`, `<<` and `>>` (the shifted type's signedness picks arithmetic or logical `>>`), integer `as` casts (widening, same-width, and the truncating casts the lowerer emits for coerced literals), comparisons (`==`/`!=` also on `bool`), `!`, `if`/`else` (including nested, early `return`, and the `&&`/`||` that lower to branches) with the variables they update, `while` and `loop` with `break`/`continue`, `requires`/`ensures` and loop `invariant` clauses, and struct, enum and `Option`/`Result` values (see "Aggregates" below). Integers are fixed-width bit-vectors, so wrapping, signedness and 128-bit values are exact. Everything else (calls of builtins (so the narrowing intrinsics such as `i64_to_u8_wrap`; calls of other functions are inlined, see "Calls" below), the `io`/`read`/`write`/`unsafe` effects, `bool` parameters, floats, `String` and maps) is **`Skipped`**, never `Verified`. A `Vec` of `bool` or integers up to 64 bits is modelled (see "Collections" below). The diagnostic is a `VerificationSkipped` warning whose message is ``skipped verification of `f`: <code>: <detail>`` with a code from the closed list in [`errors.md`](errors.md#verificationskipped) and a free-form detail (the runtime symbol, `Op[type]`, or a control-flow shape such as `irreducible loop (back edge to a block that does not dominate its source)`, `loop value used outside its loop`, `entry block is a loop header` or `loop nest deeper than 8`). A machine-readable `reason_code` field is not emitted yet.
+- **Proof obligations.** One query per `ensures` clause and per abort site, in walk order (blocks in reverse postorder); a `requires` is an assumption only for the obligations after it, and so is every earlier abort guard on the same path (an aborting run never reaches a later obligation). An obligation is asked only on the paths that reach it: its query asserts the block's path condition, and an assumption made inside a branch holds only under that branch's condition. A variable updated in a branch is merged with one `ite` over the incoming edges, and only when the arms supply different values; a branch whose condition is constant, or was already decided by an enclosing branch on the same value, leaves the other arm unexecuted. The query grows with the number of branches and updated variables, not with the number of paths. Three kinds of abort follow the language:
   - *Wrapping `/` and `%`* abort on a zero divisor, and signed `/` aborts on `MIN / -1` (`MIN % -1` is `0`). A shift aborts unless `0 <= count < width` of the shifted type, tested in the count's own type so a negative signed count is rejected. Each is its own obligation: a counterexample is `VerifyFailed`, with the unattributed vow id `4294967293`, blame `None` and violation text `division or remainder by zero`, `signed division overflow (MIN / -1)` or `shift amount exceeds the operand's bit width`.
+  - *`.unwrap()` on `None` or `Err`* is an obligation of its own: any path that reaches the abort is a counterexample with the unattributed vow id `4294967293`, blame `None` and violation text `unwrap() called on None`. A function whose `Option` parameter is unwrapped without a guard is `VerifyFailed`; one that unwraps a value it just built as `Some`, or sits on the `Some` arm of a `match`, is `Verified`. ESBMC skips every function with the `panic` effect, so it has no verdict to compare with.
   - *Checked `+! -! *! /! %!`* abort on overflow (and on a zero divisor, and signed `MIN /! -1`). The contract is judged on returning executions only, so a counterexample to such an abort is **not** a failure: the function is still `Verified` when its contracts hold, and each reachable abort adds an `ArithOverflowReachable` warning, as under ESBMC.
 
   A function with no obligation is `Verified` without a solver call. Counterexample values are decimal text of the declared type (unsigned types as magnitudes, 128-bit values in full).
-- **Extra proofs.** ESBMC reports 128-bit checked arithmetic and 128-bit constants as `Skipped`; native models them, so the same program can be `Verified` (with `ArithOverflowReachable` warnings) or `VerifyFailed` natively where ESBMC says `Skipped`.
+- **Loops.** Each loop is unrolled to an internal bound and every obligation is checked on the unrolled prefix, together with a mandatory *unwinding assertion*: no run takes more back edges than the bound. The verifier tries the bounds 2, 4, 8, 16, 32 and 64 in turn (the largest is at least ESBMC's default `--max-k-step`); the bound is not a flag and `--timeout` stays the only knob, shared by all rounds. An `ensures` or `invariant` violated by a run inside the bound is a real counterexample: `VerifyFailed` with the clause's vow id, blame and source span, found at the smallest bound that reaches it. Unwinding alone proves a function only when no run needs more iterations than the largest bound. When every loop of the function has an `invariant`, the loops are also tried inductively: each loop is cut at its header, the variables it changes are unconstrained, and the function is `Verified` when each invariant holds on entry, is preserved by one iteration from any state that satisfies it and the loop condition, and, with the negated condition, establishes the rest of the function (including `ensures`). So a loop that can run longer than the bound (a bound that is a parameter, `while true`, a literal bound above 64) is `Verified` given an inductive invariant. Induction never produces `VerifyFailed`: a wrong invariant fails because unwinding finds a run that violates it, and an invariant that is true but not inductive, or violated only beyond the largest bound, leaves the verdict `verify_status: "unknown"` with a `verify_message` that starts `unwinding assertion:`, never `Verified`. A proof by induction is partial correctness: it covers the runs that terminate, so a loop that never exits satisfies any `ensures`. When a function has a checked operator, the unrolled rounds still run, so its warnings are the aborts they reach within the unrolled prefix; an inductive proof does not add any. When a round of unwinding ends open (every claim holds inside the bound, but some run needs more iterations), the k-induction *step case* is tried at that round's bound `k`, with or without an invariant, for a function with exactly one loop whose header carries no pointer and which writes no aggregate or Vec: the loop is unrolled `k` times from an arbitrary state, the claims of the earlier copies (and the loop test, which they took) are assumed, and the function is `Verified` when every claim of the last copy and of the exit from it holds. It proves a property that is true for every trip count but not 1-inductive (an alternating divisor, a counter against a parameter bound) and, like invariant induction, is partial correctness. A failing step case proves nothing and is never `VerifyFailed`; the unwinding verdict stands. A function with several loops, or a loop that carries a pointer or writes an aggregate or a Vec, is decided by unwinding and invariant induction alone. An unrolled program above the verifier's size budget is `unknown` with the same prefix unless induction proves it. Loops that cannot be unrolled stay `Skipped` as `unsupported-opcode` (details above): irreducible control flow, a loop value read after its loop through a path the verifier cannot close, a loop in the entry block, nesting deeper than 8. Checked-arithmetic warnings are reported once per source site, not once per iteration.
+- **Extra proofs.** ESBMC reports 128-bit checked arithmetic and 128-bit struct fields or enum payloads as `Skipped`; native models them, so the same program can be `Verified` (with `ArithOverflowReachable` warnings) or `VerifyFailed` natively where ESBMC says `Skipped`.
+- **Aggregates.** A struct, enum, `Option` or `Result` value is scalarised: each field is its own `bool` or integer term (a 128-bit field is one 128-bit term), so construction, field access and `match` need no heap model. A parameter's fields are unconstrained, and so is its discriminant: no range is assumed for an enum tag. A field a construction did not write (the payload of `None`) is unconstrained too, never `0`. Two aggregates merged by an `if`/`else` or a `match` are merged field by field. A field write is path-conditional: a write in a branch keeps the old value on the paths that skip it, so a struct literal whose field value contains an `if`, a `match` or an `.unwrap()`, a field of a value built before a branch, and a field of the only struct or enum parameter are all modelled. A counterexample lists the fields of a struct, enum, `Option` or `Result` parameter in `values` under `<param>.<slot>` (the IR carries no field names): a struct's fields are `p.0`, `p.1`, ... in declaration order; an enum's discriminant is `p.0` (variant index in declaration order; `Option` is `None` = 0, `Some` = 1; `Result` is `Ok` = 0, `Err` = 1) and the chosen variant's payload starts at `p.1`; a 128-bit field takes two slots and so shifts the slots after it by one. Only slots the function reads are listed, and a claim lists those read before it in the walk (a slot read only after the claim, or never, is absent). A slot the function reads at two different widths (an `i64` payload in one variant, a `bool` in another) gets a `:bool` or `:<bits>` suffix on every one of its names (`o.1:64`, `o.1:bool`). `bool` fields print as `true` or `false`. The following are **`Skipped`** as `unsupported-opcode`: a field write through a merged value (`let p = if c { a } else { b }; p.f = 1`), a field write to a parameter of a function that has another struct, enum or collection parameter (they may be one value), a struct, enum or collection nested in another aggregate's field, a field of any other type, and `linear` values. A loop that writes a field of a value built outside its body is decided by unwinding alone, never by its `invariant`. A `Vec<i128>` or `Vec<u128>` element is `Skipped` as `unmodeled-builtin` (see "Collections").
+- **Collections.** A `Vec<T>` with `T` of `bool` or an integer of up to 64 bits (`new`, `push`, `v[i]`, `v[i] = x`, `len`, `pop`) is an array plus a 64-bit symbolic length. There is no capacity: a parameter's length is unconstrained apart from the runtime's own limit (a Vec's length is below `2^63 - 1`, so `v.len() as i64 >= 0`), and a `push` is assumed to return only while the length stays below it, so a property over every length is proven for every length, not only up to ESBMC's model capacity. An index at or past the length is an obligation of its own on `get` and `set`: a counterexample is `VerifyFailed` with the unattributed vow id `4294967293`, blame `None` and violation text `index out of bounds`. A Vec parameter's length and contents are not listed in `values`; two `Vec` parameters are distinct. **`Skipped`**: `String`, maps, `clear`, `truncate`, `reserve`, `sort`, `from_raw_parts_copy`, `pin_to_root`, wide (`i128`/`u128`) or pointer elements (`Vec<Vec<_>>`, `Vec<String>`, `Vec<struct>`; only `len` of those is modelled), a `Vec<bool>` element read, an index that is not 64-bit, a Vec stored in a struct field, passed to another function, or merged by an `if`/`else` that yields different Vecs.
+- **Calls.** A call of another function whose arguments and result are integers, `bool` or `()` is inlined: the callee's body is spliced into the caller before execution, so the caller is verified together with everything it calls and the callee's clauses become obligations of the caller. A callee `requires` is an obligation blamed on the caller (the counterexample's `vow_id` is the callee's own id, `function` is the function being verified, and `call_sites` lists the calls from that function down to the failing clause, outermost first); a callee `ensures` or loop `invariant` is an obligation blamed on the callee. Each is assumed once asked, so the first violated clause on a path is the one reported. A function without a `vow` block that calls a contracted function is verified only for those callee preconditions, as under ESBMC. A function on a call cycle, directly or through other functions, is `Skipped` as `recursion-unsupported` with the cycle as detail (`a -> b -> a`); a function whose callee is outside the subset is `Skipped` as `non-modelable-callee` with the callee and its own code as detail (`g (float-rem-unsupported)`). A call with a struct, enum, `Option` or collection argument or result stays `Skipped` as `unsupported-opcode`. A call tree whose inlined body exceeds the verifier's size budget is `verify_status: "unknown"` with a message that starts `inlining budget:`, never `Verified`.
 - **Verdict divergence from ESBMC.** The ESBMC model does not check `MIN / -1` for `/`, so `examples/divide.vow` (`requires: y != 0`, body `x / y`) is `VerifyFailed` under `--backend native` (counterexample `x = i64::MIN`, `y = -1`) while ESBMC proves it.
 - **Workers.** Each function in the subset is verified in its own `verify-worker` subprocess of the same `vowc` binary (internal; its flags and output are not part of the CLI contract), at most `--verify-jobs` at a time. A worker runs in its own process group, so killing it also kills its solver. On Linux it runs under a fixed internal address-space cap; there is no user-facing memory flag. Results are reported in IR order whatever order the workers finish in, and reporting stops at the first function that is not proven, so the output is the same for every `--verify-jobs` value. A worker that runs out of memory (the runtime's structured `OutOfMemory` report, a solver out-of-memory message, or a kill from outside) is `verify_status: "unknown"` with `verify_message: "memory limit exceeded"`, never a proof and never a compiler crash. Any other abnormal worker death (a signal, a nonzero exit, no result) is `verify_status: "panicked"` and the message names the signal or exit status. Expiry of `--timeout` kills the whole group and is `"timeout"`.
-- **Solver.** `bitwuzla` is resolved from `PATH`; one self-contained `.smt2` per obligation is written to a private temp directory owned by the parent (removed on every path, including a killed worker) and run as a child process of the worker. Only `unsat` is a proof. `unknown` is `verify_status: "unknown"`; a solver that outlives its budget is killed (`"timeout"`); a non-zero exit, `[error]` output, an unrecognised answer or an unparsable model is `"error"`. If `bitwuzla` is not on `PATH` and a function needs it, the result is `VerifyFailed` with `verify_status: "tool_not_found"` and no counterexample (ESBMC is not consulted). A module in which every function is `Skipped` needs no solver. The binary is not version- or hash-checked yet.
-- **Flags.** `--timeout <N>` (seconds, default `300`) is the budget for each function, measured from the start of its worker; `--timeout 0` is an immediate `timeout` without spawning the solver. `--verify-jobs <N>` caps concurrent workers (default half the CPUs). `--no-cache` is accepted and has no effect (the native driver is uncached). `--max-k-step`, `--solver` and `--encoding` are ESBMC options and are rejected with a usage error under `--backend native`. `--replay-cex` and `--perfetto` works as for ESBMC. `--replay-cex` also replays the division and remainder abort counterexamples and reports a counterexample that does not reproduce as a `VerifierBug` diagnostic (see "Counterexample replay" below).
+- **Solver.** `bitwuzla` is resolved from `PATH`. The obligations of one round of a function that has at least two for the solver share one interactive solver process of the worker (each obligation asked in its own scope); only an `unsat` answer, or a `sat` on a checked-operator or unwinding obligation, is taken from it. Any other answer, and any misbehaviour of that process (an error, an unrecognised reply, a timeout, an exit), is decided by one self-contained `.smt2` per obligation, written to a private temp directory owned by the parent (removed on every path, including a killed worker) and run as a child process of the worker, which alone supplies a counterexample, so the result does not depend on whether the process was shared. Only `unsat` is a proof. `unknown` is `verify_status: "unknown"`; a solver that outlives its budget is killed (`"timeout"`); a non-zero exit, `[error]` output, an unrecognised answer or an unparsable model is `"error"`. If `bitwuzla` is not on `PATH` and a function needs it, the result is `VerifyFailed` with `verify_status: "tool_not_found"` and no counterexample (ESBMC is not consulted). A module in which every function is `Skipped` needs no solver. The binary is not hash-checked; its `--version` output names it in the result cache key.
+- **Flags.** `--timeout <N>` (seconds, default `300`) is the budget for each function, measured from the start of its worker; `--timeout 0` is an immediate `timeout` without spawning the solver. `--verify-jobs <N>` caps concurrent workers (default half the CPUs). `--no-cache` disables the native result cache of `verify` (see "Result cache" below). `--max-k-step`, `--solver` and `--encoding` are ESBMC options and are rejected with a usage error under `--backend native`. `--replay-cex` works as for ESBMC; `--perfetto` is accepted and records the spans listed under the flag table. `--replay-cex` also replays the division, remainder and `unwrap()` abort counterexamples and reports a counterexample that does not reproduce as a `VerifierBug` diagnostic (see "Counterexample replay" below).
+- **Result cache.** Every solver answer that is `sat` (with its model) or `unsat` is stored on disk and replayed by a later run, so a warm run reports exactly what the cold run did without asking the solver again. An entry is keyed by a hash of the exact `.smt2` text of the query plus the solver's `bitwuzla --version` output and the fixed solver argument list, and holds that text, which a lookup compares byte for byte: a stale entry cannot exist (a new solver version or any change to the query is a different key), a hash collision is a miss, and a truncated, garbled or hand-edited entry is a miss. A claim is looked up under its full query text before a shared solver process is asked; an `unsat` from that process is stored under the same text, so a standalone run and a shared-process run replay each other's entries. A `sat` from the shared process of a soft claim carries no model and is not stored. `unknown`, `timeout`, memory, error and tool-not-found answers depend on the budget or the environment and are never stored, so they are asked again. A sliced query and the full query are cached under their own text; a cached `sat` for the sliced query still sends the claim to the full query. A non-positive budget is a `timeout` before the cache is consulted. The cache lives in `$VOW_CACHE_DIR/verify-native/` (default `~/.cache/vow/verify-native/`), sharded by the first two hex digits of the key, at most 64 entries per shard (a full shard drops an arbitrary half before it takes a new entry), written by temporary file and rename so concurrent workers never see a partial entry. Any problem with the directory or with the solver's `--version` disables the cache for that run and never fails verification. Only `verify` uses the cache: `contracts --verify` and `test --verify` ask the solver every time. `--no-cache` neither reads nor writes it, and the performance gate (`scripts/verify_perf.py`) always runs with it off and fails a sample if the cache directory is written. Unlike the ESBMC driver's cache, which only ever persists failures, this cache stores proofs: whoever can write the cache directory can forge an `unsat`, so use `--no-cache` when the result must come from a fresh solver run (a "green locally" claim). A solver call that timed out cold can be decided warm, since a hit costs nothing; the identical-verdict guarantee holds for runs in which no solver call times out.
+
+#### Native backend: `contracts` and `test`
+
+`vowc contracts --verify --backend native` and `vowc test --verify --backend native` (issue #1427) run the same native checker and worker pool as `verify`, with the status vocabulary, JSON schemas and exit codes of the ESBMC path unchanged. Self-hosted `vowc` only; the default stays `esbmc`.
+
+- **Selection.** Both commands check the functions that carry a `vow` block, exactly as the ESBMC path does (`verify` also checks callers of contracted functions, these do not). A function outside the native subset is `skipped` in `contracts` (a status only, no diagnostic, as for ESBMC) and makes the file `contract_skipped` in `test` (with one `VerificationSkipped` diagnostic of severity `error` in the entry's `diagnostics`, fixed message `contract verification skipped: function not modelable`, no reason code), and needs no solver.
+- **No early stop.** `verify` reports up to the first function that is not proven; a `contracts` report or a `test` verdict spans functions, so a failed function never cancels a later one. Every function is verified at most `--verify-jobs` at a time, and the result does not depend on which worker finishes first.
+- **Clause status (`contracts`).** Each `ensures` and `invariant` clause carries the verdict of its own obligations, from one `verify-worker` that decides every obligation of the function. A `requires` clause (an assumption, never an obligation) is `proven` when the function is proven and `unknown` otherwise, as for ESBMC's `--multi-property` mode. A function whose only counterexample is an abort (no clause refuted) has no `proven` clause: they are all `unknown`. Statuses are `proven`, `failed`, `unknown`, `timeout`, `error`, `skipped` and `vacuous`; `proven-ir` is an ESBMC-only status and is never produced. When `bitwuzla` is not on `PATH`, every clause of a function that needs it is `error` and the run exits 1; a function without obligations, or a skipped one, still resolves without a solver.
+- **Weak-contract probes (`contracts`).** The two probes of the ESBMC path are IR rewrites checked by the same engine, each in its own worker with the full `--timeout` budget, so a slow probe loses only its own answer. *Vacuity*: the function is cut right after its last `requires` and the cut point must be unreachable. If the `requires` clauses are jointly unsatisfiable, every clause of the function is `vacuous` (this overrides the clause verdicts, as for ESBMC). The probe applies to functions with a `requires`. *Trivial*: the single returned value is replaced by the type's default (`0`, `false`) and every `ensures` must still hold; if it does, each `ensures` of the function has `trivially_satisfiable: true`. The computation that produced the value stays in the function, so what it can abort on is still checked. It applies to functions with an `ensures`, a scalar result and one `return` of a value computed in the body (not a parameter), as for ESBMC. A probe that is not proven (failed, `unknown`, timeout, error) never claims a weakness.
+- **Fail-closed `test`.** Every function with a `vow` block must be `proven`: `failed`, `unknown`, `timeout`, `error` and a worker that died all make the file `verify_failed` and the test program is not run. The ESBMC path lets an `error` outcome pass; the native path does not, because nothing was established for that function. Each function has the fixed `300` s budget; `test --timeout` is the per-test execution timeout in milliseconds and does not apply to verification. `--jobs` workers each run their own verify pool, so the total grows with `--jobs` times `--verify-jobs`.
+- **Verdict divergence from ESBMC.** The ESBMC path plants its vacuity label only in the entry block. A `requires` written with `&&` or `||` lowers to branches and lands in a later block, so ESBMC reports `vacuous` for a satisfiable `requires: a > 0 && a < 100`; the native probe follows the definition above and does not. The `MIN / -1` and 128-bit differences listed under "Verdict divergence from ESBMC" above apply to `contracts` and `test` as well. Two more are specific to the clause report. A function that fails only on an abort (a division or remainder by zero, `MIN / -1`, an over-wide shift, `unwrap()` on `None`, an out-of-bounds `Vec` index) and refutes no clause has no `proven` clause: its `ensures` and `invariant` clauses are `unknown`, like its `requires` clauses, and the run exits 1, as `verify` reports the same function `VerifyFailed`. ESBMC instead lets the run continue past the abort with an unconstrained value, so a clause over that value is `failed` there, while a clause that does not depend on it, or a function with no `requires`, can be `proven` and the run exit 0. A loop with no `invariant` whose bound is symbolic is decided by unwinding alone, so its clauses are `unknown` where ESBMC's incremental BMC may close the forward condition. A function whose retained computation can still abort on a checked operator is never flagged `trivially_satisfiable`, as under ESBMC.
+- **Flags.** `--timeout <N>` (seconds) and `--verify-jobs <N>` are honoured by `contracts`; `--max-k-step`, `--solver` and `--encoding` are rejected with a usage error, as for `verify`. `--no-cache` is accepted and has no effect. `--replay-cex` and counterexamples are not part of either command.
 
 ### `vow contracts`
 
@@ -3084,16 +3350,18 @@ vow contracts [OPTIONS] <source.vow>
 
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
-| `--verify`        | (off)       | Run ESBMC verification and report per-contract status |
+| `--verify`        | (off)       | Run verification (the ESBMC backend by default, or the native backend with `--backend native`) and report per-contract status |
 | `--no-cache`      | (off)       | Disable verification result caching        |
-| `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations       |
-| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver (with --verify)           |
-| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |
-| `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |
+| `--max-k-step <N>` | `50`       | ESBMC backend only; a usage error under `--backend native`. ESBMC incremental BMC max iterations (with --verify) |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC SMT solver (with --verify) |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC encoding mode (with --verify); ir requires z3 |
+| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent `verify-worker` subprocesses under `--backend native`; a no-op under ESBMC (the ESBMC loop is serial) |
+| `--backend <esbmc\|native>` | `esbmc` | Verification backend; `native` requires `--verify` (see "Native backend: `contracts` and `test`") |
+| `--timeout <N>` | `300` (native) | Seconds per function (and per probe) under `--backend native`; ESBMC's own timeout otherwise |
 
-**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven — i.e. any `failed`, `timeout`, `unknown`, `error`, `skipped`, or `vacuous` — and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)
+**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven — i.e. any `failed`, `timeout`, `unknown`, `error`, `skipped`, or `vacuous` — and **0** only when every contract is `proven` (or `proven-ir`, an ESBMC-only status no compiler produces today). Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)
 
-When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.
+When `--verify` is requested but the verifier is not installed (ESBMC, or `bitwuzla` under `--backend native`), the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` (under native, only for functions that need the solver) and exits with code 1 (fail-closed). Install the verifier, or omit `--verify`, to obtain proven/failed/unknown statuses.
 
 ### `vow skill`
 
@@ -3112,9 +3380,13 @@ vow skill install --global  # install to $HOME/.claude/skills/vow/ on Linux
 
 `install` writes `SKILL.md` plus supporting files under `reference/`, `examples/`, and `schemas/`. Claude Code discovers the skill from the `.claude/skills/` directory and uses the frontmatter description/`when_to_use` metadata to load it for `.vow` file work as well as creation and verification-debugging prompts before a `.vow` file exists.
 
+**Atomic install.** `install` builds the whole tree in a staging directory next to the target (`.claude/skills/.vow-install-*`) and renames it into place, writing `SKILL.md` last, so a failed or interrupted install never leaves a `SKILL.md` that links to missing `reference/`, `examples/`, or `schemas/` files. When `skills/vow/` already exists, the old tree is renamed aside, the new one renamed in, and the old one restored if that rename fails; the directory is briefly absent between the two renames, never half-written. Files the install does not own (hand-added notes, stale files an older toolchain left in `reference/`) are copied from the old tree into the staged one before the swap, so a re-install rewrites owned files and leaves everything else alone; the install needs write access to `.claude/skills/` itself. A `skills/vow` symlink (dotfile managers) is kept and written through in place, support files first and `SKILL.md` last. A pre-existing partial tree is repaired by the next explicit `install`; auto-install never touches a tree that already holds `SKILL.md`.
+
 When no scope flag is provided, `install` prompts on stderr for local (`./.claude`) or global (`$HOME/.claude`) installation. Scripts and agents should pass `--local` or `--global` explicitly. `--local` requires the current directory to contain both `.git` and `.claude/`; otherwise it exits with an error and writes nothing. `--global` installs under `$HOME/.claude/skills/vow/` and fails if `$HOME` is unset or empty.
 
-**Auto-install on build.** The first time `vow build` (or the bare `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.
+**Auto-install on build.** The first time `vow build` (or the bare `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build and stays silent on failure; a failed auto-install leaves no `SKILL.md`, so the next build retries it.
+
+**Migrating an existing install.** An existing `.claude/skills/vow/SKILL.md` is never rewritten, and while it is present a build does not add or repair support files, so an older single-file skill keeps working but lacks `reference/`, `examples/`, and `schemas/`. To migrate, refresh after a compiler upgrade, or repair, run `vow skill install` with the scope being replaced: `--local` for `./.claude/skills/vow/` or `--global` for `$HOME/.claude/skills/vow/` (a global install does not refresh a project-local one). Without `.git`, `--local` is unavailable: delete `.claude/skills/vow/SKILL.md` and run a build instead. Explicit install rewrites `SKILL.md` and every support file it owns, overwriting local edits, and leaves other files alone; review the diff of a committed project install. A pre-rename `.claude/skills/vow-toolchain/` install is neither detected nor modified, so a build installs `.claude/skills/vow/` beside it: delete the old directory by hand.
 
 ### `vow test`
 
@@ -3129,15 +3401,16 @@ vow test [OPTIONS] [<path>]
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
 | `<path>`          | `.`         | Directory to scan or single `.vow` file    |
-| `--verify`        | (off)       | Run ESBMC verification on test files       |
+| `--verify`        | (off)       | Run verification (ESBMC, or the native backend with `--backend native`) on test files |
+| `--backend <esbmc\|native>` | `esbmc` | Verification backend; `native` requires `--verify` (see "Native backend: `contracts` and `test`") |
 | `--filter <pat>`  | (none)      | Only run tests whose file stem contains pat |
 | `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the nearest ancestor of the entry file that resolves all of its `use` declarations. |
 | `--jobs <N>`      | `min(num_cpus/2, 8)` (`1` with `--verify`) | Max test files compiled and run concurrently |
 | `--mode debug`    | (default)   | Insert runtime vow checks                 |
 | `--mode release`  | `debug`     | Omit all vow checks for performance       |
 | `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
-| `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations (with --verify) |
-| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs (with --verify) |
+| `--max-k-step <N>` | `50`       | ESBMC backend only; a usage error under `--backend native`. ESBMC incremental BMC max iterations (with --verify) |
+| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent verification jobs (with --verify) |
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
 
@@ -3184,7 +3457,11 @@ Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`
 
 Each test binary is run directly, with no memory limit, and is killed when `--timeout` elapses (status `timeout`). A binary that exits non-zero, or is killed by a signal, is `failed`; a signal death or a `timeout` has no `exit_code` (`null`, or omitted by the Rust compiler).
 
-`contract_skipped` means ESBMC was never invoked because a vowed function is non-modelable (distinct from `verify_failed`, where ESBMC proved a violation). Both are fail-closed — a `contract_skipped` test counts toward `failed` and yields a `TestsFailed` overall status.
+A `timeout` counts toward `failed`, like `compile_error`, `verify_failed` and `contract_skipped`: a run containing one yields `TestsFailed` and exit code 1.
+
+A `<path>` that does not exist is itself a failure: the result is `TestsFailed` with `total: 1` and `failed: 1`, holding one synthetic `failed` entry whose `file` is the path as given and whose `stderr` names it, and the exit code is 1. `total` equals the length of `tests` in every result, so the synthetic entry is counted.
+
+`contract_skipped` means no proof was attempted because a vowed function is non-modelable (distinct from `verify_failed`, where the verifier found a violation or could not decide). Both are fail-closed — a `contract_skipped` test counts toward `failed` and yields a `TestsFailed` overall status.
 
 ### `vow decl`
 
@@ -3290,7 +3567,7 @@ silently ignored. The self-hosted `vowc` only accepts the `--flag value` form fo
 `--flag=value` is reported as an unknown argument with a hint. `vowc mutants` forwards its flags to
 its own parser and is not validated by the driver.
 
-`vow build` and `vow verify` both fail closed on `Skipped`: if ESBMC was asked to verify a vowed
+`vow build` and `vow verify` both fail closed on `Skipped`: if the verifier was asked to verify a vowed
 function but the verifier could not model the function body, the contract was not statically
 proved, so the run exits non-zero. Use `--no-verify` if you genuinely want to skip verification —
 that path produces `Unverified` (exit 0).
@@ -3316,11 +3593,11 @@ rationale.
 
 | Status          | Meaning                                     |
 |-----------------|---------------------------------------------|
-| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC, and every call from a verifiable uncontracted function into a contracted function satisfies the callee's `requires` (see [Callers Without a `vow` Block](contracts.md#callers-without-a-vow-block)). "Verifiable" excludes uncontracted callers that cannot be modelled (e.g. `main() [io]`) or whose proof the verifier could not finish; each carries a `VerificationSkipped` *Note* instead, and the note does not change the status. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |
-| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
-| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `LinearBorrow`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
-| `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
-| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
+| `Verified`      | Compiled + every vowed function's contract was statically proved by the verifier, and every call from a verifiable uncontracted function into a contracted function satisfies the callee's `requires` (see [Callers Without a `vow` Block](contracts.md#callers-without-a-vow-block)). "Verifiable" excludes uncontracted callers that cannot be modelled (e.g. `main() [io]`) or whose proof the verifier could not finish; each carries a `VerificationSkipped` *Note* instead, and the note does not change the status. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |
+| `Unverified`    | Compiled but no verifier was invoked (`--no-verify`, `--dump-ir`). Exit 0. A missing verifier is not `Unverified`: it is `VerifyFailed` (exit 1). |
+| `Skipped`       | Verification was requested but at least one vowed function could not be modelled. The reason is one of the closed list in [`errors.md`](errors.md#verificationskipped) under the native backend, or free text such as `LinearBorrow`, `Load`/`Store`, `RemF*`, effects under ESBMC. **ESBMC backend:** struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled (the native backend models it). Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`, also when another function fails verification (the status is then `VerifyFailed`, and the warnings remain). Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
+| `CompileFailed` | Parse error, type error, module load error, unsupported code generation (a named backend limitation, such as `%` on floats), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
+| `VerifyFailed`  | The verifier produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`; under the native backend also an unwinding failure, `unwinding assertion: ...`, an exhausted inlining or size budget, or an out-of-memory worker, `memory limit exceeded`), tool error, the tool was not found (`tool_not_found`: ESBMC, or `bitwuzla` under native), or the verifier worker crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
 For a multi-function `verify` or verified `build`, a halt-class result (definitive
 counterexample, timeout, unknown, tool error, missing tool, or worker panic) stops new function
@@ -3417,7 +3694,7 @@ argument. A `timeout`, `unknown`, `error` or `panicked` outcome has no
 counterexample and adds no such diagnostic. Both compilers emit the same
 `diagnostics[]`, `counterexample` and `counterexamples[]` for the same source;
 the only fields that are not specified byte for byte are `verify_message`
-(ESBMC's free text) and `values` entries named `$esbmc$...` (solver temporaries).
+(the verifier's free text) and, under ESBMC, `values` entries named `$esbmc$...` (solver temporaries).
 
 A diagnostic's `span` is exactly `{file, offset, length}`: positions are byte
 offsets, and neither compiler adds line or column fields.
@@ -3458,16 +3735,16 @@ shift count) rather than exposing raw verifier output.
 | `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |
 | `message`          | string              | CompileFailed     | Compatibility error category/detail (for example "parse error", "type error", "module load error", backend/link detail, or "failed to emit frontend diagnostics: {io_error}"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
-| `counterexample`   | string              | VerifyFailed      | Legacy description string: `"[Counterexample]"` when ESBMC produced a counterexample, otherwise the soft-failure text (`verification timed out`, `verification result unknown: <reason>`, `esbmc error: <message>`, ...) |
+| `counterexample`   | string              | VerifyFailed      | Legacy description string: `"[Counterexample]"` when the verifier produced a counterexample, otherwise the soft-failure text (`verification timed out`, `verification result unknown: <reason>`, `esbmc error: <message>` (the prefix is kept whichever backend ran), ...) |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema); contains at most one entry per run under the multi-function stopping policy above |
 | `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, `"tool_not_found"`, or `"panicked"` (verifier worker thread crashed — no counterexample available) |
-| `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
+| `verify_message`   | string              | On backend failure | Verifier/backend error detail             |
 
 ### Counterexample replay
 
-With `--replay-cex`, each object in `counterexamples[]` gains a `replay` field — a **differential test** of the verifier's IR-to-C model against the executable's debug-mode runtime semantics. It is **not part of the soundness proof**: it neither strengthens nor weakens the static verdict, and the exit code is unchanged. It exists to catch *drift* between the two independent lowerings — `vow-verify`'s C emitter (`requires` → `__ESBMC_assume`, `ensures`/`invariant` → `__ESBMC_assert`) and `vow-codegen`'s debug runtime checks.
+With `--replay-cex`, each object in `counterexamples[]` gains a `replay` field — a **differential test** of the verifier's model against the executable's debug-mode runtime semantics. It is **not part of the soundness proof**: it neither strengthens nor weakens the static verdict, and the exit code is unchanged. It exists to catch *drift* between the two independent lowerings — `vow-verify`'s C emitter (`requires` → `__ESBMC_assume`, `ensures`/`invariant` → `__ESBMC_assert`) and `vow-codegen`'s debug runtime checks.
 
-For each counterexample, Vow maps the ESBMC assignment back to concrete Vow inputs, synthesizes a `--mode debug` harness that calls the failing function with those inputs, runs it, and compares the observed `VowViolation`.
+For each counterexample, Vow maps the verifier's assignment back to concrete Vow inputs, synthesizes a `--mode debug` harness that calls the failing function with those inputs, runs it, and compares the observed `VowViolation`.
 
 | `replay` value | Meaning |
 |----------------|---------|
@@ -3481,11 +3758,11 @@ program failed while keeping `"diverged"` for runs where the verifier and runtim
 whether the predicted failure is reachable. Runtime aborts use the reserved exit status `134` and
 the structured diagnostics documented under [Runtime Errors](errors.md#runtime-errors).
 
-**v1 input scope.** Reconstruction supports scalar parameters (`i64`, `u64`, `bool`) and bounded `Vec` of those scalars. `String`, `HashMap`, `BTreeMap`, struct, reference, and nested-aggregate parameters are reported as `"skipped"` with a reason. The self-hosted compiler's v1 reconstructs scalars only and reports `Vec` parameters as `"skipped"` (the Rust compiler additionally reconstructs bounded `Vec`s); both report identical outcomes for scalar and aggregate-skip cases. Replaying a counterexample for a function whose entry file already defines `main` is `"skipped"` by the self-hosted compiler.
+**v1 input scope.** Reconstruction supports scalar parameters (`i64`, `u64`, `bool`) and bounded `Vec` of those scalars. `String`, `HashMap`, `BTreeMap`, struct, reference, and nested-aggregate parameters are reported as `"skipped"` with a reason (the native backend additionally rebuilds struct, enum, `Option` and `Result` parameters of scalar fields; see "Native backend" below). The self-hosted compiler's v1 reconstructs scalars only and reports `Vec` parameters as `"skipped"` (the Rust compiler additionally reconstructs bounded `Vec`s); both report identical outcomes for scalar and aggregate-skip cases. An entry file that already defines `main` replays like any other: both compilers set that `main` aside in the harness and call the failing function from a synthesized `main`. A counterexample for `main` itself is `"skipped"` (the harness cannot call the entry function).
 
 `replay`/`replay_reason` are present on a counterexample only when `--replay-cex` was passed.
 
-**Native backend.** Under `vowc verify --backend native` the replay contract is stricter, because the native model is meant to be checked against the runtime rather than trusted. The counterexamples for a division or remainder abort (zero divisor; signed `MIN / -1`), which carry the reserved unattributed `vow_id` and blame `None`, are replayed instead of skipped: the harness calls the function with the counterexample's inputs and the replay is `"confirmed"` when the program aborts with `ArithmeticOverflow` (exit status `134`). The runtime envelope names the abort kind but not the site, so this confirms the kind of failure for those inputs, not which operation raised it. A native counterexample whose replay ends `"diverged"` or `"aborted"` additionally yields one [`VerifierBug`](errors.md#verifierbug) error diagnostic: the model and the runtime disagree, so the defect is in the verifier. `"skipped"` never ran and is not reported as a verifier bug. The `status` and exit code are unchanged. The ESBMC backend keeps skipping the unattributed ids.
+**Native backend.** Under `vowc verify --backend native` the replay contract is stricter, because the native model is meant to be checked against the runtime rather than trusted. The counterexamples for a division or remainder abort (zero divisor; signed `MIN / -1`) or for an `unwrap()` on `None`, which carry the reserved unattributed `vow_id` and blame `None`, are replayed instead of skipped: the harness calls the function with the counterexample's inputs and the replay is `"confirmed"` when the program aborts with `ArithmeticOverflow` (division, remainder) or `UnwrapOnNone` (unwrap), exit status `134`. The runtime envelope names the abort kind but not the site, so this confirms the kind of failure for those inputs, not which operation raised it. A struct, enum, `Option` or `Result` parameter whose fields are scalars (`bool`, `i8`..`i64`, `u8`..`u64`; `()` as a payload) is rebuilt from the `<param>.<slot>` values (see "Aggregates" above): the harness binds `Pair { lo: 3, hi: -4 }`, `Shape::Rect(5, 6)` or `Option::Some(9)` from the source declaration. A slot the model never read takes `0`/`false`, and an unused variant is never inspected. The replay is `"skipped"`, with a reason, for a field that is a nested aggregate, a `Vec`/`String` or any other non-scalar type, a 128-bit field, a reference, an alias or a type not declared in the program, and for a discriminant outside the enum's variants (the model does not constrain the tag, so the solver may pick one; that is a property of the model, not a verifier bug). The ESBMC backend and the Rust compiler keep reporting aggregate parameters as `"skipped"`. A native counterexample whose replay ends `"diverged"` or `"aborted"` additionally yields one [`VerifierBug`](errors.md#verifierbug) error diagnostic: the model and the runtime disagree, so the defect is in the verifier. `"skipped"` never ran and is not reported as a verifier bug. The `status` and exit code are unchanged. The ESBMC backend keeps skipping the unattributed ids.
 
 ## Contracts Output JSON
 
@@ -3542,7 +3819,7 @@ the structured diagnostics documented under [Runtime Errors](errors.md#runtime-e
 | `blame`       | string  | `"Caller"` (requires) or `"Callee"` (ensures/invariant)  |
 | `source`      | object  | `{ "file": string, "offset": integer }`                  |
 | `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, `"skipped"`, or `"vacuous"` |
-| `quality`     | string  | Static clause-shape classification (no ESBMC): `"weak"`, `"tautological"`, or `"substantive"` |
+| `quality`     | string  | Static clause-shape classification (no verifier): `"weak"`, `"tautological"`, or `"substantive"` |
 | `trivially_satisfiable` | bool | `--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational — never affects the exit code. See `docs/spec/contracts-methodology.md`. |
 
 `description` is the clause kind followed by the predicate rendered by the canonical
@@ -3570,20 +3847,20 @@ compilers anchor on the byte offset of the parameter name instead.
 | Status          | Meaning                                              |
 |-----------------|------------------------------------------------------|
 | `not_verified`  | Verification not requested (no `--verify` flag)      |
-| `proven`        | ESBMC established this contract for the configured bounded verification model (bit-vector encoding, overflow modeled) |
-| `proven-ir`     | ESBMC established this contract for the configured bounded model under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
-| `failed`        | ESBMC found a counterexample violating this contract |
-| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
-| `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
-| `error`         | ESBMC error or tool not found                        |
-| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `Load`/`Store`, `LinearBorrow`, `RemF*`) or the function has effects. (Struct construction and field ops are modelled — see the `Skipped` build-status row.) Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
-| `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously — ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |
+| `proven`        | The verifier established this contract. ESBMC: for the configured bounded verification model (bit-vector encoding, overflow modeled). Native: for every unwinding and collection length, never after a resource-limited weakened retry |
+| `proven-ir`     | ESBMC backend only, never produced natively (and not emitted as a clause status by either compiler today). ESBMC established this contract for the configured bounded model under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
+| `failed`        | The verifier found a counterexample violating this contract |
+| `unknown`       | The verifier could not conclude for this contract — under the native backend a solver `unknown`, an unwinding failure (`unwinding assertion:`), a budget or out-of-memory worker, or a function that fails only on an abort; under ESBMC either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
+| `timeout`       | The verifier timed out on the containing function (ESBMC: BV and — when applicable — IR fallback both timed out) |
+| `error`         | Verifier error, or the tool was not found (ESBMC, or `bitwuzla` under `--backend native`) |
+| `skipped`       | The containing function is outside what the verifier models, with a reason from the closed list in [`errors.md`](errors.md#verificationskipped) (e.g. effects, recursion, an unmodelled builtin, `Load`/`Store`). A machine-readable reason code is not emitted yet. Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke a verifier at all. |
+| `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously — the verifier proved nothing of substance (antecedent failure). Detected by a second run: under ESBMC a `vow_reach` label (`--error-label`) planted after the `requires` assumes is unreachable; under `--backend native` the function is cut right after its last `requires` and the cut point must be unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |
 
 The `proven` / `proven-ir` split and the rule that a resource-limited retry (e.g. the BV→IR fallback) may never report a weakened check as `proven` are the verifier's soundness discipline — the safe-vs-unsafe retry rules are specified in `docs/verifier-discipline.md`.
 
 ### Quality Values
 
-`quality` is a static classification of each clause's *shape*, computed without ESBMC and independent of `status`. It surfaces the "proven but trivial" problem: a `weak` contract can be `proven` while constraining almost nothing. See `docs/spec/contracts-methodology.md` for the full taxonomy.
+`quality` is a static classification of each clause's *shape*, computed without running a verifier and independent of `status`. It surfaces the "proven but trivial" problem: a `weak` contract can be `proven` while constraining almost nothing. See `docs/spec/contracts-methodology.md` for the full taxonomy.
 
 | Quality        | Meaning                                                                                      |
 |----------------|----------------------------------------------------------------------------------------------|
@@ -3700,7 +3977,7 @@ means region analysis placed the value too deep. `op` is one of `push`, `set`, `
 ```
 Parse JSON from stdout
 ├── status == "Verified"       → Success. Binary at `executable`.
-├── status == "Unverified"     → Compiled but unverified. ESBMC missing or --no-verify.
+├── status == "Unverified"     → Compiled but unverified (--no-verify or --dump-ir).
 ├── status == "CompileFailed"  → Read `diagnostics[]` for error details.
 │   ├── error_code is parse error  → Fix syntax (see grammar.md)
 │   ├── error_code is type error   → Fix types (see errors.md)
@@ -3720,20 +3997,23 @@ Always check stderr for human-readable diagnostics alongside the JSON on stdout.
 
 # Contract Authoring and Verification
 
-Vow uses ESBMC (bounded model checker) for static contract verification. This document covers contract patterns, verification behavior, and common pitfalls.
+Vow statically verifies contracts with one of two backends: ESBMC (a bounded model checker, `--backend esbmc`, the default today) or the native verifier (`--backend native`, self-hosted `vowc` only, which emits SMT-LIB for Bitwuzla). Both report the same verdict surface (statuses, blame, `vow_id`). This document covers contract patterns, verification behavior, and common pitfalls.
 
 ## Semantic Contracts Are Backend-Independent
 
 A contract states the function's real semantic domain and result. It does not
-state the limits of the tool currently used to check it. Replacing ESBMC with a
-stronger verifier must not require editing Vow source contracts.
+state the limits of the tool currently used to check it. Replacing the verifier
+with a stronger one must not require editing Vow source contracts.
 
 Lengths, capacities, indices, and struct fields may appear in contracts when
 they express a genuine algorithmic constraint or representation invariant. For
 example, an index may need to be within a vector's length, paired inputs may
 need equal lengths, or a ring buffer may need to be non-full before a write.
-They must not be capped merely because ESBMC uses a finite collection model or
-because a smaller struct state space is easier to solve.
+They must not be capped merely because a verifier uses a finite collection
+model or because a smaller struct state space is easier to solve. The internal
+unwinding bound of the native verifier is such a limit too: it never belongs in
+a `requires`/`ensures`/`invariant` clause, and an unwinding failure is
+`unknown`, never `proven`.
 
 The same distinction applies to numeric bounds. Exact overflow guards and real
 problem-domain restrictions are semantic; unwind caps and arbitrary
@@ -3742,16 +4022,26 @@ honest contract, report that limitation outside the contract.
 
 ## Verification Pipeline
 
-Codegen (Cranelift) and verification run in parallel:
+Codegen (Cranelift) and linking finish before verification starts, so peak memory is the larger of the two phases rather than their sum. A codegen or link failure ends the build before any verifier process is started. Verification itself runs up to `--verify-jobs` verifier processes at a time.
 
-```
-Vow Source → Parse → Type Check → IR Lower ─┬─→ Cranelift → executable
-                                              └─→ C Emit → ESBMC → proof / counterexample
-```
+| | Native backend (`--backend native`) | ESBMC backend (`--backend esbmc`, default) |
+|---|---|---|
+| Pipeline | `IR → symbolic executor → SMT-LIB → Bitwuzla`, one `verify-worker` subprocess per function | `IR → C emit → ESBMC` |
+| Clauses | `requires` is an assumption for the obligations after it; `ensures`, `invariant` and every abort site are obligations | `requires` → `__ESBMC_assume()`, `ensures`/`invariant` → `__ESBMC_assert()` |
+| Loops | Unrolled to an internal bound (2, 4, 8, 16, 32, 64) with a mandatory unwinding assertion; loops with an `invariant` are also proven inductively, and an open round tries a k-induction step case | Incremental BMC, `--max-k-step` (default 50); no inductive step |
+| Tuning | `--timeout` is the only knob; `--max-k-step`, `--solver` and `--encoding` are usage errors | `--max-k-step`, `--solver`, `--encoding`, `--timeout` |
+| Collections | Array plus symbolic length, no capacity | Fixed-capacity arrays (see below) |
+| Bounded result | An unwinding failure, solver `unknown` or out-of-memory worker is `unknown`/`timeout`, never `proven` | `proven` describes the configured model, including its finite unwind and capacities |
 
-Contract clauses become IR opcodes. The C emitter translates `requires` to `__ESBMC_assume()` (the verifier assumes preconditions hold) and `ensures`/`invariant` to `__ESBMC_assert()` (the verifier checks postconditions).
+The table is the whole difference: contracts, blame and `vow_id` are the same under both. A contract is `proven` only when the verifier decides every obligation; the native backend never reports `proven` after a resource-limited weakened retry.
 
-### ESBMC Configuration
+### Native backend
+
+The native verifier executes the IR symbolically and encodes integers as fixed-width bit-vectors, so wrapping, signedness and 128-bit values are exact. Each `ensures` clause, loop `invariant` and abort site (division or remainder by zero, `MIN / -1`, an over-wide shift, `unwrap()` on `None`, an out-of-bounds `Vec` index) is a proof obligation; a `requires` is an assumption for the obligations after it. The exact subset, loop strategy and flags are in `docs/spec/cli.md` → "Native backend". A function outside the subset is `Skipped` with a code from the closed list in [`VerificationSkipped`](errors.md#verificationskipped), never `Verified`.
+
+**Known limits.** String parsing and formatting builtins are opaque (`Skipped`). Float arithmetic is not modelled yet: a function that uses floats is `Skipped` as `unsupported-opcode` today (the intended semantics are IEEE 754 round-to-nearest-even with a canonical NaN, and `RemF32`/`RemF64` are `Skipped` as `float-rem-unsupported` until codegen defines float `%`). NaN payload bits are not distinguished. Callee inlining makes a caller's query as large as its whole call tree, so a deep call tree can end `unknown` with `inlining budget:`.
+
+### ESBMC backend
 
 - Verification strategy: **incremental BMC** (`--incremental-bmc`) — base case plus forward condition, **not** k-induction (there is no inductive step). A contract is `proven` only when ESBMC completes the configured model checks; otherwise the result is `unknown`. `proven` describes the configured verification model, including its finite unwind and collection capacities, not executions outside that model.
 - Incremental BMC with `--max-k-step` (default: **50**) — loops are verified incrementally up to N iterations
@@ -3760,7 +4050,9 @@ Contract clauses become IR opcodes. The C emitter translates `requires` to `__ES
 
 ### Collection Models for Verification
 
-ESBMC is a *bounded* model checker, so it models collection types as
+**Native backend.** A `Vec<T>` whose element `T` is `bool` or an integer of up to 64 bits (`new`, `push`, `pop`, `len`, indexing, indexed assignment) is an array plus a 64-bit symbolic length. There is no capacity: a property over every length is proven for every length, an index at or past the length is its own obligation (`index out of bounds`), and no `ModelCapacityAssumed` note is ever emitted. `String`, the maps, wide (`i128`/`u128`) or pointer elements and the mutating operations `clear`, `truncate`, `reserve`, `sort`, `from_raw_parts_copy` and `pin_to_root` are `Skipped` (see `docs/spec/cli.md` → "Native backend", "Collections"). The rest of this section describes the ESBMC backend.
+
+**ESBMC backend.** ESBMC is a *bounded* model checker, so it models collection types as
 fixed-size arrays and reasons about them up to a finite capacity. These
 capacities are an internal property of the verifier, not of the language:
 
@@ -3781,7 +4073,7 @@ capacity that was actually applied.
 in a Vow program grows dynamically on the heap with no fixed maximum; the
 capacity above only describes how far the *bounded* model checker reasons. The
 language and its contracts are deliberately decoupled from what any particular
-prover can prove: replace ESBMC with a stronger (or unbounded) checker and the
+prover can prove: replace ESBMC with a stronger (or unbounded) checker, as the native backend does for `Vec`, and the
 same source, the same contracts, and the same CLI keep working — the only
 difference is that the verifier can cover more of the state space. For this
 reason a `requires`/`ensures` clause must never encode a verifier bound (e.g.
@@ -3876,9 +4168,9 @@ tuple's span. Compare the elements instead: `requires: a != 1 || b != 2`.
 
 ## Counterexample Replay (Differential Test)
 
-`vow verify --replay-cex` (also `vow build --replay-cex`) cross-checks a counterexample against the executable's runtime semantics. After ESBMC reports a violation, Vow maps the symbolic assignment to concrete Vow inputs, builds a `--mode debug` harness that calls the failing function with them, and checks whether the runtime `VowViolation` matches — **same `vow_id` and same blame**.
+`vow verify --replay-cex` (also `vow build --replay-cex`) cross-checks a counterexample against the executable's runtime semantics. After the verifier reports a violation, Vow maps the symbolic assignment to concrete Vow inputs, builds a `--mode debug` harness that calls the failing function with them, and checks whether the runtime `VowViolation` matches — **same `vow_id` and same blame**.
 
-This is a *differential test*, **not part of the proof**. The static verdict and exit code are unchanged whether or not replay is requested. Its purpose is to detect drift between the two independent lowerings of a contract: the verifier's C model (`requires` → `__ESBMC_assume`, `ensures`/`invariant` → `__ESBMC_assert`) and `vow-codegen`'s debug-mode runtime checks. A `confirmed` replay grounds the counterexample in real execution; a `diverged` replay flags either a model false-positive or values that do not reach the violation at runtime. See `docs/spec/cli.md` → "Counterexample replay" for the JSON shape and v1 input scope. Under `--backend native` the replay is also the oracle for the native checker: a counterexample that does not reproduce is reported as a `VerifierBug` diagnostic.
+This is a *differential test*, **not part of the proof**. The static verdict and exit code are unchanged whether or not replay is requested. Its purpose is to detect drift between the two independent lowerings of a contract: the verifier's model (the C model, `requires` → `__ESBMC_assume` and `ensures`/`invariant` → `__ESBMC_assert`, under ESBMC; the SMT-LIB encoding under the native backend) and `vow-codegen`'s debug-mode runtime checks. A `confirmed` replay grounds the counterexample in real execution; a `diverged` replay flags either a model false-positive or values that do not reach the violation at runtime. See `docs/spec/cli.md` → "Counterexample replay" for the JSON shape and v1 input scope. Under `--backend native` the replay is also the oracle for the native checker: a counterexample that does not reproduce is reported as a `VerifierBug` diagnostic.
 
 ## Integer Contracts
 
@@ -4083,7 +4375,7 @@ fn double(x: i64) -> i64 vow {
 }
 ```
 
-ESBMC finds: `x = 4611686018427387904` → `result = -9223372036854775808` (wraps negative).
+The verifier finds: `x = 4611686018427387904` → `result = -9223372036854775808` (wraps negative).
 
 **Fix:** use checked arithmetic (`+!`), or bound the input.
 
@@ -4113,9 +4405,11 @@ This is not inductive — `v.len() == n` is only true after the loop.
 
 **Fix:** Use `invariant: i >= 0, invariant: i <= n`.
 
+Under the native backend the same mistake shows up differently: a wrong invariant is refuted by unwinding (a run that violates it inside the bound is `failed`), while an invariant that is true but not inductive leaves the verdict `unknown` with a `verify_message` that starts `unwinding assertion:`. A failing induction step is never `failed`.
+
 ### Unbound Loop Iterations
 
-Without a bound on loop iterations, ESBMC may timeout (default max-k-step is 50):
+Without a bound on loop iterations, the verifier may not finish. Under ESBMC the unwind stops at `--max-k-step` (default 50); under the native backend every loop is unrolled to an internal bound of at most 64 and an unrolling that is not enough is `unknown` with an `unwinding assertion:` message:
 
 ```vow
 fn fill(n: i64) -> Vec<i64> vow {
@@ -4124,11 +4418,11 @@ fn fill(n: i64) -> Vec<i64> vow {
 } { ... }
 ```
 
-ESBMC will only verify this for small `n` values. **Do not** add `requires: n <= 8` to the contract — that would distort the semantic specification. The contract is correct as-is; ESBMC's bounded verification provides partial assurance.
+The verifier unrolls only a bounded number of iterations, so for large `n` the verdict is `unknown` rather than `proven`. **Do not** add `requires: n <= 8` to the contract — that would distort the semantic specification. The contract is correct as-is; add a loop `invariant` so the native backend can prove it inductively, and accept an honest `unknown` otherwise.
 
 ### Verification-Driven Bounds (Anti-Pattern)
 
-**Never** add artificial bounds to contracts solely to help ESBMC verify them:
+**Never** add artificial bounds to contracts solely to help the verifier prove them:
 
 ```vow
 // WRONG: bounds exist only to appease the verifier
@@ -4152,7 +4446,7 @@ fn gcd(a: i64, b: i64) -> i64 vow {
 } { ... }
 ```
 
-Contracts express what is mathematically required for correctness. ESBMC verifies within its configured model (bounded loops, bounded arithmetic, bounded collection models) — if it cannot establish a correct contract, that is acceptable. An honest inconclusive result is better than a distorted specification. This includes collection lengths, capacities, indices, and struct fields: keep real domain and representation constraints, but never cap them merely to fit the model. The same rule is why the verifier's collection model capacities (see "Collection Models for Verification") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.
+Contracts express what is mathematically required for correctness. The verifier checks within its configured model (bounded loops, and under ESBMC bounded arithmetic and collection models) — if it cannot establish a correct contract, that is acceptable. An honest inconclusive result is better than a distorted specification. This includes collection lengths, capacities, indices, and struct fields: keep real domain and representation constraints, but never cap them merely to fit the model. The same rule is why the verifier's collection model capacities (see "Collection Models for Verification") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.
 
 **The overflow-guard bound is this anti-pattern's most common disguise.** A clause like `requires: a <= 4611686018427387903` on an adding function looks semantic — it does describe a real property of `i64` — but its only purpose is to keep wrapping unreachable, and it pays for that by excluding inputs the function handles perfectly well. Use the checked operator instead: `a +! b` aborts rather than wraps, the verifier models the abort, and the contract keeps its true domain. See [Range Bounds](#range-bounds) and [Wrapping Arithmetic Overflow](#wrapping-arithmetic-overflow).
 
@@ -4174,7 +4468,7 @@ A counterexample in the JSON output:
 | Field       | Meaning                                                        |
 |-------------|----------------------------------------------------------------|
 | `function`  | Which function's verification query failed                     |
-| `values`    | Source or ESBMC variable values in the counterexample           |
+| `values`    | Source variable values in the counterexample (decimal text of the declared type)           |
 | `violation` | Which contract clause was violated                             |
 | `vow_id`    | Function-local ID linking to the specific vow clause            |
 | `source`    | Byte offset in the source file of the violated clause           |
@@ -4199,7 +4493,9 @@ callee, `violation`, `source` and `blame` are the callee's clause, and `vow_id`
 is the callee-local id (the id a debug-mode `VowViolation` for that callee would
 report). It is never resolved against the verified caller's same-numbered clause.
 
-Variable names prefixed with `$esbmc$` are ESBMC internal variables; `$` cannot
+A violation that is not a contract clause (a division or remainder by zero or an over-wide shift under either backend; `MIN / -1`, `unwrap()` on `None` and an out-of-bounds `Vec` index under the native backend only) carries the unattributed `vow_id` `4294967293`, blame `None` and a `violation` text naming the abort. It is not a `requires`, so there is no clause to blame; bound the operand with a real `requires` or guard the operation.
+
+Under the ESBMC backend, variable names prefixed with `$esbmc$` are ESBMC internal variables; `$` cannot
 appear in a Vow identifier, so the prefix cannot collide with a source name.
 Named inputs map directly to function parameters, including source names that
 begin with `_esbmc`.
@@ -4221,15 +4517,19 @@ vow {
 }
 ```
 
-ESBMC verifies `u64` contracts using `uint64_t` and unsigned nondet values.
+Both backends treat `u64` as an unsigned 64-bit value (`uint64_t` and unsigned nondet values under ESBMC, a 64-bit bit-vector with unsigned comparisons natively), so a counterexample reports the magnitude.
 
 ## 128-bit Integer Contracts
 
-`i128`/`u128` literals work in contracts and bodies. The verifier builds each
-literal from its two 64-bit limbs, so under the bit-vector encoding every
-value is exact (`i128::MIN`, `i128::MAX` and `u128::MAX` included) and a
-counterexample reports the full 128-bit value. A proof from the `--encoding ir`
-timeout fallback is reported as `ProvenIr` and is weaker:
+`i128`/`u128` literals work in contracts and bodies. The native backend models
+128-bit scalars, constants, checked arithmetic and struct fields or enum payloads
+as 128-bit bit-vectors, so every value is exact (`i128::MIN`, `i128::MAX` and
+`u128::MAX` included) and a counterexample reports the full 128-bit value. Under
+the ESBMC backend 128-bit constants are modelled exactly under the bit-vector
+encoding, and a proof from its `--encoding ir` timeout fallback is reported as
+plain `proven` and is weaker; 128-bit checked arithmetic and aggregate fields
+are `Skipped`. A `Vec<i128>` or `Vec<u128>` element is `Skipped` under both
+backends. A contract over 128-bit scalars and literals verifies under both:
 
 ```vow
 fn at_least_one(x: u128) -> u128
@@ -4266,7 +4566,7 @@ The contract applies to all functions declared in the block, and documents the e
 
 This document answers a question that `contracts.md` does not: given a function,
 **which** properties are worth proving, how do you tell a strong contract from a
-hollow one, and how do you express the strong shapes within ESBMC's reach.
+hollow one, and how do you express the strong shapes within the verifier's reach.
 
 `contracts.md` is the *reference* (syntax, blame, the verification pipeline,
 anti-patterns). This is the *methodology* (judgement). Read that first.
@@ -4291,7 +4591,7 @@ compiler carry this contract:
 fn EFF_IO() -> i64 vow { ensures: result > 0 } { 1 }
 ```
 
-ESBMC proves `1 > 0` in milliseconds. But `ensures: result > 0` also holds for
+The verifier proves `1 > 0` in milliseconds. But `ensures: result > 0` also holds for
 `{ 2 }`, `{ 99 }`, and every other positive constant — it does not pin the value
 this function is *supposed* to return. It is a real postcondition, but a **weak**
 one: it constrains the output to a half-line, not to a point. Proving 354 of
@@ -4549,19 +4849,27 @@ first runs, and trivial validity *always* indicated a real defect in the design,
 spec, or environment.
 
 **Detection (the reachability probe).** `vow contracts --verify` ships this check
-(#81). For any function carrying a `requires`, it re-runs ESBMC over the same
-model with a `vow_reach` label planted immediately after the `requires` assumes,
-under `--error-label vow_reach`. If ESBMC reports the label **unreachable**
-(`VERIFICATION SUCCESSFUL`), the conjoined preconditions are contradictory and
+(#81). For any function carrying a `requires`, it re-checks the same model with
+a reachability probe immediately after the `requires` assumes. Under ESBMC the
+probe is a `vow_reach` label run under `--error-label vow_reach`; under
+`--backend native` the function is cut right after its last `requires` and the
+cut point must be unreachable. If the probe reports the point **unreachable**
+(ESBMC: `VERIFICATION SUCCESSFUL`), the conjoined preconditions are contradictory and
 every `ensures` held only vacuously — all of the function's clauses are reported
-`status: "vacuous"` and the command fails closed. If the label is **reachable**
-(`VERIFICATION FAILED`), the precondition domain is non-empty and the proof is
+`status: "vacuous"` and the command fails closed. If the point is **reachable**
+(ESBMC: `VERIFICATION FAILED`), the precondition domain is non-empty and the proof is
 live. This is operationally the dual of the classic `ensures: false` re-check —
 asking "is the post-`requires` point reachable?" instead of "does `assert(false)`
 still pass?" — but it needs only one extra run per function and is unaffected by
 body divergence, since the label precedes the body. The label sits after the
 requires prefix rather than at the function end precisely so an unbounded loop or
 an `assume(0)` deeper in the body cannot make it spuriously unreachable.
+
+Under `--backend native` the probe is not a label but a rewrite of the same IR
+that the native engine checks: the function is cut right after its last
+`requires` and that point must be unreachable, so `&&`/`||` requires (which
+lower to branches) are covered. The `trivially_satisfiable` probe is a rewrite
+too. See "Native backend: `contracts` and `test`" in `cli.md`.
 
 **Interesting witnesses.** Beer et al. also propose the dual of a counterexample:
 for a proof that holds, emit a non-trivial *witness* — concrete inputs that
@@ -4609,9 +4917,9 @@ syntax say it":
 - **expressible** — surface Vow has the syntax
 - **typechecked** — the checker validates the clause to `bool` (added in #81 Phase 0)
 - **lowerable** — the lowerer emits IR for the clause
-- **modelable** — the C emitter / ESBMC model supports the operations used
+- **modelable** — the verifier's model supports the operations used
   (pure, non-effectful helpers only; see `is_modelable` in the C emitter)
-- **backend** — ESBMC actually discharges it within bounds
+- **backend** — the verifier actually discharges it (ESBMC: within bounds; native: for every unwinding it can close, otherwise `unknown`)
 
 | Shape | expressible | typechecked | lowerable | modelable | backend |
 |-------|:-----------:|:-----------:|:---------:|:---------:|:-------:|
@@ -4622,7 +4930,7 @@ syntax say it":
 | 5. Dispatch totality | ✓ | ✓ | ✓ | ✓ (pure dispatch) | ✓ over finite domain |
 | 6a. Argument-relational | ✓ | ✓ | ✓ | ✓ | ✓ |
 | 6b. Cross-fn uniqueness | ✓ (O(n²)) | ✓ | ✓ | ✓ | ✓ but unscalable → prefer structural encoding |
-| 7. Loop invariant | ✓ | ✓ | ✓ | ✓ | partial (bounded / k-induction) |
+| 7. Loop invariant | ✓ | ✓ | ✓ | ✓ | partial (bounded; native also by induction) |
 | Bounded quantifier (`forall i in 0..n`) | ✗ (no surface syntax) | — | — | — | — (roadmap #467/#470) |
 
 Contract expressions must be **pure** — they cannot call effectful functions
@@ -4634,11 +4942,13 @@ model limitations, not contract-language limitations.
 
 `vow contracts --verify` performs the **per-obligation** quality analysis tracked
 in #81 / roadmap WS-3.2. Each clause gets an individual verification verdict (via
-ESBMC `--multi-property`), plus the three quality signals above:
+ESBMC `--multi-property`, or from one `verify-worker` per function under
+`--backend native`), plus the three quality signals above:
 
-- **Tautology** — the static `quality` field flags constant clauses (no ESBMC).
-- **Vacuity** — a contradictory `requires` is caught by the `--error-label`
-  reachability probe and reported `status: "vacuous"` (fail-closed).
+- **Tautology** — the static `quality` field flags constant clauses (no verifier is run).
+- **Vacuity** — a contradictory `requires` is caught by the reachability probe
+  (ESBMC `--error-label`, or the post-`requires` cut under `--backend native`) and
+  reported `status: "vacuous"` (fail-closed).
 - **Weakness** — the body-replace probe reports `trivially_satisfiable: true` for
   an `ensures` a trivial `return <default>` body satisfies (informational).
 
@@ -4724,6 +5034,8 @@ end of the file, or the file ends with a `\` escape that has nothing to escape
 (`unterminated string escape`). An escaped quote (`"abc\"`) does not close the
 literal.
 
+**Wrong:**
+
 ```vow
 fn f() -> () [io] {
     print_str("hello);
@@ -4732,12 +5044,22 @@ fn f() -> () [io] {
 
 **Fix:** Close the string with a matching `"`.
 
+**Right:**
+
+```vow
+fn f() -> () [io] {
+    print_str("hello");
+}
+```
+
 ### InvalidCharacter
 
 **Phase:** Lexer
 **Meaning:** The source contains a character the lexer does not recognize. The
 message is `unexpected character '<c>'` and the span covers that one byte.
 Lexing stops at the first lexical error.
+
+**Wrong:**
 
 ```vow
 fn f() -> i64 {
@@ -4747,10 +5069,20 @@ fn f() -> i64 {
 
 **Fix:** Remove the invalid character. Vow has no `@` operator.
 
+**Right:**
+
+```vow
+fn f(x: i64, y: i64) -> i64 {
+    x + y
+}
+```
+
 A float literal whose decimal magnitude overflows `f64` (parses to
 infinity) is also an `InvalidCharacter` error, raised at lex time rather
 than allowed through to produce an uncompilable C `inf` token later in
 the pipeline:
+
+**Wrong:**
 
 ```vow
 fn f() -> f64 {
@@ -4760,10 +5092,20 @@ fn f() -> f64 {
 
 **Fix:** Use a literal whose magnitude is within `f64::MAX` (~1.7976931348623157e308).
 
+**Right:**
+
+```vow
+fn f() -> f64 {
+    1000000000000000000000.0
+}
+```
+
 ### InvalidIntSuffix
 
 **Phase:** Lexer
 **Meaning:** An integer literal carries a type suffix that names a type Vow does not have.
+
+**Wrong:**
 
 ```vow
 fn f() -> u64 {
@@ -4778,10 +5120,20 @@ design (see `docs/adr/0001-numeric-tower-narrow-ints.md`), so there is no `usize
 or `isize`; write `5u64` for a machine-word-sized unsigned value and `5i64` for a
 signed one.
 
+**Right:**
+
+```vow
+fn f() -> u64 {
+    5u64
+}
+```
+
 ### UnexpectedToken
 
 **Phase:** Parser
 **Meaning:** The parser encountered a token it did not expect at that position.
+
+**Wrong:**
 
 ```vow
 module M 123
@@ -4789,23 +5141,46 @@ module M 123
 
 **Fix:** Check the syntax around the reported span. Common causes: missing `{`, `}`, `(`, `)`, or a keyword in the wrong position.
 
+**Right:**
+
+```vow
+module M
+
+fn f() -> i64 {
+    123
+}
+```
+
 ### MissingDelimiter
 
 **Phase:** Parser
 **Meaning:** A matching delimiter (`}`, `)`, `]`) is missing.
+
+**Wrong:**
 
 ```vow
 fn f() -> i64 {
     42
 ```
 
-**Fix:** Add the missing closing delimiter.
+**Fix:** Add the missing closing delimiter. No compiler emits `MissingDelimiter` today: an
+unclosed block at end of file is reported as `UnexpectedToken`.
+
+**Right:**
+
+```vow
+fn f() -> i64 {
+    42
+}
+```
 
 ### TypeMismatch
 
 **Phase:** Type Checker
 **Meaning:** An expression has a different type than expected, or a qualified
 enum pattern names an enum other than the scrutinee's enum.
+
+**Wrong:**
 
 ```vow
 fn f() -> i32 {
@@ -4818,6 +5193,32 @@ fn f() -> i32 {
 **Fix:** Change the expression or declared type to match. For an enum pattern,
 qualify the variant with the scrutinee's enum name.
 
+**Right:**
+
+```vow
+fn f() -> bool {
+    true
+}
+```
+
+A struct literal must name every declared field. Each omitted field is a
+`TypeMismatch` in both compilers, reported once per field in declaration order
+at the literal's span; a field is never zero-initialised:
+
+**Wrong:**
+
+```vow
+struct Pair { a: i64, b: i64 }
+
+fn f() -> Pair {
+    Pair { a: 1 }
+}
+```
+
+**Output:** ``struct `Pair` literal is missing field `b` ``
+
+**Fix:** Initialise the field explicitly (`Pair { a: 1, b: 0 }`).
+
 The `drop` intrinsic also reports `TypeMismatch` when it is called with an argument
 count other than one or with a value that is not a linear owner
 (``drop requires a linear value, found `i64` ``); see
@@ -4827,6 +5228,8 @@ A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::truncate`
 argument must have exactly the type `u64`. An index of any other integer type
 (for example an `i64` counter) or of a non-integer type is a `TypeMismatch`
 in both compilers:
+
+**Wrong:**
 
 ```vow
 fn f(v: Vec<i64>, i: i64) -> i64 {
@@ -4843,6 +5246,14 @@ coerce to `u64` without a cast. `String` offsets (`byte_at`, `substring`,
 and `push_byte` takes exactly `u8`; see
 [String offsets](grammar.md#string-offsets).
 
+**Right:**
+
+```vow
+fn f(v: Vec<i64>, i: u64) -> i64 {
+    v[i]
+}
+```
+
 Only `Vec<T>` has an index operator. Indexing any other type (`HashMap`,
 `BTreeMap`, `String`, `Option`, ...) is a `TypeMismatch` whose message begins
 `index operation on non-indexable type` and prints the full receiver type (for example `HashMap<i64, i64>` or `String`, identically in both compilers); read a map entry
@@ -4852,6 +5263,8 @@ with `m.get(k)` and a string byte with `s.byte_at(i)`.
 and value types from the binding's annotation. A method call on a collection
 whose type was never annotated is a `TypeMismatch` in both compilers, one per
 call:
+
+**Wrong:**
 
 ```vow
 fn f() -> () {
@@ -4864,7 +5277,18 @@ fn f() -> () {
 
 **Fix:** Annotate the binding: `let m: HashMap<i64, i64> = HashMap::new();`.
 
+**Right:**
+
+```vow
+fn f() -> () {
+    let m: HashMap<i64, i64> = HashMap::new();
+    m.insert(1, 2);
+}
+```
+
 An undefined name is a `TypeMismatch` whose message begins `undefined variable`, in both compilers, and the expression then has an error type so it does not cascade into further type errors. A parameter `where` clause is name-resolved in a scope holding only its own parameter, so a sibling parameter or `result` is an undefined name there; the hint says to move such a condition to `requires`/`ensures`.
+
+**Wrong:**
 
 ```vow
 fn ordered(a: i64, b: i64 where b > a) -> i64 {
@@ -4876,10 +5300,22 @@ fn ordered(a: i64, b: i64 where b > a) -> i64 {
 
 **Fix:** State the condition in `requires: b > a`.
 
+**Right:**
+
+```vow
+fn ordered(a: i64, b: i64) -> i64 vow {
+    requires: b > a
+} {
+    b
+}
+```
+
 ### LiteralOutOfRange
 
 **Phase:** Type Checker
 **Meaning:** An integer literal appears in a typed context (annotated `let`, function argument, struct field, or const declaration) whose target type cannot hold the literal's value. The check runs after context coercion, so the offending literal is the one written in the source, not a widened intermediate.
+
+**Wrong:**
 
 ```vow
 let x: u8 = 300;
@@ -4891,10 +5327,20 @@ let y = 256u8;   // a suffixed literal is checked against its suffix type
 
 **Fix:** Use a value within the target type's range, change the target type, or write an explicit narrowing intrinsic (`i64_to_u8_try`, `i64_to_u8_wrap`, `i64_to_u8_sat`) if you intend to convert a wider value at runtime.
 
+**Right:**
+
+```vow
+let x: u8 = 255;
+const NEG: i16 = -1;
+let y = 255u8;
+```
+
 ### NarrowingCastNotAllowed
 
 **Phase:** Type Checker
 **Meaning:** The `as` operator was used to convert a wider integer type to a narrower one. `as` is widening-only; narrowing must use a named intrinsic so the agent chooses an explicit semantics (range-checked vs. truncating vs. saturating). See `grammar.md` §Type Cast.
+
+**Wrong:**
 
 ```vow
 fn f(big: i64) -> u8 {
@@ -4909,10 +5355,22 @@ fn f(big: i64) -> u8 {
 - `i64_to_u8_wrap(big) -> u8` — truncate (keep low bits)
 - `i64_to_u8_sat(big) -> u8` — clamp to `0..=255`
 
+**Right:**
+
+```vow
+fn f(big: i64) -> u8 {
+    i64_to_u8_wrap(big)
+}
+```
+
+`i128`/`u128` to `i64`/`u64` has no narrowing intrinsic family; the diagnostic's hint says so instead of naming one. Narrow through `i32` or smaller with `i128_to_i32_try`-style intrinsics, or keep the value as `i128`/`u128`. See `grammar.md` §Type Cast.
+
 ### ShiftCountOutOfRange
 
 **Phase:** Type Checker
-**Meaning:** A constant-expression shift count is negative or greater than or equal to the bit-width of the left operand. Shifting an `N`-bit value by `>= N` bits is undefined in the underlying C model and is rejected at compile time when the count is statically known. Dynamic shift counts (non-const expressions) are checked by ESBMC, which requires `0 <= count < width` at the shift (a negative signed count is a violation). At runtime only 8-bit shifts trap: an `i8`/`u8` shift whose count is `>= 8` aborts with `ArithmeticOverflow` in every build mode. Wider shifts are not trapped; the hardware shift masks the count to the operand width (`(x: i64) << 65` is `x << 1`), so only verification excludes them.
+**Meaning:** A constant-expression shift count is negative or greater than or equal to the bit-width of the left operand. Shifting an `N`-bit value by `>= N` bits is undefined in the underlying C model and is rejected at compile time when the count is statically known. Dynamic shift counts (non-const expressions) are checked by the verifier, which requires `0 <= count < width` at the shift (a negative signed count is a violation). At runtime only 8-bit shifts trap: an `i8`/`u8` shift whose count is `>= 8` aborts with `ArithmeticOverflow` in every build mode. Wider shifts are not trapped; the hardware shift masks the count to the operand width (`(x: i64) << 65` is `x << 1`), so only verification excludes them.
+
+**Wrong:**
 
 ```vow
 fn f(x: u8) -> u8 {
@@ -4924,12 +5382,22 @@ fn f(x: u8) -> u8 {
 
 **Fix:** Use a count less than the LHS bit-width. To shift a narrow value by a larger amount, widen first: `(x as u32) << 8` is legal (it shifts the widened `u32` value by 8), but the result is `u32`; to get back to `u8`, use a narrowing intrinsic such as `u32_to_u8_wrap`.
 
+**Right:**
+
+```vow
+fn f(x: u8) -> u32 {
+    (x as u32) << 8
+}
+```
+
 ### TautologicalComparison
 
 **Phase:** Type Checker
 **Meaning:** A comparison against a constant `0` can never fail (or can never hold) because the other operand has an unsigned integer type. `x >= 0` and `0 <= x` are always true for unsigned `x`; `x < 0` and `0 > x` are always false. Such a clause admits every implementation while reading like a real bound, so it is rejected rather than warned about — there is no suppression form. The const fold sees through `as` casts, so `x >= 0 as u64` is caught too.
 
 `x > 0`, `x <= 0`, `x == 0` and `x != 0` all constrain an unsigned value and keep compiling. Signed operands are untouched.
+
+**Wrong:**
 
 ```vow
 fn sum(n: u64) -> u64 vow {
@@ -4955,10 +5423,22 @@ A chain does not hide it either: `(x as i32 as i64) >= 0` with `x: u32` is rejec
 
 **Fix:** Drop the dead clause, or state the bound you actually meant. An index invariant becomes `invariant: i < v.len()`; a lower bound that matters on an unsigned counter is `i > 0`, not `i >= 0`. If the subject really can be negative, its type should be signed.
 
+**Right:**
+
+```vow
+fn sum(n: u64) -> u64 vow {
+    ensures: result == n
+} {
+    n
+}
+```
+
 ### StaticLiteralRequired
 
 **Phase:** Type Checker
 **Meaning:** A compiler intrinsic requires a string literal operand so it can be lowered without allocation.
+
+**Wrong:**
 
 ```vow
 fn f(s: String, key: String) -> i64 {
@@ -4970,10 +5450,20 @@ fn f(s: String, key: String) -> i64 {
 
 **Fix:** Pass a literal directly, for example `string_matches_literal_at(s, 0, "name")`.
 
+**Right:**
+
+```vow
+fn f(s: String) -> i64 {
+    string_matches_literal_at(s, 0, "name")
+}
+```
+
 ### EffectViolation
 
 **Phase:** Type Checker
 **Meaning:** A function calls another function with effects not declared in its own signature, **or** a `requires`/`ensures`/`invariant` clause or parameter `where` clause calls a function or builtin method that writes through one of its arguments. The second form is blamed on the callee, even in a `requires` clause, because the clause itself is at fault for evaluating the write — not the caller.
+
+**Wrong:**
 
 ```vow
 fn f() -> () {
@@ -4982,6 +5472,16 @@ fn f() -> () {
 ```
 
 **Fix:** Add the required effect to the function signature: `fn f() -> () [io]`. Effects are independent: `[io]` does not cover `read` or `write`, so a function that prints and reads a file declares `[io, read]`.
+
+**Right:**
+
+```vow
+fn f() -> () [io] {
+    print_str("hi");
+}
+```
+
+**Wrong:**
 
 ```vow
 fn mark(p: Point) -> bool {
@@ -4997,6 +5497,18 @@ fn make_point(x: i64, y: i64) -> Point vow {
 ```
 
 **Fix:** Move the write out of the clause — contracts may only read, e.g. `ensures: result.x == x`. See `docs/spec/grammar.md` → "Contract Purity".
+
+**Right:**
+
+```vow
+struct Point { x: i64, y: i64 }
+
+fn make_point(x: i64, y: i64) -> Point vow {
+    ensures: result.x == x
+} {
+    Point { x: x, y: y }
+}
+```
 
 ### LinearTypeViolation
 
@@ -5014,13 +5526,14 @@ wrapper consumes it and transfers the obligation to the selected payload. An
 unbound `_` catchall also violates the rule while any unhandled enum variant can
 carry a linear payload.
 
+**Wrong:**
+
 ```vow
 linear struct Handle { fd: i64 }
 
-fn f(h: Handle) -> Handle {
-    let h2: Handle = h;
-    let h3: Handle = h;  // h was already consumed
-    h2
+fn f(h: Handle) -> () {
+    drop(h);
+    drop(h);  // h was already consumed
 }
 ```
 
@@ -5030,10 +5543,22 @@ supported. In a match, add explicit arms that bind and consume or transfer every
 linear payload before using `_`. Obligations that are simply left live at scope
 exit are reported later as `RegionLinear`.
 
+**Right:**
+
+```vow
+linear struct Handle { fd: i64 }
+
+fn f(h: Handle) -> () {
+    drop(h);
+}
+```
+
 ### RegionLinear
 
 **Phase:** Region Inference
 **Meaning:** A `linear struct` value can remain live when its owning region closes. Returning the value transfers the linear obligation to the caller; consuming it before the close satisfies the obligation.
+
+**Wrong:**
 
 ```vow
 linear struct Handle { fd: i64 }
@@ -5046,10 +5571,23 @@ fn f() -> i64 {
 
 **Fix:** Consume the value before the region closes, or return it so the caller receives the obligation.
 
+**Right:**
+
+```vow
+linear struct Handle { fd: i64 }
+
+fn f() -> Handle {
+    let h: Handle = Handle { fd: 1 };
+    h
+}
+```
+
 ### NonExhaustiveMatch
 
 **Phase:** Type Checker
 **Meaning:** A `match` expression does not cover all possible variants.
+
+**Wrong:**
 
 ```vow
 fn f(o: Option<i64>) -> i64 {
@@ -5061,6 +5599,17 @@ fn f(o: Option<i64>) -> i64 {
 
 **Fix:** Add a `_ => ...` wildcard arm or cover all variants (`Option::None => ...`).
 
+**Right:**
+
+```vow
+fn f(o: Option<i64>) -> i64 {
+    match o {
+        Option::Some(x) => x,
+        Option::None => 0,
+    }
+}
+```
+
 ### UnsupportedPattern
 
 **Phase:** Type Checker
@@ -5071,6 +5620,8 @@ Match currently accepts enum-valued scrutinees, qualified unit variants,
 qualified tuple variants with `_` or immutable identifier payloads, and final
 catchall `_` or immutable identifier arms. A tuple-variant pattern must bind
 exactly the number of payloads declared by the variant.
+
+**Wrong:**
 
 ```vow
 fn f(n: i64) -> i64 {
@@ -5088,9 +5639,23 @@ payloads, provide exactly one `_` or immutable identifier for each declared
 payload and inspect bound values separately. Unsupported patterns fail before
 lowering and never produce an executable.
 
+**Right:**
+
+```vow
+fn f(n: i64) -> i64 {
+    if n == 0 {
+        5
+    } else {
+        9
+    }
+}
+```
+
 `let` only binds identifier, wildcard, and tuple patterns; all other pattern
 kinds (literals, enum variants, struct patterns, or-patterns) are refutable
 and rejected outright, since `let` requires the pattern to always match:
+
+**Wrong:**
 
 ```vow
 fn f(o: Option<i64>) -> i64 {
@@ -5101,11 +5666,26 @@ fn f(o: Option<i64>) -> i64 {
 
 **Output:** `let bindings only support identifier, wildcard, and tuple patterns`
 
+**Fix:** `match` the value and handle every variant.
+
+**Right:**
+
+```vow
+fn f(o: Option<i64>) -> i64 {
+    match o {
+        Option::Some(x) => x,
+        Option::None => 0,
+    }
+}
+```
+
 A tuple `let` pattern additionally requires the initializer to be a tuple
 literal of exactly the same arity, at every nesting level — tuple *values*
 have no runtime representation, so `let (a, b) = ...` is a compile-time
 desugaring into `let a = ...; let b = ...;`, never a projection out of a
 materialized tuple:
+
+**Wrong:**
 
 ```vow
 fn pair() -> (i64, i64) { (1, 2) }
@@ -5124,12 +5704,23 @@ elements once tuples are supported as first-class values (tracked separately;
 not yet implemented). A tuple `let` pattern also cannot bind a linear-typed
 element — bind the whole owner to a single identifier instead.
 
+**Right:**
+
+```vow
+fn f() -> i64 {
+    let (a, b) = (1, 2);
+    a + b
+}
+```
+
 ### ImmutableAssignment
 
 **Phase:** Type Checker
 **Meaning:** A binding not declared `mut` was reassigned. Bindings are immutable
 by default; `mut` is required only for whole-binding reassignment `x = e`. Field
 writes (`s.f = e`) and index writes (`v[i] = e`) are allowed through any binding.
+
+**Wrong:**
 
 ```vow
 fn f() -> i64 {
@@ -5141,12 +5732,24 @@ fn f() -> i64 {
 
 **Fix:** Declare the binding `mut`: `let mut x: i64 = 1;`.
 
+**Right:**
+
+```vow
+fn f() -> i64 {
+    let mut x: i64 = 1;
+    x = 2;
+    x
+}
+```
+
 ### UnusedMut
 
 **Phase:** Type Checker
 **Meaning:** A `let mut` binding is never reassigned, so the `mut` is dead. Only
 whole-binding reassignment counts as a use of `mut` — a binding mutated solely
 via `s.f = e`, `v[i] = e`, or a method call does not need `mut`.
+
+**Wrong:**
 
 ```vow
 fn f() -> i64 {
@@ -5157,10 +5760,21 @@ fn f() -> i64 {
 
 **Fix:** Remove `mut`: `let x: i64 = 1;`.
 
+**Right:**
+
+```vow
+fn f() -> i64 {
+    let x: i64 = 1;
+    x
+}
+```
+
 ### UnknownMethod
 
 **Phase:** Type Checker
 **Meaning:** A method call uses a name that does not exist on the receiver type.
+
+**Wrong:**
 
 ```vow
 fn f() -> () {
@@ -5173,10 +5787,21 @@ fn f() -> () {
 
 **Fix:** Check the method name for typos. Use `--help` to see available methods for each type. `Vec` has no `get` method: read an element with `v[i]` (see [Indexing](grammar.md#indexing)), and call `HashMap::get` or `BTreeMap::get` for maps. A `Vec` receiver calling `get` carries the structured hint ``use `v[i]` to read an element; `Vec` has no `get` `` in the diagnostic's `hints` array, identically in both compilers. Any other unknown method on a `String`, `Vec`, `HashMap`, `BTreeMap`, `Option` or `Result` receiver carries ``did you mean `push`?`` for the nearest builtin method within an edit distance of 3 (the earliest in the method list wins a tie; names over 128 bytes get none), and otherwise `available methods: len, push, pop, clear, truncate`, again identically in both compilers.
 
+**Right:**
+
+```vow
+fn f() -> () {
+    let v: Vec<i64> = Vec::new();
+    v.push(42);
+}
+```
+
 ### UnsupportedFeature
 
 **Phase:** Parser (`&expr`), Type Checker (everything else)
 **Meaning:** A language feature that is not supported in Vow was used, or a `HashMap`/`BTreeMap` was written with a key or value type the runtime cannot store (see [Map key and value types](#map-key-and-value-types)).
+
+**Wrong:**
 
 ```vow
 trait Foo {
@@ -5188,9 +5813,19 @@ trait Foo {
 
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
 
+**Right:**
+
+```vow
+fn bar() -> i64 {
+    0
+}
+```
+
 A prefix `&expr` (or `&mut expr`, `&&expr`) borrow expression is rejected by the parser, at the `&` or `&&` token, with
 the hint ``Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise
 AND operator``; the operand is still parsed, so the diagnostic is reported once:
+
+**Wrong:**
 
 ```vow
 fn f(x: i64) -> i64 {
@@ -5203,8 +5838,19 @@ fn f(x: i64) -> i64 {
 
 **Fix:** Use the value directly. `&` is the bitwise AND operator between two operands (`x & 1`).
 
+**Right:**
+
+```vow
+fn f(x: i64) -> i64 {
+    let r: i64 = x;
+    r
+}
+```
+
 A tuple expression, including the empty tuple `()`, inside a contract clause is also
 `UnsupportedFeature`, because tuples have no runtime or verifier representation:
+
+**Wrong:**
 
 ```vow
 fn f(a: i64, b: i64) -> i64 vow {
@@ -5218,9 +5864,21 @@ fn f(a: i64, b: i64) -> i64 vow {
 
 **Fix:** Compare the elements individually, e.g. `requires: a != 1 || b != 2`.
 
+**Right:**
+
+```vow
+fn f(a: i64, b: i64) -> i64 vow {
+    requires: a != 1 || b != 2
+} {
+    a
+}
+```
+
 #### Map key and value types
 
 The same code reports a map type whose key or value cannot be stored in the runtime's single 64-bit map slot: a `HashMap` key that is not an integer type of at most 64 bits or `bool`, a `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64`, and a `HashMap` value that is or contains a `linear struct` (see [HashMap key and value types](grammar.md#hashmap-methods)).
+
+**Wrong:**
 
 ```vow
 fn f() -> () {
@@ -5232,9 +5890,19 @@ fn f() -> () {
 
 **Fix:** Hash or intern the key to a `u64` at the call site and keep a side table for the originals. For a 128-bit value, store the two `u64` halves separately. For a linear value, keep it in a local binding and store only an integer handle in the map.
 
+**Right:**
+
+```vow
+fn f() -> () {
+    let m: HashMap<u64, i64> = HashMap::new();
+}
+```
+
 #### Linear collection elements
 
 The same code reports a `Vec<T>` whose element type is or contains a linear owner (a `linear struct`, or an `Option`, `Result`, or user enum wrapping one). Collections copy and shift elements bitwise, so a stored linear value would be duplicated or would escape the checker's consume-once tracking. A reference element (`Vec<&Token>`) borrows rather than owns and is accepted; a nested collection is reported once, where the innermost `Vec` is written, and a type alias once, at its definition.
+
+**Wrong:**
 
 ```vow
 linear struct Token { id: i64 }
@@ -5248,9 +5916,22 @@ fn f() -> () {
 
 **Fix:** Keep the linear value in a local binding and store an integer handle in the `Vec`. Consume a linear value that is no longer needed with `drop(value)`.
 
+**Right:**
+
+```vow
+linear struct Token { id: i64 }
+
+fn f(t: Token) -> () {
+    let ids: Vec<i64> = Vec::new();
+    drop(t);
+}
+```
+
 #### Slice types
 
 The same code reports a slice type `[T]` (see [Slice Types](grammar.md#slice-types)). Each bracket pair is reported once (`[[i64]]` gives two diagnostics, an alias once at its definition), with the hint ``use `Vec<T>` to hold a sequence of values``.
+
+**Wrong:**
 
 ```vow
 fn probe(sl: [i64]) -> i64 { 0 }
@@ -5260,9 +5941,17 @@ fn probe(sl: [i64]) -> i64 { 0 }
 
 **Fix:** Take a `Vec<T>` instead.
 
+**Right:**
+
+```vow
+fn probe(sl: Vec<i64>) -> i64 { 0 }
+```
+
 #### Reserved type names
 
 The same code reports a `struct`, `enum` or `type` alias named after a builtin type (see [User-Defined Types](grammar.md#user-defined-types)). It is reported once per declaration, at the declaration, with the hint `choose a different name for this type`.
+
+**Wrong:**
 
 ```vow
 struct Vec { x: i64 }
@@ -5272,9 +5961,17 @@ struct Vec { x: i64 }
 
 **Fix:** Rename the type.
 
+**Right:**
+
+```vow
+struct Coord { x: i64 }
+```
+
 #### Unit parameters
 
 The same code reports a parameter of type `()` (directly or through a type alias). The unit value carries no information and has no ABI slot, so such a parameter is rejected at the declaration.
+
+**Wrong:**
 
 ```vow
 fn f(u: ()) -> i64 { 0 }
@@ -5284,12 +5981,20 @@ fn f(u: ()) -> i64 { 0 }
 
 **Fix:** Remove the parameter.
 
-A 128-bit integer as an `Option`, `Result`, or `enum` payload is supported, so `HashMap<i64, Option<u128>>` is a valid map type (the map stores a pointer to the payload cell). A bare `u128` or `i128` map value is still rejected with the error above, because a map value occupies a single 64-bit slot. A 128-bit struct field or `Vec` element is not a map restriction: those aggregate positions cannot hold a 128-bit value yet, so codegen rejects them with `CodegenUnsupported` wherever they appear.
+**Right:**
+
+```vow
+fn f() -> i64 { 0 }
+```
+
+A 128-bit integer as an `Option`, `Result`, or `enum` payload is supported, so `HashMap<i64, Option<u128>>` is a valid map type (the map stores a pointer to the payload cell). A bare `u128` or `i128` map value is still rejected with the error above, because a map value occupies a single 64-bit slot. A 128-bit struct field or `Vec` element is not a map restriction: aggregates hold 128-bit values in two slots, so only a bare 128-bit map value is rejected.
 
 ### BTreeMapKeyTypeMustBeI64
 
 **Phase:** Type Checker
-**Meaning:** A `BTreeMap<K, V>` was instantiated with `K` not equal to `i64`. Phase 1 of the BTreeMap stdlib only supports `i64` keys; the runtime helpers and ESBMC C model are hard-coded to i64.
+**Meaning:** A `BTreeMap<K, V>` was instantiated with `K` not equal to `i64`. Phase 1 of the BTreeMap stdlib only supports `i64` keys; the runtime helpers and the verifier's model are hard-coded to i64.
+
+**Wrong:**
 
 ```vow
 fn f() -> () {
@@ -5302,10 +6007,21 @@ fn f() -> () {
 
 **Fix:** Use `BTreeMap<i64, V>`. If you need string or struct keys, hash or intern them to `i64` at the call site and keep a side-table for the originals.
 
+**Right:**
+
+```vow
+fn f() -> () {
+    let m: BTreeMap<i64, i64> = BTreeMap::new();
+    m.insert(1, 1);
+}
+```
+
 ### BTreeMapValueMustBeNonLinear
 
 **Phase:** Type Checker
 **Meaning:** A `BTreeMap<K, V>` was instantiated with a `V` that is or transitively contains a `linear struct`. Non-linear containers like `BTreeMap`, `Vec`, and `HashMap` cannot hold linear values because their internal shift/copy operations are bitwise and would silently duplicate the linear ownership obligation.
+
+**Wrong:**
 
 ```vow
 linear struct Token { id: i64 }
@@ -5318,14 +6034,27 @@ fn f() -> () {
 
 **Fix:** Either drop the `linear` qualifier on the struct, or keep handles in a `Vec<i64>` indirection and consume the linear values via direct function calls outside the map.
 
+**Right:**
+
+```vow
+linear struct Token { id: i64 }
+
+fn f(t: Token) -> () {
+    let m: BTreeMap<i64, i64> = BTreeMap::new();
+    drop(t);
+}
+```
+
 ### MissingContract
 
 **Phase:** Type Checker
 **Meaning:** An `extern "C"` block was declared without a `vow { ... }` contract. Every foreign function call requires a mandatory contract specifying expected behavior.
 
+**Wrong:**
+
 ```vow
 extern "C" {
-    fn write(fd: i32, ptr: i64, len: i64) -> i64 [io];
+    fn write_thing(fd: i32, ptr: i64, len: i64) -> i64 [io];
 }
 ```
 
@@ -5333,10 +6062,23 @@ extern "C" {
 
 **Fix:** Add a `vow { ... }` block to the extern declaration with `requires` and/or `ensures` clauses.
 
+**Right:**
+
+```vow
+extern "C" {
+    vow {
+        requires: fd >= 0
+    }
+    fn write_thing(fd: i32, ptr: i64, len: i64) -> i64 [io];
+}
+```
+
 ### ContractTypeMismatch
 
 **Phase:** Type Checker
 **Meaning:** A `requires`, `ensures`, or `invariant` clause expression, or a parameter `where` clause, does not have type `bool`.
+
+**Wrong:**
 
 ```vow
 fn add(a: i64, b: i64) -> i64 vow {
@@ -5350,33 +6092,129 @@ fn add(a: i64, b: i64) -> i64 vow {
 
 **Fix:** Ensure every contract clause is a boolean expression (comparison, logical operator, or a call to a predicate function returning `bool`).
 
+**Right:**
+
+```vow
+fn add(a: i64, b: i64) -> i64 vow {
+    requires: a >= 0 && b >= 0
+} {
+    a + b
+}
+```
+
 ### VowRequiresViolated
 
-**Phase:** Verification (ESBMC)
-**Meaning:** ESBMC found inputs that violate a `requires` precondition. This is a **static** verification error — it means the function's callers can reach it with invalid arguments.
+**Phase:** Verification
+**Meaning:** The verifier found inputs that violate a `requires` precondition. This is a **static** verification error — it means the function's callers can reach it with invalid arguments.
 
-**Fix:** Strengthen the `requires` clause, or fix the callers to pass valid arguments.
+**Wrong:**
+
+```vow
+fn dec(n: u64) -> u64 vow {
+    requires: n > 0
+} {
+    n - 1
+}
+
+fn caller(x: u64) -> u64 {
+    dec(x)
+}
+```
+
+**Fix:** Fix the callers to pass valid arguments, or, if the function is correct on a wider domain, state that real domain in the `requires` clause.
+
+**Right:** (`dec` unchanged)
+
+```vow
+fn caller(x: u64) -> u64 {
+    if x > 0 {
+        dec(x)
+    } else {
+        0
+    }
+}
+```
 
 ### VowEnsuresViolated
 
-**Phase:** Verification (ESBMC)
-**Meaning:** ESBMC found inputs where the function's return value does not satisfy the `ensures` postcondition.
+**Phase:** Verification
+**Meaning:** The verifier found inputs where the function's return value does not satisfy the `ensures` postcondition.
+
+**Wrong:**
+
+```vow
+fn max(a: i64, b: i64) -> i64 vow {
+    ensures: result >= a && result >= b
+} {
+    a
+}
+```
 
 **Fix:** Fix the function body to satisfy the postcondition, or weaken the `ensures` clause.
 
+**Right:**
+
+```vow
+fn max(a: i64, b: i64) -> i64 vow {
+    ensures: result >= a && result >= b
+} {
+    if a > b { a } else { b }
+}
+```
+
 ### VowInvariantViolated
 
-**Phase:** Verification (ESBMC)
-**Meaning:** ESBMC found a loop iteration where the `invariant` does not hold.
+**Phase:** Verification
+**Meaning:** The verifier found a loop iteration where the `invariant` does not hold.
 
-**Fix:** Strengthen the invariant or fix the loop body.
+**Wrong:**
+
+```vow
+fn count_up() -> u64 {
+    let mut i: u64 = 0;
+    while i < 10 vow {
+        invariant: i <= 10
+    } {
+        i = i + 3;
+    }
+    i
+}
+```
+
+**Fix:** Strengthen the invariant or fix the loop body. No compiler emits `VowInvariantViolated` today: a loop-invariant counterexample is reported with `error_code` `VowEnsuresViolated`, the message reads ``contract violation in `f`: invariant <predicate>``, and the counterexample `violation` starts with `invariant`.
+
+**Right:**
+
+```vow
+fn count_up() -> u64 {
+    let mut i: u64 = 0;
+    while i < 10 vow {
+        invariant: i <= 10
+    } {
+        i = i + 1;
+    }
+    i
+}
+```
 
 ### EsbmcNotFound
 
 **Phase:** Verification
-**Meaning:** ESBMC is not installed or not on `$PATH`. When verification is enabled (the default for `vowc build`, always for `vowc verify`), the compiler checks for ESBMC upfront before compilation. If ESBMC is not found, the build aborts immediately with exit code 1.
+**Meaning:** ESBMC is not installed or not on `$PATH`. When verification is enabled with the ESBMC backend (the default for `vowc build`, always for `vowc verify`), the compiler checks for ESBMC upfront before compilation. If ESBMC is not found, the build aborts immediately with exit code 1. Under `--backend native` the verifier is Bitwuzla instead: a missing `bitwuzla` is reported per function as `VerifyFailed` with `verify_status: "tool_not_found"` (clause `status` `error` in `vowc contracts --verify`), and ESBMC is never consulted.
+
+**Wrong:**
+
+```sh
+vowc build f.vow
+```
 
 **Fix:** Install ESBMC, or use `--no-verify` to skip verification: `vowc build --no-verify <file>`.
+
+**Right:**
+
+```sh
+vowc build --no-verify f.vow
+```
 
 ### RegionConflict
 
@@ -5413,6 +6251,18 @@ fn store_into(out: Vec<String>, prefix: String) [io] {
 
 **Fix:** Move the allocation to a wider scope, or copy the value into the target region (e.g., `String::from(s)` into the outer arena). For routings that compile cleanly but you'd like to know about (root-region placement), see `RegionRootEscape` below. See `docs/design/arena_memory.md` §4.4 for the full rejection vs. visibility distinction.
 
+Neither compiler rejects the snippet above today: it compiles and carries only a `RegionRootEscape` note (the self-hosted frontend reaches `RegionConflict` only through an internal-compiler-error path). Returning the value from the constructing function is the canonical shape and triggers neither:
+
+**Right:**
+
+```vow
+fn make_greeting(prefix: String) -> String {
+    let s: String = String::from(prefix);
+    s.push_str(String::from(" world"));
+    s
+}
+```
+
 ### RegionRootEscape
 
 **Phase:** Region Inference (arena-per-scope, Phase 3)
@@ -5425,6 +6275,14 @@ fn store_into(out: Vec<String>, prefix: String) [io] {
 This is a memory-cost decision the compiler surfaces visibly per `docs/design/arena_memory.md` §4.4: silent root-region placement caused growth-with-no-signal in earlier compiler versions, and the note restores that signal without conflating it with unsoundness (`RegionConflict`).
 
 The note is conservative — it fires for any qualifying allocation in a function that could route to a caller or that widens to root, even if the actual concrete chain in this program doesn't reach `main`. False positives are tolerated because the diagnostic is non-blocking. A widen-to-root allocation is flagged even when it is also returned: being returned does not undo a root-region placement.
+
+**Wrong:**
+
+```vow
+fn store_into(out: Vec<String>, prefix: String) {
+    out.push(String::from(prefix));
+}
+```
 
 ```json
 {
@@ -5439,6 +6297,14 @@ The note is conservative — it fires for any qualifying allocation in a functio
 
 **Fix:** Often none — if the program is short-lived (a checker, a CLI tool) or the values are genuinely program-lifetime, the note is informational. To free the allocation earlier, restructure so the value is **returned** from the constructing function rather than stored into a parameter container; the canonical `FreshInCaller` return path (`fn make_X() -> X`) does not trigger the note for the returned value or any allocation installed as a field of the returned struct (e.g. `Item { name: String::from("hi") }`). The exemption applies only to the *currently-installed* field initializers — a field overwritten before the return (`x.f = A; x.f = B; return x`) does not suppress the dead allocation `A`, which fires the note as expected (per-block last-write dedup, issue #326).
 
+**Right:**
+
+```vow
+fn make_name(prefix: String) -> String {
+    String::from(prefix)
+}
+```
+
 ### CodegenUnsupported
 
 **Phase:** Code Generation
@@ -5450,17 +6316,25 @@ build is left untouched, so branch on `status`/`executable` rather than on the
 output path existing. The diagnostic currently has a file-level span because
 backend errors do not carry an instruction origin.
 
+**Wrong:**
+
 ```vow
-fn main() -> i32 {
-    let values: Vec<i128> = Vec::new();
-    values.push(1);
-    0
+fn remainder(a: f64, b: f64) -> f64 {
+    a % b
 }
 ```
 
 **Fix:** Restructure the program to avoid the named backend limitation, or use
 a supported representation until the backend implements it. Agents may branch
 on `CodegenUnsupported` without parsing the human-readable `message` field.
+
+**Right:**
+
+```vow
+fn remainder(a: i64, b: i64) -> i64 {
+    a % b
+}
+```
 
 ### CodegenFailed
 
@@ -5474,6 +6348,8 @@ uses only documented supported operations, report a compiler bug with the
 source and diagnostic; changing source syntax or types may not resolve an
 internal backend failure.
 
+**Right:** No source rewrite applies; the program is not at fault. Keep it unchanged and report the bug.
+
 ### LinkFailed
 
 **Phase:** Linker
@@ -5481,9 +6357,21 @@ internal backend failure.
 not create the executable. A missing `libvow_runtime.a` is also reported with
 this code.
 
+**Wrong:**
+
+```sh
+vowc build f.vow   # libvow_runtime.a not found
+```
+
 **Fix:** Inspect the diagnostic message and verify that the host linker and Vow
 runtime archive are installed and accessible. When building Vow itself, run
 `cargo build --release --all` or set `VOW_RUNTIME_PATH` to the runtime archive.
+
+**Right:**
+
+```sh
+VOW_RUNTIME_PATH=target/release/libvow_runtime.a vowc build f.vow
+```
 
 ### IoError
 
@@ -5500,6 +6388,14 @@ the filesystem's answer rather than a backend defect — which is why it is not
 before type-checking, so diagnostics do not include follow-on errors for names
 from the missing module.
 
+**Wrong:**
+
+```vow
+module Main
+
+use util.mathh
+```
+
 **Fix:** Check the path in the diagnostic message. For a module load, verify
 the `use` path resolves relative to the importing file. For an object write,
 the compiler creates missing parent directories automatically; verify that no
@@ -5508,10 +6404,51 @@ and writing the object, and that the filesystem is writable and has free
 space. Re-running the same build after fixing the filesystem succeeds;
 changing the source will not help.
 
+For a module-load failure, the path must resolve to `util/math.vow` (or `util/math.vow.d`) next to the importing file:
+
+**Right:**
+
+```vow
+module Main
+
+use util.math
+```
+
 ### VerificationSkipped
 
 **Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)
-**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) A call to a user function that passes a `Vec`, `String`, map or `Option` argument is also not modelable (`Call target with a collection argument`): the model has no representation for a collection crossing a user-function boundary. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
+**Meaning:** The function carries a `vow {}` block but the verifier has no model for something its body does, so no proof is attempted. The contract becomes documentary: runtime checks still apply in `--mode debug`. A function is `Skipped` only for one of the reasons below; a timeout, a solver `unknown`, an unwinding failure and an out-of-memory worker are never `Skipped` (they are `timeout` / `unknown`, see `docs/spec/cli.md` → "Status Values").
+
+The native backend names the reason with a code from a **closed** list, written after the function name in the message (``skipped verification of `f`: <code>: <detail>``). `detail` is free-form (a function, opcode or builtin name) and is not part of the enumerated set; the message text is not a contract. A machine-readable `reason_code` field is specified additively but **not emitted yet**, so do not parse for it.
+
+| Code | When | Typical `detail` |
+|---|---|---|
+| `function-has-effects` | The function has an effect other than `panic` (`io`, `read`, `write`, `unsafe`). `panic`, the effect of `.unwrap()`, is modelled. | the effect |
+| `recursion-unsupported` | The function is directly or mutually recursive in the inlined call graph, or only reaches a recursive function. | the cycle, `a -> b -> a` |
+| `float-rem-unsupported` | The body uses float `%` (`RemF32`, `RemF64`). Lasts until codegen defines float `%`. | |
+| `ir-non-dominating-read` | The dominance validator rejects the IR (defensive gate). | |
+| `unmodeled-builtin` | An extern call whose runtime symbol has no `verifier_model: known` entry in `docs/spec/operations.json` (`String` and map operations, `Vec` `clear`/`sort`/..., a `Vec<i128>` element). Shrinks as builtins are modelled. | the runtime symbol |
+| `unsupported-opcode` | An opcode the symbolic executor does not encode (today floats other than `%`, string constants, `Load`/`Store`, `LinearBorrow`), a shape it cannot unroll, or an aggregate use outside the modelled subset. Shrinks. | `Op[type]`, or `irreducible loop (...)`, `loop value used outside its loop`, `entry block is a loop header`, `loop nest deeper than 8`, `FieldSet through a merged value`, `FieldSet on a parameter that may alias another parameter`, `FieldSet on a value that is neither an allocation nor a parameter` |
+| `non-modelable-callee` | An inlined callee is itself `Skipped`. | `<callee> (<code>)` |
+| `reserved-verifier-symbol` | The function name collides with a reserved checker symbol. Defined; not emitted yet. | |
+
+The list is closed: a function that fits no row is a verifier bug, not a new `Skipped` reason. Under the ESBMC backend the reason is the older free-text `non_modelable_reason` of the C emitter instead, for example an opcode the C model cannot represent (`RegionAlloc` and `FieldSet` from a struct construction the model does not cover, `Load`/`Store`, `RemF*`, `LinearBorrow`), a 128-bit checked operation or aggregate field, or a call that passes a `Vec`, `String`, map or `Option` argument to a user function (`Call target with a collection argument`). Native verification models the 128-bit cases, so those are `Skipped` only under ESBMC.
+
+Every non-modelable vowed function is reported, including when another function fails verification in the same run: the set of skipped functions depends only on the program, not on the verify cache or `--verify-jobs`.
+
+**Wrong:**
+
+```vow
+fn len_of(v: Vec<i64>) -> u64 {
+    v.len()
+}
+
+fn count(v: Vec<i64>) -> u64 vow {
+    ensures: result == v.len()
+} {
+    len_of(v)
+}
+```
 
 ```json
 {
@@ -5524,11 +6461,21 @@ changing the source will not help.
 }
 ```
 
-**Why the build fails closed.** Per `CLAUDE.md`'s "Contract Authoring" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier's bounded model checker cannot represent a function's body, the function is skipped with a structured warning instead of tripping the defense-in-depth `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")` that historically broke the bootstrap on every vowed struct-builder. But a skipped contract is still an unproved contract, so the build lifts its overall status to `Skipped` (exit 1). Use `--no-verify` if you explicitly want a non-failing path that does not invoke ESBMC at all (`Unverified`, exit 0).
+**Why the build fails closed.** Per `CLAUDE.md`'s "Contract Authoring" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier cannot represent a function's body, the function is skipped with a structured warning instead of tripping a defense-in-depth assertion (under ESBMC, `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")`, which historically broke the bootstrap on every vowed struct-builder). But a skipped contract is still an unproved contract, so the build lifts its overall status to `Skipped` (exit 1). Use `--no-verify` if you explicitly want a non-failing path that does not invoke a verifier at all (`Unverified`, exit 0).
 
 **Fix:** Refactor the function so its body uses only modelable opcodes — typically by splitting allocation/initialisation away from the contract-bearing computation. Alternatively, run with `--no-verify` if the contract is intentionally documentary.
 
-**Note form (uncontracted caller).** The same code also appears with `severity: "note"` for a function that has no `vow` block, cannot be modelled (effects such as `[io]`, unsupported operations, a collection passed to a user function), and calls contracted functions. The callee `requires` at those call sites are not statically checked, but no contract of its own went unproved, so the build status does **not** fail closed. The message ends with the reason, and the reasons need different fixes: `` `f` cannot be modelled `` (restructure `f`, or accept that it stays unverified), or `the verifier timed out for `f`` / `the verifier could not decide them for `f`` (the proof was attempted but not finished — constrain or simplify `f`, or raise the timeout):
+**Right:**
+
+```vow
+fn count(v: Vec<i64>) -> u64 vow {
+    ensures: result == v.len()
+} {
+    v.len()
+}
+```
+
+**Note form (uncontracted caller).** The same code also appears with `severity: "note"` for a function that has no `vow` block, cannot be modelled (effects such as `[io]`, unsupported operations, a collection passed to a user function), and calls contracted functions. The callee `requires` at those call sites are not statically checked, but no contract of its own went unproved, so the build status does **not** fail closed. This note form is produced by the ESBMC backend; under `--backend native` the uncontracted-caller selection is shared but a native timeout or `unknown` for such a caller is a hard `VerifyFailed`, not a note. The message ends with the reason, and the reasons need different fixes: `` `f` cannot be modelled `` (restructure `f`, or accept that it stays unverified), or `the verifier timed out for `f`` / `the verifier could not decide them for `f`` (the proof was attempted but not finished — constrain or simplify `f`, or raise the timeout):
 
 ```json
 {
@@ -5545,6 +6492,16 @@ changing the source will not help.
 
 **Phase:** Verification (Warning; the build status stays `Verified`)
 **Meaning:** The verifier proved that a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) can reach its `ArithmeticOverflow` abort for some input the function's `requires` admits. The operand span in `primary` points at the operator itself.
+
+**Wrong:**
+
+```vow
+fn twice(x: i64) -> i64 vow {
+    ensures: result == x + x
+} {
+    x +! x
+}
+```
 
 ```json
 {
@@ -5564,12 +6521,33 @@ The `message` names the cause: `addition overflows`, `subtraction overflows`, `m
 
 **Fix:** If the abort is unreachable in practice, say so in the contract — a `requires` that bounds the operands removes the warning, and the bound is then a genuine semantic constraint rather than a verifier appeasement. If wrapping is the intended behaviour, use the wrapping operator (`+`, `-`, `*`, `/`, `%`) and state the wrapped result in the contract. If the abort is a real possibility the caller must handle, the warning is informational.
 
+**Right:**
+
+```vow
+fn twice(x: i64) -> i64 vow {
+    requires: x >= -4611686018427387904 && x <= 4611686018427387903
+    ensures: result == x + x
+} {
+    x +! x
+}
+```
+
 **Not emitted when:** the contract itself fails. The verifier reports one violated property per run, so a contract counterexample takes precedence and no abort claim is made — the counterexample is the actionable finding.
 
 ### VerifierAssertionUnattributed
 
 **Phase:** Verification
-**Meaning:** ESBMC found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "None"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero and a dynamic shift count that exceeds the operand's bit width.
+**Meaning:** The verifier found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "None"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero, a dynamic shift count that exceeds the operand's bit width, signed `MIN / -1` (native backend only), `unwrap()` called on `None` or `Err` (native backend only) and an out-of-bounds `Vec` index (native backend only). Under `--backend native` the native `vow_id` is `4294967293` and blame is `None`.
+
+**Wrong:**
+
+```vow
+fn remainder(n: u64, d: u64) -> u64 vow {
+    ensures: result <= n
+} {
+    n % d
+}
+```
 
 ```json
 {
@@ -5580,14 +6558,25 @@ The `message` names the cause: `addition overflows`, `subtraction overflows`, `m
 }
 ```
 
-The structured counterexample's `violation` field carries the stable property description instead of raw ESBMC text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.
+The structured counterexample's `violation` field carries the stable property description instead of raw verifier text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.
 
-**Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
+**Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For `unwrap() called on None`, match on the value or require its discriminant instead of unwrapping. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
+
+**Right:**
+
+```vow
+fn remainder(n: u64, d: u64) -> u64 vow {
+    requires: d != 0
+    ensures: result <= n
+} {
+    n % d
+}
+```
 
 ### VerifierBug
 
 **Phase:** Verification (self-hosted `vowc verify --backend native --replay-cex` only)
-**Meaning:** Under the native backend, a counterexample did not replay: the `--mode debug` harness built from its concrete inputs did not reproduce the predicted `VowViolation` (same `vow_id` and blame) or, for a division or remainder abort, the predicted `ArithmeticOverflow` abort. The counterexample's `replay` is `"diverged"` or `"aborted"` and `replay_reason` says why. A `"skipped"` replay (a harness limitation such as an unsupported parameter type) never ran and is not reported. The verifier model and the runtime disagree, so this is a defect in the verifier, not in the program. One diagnostic is emitted per such counterexample; the `status` stays `VerifyFailed` and the exit code stays 1.
+**Meaning:** Under the native backend, a counterexample did not replay: the `--mode debug` harness built from its concrete inputs did not reproduce the predicted `VowViolation` (same `vow_id` and blame) or, for a division or remainder abort, the predicted `ArithmeticOverflow` abort, or, for an `unwrap()` abort, the predicted `UnwrapOnNone` abort. The counterexample's `replay` is `"diverged"` or `"aborted"` and `replay_reason` says why. A `"skipped"` replay (a harness limitation such as an unsupported parameter type) never ran and is not reported. The verifier model and the runtime disagree, so this is a defect in the verifier, not in the program. One diagnostic is emitted per such counterexample; the `status` stays `VerifyFailed` and the exit code stays 1.
 
 ```json
 {
@@ -5602,10 +6591,27 @@ The structured counterexample's `violation` field carries the stable property de
 
 **Fix:** Report the function, its counterexample `values` and `replay_reason` as a verifier bug. Do not weaken the contract to avoid the counterexample on the strength of this diagnostic alone.
 
+**Right:** No source rewrite applies; the program and its contract are not at fault. Keep both unchanged and report the bug.
+
 ### ModelCapacityAssumed
 
-**Phase:** Verification (Note; the build status stays `Verified`)
+**Phase:** Verification (Note; the build status stays `Verified`). **ESBMC backend only:** never emitted under `--backend native`, which models collections with a symbolic length and no capacity. The diagnostic is retired together with the ESBMC backend.
 **Meaning:** The function's contracts were proved, but the proof's model restricts at least one capacity to the verifier's model capacity (defaults: `Vec<T>` 128, `String` 256, `HashMap<K, V>` and `BTreeMap<K, V>` 64, user-struct `Heap` 1024 slots; the `String` capacity is raised to the longest string literal in the module, and the note's message reports the capacity actually applied; see [`contracts.md`](contracts.md#collection-models-for-verification)). A parameter, struct-field collection, `String::from_cstr` result, or non-constant `from_raw_parts_copy` length is modelled as nondeterministic *within* its capacity, and struct allocations stop at the heap capacity, so executions with longer collections or more struct allocations were pruned, not checked: `Verified` means "verified for executions up to the capacities".
+
+**Wrong:**
+
+```vow
+fn first_or_zero(v: Vec<i64>) -> i64 vow {
+    requires: v.len() <= 128
+    ensures: v.len() > 0 || result == 0
+} {
+    if v.len() > 0 {
+        v[0]
+    } else {
+        0
+    }
+}
+```
 
 ```json
 {
@@ -5624,6 +6630,20 @@ The `message` lists every bounded kind as `Kind: capacity`, in the fixed order `
 **Why this is a Note and not a failure.** The verdict is genuine for every execution inside the bound and the verifier never changes a verdict because of the note. It is informational so that an agent or CEGIS loop can tell a bounded proof from an unbounded one — for example, to treat a `Verified` function that handles untrusted-length collections with extra scrutiny, or to test it with the runtime checks of `--mode debug`.
 
 **Fix:** None is required. Do **not** add `requires: v.len() <= 128` (or any other capacity) to silence it: that distorts a true contract to fit a prover limitation, and an unbounded backend removes the note without any source change.
+
+**Right:** Remove the length bound and keep the note; the source needs no other change.
+
+```vow
+fn first_or_zero(v: Vec<i64>) -> i64 vow {
+    ensures: v.len() > 0 || result == 0
+} {
+    if v.len() > 0 {
+        v[0]
+    } else {
+        0
+    }
+}
+```
 
 **Ordering and presence.** Notes describe a *completed* proof run, so they are emitted only when the overall `status` is `Verified`, one per proved function, after every other diagnostic and in function declaration order. A run that ends in a counterexample, `unknown`, `timeout`, `error`, or a fail-closed skip carries no note: a halt cuts the set of verified functions short in a scheduling-dependent way, and a note about one of them would be noise next to the real failure.
 
@@ -5659,7 +6679,31 @@ magnitude, which can exceed the range an IEEE-754 double represents exactly —
 that acts on the exact value must read it with an arbitrary-precision JSON
 number parser; a default `double` parser silently rounds it.
 
+**Wrong:**
+
+```vow
+fn divide(a: i64, b: i64) -> i64 vow {
+    requires: b != 0
+} {
+    a / b
+}
+
+fn main() -> i32 {
+    let q: i64 = divide(10, 0);
+    0
+}
+```
+
 **Fix:** See the `description` and `values` fields to understand which predicate failed and with what runtime values.
+
+**Right:** (`divide` unchanged)
+
+```vow
+fn main() -> i32 {
+    let q: i64 = divide(10, 2);
+    0
+}
+```
 
 ### ArithmeticOverflow
 
@@ -5678,6 +6722,28 @@ if overflow is acceptable, or add bounds contracts to prevent overflow. For
 division and remainder, rule out a zero divisor and, for signed division, the
 `MIN / -1` case.
 
+**Wrong:**
+
+```vow
+fn main() -> i32 {
+    let a: i64 = 9223372036854775807;
+    let b: i64 = a +! 1;
+    0
+}
+```
+
+**Right:**
+
+```vow
+fn main() -> i32 {
+    let a: i64 = 9223372036854775807;
+    if a < 9223372036854775807 {
+        let b: i64 = a +! 1;
+    }
+    0
+}
+```
+
 The abort is emitted in every build mode, release included, so this cannot be
 deferred to a debug run. A checked operator's abort is part of the operator's
 meaning, not a debug-mode check. Division and remainder also abort when no
@@ -5692,8 +6758,31 @@ used.
 {"error":"UnwrapOnNone"}
 ```
 
+**Wrong:**
+
+```vow
+fn main() -> i32 [panic] {
+    let o: Option<i64> = Option::None;
+    let x: i64 = o.unwrap();
+    0
+}
+```
+
 **Fix:** Use `match` to handle the empty variant — `None` for `Option`, `Err` for
 `Result` — or add contracts that guarantee the value is `Some`/`Ok`.
+
+**Right:**
+
+```vow
+fn main() -> i32 {
+    let o: Option<i64> = Option::None;
+    match o {
+        Option::Some(x) => x,
+        Option::None => 0,
+    };
+    0
+}
+```
 
 The abort is emitted in every build mode, release included, so this cannot be
 deferred to a debug run.
@@ -5708,7 +6797,29 @@ Not gated by `[panic]`: the abort is a verification obligation of the (pure) ind
 {"error":"IndexOutOfBounds"}
 ```
 
+**Wrong:**
+
+```vow
+fn main() -> i32 {
+    let v: Vec<i64> = Vec::new();
+    let x: i64 = v[0];
+    0
+}
+```
+
 **Fix:** Add a bounds check before indexing, or add a contract: `requires: i < v.len()`. Do not pair it with `requires: i >= 0` — on an unsigned index that clause is always true and is rejected as [TautologicalComparison](#tautologicalcomparison).
+
+**Right:**
+
+```vow
+fn main() -> i32 {
+    let v: Vec<i64> = Vec::new();
+    if v.len() > 0 {
+        let x: i64 = v[0];
+    }
+    0
+}
+```
 
 ### RegionLiteralMutation
 
@@ -5728,7 +6839,27 @@ hint: construct a mutable HashMap and copy entries before mutating  # for HashMa
 
 The `operation` field identifies the source-level method that trapped (e.g., `Vec::push`, `Vec::pop`, `HashMap::insert`, `String::clear`). The `origin` field identifies the storage class of the immutable backing; today only `rodata` is emitted.
 
+**Wrong:**
+
+```vow
+fn main() -> i32 {
+    let s: String = "abc";
+    s.push_str("d");
+    0
+}
+```
+
 **Fix:** Obtain an explicit mutable copy before mutation: `String::from(value)`, or construct a fresh mutable container and copy the entries you need before mutating.
+
+**Right:**
+
+```vow
+fn main() -> i32 {
+    let s: String = String::from("abc");
+    s.push_str("d");
+    0
+}
+```
 
 ### StackOverflow
 
@@ -5746,7 +6877,36 @@ In debug or sanitize mode, the diagnostic includes call depth and the function t
 
 The signal handler is installed in **all** build modes. The `depth` and `function` fields are only available in debug/sanitize mode where call-depth instrumentation is emitted.
 
+**Wrong:**
+
+```vow
+fn count_down(n: u64) -> u64 {
+    count_down(n + 1)
+}
+
+fn main() -> i32 {
+    let r: u64 = count_down(1);
+    0
+}
+```
+
 **Fix:** Add a base case to recursive functions, or restructure the algorithm to use iteration instead of recursion.
+
+**Right:**
+
+```vow
+fn count_down(n: u64) -> u64 {
+    if n == 0 {
+        return 0;
+    }
+    count_down(n - 1)
+}
+
+fn main() -> i32 {
+    let r: u64 = count_down(1);
+    0
+}
+```
 
 ### OutOfMemory
 
@@ -5762,6 +6922,8 @@ Like every runtime abort, an OOM exits with the reserved status **`134`** (see *
 
 **Fix:** Reduce working-set size, raise the process memory limit, or run on a machine with more memory. This is not a Vow program error.
 
+**Right:** No source rewrite applies; the program is not at fault.
+
 ## Warnings
 
 ### LoweringWarning
@@ -5770,6 +6932,17 @@ Like every runtime abort, an OOM exits with the reserved status **`134`** (see *
 **Meaning:** The IR lowerer could not resolve a struct type tag or field name, defaulting to index 0. This usually indicates a missing type annotation on a `let` binding, causing the compiler to lose track of which struct type a pointer refers to.
 
 **Fix:** Add an explicit type annotation: `let x: MyStruct = ...;` so the compiler can track struct type tags through the IR.
+
+**Right:**
+
+```vow
+struct MyStruct { a: i64 }
+
+fn f() -> i64 {
+    let x: MyStruct = MyStruct { a: 1 };
+    x.a
+}
+```
 
 ---
 
@@ -5782,14 +6955,14 @@ under `stdlib/`. Each module is a self-contained directory: one or more library
 This is a **reference collection**, not a globally-importable package set. Vow has
 no module search path today (see [Consumption model](#consumption-model)). Modules
 carry contracts, but only some are statically verifiable under the current ESBMC
-model — read [Verification status](#verification-status) before relying on a
+backend model — read [Verification status](#verification-status) before relying on a
 contract as a proof rather than a runtime check.
 
 In all examples below, `vow` refers to `build/vowc`.
 
 ## Modules at a glance
 
-| Module path           | Provides                                                                 | ESBMC status |
+| Module path           | Provides                                                                 | ESBMC-backend status |
 |-----------------------|-------------------------------------------------------------------------|---------------------------|
 | `stdlib/math`         | `arithmetic`, `number_theory`, `vec_math` — integer & vector math        | VerifyFailed (env)        |
 | `stdlib/heap`         | `min_heap`, `max_heap` — binary heaps over `i64`                          | VerifyFailed (env)        |
@@ -5798,7 +6971,7 @@ In all examples below, `vow` refers to `build/vowc`.
 | `stdlib/bignum`       | `bignum` — arbitrary-precision signed integers                          | Skipped     |
 | `stdlib/gc`           | `gc` — mark-and-sweep garbage collector over `i64` slots                 | VerifyFailed              |
 
-These are the `vow verify <module>/main.vow` results, measured against ESBMC 8.3.0. `(env)` marks an environmental verifier limitation, not a contract
+These are the `vow verify <module>/main.vow` results, measured against ESBMC 8.3.0 (ESBMC backend; native results are not recorded here). `(env)` marks an environmental verifier limitation, not a contract
 defect. The statuses reflect the verifier's memory model, **not** the soundness of
 the contracts — see [Verification status](#verification-status).
 
@@ -5851,7 +7024,7 @@ alongside it.
 
 ## Verification status
 
-The verifier statuses below were measured with `vow verify` against ESBMC 8.3.0.
+The verifier statuses below were measured with `vow verify` (ESBMC backend) against ESBMC 8.3.0.
 They are **pre-existing properties of the code and the verifier**, unchanged by the
 move into `stdlib/`. A `Skipped`/`VerifyFailed` status does not mean a contract is
 wrong — in `--mode debug` every contract is still enforced at runtime via
@@ -6190,7 +7363,7 @@ $ vow build examples/divide.vow
 {"status":"Verified","executable":"examples/divide","diagnostics":[],"counterexamples":[]}
 ```
 
-ESBMC proves the contract: whenever `y != 0` holds, the division is safe.
+The verifier proves the contract: whenever `y != 0` holds, the division is safe.
 
 ### Step 3: Runtime behavior (debug mode)
 
@@ -6292,7 +7465,7 @@ $ vow build examples/cegis_fixed.vow
 {"status":"Verified","executable":"examples/cegis_fixed","diagnostics":[],"counterexamples":[]}
 ```
 
-Verified. With `a >= 0`, `b >= 0`, and `a >= b`, ESBMC proves `result >= 0`.
+Verified. With `a >= 0`, `b >= 0`, and `a >= b`, the verifier proves `result >= 0`.
 
 ---
 
@@ -6340,7 +7513,7 @@ $ vow verify examples/vec_fill.vow
 
 **Key points:**
 - `invariant: i <= n` is inductive: true on entry, preserved by the loop body. The lower bounds `i >= 0` and `n >= 0` are carried by the `u64` type, so they need no clause (and `TautologicalComparison` rejects one)
-- The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`
+- The Vec model tracks `len`, so the verifier can reason about `result.len() == n`
 - The contract states the algorithmic domain. An unwind or Vec-model limit must not be added as a precondition.
 - `VerifyFailed` with `verify_status: "unknown"` records the current verifier's limit; it does not make the contract false.
 
@@ -6630,7 +7803,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     "status": {
       "type": "string",
       "enum": ["Verified", "Unverified", "Skipped", "CompileFailed", "VerifyFailed"],
-      "description": "Build outcome. `Skipped` means ESBMC was invoked but at least one vowed function could not be modelled; the build fails closed with exit 1 (distinct from `Unverified`, which means ESBMC was not invoked, e.g. `--no-verify`/`--dump-ir`, exit 0)."
+      "description": "Build outcome. `Skipped` means verification was requested but at least one vowed function could not be modelled; the build fails closed with exit 1 (distinct from `Unverified`, which means no verifier was invoked, e.g. `--no-verify`/`--dump-ir`, exit 0)."
     },
     "executable": {
       "type": ["string", "null"],
@@ -6656,7 +7829,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     "counterexamples": {
       "type": "array",
       "items": { "$ref": "counterexample.schema.json" },
-      "description": "Structured counterexamples from ESBMC verification"
+      "description": "Structured counterexamples from verification (ESBMC or the native backend)"
     },
     "verify_status": {
       "type": "string",
@@ -6920,7 +8093,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
           "quality": {
             "type": "string",
             "enum": ["weak", "tautological", "substantive"],
-            "description": "Static, no-ESBMC classification of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md"
+            "description": "Static classification (no verifier is run) of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md"
           },
           "trivially_satisfiable": {
             "type": "boolean",
@@ -6970,7 +8143,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vow-lang.dev/schemas/counterexample.schema.json",
   "title": "Counterexample",
-  "description": "A structured counterexample from ESBMC verification failure",
+  "description": "A structured counterexample from a verification failure (ESBMC or the native backend)",
   "type": "object",
   "required": ["function", "values", "violation", "vow_id", "source", "blame"],
   "properties": {
@@ -6981,7 +8154,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     "values": {
       "type": "object",
       "additionalProperties": { "type": "string" },
-      "description": "Map of source names or $esbmc$-prefixed internal variable names to counterexample values"
+      "description": "Map of source names (or, under the ESBMC backend, $esbmc$-prefixed internal variable names) to counterexample values. Under the native backend a field of a struct, enum, Option or Result parameter is named <param>.<slot> (an enum's discriminant is slot 0), with a :bool or :<bits> suffix when the function reads that slot at two widths; bool values are true or false"
     },
     "violation": {
       "type": "string",
@@ -7321,7 +8494,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "status": {
           "type": "string",
           "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed", "contract_skipped"],
-          "description": "Per-test outcome (`contract_skipped`: ESBMC never invoked because a vowed function is non-modelable; fail-closed, counts toward `failed`)"
+          "description": "Per-test outcome (`contract_skipped`: no proof was attempted because a vowed function is non-modelable; fail-closed, counts toward `failed`)"
         },
         "exit_code": {
           "type": ["integer", "null"],
@@ -7338,7 +8511,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "counterexamples": {
           "type": "array",
           "items": { "$ref": "counterexample.schema.json" },
-          "description": "ESBMC counterexamples (on verify_failed)"
+          "description": "Verifier counterexamples (on verify_failed)"
         }
       }
     },
@@ -7568,8 +8741,8 @@ pub fn api_function(x: i64) -> i64 {
 | `u32`  | 32-bit unsigned integer  |
 | `u64`  | 64-bit unsigned integer  |
 | `u128` | 128-bit unsigned integer (verifier may time out; see below) |
-| `f32`  | 32-bit float (limited support — avoid in contracts) |
-| `f64`  | 64-bit float (limited support — avoid in contracts) |
+| `f32`  | 32-bit float (limited support — avoid in contracts; `--backend native` does not model float operations yet, so a contracted function using them is `Skipped`) |
+| `f64`  | 64-bit float (limited support — avoid in contracts; `--backend native` does not model float operations yet, so a contracted function using them is `Skipped`) |
 | `bool` | Boolean                  |
 | `()`   | Unit type; its only value is also written `()` (not allowed as a parameter type) |
 | `!`    | Never type (diverges)    |
@@ -7589,21 +8762,21 @@ index expression has exactly the type `u64` (see [Indexing](#indexing)), so
 **128-bit implementation status:** `i128`/`u128` are executable end to end:
 full-range literals, arithmetic, casts, narrowing, and `parse_i128`/`parse_u128`
 compile natively. A 128-bit value may be an `Option`, `Result`, or `enum`
-payload; it may not yet be a struct field or a `Vec` element (see the layout
-below). ESBMC modelling of 128-bit aggregates and constants is not available, so
-verification reports `Skipped` rather than an unsound result. Never weaken
+payload, a struct field, or a `Vec` element (see the layout below). The ESBMC backend does not model 128-bit aggregates and constants, so
+it reports `Skipped` rather than an unsound result; the native backend
+(`--backend native`) models them exactly. Never weaken
 contracts to fit the verifier.
 
 **Aggregate layout:** every struct field and enum payload occupies one 8-byte
 slot regardless of declared type (narrow ints are padded). An `i128`/`u128`
-**enum payload** occupies two consecutive 8-byte slots, low limb first
-([ADR 0001](../adr/0001-numeric-tower-narrow-ints.md) decision 9), so every
-payload after it moves up by one slot. The two-slot layout is not implemented
-for struct fields or `Vec` elements: the compiler refuses reads and writes of
-128-bit struct fields and `Vec<i128>`/`Vec<u128>` elements instead of storing
-them in an undersized slot. There is no packing or natural-alignment layout
-today; FFI structs that need a specific C layout must shim through `Vec<u8>` or
-extern wrappers.
+struct field or enum payload occupies two consecutive 8-byte slots, low limb
+first ([ADR 0001](../adr/0001-numeric-tower-narrow-ints.md) decision 9), so
+every field or payload after it moves up by one slot and the allocation grows
+with it. A struct has no tag, so its first field is slot 0; an enum's tag takes
+slot 0 and payloads start at slot 1. A `Vec<i128>`/`Vec<u128>` element is 16
+bytes (two slots, low limb first); `len` and `cap` still count elements. There
+is no packing or natural-alignment layout today; FFI structs that need a
+specific C layout must shim through `Vec<u8>` or extern wrappers.
 
 ### Built-in Parameterized Types
 
@@ -7801,31 +8974,32 @@ remainder by zero aborts at every width, as does signed `/` and `/!` on
 not abort.
 
 128-bit values carry both limbs through locals, parameters, returns,
-temporaries, and the payloads of `enum`, `Option`, and `Result` values (stored
-in two consecutive slots, see the aggregate layout above). The payload width
-comes from the checker, so it holds wherever the value came from: built in the
-same function, received as a parameter, handed back by a call, or read out of a
-`Vec` element or a struct field holding the enum; through a `match` arm, `?`, or
-`.unwrap()`; and at every payload position.
+temporaries, struct fields, `Vec` elements, and the payloads of `enum`,
+`Option`, and `Result` values (stored in two consecutive slots, see the
+aggregate layout above). The width comes from the checker, so it holds wherever
+the value came from: built in the same function, received as a parameter,
+handed back by a call, or read out of a `Vec` element or a struct field; through
+a `match` arm, `?`, or `.unwrap()`; at every payload position; and at every
+`Vec` index read or write, `push`, and `for` loop. `pin_to_root` and
+`Vec::from_raw_parts_copy` copy one 8-byte slot per element, so they reject
+`Vec<i128>`/`Vec<u128>` with a `TypeMismatch`; build such a `Vec` with `push`.
 
-Two aggregate positions are not supported yet: `Vec<i128>`/`Vec<u128>`
-elements (the element helpers are i64-only) and `i128`/`u128` struct fields.
-Reading or writing either fails codegen with `CodegenUnsupported` and a named
-limitation rather than a raw backend verifier dump, before an 8-byte slot can
-truncate the value or a 16-byte store can overwrite its neighbour. The refusal
-is at the access, not the declaration: a struct may declare a 128-bit member
-and still compile as long as nothing touches it. These are backend gaps, not
-language rules; the type checker accepts both at 128-bit width. Verification
-is a separate matter: 128-bit literals (in a body or in
+Verification is a separate matter. 128-bit literals (in a body or in
 `requires`/`ensures`/`invariant`) are verifiable, and are modelled exactly under
-the bit-vector encoding, `i128::MIN`, `i128::MAX` and `u128::MAX` included; a
-proof obtained by the `--encoding ir` timeout fallback is reported as `ProvenIr`
-and is weaker. A contracted function that reads or writes a 128-bit aggregate field or enum payload is
-likewise reported `Skipped`, with `FieldGet at 128-bit width` or `FieldSet at
-128-bit width`, rather than being modelled through the verifier's 8-byte heap
-slot; so is a call to `parse_i128` or `parse_u128`, whose `Option` result the
-verifier's 64-bit `Option` model cannot represent. Contracts over 128-bit
-parameters alone do verify.
+the bit-vector encoding (both backends), `i128::MIN`, `i128::MAX` and `u128::MAX` included; under
+ESBMC a proof obtained by the `--encoding ir` timeout fallback is weaker (it is
+reported as plain `proven`). Under the default ESBMC backend every 128-bit aggregate access
+is `Skipped` rather than modelled: a contracted function that reads or writes a
+128-bit aggregate field or enum payload is reported `Skipped`, with `FieldGet at
+128-bit width` or `FieldSet at 128-bit width`, rather than being modelled through
+the verifier's 8-byte heap slot. `--backend native` models a 128-bit struct
+field or enum payload exactly, as one 128-bit term (it occupies two slots, and a
+narrow field declared after it lives in the shifted slot). A function that
+reads, writes, or pushes a `Vec<i128>` or `Vec<u128>` element is `Skipped`
+under both backends (an unsupported `Call extern` opcode under ESBMC,
+`unmodeled-builtin` under native); so is a call to `parse_i128` or
+`parse_u128`, whose `Option` result the verifier's 64-bit `Option` model cannot
+represent. Contracts over 128-bit parameters alone do verify.
 
 Runtime violation values are *not* one of those gaps: a scalar `i128`/`u128`
 binding captured by a `vow` block reports its full value in the runtime
@@ -7899,7 +9073,7 @@ the count's type.
 `>= bit-width(LHS)` is a compile-time error (`ShiftCountOutOfRange`), at every
 width: `(x: u8) << 8` and `(x: i64) << 64` do not compile. Dynamic shift counts
 (`x << n` where `n` is not a const expression) get a check on the operation
-that ESBMC proves: the count must satisfy `0 <= count < width(LHS)` at the point
+that the verifier proves: the count must satisfy `0 <= count < width(LHS)` at the point
 of the shift, so a negative signed count is rejected as well. At runtime only
 8-bit shifts trap (`i8`/`u8` with count `>= 8` aborts with `ArithmeticOverflow`);
 wider shifts mask the count to the operand width, like the hardware shift.
@@ -7924,10 +9098,12 @@ From loosest to tightest, Vow follows the usual C/Rust precedence for logical an
 
 `||`, `&&`, comparisons (`== != < <= > >=`), `|`, `^`, `&`, `<< >>`, `+ -`, `* / %`
 
-Unary `-` and `!` bind tighter than every binary operator. The postfix forms
-(`.field`, `.method()`, `[index]`, `(args)`, `?`, and `as Type`) bind tighter
-still, so `-x as u64` is `-(x as u64)` and `a.len() as i64 + 1` is
-`(a.len() as i64) + 1`.
+Unary `-` and `!` bind tighter than every binary operator and tighter than
+`as Type`, matching Rust: `-x as u64` is `(-x) as u64`; write `-(x as i64)` to
+negate a cast result. The other postfix forms (`.field`, `.method()`,
+`[index]`, `(args)`, `?`) bind tighter than unary, so `-v.len()` is
+`-(v.len())`. `as Type` binds tighter than every binary operator, so
+`a.len() as i64 + 1` is `(a.len() as i64) + 1`.
 
 `&` is only the infix bitwise AND operator (`lhs & rhs`). There is no prefix
 `&expr`: Vow has no borrow expressions, so `&x`, `&mut x`, `&&x` (and `x & &y`)
@@ -8028,8 +9204,8 @@ match i64_to_u8_try(big) {
 }
 ```
 
-These intrinsics are emitted by the compiler so ESBMC sees their semantics
-directly in the verification C model.
+These intrinsics are emitted by the compiler so the verifier sees their semantics
+directly in its model (the C model under ESBMC).
 
 For the `u8` target, the available narrowing source types are `i16`, `i32`,
 `i64`, `i128`, `u16`, `u32`, `u64`, and `u128`. Each source provides all three
@@ -8051,7 +9227,9 @@ The remaining executable sub-64-bit targets expose these complete families:
 | `u32`  | `i64`, `u64`, `i128`, `u128` |
 
 Every listed source/target pair provides `_try`, `_wrap`, and `_sat`. Same-width
-signedness changes use `as`; they are bit reinterpretations, not narrowing.
+signedness changes use `as`, which reinterprets the bits and is not narrowing;
+`i128`/`u128` additionally have the explicit same-width intrinsics described
+below.
 
 `i128` and `u128` appear in these tables only as sources: they are the widest
 integer types, so no other width narrows into them. The one conversion between
@@ -8190,9 +9368,12 @@ A `print_*` call inside a contracted function gives that function an effect,
 and the verifier model is restricted to pure functions, so the contract is
 reported as `VerificationSkipped` rather than checked.
 
-This idiom does not by itself make a length-bounded loop provable. ESBMC's
-unwind bound sits below the modelled collection capacity, so this form and the
-signed `while i >= 0` form both return `unknown`. What the idiom buys is a
+This idiom does not by itself make a length-bounded loop provable. A loop
+without an `invariant` that runs longer than the verifier's unwind bound
+(ESBMC's `--max-k-step`, or the native backend's internal bound of 64) returns
+`unknown` unless the native backend closes it by induction (`docs/spec/cli.md` →
+"Native backend", "Loops"), for this form and the signed `while i >= 0` form
+alike. What the idiom buys is a
 *writable* invariant rather than a stronger proof: `i <= n` is expressible on
 an unsigned index, whereas the signed form's companion clause `i >= -1` is not
 — a negative literal does not fit `u64` at all.
@@ -8215,22 +9396,25 @@ first index read runs far out of bounds.
 
 Plain wrapping `-` is the correct decrement in the canonical form. The guard
 `i > 0` has already discharged the underflow obligation, so no check is
-needed, and plain `-` is exactly what ESBMC's bitvector encoding models — a
+needed, and plain `-` is exactly what the verifier's bit-vector encoding models — a
 *wrong* guard therefore stays observable through `invariant: i <= n`. Reserve
 `-!` for decrements whose non-negativity the guard does not establish.
 
-Note one asymmetry while reading that advice. `-!` does trap at runtime under
-`--mode debug`, reporting `{"error":"ArithmeticOverflow"}`, but the verifier
-does not model checked arithmetic at all: `n -! 1` and `n - 1` emit the same C
-and yield byte-identical counterexamples. Do not reach for `-!` expecting it
-to make an underflow statically visible.
+Note one asymmetry while reading that advice. `-!` traps at runtime under
+`--mode debug`, reporting `{"error":"ArithmeticOverflow"}`, and the verifier
+models that abort: an aborting execution never returns, so it cannot witness a
+violated `ensures`, and a reachable abort adds an `ArithOverflowReachable`
+warning instead of failing the build. `n -! 1` and `n - 1` are therefore
+different obligations. Do not reach for `-!` expecting it to turn an underflow
+into a failed proof.
 
 #### Why there is no reverse-range syntax
 
 Vow has no numeric range form, and adding one is rejected rather than pending:
 
 - `loop` is not an escape hatch. `break value` is restricted to `loop`, and
-  ESBMC cannot verify an unbounded `loop` at all.
+  an unbounded `loop` is verifiable only through its `invariant` and `break`
+  structure (the native backend models `loop`; ESBMC does not).
 - A reverse for-each would cover very little. Most reverse scans need the
   *index*, not the element — they read a parallel array at `i`, or write a
   second collection at the same `i`.
@@ -8274,7 +9458,7 @@ let idx: i64 = loop {
 };
 ```
 
-ESBMC cannot verify unbounded `loop` constructs — use `while` with invariants for verifiable loops.
+Under the ESBMC backend an unbounded `loop` cannot be verified; the native backend models `loop` with `break` and `continue`. Use `while` with invariants for loops that verify under both.
 
 ### Break
 
@@ -8363,8 +9547,27 @@ Struct literal names must be PascalCase:
 let p: Point = Point { x: 1, y: 2 };
 ```
 
-Because of that, an identifier that does not start with an upper-case letter is
-never a struct literal: in `while c { }` and `if c { }` the `{` opens the body.
+A struct literal must initialise every declared field. An omitted field is a
+`TypeMismatch` (``struct `Point` literal is missing field `y` ``, one per missing
+field in declaration order, at the literal's span), never zero-initialised.
+
+An identifier that does not start with an upper-case letter is never a struct
+literal: in `while c { }` and `if c { }` the `{` opens the body.
+
+In the head of `if`, `while`, `for … in` and `match`, a `Name {` or
+`Path::Variant {` is never a struct literal or brace-form enum constructor; the
+`{` always opens the body. This is what lets `if DEBUG { }` and
+`if c == Color::Red { }` parse. To use a struct literal there, parenthesise it
+or bind it to a `let` first:
+
+```vow
+if (Point { x: 1, y: 2 }).x == 1 { }
+```
+
+Delimiters re-enable literals inside a head: `(…)`, call and method-call
+arguments, `[…]`, blocks, `match` arms and `vow { … }` blocks. The canonical
+printer parenthesises a head that would otherwise expose a struct literal, so
+`parse → print → parse` stays idempotent.
 
 ### Field Access
 
@@ -8429,10 +9632,13 @@ let some: Option<i64> = Option::Some(42);
 `Result<T, E>` has variants `Ok(T)` and `Err(E)`.
 For scalar payloads supported by native aggregate codegen, `match` and
 `.unwrap()` extract the declared type, including `f32` and `f64`; `?`
-currently propagates `Option` payloads only. The ESBMC C model still
-uses integer slots for enum payloads and does not preserve float bits on a
-store and load. Verification of contracts involving float enum payloads is
-therefore unsupported until that model represents float payloads faithfully.
+currently propagates `Option` payloads only. The ESBMC backend's C model moves `f32`
+and `f64` enum payloads and struct fields through its integer slots by
+IEEE-754 bit pattern (an `f64` as its raw 64 bits, an `f32` as its 32 bits
+zero-extended), as native codegen does, so contracts over float payloads
+verify under the default bit-vector encoding; `--encoding ir` does not
+model the reinterpretation and can report a spurious counterexample.
+Float equality follows IEEE-754: a NaN payload does not equal itself.
 
 ## Pattern Matching
 
@@ -8490,7 +9696,7 @@ m.contains_key(k)
 | Method         | Signature                        |
 |----------------|----------------------------------|
 | `Vec::new()`   | `() -> Vec<T>`                   |
-| `Vec::from_raw_parts_copy(ptr, len)` | `(i64, u64) -> Vec<T>` for flat scalar `T` |
+| `Vec::from_raw_parts_copy(ptr, len)` | `(i64, u64) -> Vec<T>` for one-slot scalar `T` (not `i128`/`u128`) |
 | `.push(val)`   | `(T) -> ()`                      |
 | `.pop()`       | `() -> ()`                       |
 | `.len()`       | `() -> u64`                      |
@@ -8536,7 +9742,7 @@ m.contains_key(k)
 | `.remove(k)`        | `(K) -> ()`                 |
 | `.len()`            | `() -> u64`                 |
 
-**Key and value types.** The runtime stores each key and each value in one 64-bit slot and compares keys by value. A `HashMap` key must therefore be `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, or `bool`; every other key type is an `UnsupportedFeature` error in both compilers. `String`, `Vec`, struct, enum, `Option`, and tuple keys are heap-backed handles that would compare by pointer, so a lookup with an equal-but-distinct `String` would silently miss (and a mutable `String` mutated after insertion would corrupt the map). `i128`/`u128` keys would be truncated, and `f32`/`f64` have no total equality. Hash or intern such keys to a `u64` at the call site (`hash_str` / `hash_u64`, see [Hashing](#hashing)) and keep a side table for the originals. A `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64` is likewise an `UnsupportedFeature` error: map values occupy a single 64-bit integer slot, so a 128-bit value would lose its high word and a float has no slot encoding. A `HashMap` value that is or transitively contains a `linear struct` is an `UnsupportedFeature` error for the same reason `BTreeMap` rejects it (`BTreeMapValueMustBeNonLinear`): the map copies values bitwise and `get` would hand out a second copy of the linear obligation. Narrow integer values (`i8` … `u32`) are stored widened and read back at their declared width. The check applies wherever the map type is written (annotations, parameters, returns, fields, aliases, constants), including nested inside `Vec`, `Option`, tuples, and other maps. A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: no aggregate can hold a 128-bit field yet (epic #526), so codegen rejects it with `CodegenUnsupported` wherever it appears.
+**Key and value types.** The runtime stores each key and each value in one 64-bit slot and compares keys by value. A `HashMap` key must therefore be `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, or `bool`; every other key type is an `UnsupportedFeature` error in both compilers. `String`, `Vec`, struct, enum, `Option`, and tuple keys are heap-backed handles that would compare by pointer, so a lookup with an equal-but-distinct `String` would silently miss (and a mutable `String` mutated after insertion would corrupt the map). `i128`/`u128` keys would be truncated, and `f32`/`f64` have no total equality. Hash or intern such keys to a `u64` at the call site (`hash_str` / `hash_u64`, see [Hashing](#hashing)) and keep a side table for the originals. A `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64` is likewise an `UnsupportedFeature` error: map values occupy a single 64-bit integer slot, so a 128-bit value would lose its high word and a float has no slot encoding. A `HashMap` value that is or transitively contains a `linear struct` is an `UnsupportedFeature` error for the same reason `BTreeMap` rejects it (`BTreeMapValueMustBeNonLinear`): the map copies values bitwise and `get` would hand out a second copy of the linear obligation. Narrow integer values (`i8` … `u32`) are stored widened and read back at their declared width. The check applies wherever the map type is written (annotations, parameters, returns, fields, aliases, constants), including nested inside `Vec`, `Option`, tuples, and other maps. A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: aggregates hold 128-bit fields in two slots, so only a bare 128-bit map value is rejected.
 
 **Set idiom.** The unit type `()` is a valid map value, so `HashMap<K, ()>` and `BTreeMap<K, ()>` are sets: `s.insert(k, ());` adds a member, `s.contains_key(k)` (`s.contains(k)` for `BTreeMap`) tests membership, `s.remove(k)` deletes it, and `s.get(k)` returns `Option<()>`. The value `()` has type `()` (it checks against a `()` annotation or return type), and the runtime stores it in the usual 64-bit slot as `0`. A function cannot take a `()` parameter (`UnsupportedFeature`: the argument carries no information and has no ABI slot), so pass the set itself or a key instead.
 
@@ -8728,9 +9934,9 @@ vow {
 
 | Function         | Signature                                  | Effects    |
 |------------------|--------------------------------------------|------------|
-| `pin_to_root`    | `fn(value: String) -> String` and `fn<T>(value: Vec<T>) -> Vec<T>` for flat scalar `T` | `[]` |
+| `pin_to_root`    | `fn(value: String) -> String` and `fn<T>(value: Vec<T>) -> Vec<T>` for one-slot scalar `T` | `[]` |
 
-`pin_to_root` is a compiler intrinsic, not a user-defined generic. Each call site is monomorphised from the argument type. It always deep-copies the supported heap value into root storage; it does not inspect descriptor tags and does not claim idempotency. The current supported forms are `String` and `Vec<T>` where `T` is a flat scalar slot type (`i*`, `u*`, `f32`, `f64`, `bool`). Pointer-containing payloads, user structs, enums, and maps require hand-written deep-copy wrappers at the FFI boundary.
+`pin_to_root` is a compiler intrinsic, not a user-defined generic. Each call site is monomorphised from the argument type. It always deep-copies the supported heap value into root storage; it does not inspect descriptor tags and does not claim idempotency. The current supported forms are `String` and `Vec<T>` where `T` is a one-slot scalar type (`i8`..`i64`, `u8`..`u64`, `f32`, `f64`, `bool`; not `i128`/`u128`, whose elements take two slots). Pointer-containing payloads, user structs, enums, and maps require hand-written deep-copy wrappers at the FFI boundary.
 
 #### Linear Intrinsics
 
@@ -8740,7 +9946,7 @@ vow {
 
 `drop` is a compiler intrinsic, not a user-defined generic. `L` must be a linear owner: a `linear struct`, or an owned enum wrapper (`Option`, `Result`, or a user enum) that contains one. Any other argument type, or an argument count other than one, is a `TypeMismatch`. `drop` consumes the value exactly once (a second use is `LinearTypeViolation`) and discharges its obligation. It has no runtime effect beyond that: it runs no destructor, frees nothing, and lowers to no instruction other than the consume marker the type and region passes already track. It is verifier-neutral: the consume marker is a no-op in the C model, so a function that drops a linear value is verified exactly as if the call were absent. A user-defined function named `drop` takes precedence over the intrinsic.
 
-`String::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` bytes from a raw C pointer into a fresh `String`. `Vec::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` flat scalar slots into a fresh `Vec<T>`. The pointer is `i64` and the length is `u64`, so a signed length must be converted explicitly (`n as u64`); the code generator converts pointer and length values to the platform pointer-sized ABI type at the FFI boundary. Both helpers have a `FreshInCaller` return summary.
+`String::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` bytes from a raw C pointer into a fresh `String`. `Vec::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` one-slot scalars into a fresh `Vec<T>` (`T` is not `i128`/`u128`). The pointer is `i64` and the length is `u64`, so a signed length must be converted explicitly (`n as u64`); the code generator converts pointer and length values to the platform pointer-sized ABI type at the FFI boundary. Both helpers have a `FreshInCaller` return summary.
 
 For pointer-containing C payloads, a wrapper must be written per type: call the extern, recursively copy every Vow-owned heap subobject into the target region, free every C-owned pointer according to the extern's ownership contract, then return the Vow-placed value. A bytewise copy of a pointer-containing payload is unsound because it preserves stale pointers into C-owned storage.
 
@@ -8752,6 +9958,9 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 | `print_i64`      | `fn(v: i64) -> ()`                         | `[io]`     |
 | `print_u64`      | `fn(v: u64) -> ()`                         | `[io]`     |
 | `eprintln_str`   | `fn(s: String) -> ()`                      | `[io]`     |
+| `try_eprintln_str` | `fn(s: String) -> i64`                   | `[io]`     |
+
+`try_eprintln_str` writes `s` and a newline to stderr and reports the outcome instead of ignoring it: `0` when written, `1` when stderr is a closed pipe (`BrokenPipe`), `2` for any other write failure. A closed stderr descriptor (`EBADF`) counts as `0`, matching Rust's standard library. SIGPIPE is blocked for the duration of the call, so a closed pipe returns `1` instead of terminating the process. `eprintln_str` ignores write failures entirely.
 
 #### Debug
 
@@ -9039,19 +10248,20 @@ The bare `vow <source.vow>` form is exactly `vow build`: it verifies by default,
 |-------------------|-------------|--------------------------------------------|
 | `-o, --output`    | `build/<stem>` | Output executable path                  |
 | `--mode <debug\|release\|profile\|sanitize>` | `release` | Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + use-after-region-close detection for Vecs |
-| `--no-verify`     | (off)       | Skip ESBMC static verification            |
+| `--no-verify`     | (off)       | Skip static verification                  |
 | `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |
 | `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
 | `--no-cache`    | (off)       | Disable verification result caching, and (for `--no-verify` builds) the compile-object cache. See "Compile-object cache behavior" below |
-| `--max-k-step <N>` | `50`     | ESBMC incremental BMC max iterations          |
-| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
-| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
-| `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
-| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
+| `--max-k-step <N>` | `50`     | ESBMC backend only; a usage error under `--backend native`. ESBMC incremental BMC max iterations |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC SMT solver; auto selects per-function via heuristic |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
+| `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | Per-function verification timeout in seconds; the only resource knob of the native backend, where the default is a fixed `300`. ESBMC backend: under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is an immediate watchdog kill under ESBMC and a zero budget (no solver is spawned; statically decided claims still resolve) under `--backend native` |
+| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent verification jobs (ESBMC processes, or `verify-worker` subprocesses under `--backend native`) |
+| `--backend <esbmc\|native>` | `esbmc` | Verification backend. `native` is accepted only by `vowc verify`, `contracts --verify` and `test --verify`; on `build` and the bare form it is a usage error (exit 1) that points at `vowc verify`, and `esbmc` is accepted silently |
 | `--replay-cex`    | (off)       | Differential test the verifier model against runtime semantics (same as `vow verify --replay-cex`; see below) |
-| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this compilation to `<path>` (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from `--mode profile`, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. |
+| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this compilation to `<path>` (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link and, under the ESBMC backend, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from `--mode profile`, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. |
 
-**Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
+**Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever static verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
 
 ### `vow verify`
 
@@ -9065,31 +10275,49 @@ vow verify [OPTIONS] <source.vow>
 
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
-| `--no-cache`      | (off)       | Disable verification result caching        |
-| `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations       |
-| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
-| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
-| `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
+| `--no-cache`      | (off)       | Disable verification result caching; under `--backend native` it disables the native result cache of `verify` (see "Result cache" below) |
+| `--max-k-step <N>` | `50`       | ESBMC backend only; a usage error under `--backend native`. ESBMC incremental BMC max iterations |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC SMT solver; auto selects per-function via heuristic |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
+| `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | Per-function verification timeout in seconds; the only resource knob of the native backend, where the default is a fixed `300`. ESBMC backend: under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is an immediate watchdog kill under ESBMC and a zero budget (no solver is spawned; statically decided claims still resolve) under `--backend native` |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent verification jobs (ESBMC processes, or `verify-worker` subprocesses under `--backend native`) |
-| `--backend <esbmc\|native>` | `esbmc` | Verification backend. `native` is the symbolic checker with Bitwuzla, run in per-function worker subprocesses (epic #1398); self-hosted `vowc` only, see "Native backend" below. Accepted by `verify` only: `build`, `contracts`, `test` and the bare `vowc <file>` form (identical to `build`) reject `--backend native` with a usage error (exit 1) instead of silently running ESBMC. Any value other than `esbmc` or `native` is a usage error |
-| `--replay-cex`    | (off)       | Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a `--mode debug` harness that calls the failing function with the counterexample's concrete inputs and check that the runtime `VowViolation` agrees (same `vow_id` and blame). Adds a `replay` field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by `vow build`. |
-| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this verification run to `<path>` (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. |
+| `--backend <esbmc\|native>` | `esbmc` | Verification backend. `native` is the symbolic checker with Bitwuzla, run in per-function worker subprocesses (epic #1398); self-hosted `vowc` only, see "Native backend" below. Accepted by `verify`, `contracts --verify` and `test --verify`; `contracts` and `test` without `--verify`, `build` and the bare `vowc <file>` form (identical to `build`) reject `--backend native` with a usage error (exit 1) instead of silently running ESBMC or reporting `not_verified` as if the native backend had run. Any value other than `esbmc` or `native` is a usage error |
+| `--replay-cex`    | (off)       | Differential test of the verifier model against runtime semantics. After the verifier reports a counterexample, build a `--mode debug` harness that calls the failing function with the counterexample's concrete inputs and check that the runtime `VowViolation` agrees (same `vow_id` and blame). Adds a `replay` field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by `vow build`. |
+| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this verification run to `<path>` (load directly at ui.perfetto.dev). Captures frontend phase spans and, under the ESBMC backend, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process; under `--backend native` it records the frontend phase spans (`module-load`, `parse`, `typecheck`, `lower`, ...) and one `verification` span (no per-claim worker or solver spans, no per-worker RSS yet). Accepted only by `build` and `verify`. Pure side artifact. |
 
-#### Native backend (`vowc verify --backend native`)
+#### Native backend (`vowc verify --backend native`; also `contracts --verify` and `test --verify`, see "Native backend: `contracts` and `test`" below)
 
 Opt-in; the default stays `esbmc`. Implemented only by the self-hosted `vowc`: the Rust `vow` does not accept `--backend` until verification is delegated to a pinned seed `vowc`. Scope (issues #1408, #1411):
 
-- **Subset.** A function is verified when it is pure, its control flow is acyclic, and it uses only these operations on integers of every width (`i8`..`i128`, `u8`..`u128`) and `bool`: constants, integer parameters, wrapping `+ - * / %`, the checked `+! -! *! /! %!`, `& | ^`, `<<` and `>>` (the shifted type's signedness picks arithmetic or logical `>>`), integer `as` casts (widening, same-width, and the truncating casts the lowerer emits for coerced literals), comparisons (`==`/`!=` also on `bool`), `!`, `if`/`else` (including nested, early `return`, and the `&&`/`||` that lower to branches) with the variables they update, and `requires`/`ensures` clauses. Integers are fixed-width bit-vectors, so wrapping, signedness and 128-bit values are exact. Everything else (loops, calls (so the narrowing intrinsics such as `i64_to_u8_wrap`), effects, `bool` parameters, floats, collections, enum and struct values and so the `match` over them, `invariant`) is **`Skipped`**, never `Verified`. The diagnostic is a `VerificationSkipped` warning whose message is ``skipped verification of `f`: <code>: <detail>`` with a code from ADR-1430 (`function-has-effects`, `ir-non-dominating-read`, `float-rem-unsupported`, `unmodeled-builtin` with detail the runtime symbol, `wide-aggregate-field`, `unsupported-opcode` with detail `Op[type]`, or a control-flow shape such as `loop (back edge in the control-flow graph)`). A machine-readable `reason_code` field is not emitted yet.
-- **Proof obligations.** One query per `ensures` clause and per abort site, in walk order (blocks in reverse postorder); a `requires` is an assumption only for the obligations after it, and so is every earlier abort guard on the same path (an aborting run never reaches a later obligation). An obligation is asked only on the paths that reach it: its query asserts the block's path condition, and an assumption made inside a branch holds only under that branch's condition. A variable updated in a branch is merged with one `ite` over the incoming edges, and only when the arms supply different values; a branch whose condition is constant, or was already decided by an enclosing branch on the same value, leaves the other arm unexecuted. The query grows with the number of branches and updated variables, not with the number of paths. Two kinds of abort follow the language:
+- **Subset.** A function is verified when its only effect is `panic` (or it has none), its loops are reducible `while`/`loop` loops (see "Loops" below), and it uses only these operations on integers of every width (`i8`..`i128`, `u8`..`u128`) and `bool`: constants, integer parameters, wrapping `+ - * / %`, the checked `+! -! *! /! %!`, `& | ^`, `<<` and `>>` (the shifted type's signedness picks arithmetic or logical `>>`), integer `as` casts (widening, same-width, and the truncating casts the lowerer emits for coerced literals), comparisons (`==`/`!=` also on `bool`), `!`, `if`/`else` (including nested, early `return`, and the `&&`/`||` that lower to branches) with the variables they update, `while` and `loop` with `break`/`continue`, `requires`/`ensures` and loop `invariant` clauses, and struct, enum and `Option`/`Result` values (see "Aggregates" below). Integers are fixed-width bit-vectors, so wrapping, signedness and 128-bit values are exact. Everything else (calls of builtins (so the narrowing intrinsics such as `i64_to_u8_wrap`; calls of other functions are inlined, see "Calls" below), the `io`/`read`/`write`/`unsafe` effects, `bool` parameters, floats, `String` and maps) is **`Skipped`**, never `Verified`. A `Vec` of `bool` or integers up to 64 bits is modelled (see "Collections" below). The diagnostic is a `VerificationSkipped` warning whose message is ``skipped verification of `f`: <code>: <detail>`` with a code from the closed list in [`errors.md`](errors.md#verificationskipped) and a free-form detail (the runtime symbol, `Op[type]`, or a control-flow shape such as `irreducible loop (back edge to a block that does not dominate its source)`, `loop value used outside its loop`, `entry block is a loop header` or `loop nest deeper than 8`). A machine-readable `reason_code` field is not emitted yet.
+- **Proof obligations.** One query per `ensures` clause and per abort site, in walk order (blocks in reverse postorder); a `requires` is an assumption only for the obligations after it, and so is every earlier abort guard on the same path (an aborting run never reaches a later obligation). An obligation is asked only on the paths that reach it: its query asserts the block's path condition, and an assumption made inside a branch holds only under that branch's condition. A variable updated in a branch is merged with one `ite` over the incoming edges, and only when the arms supply different values; a branch whose condition is constant, or was already decided by an enclosing branch on the same value, leaves the other arm unexecuted. The query grows with the number of branches and updated variables, not with the number of paths. Three kinds of abort follow the language:
   - *Wrapping `/` and `%`* abort on a zero divisor, and signed `/` aborts on `MIN / -1` (`MIN % -1` is `0`). A shift aborts unless `0 <= count < width` of the shifted type, tested in the count's own type so a negative signed count is rejected. Each is its own obligation: a counterexample is `VerifyFailed`, with the unattributed vow id `4294967293`, blame `None` and violation text `division or remainder by zero`, `signed division overflow (MIN / -1)` or `shift amount exceeds the operand's bit width`.
+  - *`.unwrap()` on `None` or `Err`* is an obligation of its own: any path that reaches the abort is a counterexample with the unattributed vow id `4294967293`, blame `None` and violation text `unwrap() called on None`. A function whose `Option` parameter is unwrapped without a guard is `VerifyFailed`; one that unwraps a value it just built as `Some`, or sits on the `Some` arm of a `match`, is `Verified`. ESBMC skips every function with the `panic` effect, so it has no verdict to compare with.
   - *Checked `+! -! *! /! %!`* abort on overflow (and on a zero divisor, and signed `MIN /! -1`). The contract is judged on returning executions only, so a counterexample to such an abort is **not** a failure: the function is still `Verified` when its contracts hold, and each reachable abort adds an `ArithOverflowReachable` warning, as under ESBMC.
 
   A function with no obligation is `Verified` without a solver call. Counterexample values are decimal text of the declared type (unsigned types as magnitudes, 128-bit values in full).
-- **Extra proofs.** ESBMC reports 128-bit checked arithmetic and 128-bit constants as `Skipped`; native models them, so the same program can be `Verified` (with `ArithOverflowReachable` warnings) or `VerifyFailed` natively where ESBMC says `Skipped`.
+- **Loops.** Each loop is unrolled to an internal bound and every obligation is checked on the unrolled prefix, together with a mandatory *unwinding assertion*: no run takes more back edges than the bound. The verifier tries the bounds 2, 4, 8, 16, 32 and 64 in turn (the largest is at least ESBMC's default `--max-k-step`); the bound is not a flag and `--timeout` stays the only knob, shared by all rounds. An `ensures` or `invariant` violated by a run inside the bound is a real counterexample: `VerifyFailed` with the clause's vow id, blame and source span, found at the smallest bound that reaches it. Unwinding alone proves a function only when no run needs more iterations than the largest bound. When every loop of the function has an `invariant`, the loops are also tried inductively: each loop is cut at its header, the variables it changes are unconstrained, and the function is `Verified` when each invariant holds on entry, is preserved by one iteration from any state that satisfies it and the loop condition, and, with the negated condition, establishes the rest of the function (including `ensures`). So a loop that can run longer than the bound (a bound that is a parameter, `while true`, a literal bound above 64) is `Verified` given an inductive invariant. Induction never produces `VerifyFailed`: a wrong invariant fails because unwinding finds a run that violates it, and an invariant that is true but not inductive, or violated only beyond the largest bound, leaves the verdict `verify_status: "unknown"` with a `verify_message` that starts `unwinding assertion:`, never `Verified`. A proof by induction is partial correctness: it covers the runs that terminate, so a loop that never exits satisfies any `ensures`. When a function has a checked operator, the unrolled rounds still run, so its warnings are the aborts they reach within the unrolled prefix; an inductive proof does not add any. When a round of unwinding ends open (every claim holds inside the bound, but some run needs more iterations), the k-induction *step case* is tried at that round's bound `k`, with or without an invariant, for a function with exactly one loop whose header carries no pointer and which writes no aggregate or Vec: the loop is unrolled `k` times from an arbitrary state, the claims of the earlier copies (and the loop test, which they took) are assumed, and the function is `Verified` when every claim of the last copy and of the exit from it holds. It proves a property that is true for every trip count but not 1-inductive (an alternating divisor, a counter against a parameter bound) and, like invariant induction, is partial correctness. A failing step case proves nothing and is never `VerifyFailed`; the unwinding verdict stands. A function with several loops, or a loop that carries a pointer or writes an aggregate or a Vec, is decided by unwinding and invariant induction alone. An unrolled program above the verifier's size budget is `unknown` with the same prefix unless induction proves it. Loops that cannot be unrolled stay `Skipped` as `unsupported-opcode` (details above): irreducible control flow, a loop value read after its loop through a path the verifier cannot close, a loop in the entry block, nesting deeper than 8. Checked-arithmetic warnings are reported once per source site, not once per iteration.
+- **Extra proofs.** ESBMC reports 128-bit checked arithmetic and 128-bit struct fields or enum payloads as `Skipped`; native models them, so the same program can be `Verified` (with `ArithOverflowReachable` warnings) or `VerifyFailed` natively where ESBMC says `Skipped`.
+- **Aggregates.** A struct, enum, `Option` or `Result` value is scalarised: each field is its own `bool` or integer term (a 128-bit field is one 128-bit term), so construction, field access and `match` need no heap model. A parameter's fields are unconstrained, and so is its discriminant: no range is assumed for an enum tag. A field a construction did not write (the payload of `None`) is unconstrained too, never `0`. Two aggregates merged by an `if`/`else` or a `match` are merged field by field. A field write is path-conditional: a write in a branch keeps the old value on the paths that skip it, so a struct literal whose field value contains an `if`, a `match` or an `.unwrap()`, a field of a value built before a branch, and a field of the only struct or enum parameter are all modelled. A counterexample lists the fields of a struct, enum, `Option` or `Result` parameter in `values` under `<param>.<slot>` (the IR carries no field names): a struct's fields are `p.0`, `p.1`, ... in declaration order; an enum's discriminant is `p.0` (variant index in declaration order; `Option` is `None` = 0, `Some` = 1; `Result` is `Ok` = 0, `Err` = 1) and the chosen variant's payload starts at `p.1`; a 128-bit field takes two slots and so shifts the slots after it by one. Only slots the function reads are listed, and a claim lists those read before it in the walk (a slot read only after the claim, or never, is absent). A slot the function reads at two different widths (an `i64` payload in one variant, a `bool` in another) gets a `:bool` or `:<bits>` suffix on every one of its names (`o.1:64`, `o.1:bool`). `bool` fields print as `true` or `false`. The following are **`Skipped`** as `unsupported-opcode`: a field write through a merged value (`let p = if c { a } else { b }; p.f = 1`), a field write to a parameter of a function that has another struct, enum or collection parameter (they may be one value), a struct, enum or collection nested in another aggregate's field, a field of any other type, and `linear` values. A loop that writes a field of a value built outside its body is decided by unwinding alone, never by its `invariant`. A `Vec<i128>` or `Vec<u128>` element is `Skipped` as `unmodeled-builtin` (see "Collections").
+- **Collections.** A `Vec<T>` with `T` of `bool` or an integer of up to 64 bits (`new`, `push`, `v[i]`, `v[i] = x`, `len`, `pop`) is an array plus a 64-bit symbolic length. There is no capacity: a parameter's length is unconstrained apart from the runtime's own limit (a Vec's length is below `2^63 - 1`, so `v.len() as i64 >= 0`), and a `push` is assumed to return only while the length stays below it, so a property over every length is proven for every length, not only up to ESBMC's model capacity. An index at or past the length is an obligation of its own on `get` and `set`: a counterexample is `VerifyFailed` with the unattributed vow id `4294967293`, blame `None` and violation text `index out of bounds`. A Vec parameter's length and contents are not listed in `values`; two `Vec` parameters are distinct. **`Skipped`**: `String`, maps, `clear`, `truncate`, `reserve`, `sort`, `from_raw_parts_copy`, `pin_to_root`, wide (`i128`/`u128`) or pointer elements (`Vec<Vec<_>>`, `Vec<String>`, `Vec<struct>`; only `len` of those is modelled), a `Vec<bool>` element read, an index that is not 64-bit, a Vec stored in a struct field, passed to another function, or merged by an `if`/`else` that yields different Vecs.
+- **Calls.** A call of another function whose arguments and result are integers, `bool` or `()` is inlined: the callee's body is spliced into the caller before execution, so the caller is verified together with everything it calls and the callee's clauses become obligations of the caller. A callee `requires` is an obligation blamed on the caller (the counterexample's `vow_id` is the callee's own id, `function` is the function being verified, and `call_sites` lists the calls from that function down to the failing clause, outermost first); a callee `ensures` or loop `invariant` is an obligation blamed on the callee. Each is assumed once asked, so the first violated clause on a path is the one reported. A function without a `vow` block that calls a contracted function is verified only for those callee preconditions, as under ESBMC. A function on a call cycle, directly or through other functions, is `Skipped` as `recursion-unsupported` with the cycle as detail (`a -> b -> a`); a function whose callee is outside the subset is `Skipped` as `non-modelable-callee` with the callee and its own code as detail (`g (float-rem-unsupported)`). A call with a struct, enum, `Option` or collection argument or result stays `Skipped` as `unsupported-opcode`. A call tree whose inlined body exceeds the verifier's size budget is `verify_status: "unknown"` with a message that starts `inlining budget:`, never `Verified`.
 - **Verdict divergence from ESBMC.** The ESBMC model does not check `MIN / -1` for `/`, so `examples/divide.vow` (`requires: y != 0`, body `x / y`) is `VerifyFailed` under `--backend native` (counterexample `x = i64::MIN`, `y = -1`) while ESBMC proves it.
 - **Workers.** Each function in the subset is verified in its own `verify-worker` subprocess of the same `vowc` binary (internal; its flags and output are not part of the CLI contract), at most `--verify-jobs` at a time. A worker runs in its own process group, so killing it also kills its solver. On Linux it runs under a fixed internal address-space cap; there is no user-facing memory flag. Results are reported in IR order whatever order the workers finish in, and reporting stops at the first function that is not proven, so the output is the same for every `--verify-jobs` value. A worker that runs out of memory (the runtime's structured `OutOfMemory` report, a solver out-of-memory message, or a kill from outside) is `verify_status: "unknown"` with `verify_message: "memory limit exceeded"`, never a proof and never a compiler crash. Any other abnormal worker death (a signal, a nonzero exit, no result) is `verify_status: "panicked"` and the message names the signal or exit status. Expiry of `--timeout` kills the whole group and is `"timeout"`.
-- **Solver.** `bitwuzla` is resolved from `PATH`; one self-contained `.smt2` per obligation is written to a private temp directory owned by the parent (removed on every path, including a killed worker) and run as a child process of the worker. Only `unsat` is a proof. `unknown` is `verify_status: "unknown"`; a solver that outlives its budget is killed (`"timeout"`); a non-zero exit, `[error]` output, an unrecognised answer or an unparsable model is `"error"`. If `bitwuzla` is not on `PATH` and a function needs it, the result is `VerifyFailed` with `verify_status: "tool_not_found"` and no counterexample (ESBMC is not consulted). A module in which every function is `Skipped` needs no solver. The binary is not version- or hash-checked yet.
-- **Flags.** `--timeout <N>` (seconds, default `300`) is the budget for each function, measured from the start of its worker; `--timeout 0` is an immediate `timeout` without spawning the solver. `--verify-jobs <N>` caps concurrent workers (default half the CPUs). `--no-cache` is accepted and has no effect (the native driver is uncached). `--max-k-step`, `--solver` and `--encoding` are ESBMC options and are rejected with a usage error under `--backend native`. `--replay-cex` and `--perfetto` works as for ESBMC. `--replay-cex` also replays the division and remainder abort counterexamples and reports a counterexample that does not reproduce as a `VerifierBug` diagnostic (see "Counterexample replay" below).
+- **Solver.** `bitwuzla` is resolved from `PATH`. The obligations of one round of a function that has at least two for the solver share one interactive solver process of the worker (each obligation asked in its own scope); only an `unsat` answer, or a `sat` on a checked-operator or unwinding obligation, is taken from it. Any other answer, and any misbehaviour of that process (an error, an unrecognised reply, a timeout, an exit), is decided by one self-contained `.smt2` per obligation, written to a private temp directory owned by the parent (removed on every path, including a killed worker) and run as a child process of the worker, which alone supplies a counterexample, so the result does not depend on whether the process was shared. Only `unsat` is a proof. `unknown` is `verify_status: "unknown"`; a solver that outlives its budget is killed (`"timeout"`); a non-zero exit, `[error]` output, an unrecognised answer or an unparsable model is `"error"`. If `bitwuzla` is not on `PATH` and a function needs it, the result is `VerifyFailed` with `verify_status: "tool_not_found"` and no counterexample (ESBMC is not consulted). A module in which every function is `Skipped` needs no solver. The binary is not hash-checked; its `--version` output names it in the result cache key.
+- **Flags.** `--timeout <N>` (seconds, default `300`) is the budget for each function, measured from the start of its worker; `--timeout 0` is an immediate `timeout` without spawning the solver. `--verify-jobs <N>` caps concurrent workers (default half the CPUs). `--no-cache` disables the native result cache of `verify` (see "Result cache" below). `--max-k-step`, `--solver` and `--encoding` are ESBMC options and are rejected with a usage error under `--backend native`. `--replay-cex` works as for ESBMC; `--perfetto` is accepted and records the spans listed under the flag table. `--replay-cex` also replays the division, remainder and `unwrap()` abort counterexamples and reports a counterexample that does not reproduce as a `VerifierBug` diagnostic (see "Counterexample replay" below).
+- **Result cache.** Every solver answer that is `sat` (with its model) or `unsat` is stored on disk and replayed by a later run, so a warm run reports exactly what the cold run did without asking the solver again. An entry is keyed by a hash of the exact `.smt2` text of the query plus the solver's `bitwuzla --version` output and the fixed solver argument list, and holds that text, which a lookup compares byte for byte: a stale entry cannot exist (a new solver version or any change to the query is a different key), a hash collision is a miss, and a truncated, garbled or hand-edited entry is a miss. A claim is looked up under its full query text before a shared solver process is asked; an `unsat` from that process is stored under the same text, so a standalone run and a shared-process run replay each other's entries. A `sat` from the shared process of a soft claim carries no model and is not stored. `unknown`, `timeout`, memory, error and tool-not-found answers depend on the budget or the environment and are never stored, so they are asked again. A sliced query and the full query are cached under their own text; a cached `sat` for the sliced query still sends the claim to the full query. A non-positive budget is a `timeout` before the cache is consulted. The cache lives in `$VOW_CACHE_DIR/verify-native/` (default `~/.cache/vow/verify-native/`), sharded by the first two hex digits of the key, at most 64 entries per shard (a full shard drops an arbitrary half before it takes a new entry), written by temporary file and rename so concurrent workers never see a partial entry. Any problem with the directory or with the solver's `--version` disables the cache for that run and never fails verification. Only `verify` uses the cache: `contracts --verify` and `test --verify` ask the solver every time. `--no-cache` neither reads nor writes it, and the performance gate (`scripts/verify_perf.py`) always runs with it off and fails a sample if the cache directory is written. Unlike the ESBMC driver's cache, which only ever persists failures, this cache stores proofs: whoever can write the cache directory can forge an `unsat`, so use `--no-cache` when the result must come from a fresh solver run (a "green locally" claim). A solver call that timed out cold can be decided warm, since a hit costs nothing; the identical-verdict guarantee holds for runs in which no solver call times out.
+
+#### Native backend: `contracts` and `test`
+
+`vowc contracts --verify --backend native` and `vowc test --verify --backend native` (issue #1427) run the same native checker and worker pool as `verify`, with the status vocabulary, JSON schemas and exit codes of the ESBMC path unchanged. Self-hosted `vowc` only; the default stays `esbmc`.
+
+- **Selection.** Both commands check the functions that carry a `vow` block, exactly as the ESBMC path does (`verify` also checks callers of contracted functions, these do not). A function outside the native subset is `skipped` in `contracts` (a status only, no diagnostic, as for ESBMC) and makes the file `contract_skipped` in `test` (with one `VerificationSkipped` diagnostic of severity `error` in the entry's `diagnostics`, fixed message `contract verification skipped: function not modelable`, no reason code), and needs no solver.
+- **No early stop.** `verify` reports up to the first function that is not proven; a `contracts` report or a `test` verdict spans functions, so a failed function never cancels a later one. Every function is verified at most `--verify-jobs` at a time, and the result does not depend on which worker finishes first.
+- **Clause status (`contracts`).** Each `ensures` and `invariant` clause carries the verdict of its own obligations, from one `verify-worker` that decides every obligation of the function. A `requires` clause (an assumption, never an obligation) is `proven` when the function is proven and `unknown` otherwise, as for ESBMC's `--multi-property` mode. A function whose only counterexample is an abort (no clause refuted) has no `proven` clause: they are all `unknown`. Statuses are `proven`, `failed`, `unknown`, `timeout`, `error`, `skipped` and `vacuous`; `proven-ir` is an ESBMC-only status and is never produced. When `bitwuzla` is not on `PATH`, every clause of a function that needs it is `error` and the run exits 1; a function without obligations, or a skipped one, still resolves without a solver.
+- **Weak-contract probes (`contracts`).** The two probes of the ESBMC path are IR rewrites checked by the same engine, each in its own worker with the full `--timeout` budget, so a slow probe loses only its own answer. *Vacuity*: the function is cut right after its last `requires` and the cut point must be unreachable. If the `requires` clauses are jointly unsatisfiable, every clause of the function is `vacuous` (this overrides the clause verdicts, as for ESBMC). The probe applies to functions with a `requires`. *Trivial*: the single returned value is replaced by the type's default (`0`, `false`) and every `ensures` must still hold; if it does, each `ensures` of the function has `trivially_satisfiable: true`. The computation that produced the value stays in the function, so what it can abort on is still checked. It applies to functions with an `ensures`, a scalar result and one `return` of a value computed in the body (not a parameter), as for ESBMC. A probe that is not proven (failed, `unknown`, timeout, error) never claims a weakness.
+- **Fail-closed `test`.** Every function with a `vow` block must be `proven`: `failed`, `unknown`, `timeout`, `error` and a worker that died all make the file `verify_failed` and the test program is not run. The ESBMC path lets an `error` outcome pass; the native path does not, because nothing was established for that function. Each function has the fixed `300` s budget; `test --timeout` is the per-test execution timeout in milliseconds and does not apply to verification. `--jobs` workers each run their own verify pool, so the total grows with `--jobs` times `--verify-jobs`.
+- **Verdict divergence from ESBMC.** The ESBMC path plants its vacuity label only in the entry block. A `requires` written with `&&` or `||` lowers to branches and lands in a later block, so ESBMC reports `vacuous` for a satisfiable `requires: a > 0 && a < 100`; the native probe follows the definition above and does not. The `MIN / -1` and 128-bit differences listed under "Verdict divergence from ESBMC" above apply to `contracts` and `test` as well. Two more are specific to the clause report. A function that fails only on an abort (a division or remainder by zero, `MIN / -1`, an over-wide shift, `unwrap()` on `None`, an out-of-bounds `Vec` index) and refutes no clause has no `proven` clause: its `ensures` and `invariant` clauses are `unknown`, like its `requires` clauses, and the run exits 1, as `verify` reports the same function `VerifyFailed`. ESBMC instead lets the run continue past the abort with an unconstrained value, so a clause over that value is `failed` there, while a clause that does not depend on it, or a function with no `requires`, can be `proven` and the run exit 0. A loop with no `invariant` whose bound is symbolic is decided by unwinding alone, so its clauses are `unknown` where ESBMC's incremental BMC may close the forward condition. A function whose retained computation can still abort on a checked operator is never flagged `trivially_satisfiable`, as under ESBMC.
+- **Flags.** `--timeout <N>` (seconds) and `--verify-jobs <N>` are honoured by `contracts`; `--max-k-step`, `--solver` and `--encoding` are rejected with a usage error, as for `verify`. `--no-cache` is accepted and has no effect. `--replay-cex` and counterexamples are not part of either command.
 
 ### `vow contracts`
 
@@ -9103,16 +10331,18 @@ vow contracts [OPTIONS] <source.vow>
 
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
-| `--verify`        | (off)       | Run ESBMC verification and report per-contract status |
+| `--verify`        | (off)       | Run verification (the ESBMC backend by default, or the native backend with `--backend native`) and report per-contract status |
 | `--no-cache`      | (off)       | Disable verification result caching        |
-| `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations       |
-| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver (with --verify)           |
-| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |
-| `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |
+| `--max-k-step <N>` | `50`       | ESBMC backend only; a usage error under `--backend native`. ESBMC incremental BMC max iterations (with --verify) |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC SMT solver (with --verify) |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC encoding mode (with --verify); ir requires z3 |
+| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent `verify-worker` subprocesses under `--backend native`; a no-op under ESBMC (the ESBMC loop is serial) |
+| `--backend <esbmc\|native>` | `esbmc` | Verification backend; `native` requires `--verify` (see "Native backend: `contracts` and `test`") |
+| `--timeout <N>` | `300` (native) | Seconds per function (and per probe) under `--backend native`; ESBMC's own timeout otherwise |
 
-**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven — i.e. any `failed`, `timeout`, `unknown`, `error`, `skipped`, or `vacuous` — and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)
+**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven — i.e. any `failed`, `timeout`, `unknown`, `error`, `skipped`, or `vacuous` — and **0** only when every contract is `proven` (or `proven-ir`, an ESBMC-only status no compiler produces today). Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)
 
-When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.
+When `--verify` is requested but the verifier is not installed (ESBMC, or `bitwuzla` under `--backend native`), the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` (under native, only for functions that need the solver) and exits with code 1 (fail-closed). Install the verifier, or omit `--verify`, to obtain proven/failed/unknown statuses.
 
 ### `vow skill`
 
@@ -9131,9 +10361,13 @@ vow skill install --global  # install to $HOME/.claude/skills/vow/ on Linux
 
 `install` writes `SKILL.md` plus supporting files under `reference/`, `examples/`, and `schemas/`. Claude Code discovers the skill from the `.claude/skills/` directory and uses the frontmatter description/`when_to_use` metadata to load it for `.vow` file work as well as creation and verification-debugging prompts before a `.vow` file exists.
 
+**Atomic install.** `install` builds the whole tree in a staging directory next to the target (`.claude/skills/.vow-install-*`) and renames it into place, writing `SKILL.md` last, so a failed or interrupted install never leaves a `SKILL.md` that links to missing `reference/`, `examples/`, or `schemas/` files. When `skills/vow/` already exists, the old tree is renamed aside, the new one renamed in, and the old one restored if that rename fails; the directory is briefly absent between the two renames, never half-written. Files the install does not own (hand-added notes, stale files an older toolchain left in `reference/`) are copied from the old tree into the staged one before the swap, so a re-install rewrites owned files and leaves everything else alone; the install needs write access to `.claude/skills/` itself. A `skills/vow` symlink (dotfile managers) is kept and written through in place, support files first and `SKILL.md` last. A pre-existing partial tree is repaired by the next explicit `install`; auto-install never touches a tree that already holds `SKILL.md`.
+
 When no scope flag is provided, `install` prompts on stderr for local (`./.claude`) or global (`$HOME/.claude`) installation. Scripts and agents should pass `--local` or `--global` explicitly. `--local` requires the current directory to contain both `.git` and `.claude/`; otherwise it exits with an error and writes nothing. `--global` installs under `$HOME/.claude/skills/vow/` and fails if `$HOME` is unset or empty.
 
-**Auto-install on build.** The first time `vow build` (or the bare `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.
+**Auto-install on build.** The first time `vow build` (or the bare `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build and stays silent on failure; a failed auto-install leaves no `SKILL.md`, so the next build retries it.
+
+**Migrating an existing install.** An existing `.claude/skills/vow/SKILL.md` is never rewritten, and while it is present a build does not add or repair support files, so an older single-file skill keeps working but lacks `reference/`, `examples/`, and `schemas/`. To migrate, refresh after a compiler upgrade, or repair, run `vow skill install` with the scope being replaced: `--local` for `./.claude/skills/vow/` or `--global` for `$HOME/.claude/skills/vow/` (a global install does not refresh a project-local one). Without `.git`, `--local` is unavailable: delete `.claude/skills/vow/SKILL.md` and run a build instead. Explicit install rewrites `SKILL.md` and every support file it owns, overwriting local edits, and leaves other files alone; review the diff of a committed project install. A pre-rename `.claude/skills/vow-toolchain/` install is neither detected nor modified, so a build installs `.claude/skills/vow/` beside it: delete the old directory by hand.
 
 ### `vow test`
 
@@ -9148,15 +10382,16 @@ vow test [OPTIONS] [<path>]
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
 | `<path>`          | `.`         | Directory to scan or single `.vow` file    |
-| `--verify`        | (off)       | Run ESBMC verification on test files       |
+| `--verify`        | (off)       | Run verification (ESBMC, or the native backend with `--backend native`) on test files |
+| `--backend <esbmc\|native>` | `esbmc` | Verification backend; `native` requires `--verify` (see "Native backend: `contracts` and `test`") |
 | `--filter <pat>`  | (none)      | Only run tests whose file stem contains pat |
 | `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the nearest ancestor of the entry file that resolves all of its `use` declarations. |
 | `--jobs <N>`      | `min(num_cpus/2, 8)` (`1` with `--verify`) | Max test files compiled and run concurrently |
 | `--mode debug`    | (default)   | Insert runtime vow checks                 |
 | `--mode release`  | `debug`     | Omit all vow checks for performance       |
 | `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
-| `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations (with --verify) |
-| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs (with --verify) |
+| `--max-k-step <N>` | `50`       | ESBMC backend only; a usage error under `--backend native`. ESBMC incremental BMC max iterations (with --verify) |
+| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent verification jobs (with --verify) |
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
 
@@ -9203,7 +10438,11 @@ Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`
 
 Each test binary is run directly, with no memory limit, and is killed when `--timeout` elapses (status `timeout`). A binary that exits non-zero, or is killed by a signal, is `failed`; a signal death or a `timeout` has no `exit_code` (`null`, or omitted by the Rust compiler).
 
-`contract_skipped` means ESBMC was never invoked because a vowed function is non-modelable (distinct from `verify_failed`, where ESBMC proved a violation). Both are fail-closed — a `contract_skipped` test counts toward `failed` and yields a `TestsFailed` overall status.
+A `timeout` counts toward `failed`, like `compile_error`, `verify_failed` and `contract_skipped`: a run containing one yields `TestsFailed` and exit code 1.
+
+A `<path>` that does not exist is itself a failure: the result is `TestsFailed` with `total: 1` and `failed: 1`, holding one synthetic `failed` entry whose `file` is the path as given and whose `stderr` names it, and the exit code is 1. `total` equals the length of `tests` in every result, so the synthetic entry is counted.
+
+`contract_skipped` means no proof was attempted because a vowed function is non-modelable (distinct from `verify_failed`, where the verifier found a violation or could not decide). Both are fail-closed — a `contract_skipped` test counts toward `failed` and yields a `TestsFailed` overall status.
 
 ### `vow decl`
 
@@ -9309,7 +10548,7 @@ silently ignored. The self-hosted `vowc` only accepts the `--flag value` form fo
 `--flag=value` is reported as an unknown argument with a hint. `vowc mutants` forwards its flags to
 its own parser and is not validated by the driver.
 
-`vow build` and `vow verify` both fail closed on `Skipped`: if ESBMC was asked to verify a vowed
+`vow build` and `vow verify` both fail closed on `Skipped`: if the verifier was asked to verify a vowed
 function but the verifier could not model the function body, the contract was not statically
 proved, so the run exits non-zero. Use `--no-verify` if you genuinely want to skip verification —
 that path produces `Unverified` (exit 0).
@@ -9335,11 +10574,11 @@ rationale.
 
 | Status          | Meaning                                     |
 |-----------------|---------------------------------------------|
-| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC, and every call from a verifiable uncontracted function into a contracted function satisfies the callee's `requires` (see [Callers Without a `vow` Block](contracts.md#callers-without-a-vow-block)). "Verifiable" excludes uncontracted callers that cannot be modelled (e.g. `main() [io]`) or whose proof the verifier could not finish; each carries a `VerificationSkipped` *Note* instead, and the note does not change the status. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |
-| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
-| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `LinearBorrow`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
-| `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
-| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
+| `Verified`      | Compiled + every vowed function's contract was statically proved by the verifier, and every call from a verifiable uncontracted function into a contracted function satisfies the callee's `requires` (see [Callers Without a `vow` Block](contracts.md#callers-without-a-vow-block)). "Verifiable" excludes uncontracted callers that cannot be modelled (e.g. `main() [io]`) or whose proof the verifier could not finish; each carries a `VerificationSkipped` *Note* instead, and the note does not change the status. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |
+| `Unverified`    | Compiled but no verifier was invoked (`--no-verify`, `--dump-ir`). Exit 0. A missing verifier is not `Unverified`: it is `VerifyFailed` (exit 1). |
+| `Skipped`       | Verification was requested but at least one vowed function could not be modelled. The reason is one of the closed list in [`errors.md`](errors.md#verificationskipped) under the native backend, or free text such as `LinearBorrow`, `Load`/`Store`, `RemF*`, effects under ESBMC. **ESBMC backend:** struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled (the native backend models it). Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`, also when another function fails verification (the status is then `VerifyFailed`, and the warnings remain). Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
+| `CompileFailed` | Parse error, type error, module load error, unsupported code generation (a named backend limitation, such as `%` on floats), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
+| `VerifyFailed`  | The verifier produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`; under the native backend also an unwinding failure, `unwinding assertion: ...`, an exhausted inlining or size budget, or an out-of-memory worker, `memory limit exceeded`), tool error, the tool was not found (`tool_not_found`: ESBMC, or `bitwuzla` under native), or the verifier worker crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
 For a multi-function `verify` or verified `build`, a halt-class result (definitive
 counterexample, timeout, unknown, tool error, missing tool, or worker panic) stops new function
@@ -9436,7 +10675,7 @@ argument. A `timeout`, `unknown`, `error` or `panicked` outcome has no
 counterexample and adds no such diagnostic. Both compilers emit the same
 `diagnostics[]`, `counterexample` and `counterexamples[]` for the same source;
 the only fields that are not specified byte for byte are `verify_message`
-(ESBMC's free text) and `values` entries named `$esbmc$...` (solver temporaries).
+(the verifier's free text) and, under ESBMC, `values` entries named `$esbmc$...` (solver temporaries).
 
 A diagnostic's `span` is exactly `{file, offset, length}`: positions are byte
 offsets, and neither compiler adds line or column fields.
@@ -9477,16 +10716,16 @@ shift count) rather than exposing raw verifier output.
 | `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |
 | `message`          | string              | CompileFailed     | Compatibility error category/detail (for example "parse error", "type error", "module load error", backend/link detail, or "failed to emit frontend diagnostics: {io_error}"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
-| `counterexample`   | string              | VerifyFailed      | Legacy description string: `"[Counterexample]"` when ESBMC produced a counterexample, otherwise the soft-failure text (`verification timed out`, `verification result unknown: <reason>`, `esbmc error: <message>`, ...) |
+| `counterexample`   | string              | VerifyFailed      | Legacy description string: `"[Counterexample]"` when the verifier produced a counterexample, otherwise the soft-failure text (`verification timed out`, `verification result unknown: <reason>`, `esbmc error: <message>` (the prefix is kept whichever backend ran), ...) |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema); contains at most one entry per run under the multi-function stopping policy above |
 | `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, `"tool_not_found"`, or `"panicked"` (verifier worker thread crashed — no counterexample available) |
-| `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
+| `verify_message`   | string              | On backend failure | Verifier/backend error detail             |
 
 ### Counterexample replay
 
-With `--replay-cex`, each object in `counterexamples[]` gains a `replay` field — a **differential test** of the verifier's IR-to-C model against the executable's debug-mode runtime semantics. It is **not part of the soundness proof**: it neither strengthens nor weakens the static verdict, and the exit code is unchanged. It exists to catch *drift* between the two independent lowerings — `vow-verify`'s C emitter (`requires` → `__ESBMC_assume`, `ensures`/`invariant` → `__ESBMC_assert`) and `vow-codegen`'s debug runtime checks.
+With `--replay-cex`, each object in `counterexamples[]` gains a `replay` field — a **differential test** of the verifier's model against the executable's debug-mode runtime semantics. It is **not part of the soundness proof**: it neither strengthens nor weakens the static verdict, and the exit code is unchanged. It exists to catch *drift* between the two independent lowerings — `vow-verify`'s C emitter (`requires` → `__ESBMC_assume`, `ensures`/`invariant` → `__ESBMC_assert`) and `vow-codegen`'s debug runtime checks.
 
-For each counterexample, Vow maps the ESBMC assignment back to concrete Vow inputs, synthesizes a `--mode debug` harness that calls the failing function with those inputs, runs it, and compares the observed `VowViolation`.
+For each counterexample, Vow maps the verifier's assignment back to concrete Vow inputs, synthesizes a `--mode debug` harness that calls the failing function with those inputs, runs it, and compares the observed `VowViolation`.
 
 | `replay` value | Meaning |
 |----------------|---------|
@@ -9500,11 +10739,11 @@ program failed while keeping `"diverged"` for runs where the verifier and runtim
 whether the predicted failure is reachable. Runtime aborts use the reserved exit status `134` and
 the structured diagnostics documented under [Runtime Errors](errors.md#runtime-errors).
 
-**v1 input scope.** Reconstruction supports scalar parameters (`i64`, `u64`, `bool`) and bounded `Vec` of those scalars. `String`, `HashMap`, `BTreeMap`, struct, reference, and nested-aggregate parameters are reported as `"skipped"` with a reason. The self-hosted compiler's v1 reconstructs scalars only and reports `Vec` parameters as `"skipped"` (the Rust compiler additionally reconstructs bounded `Vec`s); both report identical outcomes for scalar and aggregate-skip cases. Replaying a counterexample for a function whose entry file already defines `main` is `"skipped"` by the self-hosted compiler.
+**v1 input scope.** Reconstruction supports scalar parameters (`i64`, `u64`, `bool`) and bounded `Vec` of those scalars. `String`, `HashMap`, `BTreeMap`, struct, reference, and nested-aggregate parameters are reported as `"skipped"` with a reason (the native backend additionally rebuilds struct, enum, `Option` and `Result` parameters of scalar fields; see "Native backend" below). The self-hosted compiler's v1 reconstructs scalars only and reports `Vec` parameters as `"skipped"` (the Rust compiler additionally reconstructs bounded `Vec`s); both report identical outcomes for scalar and aggregate-skip cases. An entry file that already defines `main` replays like any other: both compilers set that `main` aside in the harness and call the failing function from a synthesized `main`. A counterexample for `main` itself is `"skipped"` (the harness cannot call the entry function).
 
 `replay`/`replay_reason` are present on a counterexample only when `--replay-cex` was passed.
 
-**Native backend.** Under `vowc verify --backend native` the replay contract is stricter, because the native model is meant to be checked against the runtime rather than trusted. The counterexamples for a division or remainder abort (zero divisor; signed `MIN / -1`), which carry the reserved unattributed `vow_id` and blame `None`, are replayed instead of skipped: the harness calls the function with the counterexample's inputs and the replay is `"confirmed"` when the program aborts with `ArithmeticOverflow` (exit status `134`). The runtime envelope names the abort kind but not the site, so this confirms the kind of failure for those inputs, not which operation raised it. A native counterexample whose replay ends `"diverged"` or `"aborted"` additionally yields one [`VerifierBug`](errors.md#verifierbug) error diagnostic: the model and the runtime disagree, so the defect is in the verifier. `"skipped"` never ran and is not reported as a verifier bug. The `status` and exit code are unchanged. The ESBMC backend keeps skipping the unattributed ids.
+**Native backend.** Under `vowc verify --backend native` the replay contract is stricter, because the native model is meant to be checked against the runtime rather than trusted. The counterexamples for a division or remainder abort (zero divisor; signed `MIN / -1`) or for an `unwrap()` on `None`, which carry the reserved unattributed `vow_id` and blame `None`, are replayed instead of skipped: the harness calls the function with the counterexample's inputs and the replay is `"confirmed"` when the program aborts with `ArithmeticOverflow` (division, remainder) or `UnwrapOnNone` (unwrap), exit status `134`. The runtime envelope names the abort kind but not the site, so this confirms the kind of failure for those inputs, not which operation raised it. A struct, enum, `Option` or `Result` parameter whose fields are scalars (`bool`, `i8`..`i64`, `u8`..`u64`; `()` as a payload) is rebuilt from the `<param>.<slot>` values (see "Aggregates" above): the harness binds `Pair { lo: 3, hi: -4 }`, `Shape::Rect(5, 6)` or `Option::Some(9)` from the source declaration. A slot the model never read takes `0`/`false`, and an unused variant is never inspected. The replay is `"skipped"`, with a reason, for a field that is a nested aggregate, a `Vec`/`String` or any other non-scalar type, a 128-bit field, a reference, an alias or a type not declared in the program, and for a discriminant outside the enum's variants (the model does not constrain the tag, so the solver may pick one; that is a property of the model, not a verifier bug). The ESBMC backend and the Rust compiler keep reporting aggregate parameters as `"skipped"`. A native counterexample whose replay ends `"diverged"` or `"aborted"` additionally yields one [`VerifierBug`](errors.md#verifierbug) error diagnostic: the model and the runtime disagree, so the defect is in the verifier. `"skipped"` never ran and is not reported as a verifier bug. The `status` and exit code are unchanged. The ESBMC backend keeps skipping the unattributed ids.
 
 ## Contracts Output JSON
 
@@ -9561,7 +10800,7 @@ the structured diagnostics documented under [Runtime Errors](errors.md#runtime-e
 | `blame`       | string  | `"Caller"` (requires) or `"Callee"` (ensures/invariant)  |
 | `source`      | object  | `{ "file": string, "offset": integer }`                  |
 | `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, `"skipped"`, or `"vacuous"` |
-| `quality`     | string  | Static clause-shape classification (no ESBMC): `"weak"`, `"tautological"`, or `"substantive"` |
+| `quality`     | string  | Static clause-shape classification (no verifier): `"weak"`, `"tautological"`, or `"substantive"` |
 | `trivially_satisfiable` | bool | `--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational — never affects the exit code. See `docs/spec/contracts-methodology.md`. |
 
 `description` is the clause kind followed by the predicate rendered by the canonical
@@ -9589,20 +10828,20 @@ compilers anchor on the byte offset of the parameter name instead.
 | Status          | Meaning                                              |
 |-----------------|------------------------------------------------------|
 | `not_verified`  | Verification not requested (no `--verify` flag)      |
-| `proven`        | ESBMC established this contract for the configured bounded verification model (bit-vector encoding, overflow modeled) |
-| `proven-ir`     | ESBMC established this contract for the configured bounded model under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
-| `failed`        | ESBMC found a counterexample violating this contract |
-| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
-| `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
-| `error`         | ESBMC error or tool not found                        |
-| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `Load`/`Store`, `LinearBorrow`, `RemF*`) or the function has effects. (Struct construction and field ops are modelled — see the `Skipped` build-status row.) Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
-| `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously — ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |
+| `proven`        | The verifier established this contract. ESBMC: for the configured bounded verification model (bit-vector encoding, overflow modeled). Native: for every unwinding and collection length, never after a resource-limited weakened retry |
+| `proven-ir`     | ESBMC backend only, never produced natively (and not emitted as a clause status by either compiler today). ESBMC established this contract for the configured bounded model under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
+| `failed`        | The verifier found a counterexample violating this contract |
+| `unknown`       | The verifier could not conclude for this contract — under the native backend a solver `unknown`, an unwinding failure (`unwinding assertion:`), a budget or out-of-memory worker, or a function that fails only on an abort; under ESBMC either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
+| `timeout`       | The verifier timed out on the containing function (ESBMC: BV and — when applicable — IR fallback both timed out) |
+| `error`         | Verifier error, or the tool was not found (ESBMC, or `bitwuzla` under `--backend native`) |
+| `skipped`       | The containing function is outside what the verifier models, with a reason from the closed list in [`errors.md`](errors.md#verificationskipped) (e.g. effects, recursion, an unmodelled builtin, `Load`/`Store`). A machine-readable reason code is not emitted yet. Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke a verifier at all. |
+| `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously — the verifier proved nothing of substance (antecedent failure). Detected by a second run: under ESBMC a `vow_reach` label (`--error-label`) planted after the `requires` assumes is unreachable; under `--backend native` the function is cut right after its last `requires` and the cut point must be unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |
 
 The `proven` / `proven-ir` split and the rule that a resource-limited retry (e.g. the BV→IR fallback) may never report a weakened check as `proven` are the verifier's soundness discipline — the safe-vs-unsafe retry rules are specified in `docs/verifier-discipline.md`.
 
 ### Quality Values
 
-`quality` is a static classification of each clause's *shape*, computed without ESBMC and independent of `status`. It surfaces the "proven but trivial" problem: a `weak` contract can be `proven` while constraining almost nothing. See `docs/spec/contracts-methodology.md` for the full taxonomy.
+`quality` is a static classification of each clause's *shape*, computed without running a verifier and independent of `status`. It surfaces the "proven but trivial" problem: a `weak` contract can be `proven` while constraining almost nothing. See `docs/spec/contracts-methodology.md` for the full taxonomy.
 
 | Quality        | Meaning                                                                                      |
 |----------------|----------------------------------------------------------------------------------------------|
@@ -9719,7 +10958,7 @@ means region analysis placed the value too deep. `op` is one of `push`, `set`, `
 ```
 Parse JSON from stdout
 ├── status == "Verified"       → Success. Binary at `executable`.
-├── status == "Unverified"     → Compiled but unverified. ESBMC missing or --no-verify.
+├── status == "Unverified"     → Compiled but unverified (--no-verify or --dump-ir).
 ├── status == "CompileFailed"  → Read `diagnostics[]` for error details.
 │   ├── error_code is parse error  → Fix syntax (see grammar.md)
 │   ├── error_code is type error   → Fix types (see errors.md)
@@ -9740,20 +10979,23 @@ Always check stderr for human-readable diagnostics alongside the JSON on stdout.
             r#"reference/contracts.md"#,
             r#"# Contract Authoring and Verification
 
-Vow uses ESBMC (bounded model checker) for static contract verification. This document covers contract patterns, verification behavior, and common pitfalls.
+Vow statically verifies contracts with one of two backends: ESBMC (a bounded model checker, `--backend esbmc`, the default today) or the native verifier (`--backend native`, self-hosted `vowc` only, which emits SMT-LIB for Bitwuzla). Both report the same verdict surface (statuses, blame, `vow_id`). This document covers contract patterns, verification behavior, and common pitfalls.
 
 ## Semantic Contracts Are Backend-Independent
 
 A contract states the function's real semantic domain and result. It does not
-state the limits of the tool currently used to check it. Replacing ESBMC with a
-stronger verifier must not require editing Vow source contracts.
+state the limits of the tool currently used to check it. Replacing the verifier
+with a stronger one must not require editing Vow source contracts.
 
 Lengths, capacities, indices, and struct fields may appear in contracts when
 they express a genuine algorithmic constraint or representation invariant. For
 example, an index may need to be within a vector's length, paired inputs may
 need equal lengths, or a ring buffer may need to be non-full before a write.
-They must not be capped merely because ESBMC uses a finite collection model or
-because a smaller struct state space is easier to solve.
+They must not be capped merely because a verifier uses a finite collection
+model or because a smaller struct state space is easier to solve. The internal
+unwinding bound of the native verifier is such a limit too: it never belongs in
+a `requires`/`ensures`/`invariant` clause, and an unwinding failure is
+`unknown`, never `proven`.
 
 The same distinction applies to numeric bounds. Exact overflow guards and real
 problem-domain restrictions are semantic; unwind caps and arbitrary
@@ -9762,16 +11004,26 @@ honest contract, report that limitation outside the contract.
 
 ## Verification Pipeline
 
-Codegen (Cranelift) and verification run in parallel:
+Codegen (Cranelift) and linking finish before verification starts, so peak memory is the larger of the two phases rather than their sum. A codegen or link failure ends the build before any verifier process is started. Verification itself runs up to `--verify-jobs` verifier processes at a time.
 
-```
-Vow Source → Parse → Type Check → IR Lower ─┬─→ Cranelift → executable
-                                              └─→ C Emit → ESBMC → proof / counterexample
-```
+| | Native backend (`--backend native`) | ESBMC backend (`--backend esbmc`, default) |
+|---|---|---|
+| Pipeline | `IR → symbolic executor → SMT-LIB → Bitwuzla`, one `verify-worker` subprocess per function | `IR → C emit → ESBMC` |
+| Clauses | `requires` is an assumption for the obligations after it; `ensures`, `invariant` and every abort site are obligations | `requires` → `__ESBMC_assume()`, `ensures`/`invariant` → `__ESBMC_assert()` |
+| Loops | Unrolled to an internal bound (2, 4, 8, 16, 32, 64) with a mandatory unwinding assertion; loops with an `invariant` are also proven inductively, and an open round tries a k-induction step case | Incremental BMC, `--max-k-step` (default 50); no inductive step |
+| Tuning | `--timeout` is the only knob; `--max-k-step`, `--solver` and `--encoding` are usage errors | `--max-k-step`, `--solver`, `--encoding`, `--timeout` |
+| Collections | Array plus symbolic length, no capacity | Fixed-capacity arrays (see below) |
+| Bounded result | An unwinding failure, solver `unknown` or out-of-memory worker is `unknown`/`timeout`, never `proven` | `proven` describes the configured model, including its finite unwind and capacities |
 
-Contract clauses become IR opcodes. The C emitter translates `requires` to `__ESBMC_assume()` (the verifier assumes preconditions hold) and `ensures`/`invariant` to `__ESBMC_assert()` (the verifier checks postconditions).
+The table is the whole difference: contracts, blame and `vow_id` are the same under both. A contract is `proven` only when the verifier decides every obligation; the native backend never reports `proven` after a resource-limited weakened retry.
 
-### ESBMC Configuration
+### Native backend
+
+The native verifier executes the IR symbolically and encodes integers as fixed-width bit-vectors, so wrapping, signedness and 128-bit values are exact. Each `ensures` clause, loop `invariant` and abort site (division or remainder by zero, `MIN / -1`, an over-wide shift, `unwrap()` on `None`, an out-of-bounds `Vec` index) is a proof obligation; a `requires` is an assumption for the obligations after it. The exact subset, loop strategy and flags are in `docs/spec/cli.md` → "Native backend". A function outside the subset is `Skipped` with a code from the closed list in [`VerificationSkipped`](errors.md#verificationskipped), never `Verified`.
+
+**Known limits.** String parsing and formatting builtins are opaque (`Skipped`). Float arithmetic is not modelled yet: a function that uses floats is `Skipped` as `unsupported-opcode` today (the intended semantics are IEEE 754 round-to-nearest-even with a canonical NaN, and `RemF32`/`RemF64` are `Skipped` as `float-rem-unsupported` until codegen defines float `%`). NaN payload bits are not distinguished. Callee inlining makes a caller's query as large as its whole call tree, so a deep call tree can end `unknown` with `inlining budget:`.
+
+### ESBMC backend
 
 - Verification strategy: **incremental BMC** (`--incremental-bmc`) — base case plus forward condition, **not** k-induction (there is no inductive step). A contract is `proven` only when ESBMC completes the configured model checks; otherwise the result is `unknown`. `proven` describes the configured verification model, including its finite unwind and collection capacities, not executions outside that model.
 - Incremental BMC with `--max-k-step` (default: **50**) — loops are verified incrementally up to N iterations
@@ -9780,7 +11032,9 @@ Contract clauses become IR opcodes. The C emitter translates `requires` to `__ES
 
 ### Collection Models for Verification
 
-ESBMC is a *bounded* model checker, so it models collection types as
+**Native backend.** A `Vec<T>` whose element `T` is `bool` or an integer of up to 64 bits (`new`, `push`, `pop`, `len`, indexing, indexed assignment) is an array plus a 64-bit symbolic length. There is no capacity: a property over every length is proven for every length, an index at or past the length is its own obligation (`index out of bounds`), and no `ModelCapacityAssumed` note is ever emitted. `String`, the maps, wide (`i128`/`u128`) or pointer elements and the mutating operations `clear`, `truncate`, `reserve`, `sort`, `from_raw_parts_copy` and `pin_to_root` are `Skipped` (see `docs/spec/cli.md` → "Native backend", "Collections"). The rest of this section describes the ESBMC backend.
+
+**ESBMC backend.** ESBMC is a *bounded* model checker, so it models collection types as
 fixed-size arrays and reasons about them up to a finite capacity. These
 capacities are an internal property of the verifier, not of the language:
 
@@ -9801,7 +11055,7 @@ capacity that was actually applied.
 in a Vow program grows dynamically on the heap with no fixed maximum; the
 capacity above only describes how far the *bounded* model checker reasons. The
 language and its contracts are deliberately decoupled from what any particular
-prover can prove: replace ESBMC with a stronger (or unbounded) checker and the
+prover can prove: replace ESBMC with a stronger (or unbounded) checker, as the native backend does for `Vec`, and the
 same source, the same contracts, and the same CLI keep working — the only
 difference is that the verifier can cover more of the state space. For this
 reason a `requires`/`ensures` clause must never encode a verifier bound (e.g.
@@ -9896,9 +11150,9 @@ tuple's span. Compare the elements instead: `requires: a != 1 || b != 2`.
 
 ## Counterexample Replay (Differential Test)
 
-`vow verify --replay-cex` (also `vow build --replay-cex`) cross-checks a counterexample against the executable's runtime semantics. After ESBMC reports a violation, Vow maps the symbolic assignment to concrete Vow inputs, builds a `--mode debug` harness that calls the failing function with them, and checks whether the runtime `VowViolation` matches — **same `vow_id` and same blame**.
+`vow verify --replay-cex` (also `vow build --replay-cex`) cross-checks a counterexample against the executable's runtime semantics. After the verifier reports a violation, Vow maps the symbolic assignment to concrete Vow inputs, builds a `--mode debug` harness that calls the failing function with them, and checks whether the runtime `VowViolation` matches — **same `vow_id` and same blame**.
 
-This is a *differential test*, **not part of the proof**. The static verdict and exit code are unchanged whether or not replay is requested. Its purpose is to detect drift between the two independent lowerings of a contract: the verifier's C model (`requires` → `__ESBMC_assume`, `ensures`/`invariant` → `__ESBMC_assert`) and `vow-codegen`'s debug-mode runtime checks. A `confirmed` replay grounds the counterexample in real execution; a `diverged` replay flags either a model false-positive or values that do not reach the violation at runtime. See `docs/spec/cli.md` → "Counterexample replay" for the JSON shape and v1 input scope. Under `--backend native` the replay is also the oracle for the native checker: a counterexample that does not reproduce is reported as a `VerifierBug` diagnostic.
+This is a *differential test*, **not part of the proof**. The static verdict and exit code are unchanged whether or not replay is requested. Its purpose is to detect drift between the two independent lowerings of a contract: the verifier's model (the C model, `requires` → `__ESBMC_assume` and `ensures`/`invariant` → `__ESBMC_assert`, under ESBMC; the SMT-LIB encoding under the native backend) and `vow-codegen`'s debug-mode runtime checks. A `confirmed` replay grounds the counterexample in real execution; a `diverged` replay flags either a model false-positive or values that do not reach the violation at runtime. See `docs/spec/cli.md` → "Counterexample replay" for the JSON shape and v1 input scope. Under `--backend native` the replay is also the oracle for the native checker: a counterexample that does not reproduce is reported as a `VerifierBug` diagnostic.
 
 ## Integer Contracts
 
@@ -10103,7 +11357,7 @@ fn double(x: i64) -> i64 vow {
 }
 ```
 
-ESBMC finds: `x = 4611686018427387904` → `result = -9223372036854775808` (wraps negative).
+The verifier finds: `x = 4611686018427387904` → `result = -9223372036854775808` (wraps negative).
 
 **Fix:** use checked arithmetic (`+!`), or bound the input.
 
@@ -10133,9 +11387,11 @@ This is not inductive — `v.len() == n` is only true after the loop.
 
 **Fix:** Use `invariant: i >= 0, invariant: i <= n`.
 
+Under the native backend the same mistake shows up differently: a wrong invariant is refuted by unwinding (a run that violates it inside the bound is `failed`), while an invariant that is true but not inductive leaves the verdict `unknown` with a `verify_message` that starts `unwinding assertion:`. A failing induction step is never `failed`.
+
 ### Unbound Loop Iterations
 
-Without a bound on loop iterations, ESBMC may timeout (default max-k-step is 50):
+Without a bound on loop iterations, the verifier may not finish. Under ESBMC the unwind stops at `--max-k-step` (default 50); under the native backend every loop is unrolled to an internal bound of at most 64 and an unrolling that is not enough is `unknown` with an `unwinding assertion:` message:
 
 ```vow
 fn fill(n: i64) -> Vec<i64> vow {
@@ -10144,11 +11400,11 @@ fn fill(n: i64) -> Vec<i64> vow {
 } { ... }
 ```
 
-ESBMC will only verify this for small `n` values. **Do not** add `requires: n <= 8` to the contract — that would distort the semantic specification. The contract is correct as-is; ESBMC's bounded verification provides partial assurance.
+The verifier unrolls only a bounded number of iterations, so for large `n` the verdict is `unknown` rather than `proven`. **Do not** add `requires: n <= 8` to the contract — that would distort the semantic specification. The contract is correct as-is; add a loop `invariant` so the native backend can prove it inductively, and accept an honest `unknown` otherwise.
 
 ### Verification-Driven Bounds (Anti-Pattern)
 
-**Never** add artificial bounds to contracts solely to help ESBMC verify them:
+**Never** add artificial bounds to contracts solely to help the verifier prove them:
 
 ```vow
 // WRONG: bounds exist only to appease the verifier
@@ -10172,7 +11428,7 @@ fn gcd(a: i64, b: i64) -> i64 vow {
 } { ... }
 ```
 
-Contracts express what is mathematically required for correctness. ESBMC verifies within its configured model (bounded loops, bounded arithmetic, bounded collection models) — if it cannot establish a correct contract, that is acceptable. An honest inconclusive result is better than a distorted specification. This includes collection lengths, capacities, indices, and struct fields: keep real domain and representation constraints, but never cap them merely to fit the model. The same rule is why the verifier's collection model capacities (see "Collection Models for Verification") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.
+Contracts express what is mathematically required for correctness. The verifier checks within its configured model (bounded loops, and under ESBMC bounded arithmetic and collection models) — if it cannot establish a correct contract, that is acceptable. An honest inconclusive result is better than a distorted specification. This includes collection lengths, capacities, indices, and struct fields: keep real domain and representation constraints, but never cap them merely to fit the model. The same rule is why the verifier's collection model capacities (see "Collection Models for Verification") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.
 
 **The overflow-guard bound is this anti-pattern's most common disguise.** A clause like `requires: a <= 4611686018427387903` on an adding function looks semantic — it does describe a real property of `i64` — but its only purpose is to keep wrapping unreachable, and it pays for that by excluding inputs the function handles perfectly well. Use the checked operator instead: `a +! b` aborts rather than wraps, the verifier models the abort, and the contract keeps its true domain. See [Range Bounds](#range-bounds) and [Wrapping Arithmetic Overflow](#wrapping-arithmetic-overflow).
 
@@ -10194,7 +11450,7 @@ A counterexample in the JSON output:
 | Field       | Meaning                                                        |
 |-------------|----------------------------------------------------------------|
 | `function`  | Which function's verification query failed                     |
-| `values`    | Source or ESBMC variable values in the counterexample           |
+| `values`    | Source variable values in the counterexample (decimal text of the declared type)           |
 | `violation` | Which contract clause was violated                             |
 | `vow_id`    | Function-local ID linking to the specific vow clause            |
 | `source`    | Byte offset in the source file of the violated clause           |
@@ -10219,7 +11475,9 @@ callee, `violation`, `source` and `blame` are the callee's clause, and `vow_id`
 is the callee-local id (the id a debug-mode `VowViolation` for that callee would
 report). It is never resolved against the verified caller's same-numbered clause.
 
-Variable names prefixed with `$esbmc$` are ESBMC internal variables; `$` cannot
+A violation that is not a contract clause (a division or remainder by zero or an over-wide shift under either backend; `MIN / -1`, `unwrap()` on `None` and an out-of-bounds `Vec` index under the native backend only) carries the unattributed `vow_id` `4294967293`, blame `None` and a `violation` text naming the abort. It is not a `requires`, so there is no clause to blame; bound the operand with a real `requires` or guard the operation.
+
+Under the ESBMC backend, variable names prefixed with `$esbmc$` are ESBMC internal variables; `$` cannot
 appear in a Vow identifier, so the prefix cannot collide with a source name.
 Named inputs map directly to function parameters, including source names that
 begin with `_esbmc`.
@@ -10241,15 +11499,19 @@ vow {
 }
 ```
 
-ESBMC verifies `u64` contracts using `uint64_t` and unsigned nondet values.
+Both backends treat `u64` as an unsigned 64-bit value (`uint64_t` and unsigned nondet values under ESBMC, a 64-bit bit-vector with unsigned comparisons natively), so a counterexample reports the magnitude.
 
 ## 128-bit Integer Contracts
 
-`i128`/`u128` literals work in contracts and bodies. The verifier builds each
-literal from its two 64-bit limbs, so under the bit-vector encoding every
-value is exact (`i128::MIN`, `i128::MAX` and `u128::MAX` included) and a
-counterexample reports the full 128-bit value. A proof from the `--encoding ir`
-timeout fallback is reported as `ProvenIr` and is weaker:
+`i128`/`u128` literals work in contracts and bodies. The native backend models
+128-bit scalars, constants, checked arithmetic and struct fields or enum payloads
+as 128-bit bit-vectors, so every value is exact (`i128::MIN`, `i128::MAX` and
+`u128::MAX` included) and a counterexample reports the full 128-bit value. Under
+the ESBMC backend 128-bit constants are modelled exactly under the bit-vector
+encoding, and a proof from its `--encoding ir` timeout fallback is reported as
+plain `proven` and is weaker; 128-bit checked arithmetic and aggregate fields
+are `Skipped`. A `Vec<i128>` or `Vec<u128>` element is `Skipped` under both
+backends. A contract over 128-bit scalars and literals verifies under both:
 
 ```vow
 fn at_least_one(x: u128) -> u128
@@ -10287,7 +11549,7 @@ The contract applies to all functions declared in the block, and documents the e
 
 This document answers a question that `contracts.md` does not: given a function,
 **which** properties are worth proving, how do you tell a strong contract from a
-hollow one, and how do you express the strong shapes within ESBMC's reach.
+hollow one, and how do you express the strong shapes within the verifier's reach.
 
 `contracts.md` is the *reference* (syntax, blame, the verification pipeline,
 anti-patterns). This is the *methodology* (judgement). Read that first.
@@ -10312,7 +11574,7 @@ compiler carry this contract:
 fn EFF_IO() -> i64 vow { ensures: result > 0 } { 1 }
 ```
 
-ESBMC proves `1 > 0` in milliseconds. But `ensures: result > 0` also holds for
+The verifier proves `1 > 0` in milliseconds. But `ensures: result > 0` also holds for
 `{ 2 }`, `{ 99 }`, and every other positive constant — it does not pin the value
 this function is *supposed* to return. It is a real postcondition, but a **weak**
 one: it constrains the output to a half-line, not to a point. Proving 354 of
@@ -10570,19 +11832,27 @@ first runs, and trivial validity *always* indicated a real defect in the design,
 spec, or environment.
 
 **Detection (the reachability probe).** `vow contracts --verify` ships this check
-(#81). For any function carrying a `requires`, it re-runs ESBMC over the same
-model with a `vow_reach` label planted immediately after the `requires` assumes,
-under `--error-label vow_reach`. If ESBMC reports the label **unreachable**
-(`VERIFICATION SUCCESSFUL`), the conjoined preconditions are contradictory and
+(#81). For any function carrying a `requires`, it re-checks the same model with
+a reachability probe immediately after the `requires` assumes. Under ESBMC the
+probe is a `vow_reach` label run under `--error-label vow_reach`; under
+`--backend native` the function is cut right after its last `requires` and the
+cut point must be unreachable. If the probe reports the point **unreachable**
+(ESBMC: `VERIFICATION SUCCESSFUL`), the conjoined preconditions are contradictory and
 every `ensures` held only vacuously — all of the function's clauses are reported
-`status: "vacuous"` and the command fails closed. If the label is **reachable**
-(`VERIFICATION FAILED`), the precondition domain is non-empty and the proof is
+`status: "vacuous"` and the command fails closed. If the point is **reachable**
+(ESBMC: `VERIFICATION FAILED`), the precondition domain is non-empty and the proof is
 live. This is operationally the dual of the classic `ensures: false` re-check —
 asking "is the post-`requires` point reachable?" instead of "does `assert(false)`
 still pass?" — but it needs only one extra run per function and is unaffected by
 body divergence, since the label precedes the body. The label sits after the
 requires prefix rather than at the function end precisely so an unbounded loop or
 an `assume(0)` deeper in the body cannot make it spuriously unreachable.
+
+Under `--backend native` the probe is not a label but a rewrite of the same IR
+that the native engine checks: the function is cut right after its last
+`requires` and that point must be unreachable, so `&&`/`||` requires (which
+lower to branches) are covered. The `trivially_satisfiable` probe is a rewrite
+too. See "Native backend: `contracts` and `test`" in `cli.md`.
 
 **Interesting witnesses.** Beer et al. also propose the dual of a counterexample:
 for a proof that holds, emit a non-trivial *witness* — concrete inputs that
@@ -10630,9 +11900,9 @@ syntax say it":
 - **expressible** — surface Vow has the syntax
 - **typechecked** — the checker validates the clause to `bool` (added in #81 Phase 0)
 - **lowerable** — the lowerer emits IR for the clause
-- **modelable** — the C emitter / ESBMC model supports the operations used
+- **modelable** — the verifier's model supports the operations used
   (pure, non-effectful helpers only; see `is_modelable` in the C emitter)
-- **backend** — ESBMC actually discharges it within bounds
+- **backend** — the verifier actually discharges it (ESBMC: within bounds; native: for every unwinding it can close, otherwise `unknown`)
 
 | Shape | expressible | typechecked | lowerable | modelable | backend |
 |-------|:-----------:|:-----------:|:---------:|:---------:|:-------:|
@@ -10643,7 +11913,7 @@ syntax say it":
 | 5. Dispatch totality | ✓ | ✓ | ✓ | ✓ (pure dispatch) | ✓ over finite domain |
 | 6a. Argument-relational | ✓ | ✓ | ✓ | ✓ | ✓ |
 | 6b. Cross-fn uniqueness | ✓ (O(n²)) | ✓ | ✓ | ✓ | ✓ but unscalable → prefer structural encoding |
-| 7. Loop invariant | ✓ | ✓ | ✓ | ✓ | partial (bounded / k-induction) |
+| 7. Loop invariant | ✓ | ✓ | ✓ | ✓ | partial (bounded; native also by induction) |
 | Bounded quantifier (`forall i in 0..n`) | ✗ (no surface syntax) | — | — | — | — (roadmap #467/#470) |
 
 Contract expressions must be **pure** — they cannot call effectful functions
@@ -10655,11 +11925,13 @@ model limitations, not contract-language limitations.
 
 `vow contracts --verify` performs the **per-obligation** quality analysis tracked
 in #81 / roadmap WS-3.2. Each clause gets an individual verification verdict (via
-ESBMC `--multi-property`), plus the three quality signals above:
+ESBMC `--multi-property`, or from one `verify-worker` per function under
+`--backend native`), plus the three quality signals above:
 
-- **Tautology** — the static `quality` field flags constant clauses (no ESBMC).
-- **Vacuity** — a contradictory `requires` is caught by the `--error-label`
-  reachability probe and reported `status: "vacuous"` (fail-closed).
+- **Tautology** — the static `quality` field flags constant clauses (no verifier is run).
+- **Vacuity** — a contradictory `requires` is caught by the reachability probe
+  (ESBMC `--error-label`, or the post-`requires` cut under `--backend native`) and
+  reported `status: "vacuous"` (fail-closed).
 - **Weakness** — the body-replace probe reports `trivially_satisfiable: true` for
   an `ensures` a trivial `return <default>` body satisfies (informational).
 
@@ -10746,6 +12018,8 @@ end of the file, or the file ends with a `\` escape that has nothing to escape
 (`unterminated string escape`). An escaped quote (`"abc\"`) does not close the
 literal.
 
+**Wrong:**
+
 ```vow
 fn f() -> () [io] {
     print_str("hello);
@@ -10754,12 +12028,22 @@ fn f() -> () [io] {
 
 **Fix:** Close the string with a matching `"`.
 
+**Right:**
+
+```vow
+fn f() -> () [io] {
+    print_str("hello");
+}
+```
+
 ### InvalidCharacter
 
 **Phase:** Lexer
 **Meaning:** The source contains a character the lexer does not recognize. The
 message is `unexpected character '<c>'` and the span covers that one byte.
 Lexing stops at the first lexical error.
+
+**Wrong:**
 
 ```vow
 fn f() -> i64 {
@@ -10769,10 +12053,20 @@ fn f() -> i64 {
 
 **Fix:** Remove the invalid character. Vow has no `@` operator.
 
+**Right:**
+
+```vow
+fn f(x: i64, y: i64) -> i64 {
+    x + y
+}
+```
+
 A float literal whose decimal magnitude overflows `f64` (parses to
 infinity) is also an `InvalidCharacter` error, raised at lex time rather
 than allowed through to produce an uncompilable C `inf` token later in
 the pipeline:
+
+**Wrong:**
 
 ```vow
 fn f() -> f64 {
@@ -10782,10 +12076,20 @@ fn f() -> f64 {
 
 **Fix:** Use a literal whose magnitude is within `f64::MAX` (~1.7976931348623157e308).
 
+**Right:**
+
+```vow
+fn f() -> f64 {
+    1000000000000000000000.0
+}
+```
+
 ### InvalidIntSuffix
 
 **Phase:** Lexer
 **Meaning:** An integer literal carries a type suffix that names a type Vow does not have.
+
+**Wrong:**
 
 ```vow
 fn f() -> u64 {
@@ -10800,10 +12104,20 @@ design (see `docs/adr/0001-numeric-tower-narrow-ints.md`), so there is no `usize
 or `isize`; write `5u64` for a machine-word-sized unsigned value and `5i64` for a
 signed one.
 
+**Right:**
+
+```vow
+fn f() -> u64 {
+    5u64
+}
+```
+
 ### UnexpectedToken
 
 **Phase:** Parser
 **Meaning:** The parser encountered a token it did not expect at that position.
+
+**Wrong:**
 
 ```vow
 module M 123
@@ -10811,23 +12125,46 @@ module M 123
 
 **Fix:** Check the syntax around the reported span. Common causes: missing `{`, `}`, `(`, `)`, or a keyword in the wrong position.
 
+**Right:**
+
+```vow
+module M
+
+fn f() -> i64 {
+    123
+}
+```
+
 ### MissingDelimiter
 
 **Phase:** Parser
 **Meaning:** A matching delimiter (`}`, `)`, `]`) is missing.
+
+**Wrong:**
 
 ```vow
 fn f() -> i64 {
     42
 ```
 
-**Fix:** Add the missing closing delimiter.
+**Fix:** Add the missing closing delimiter. No compiler emits `MissingDelimiter` today: an
+unclosed block at end of file is reported as `UnexpectedToken`.
+
+**Right:**
+
+```vow
+fn f() -> i64 {
+    42
+}
+```
 
 ### TypeMismatch
 
 **Phase:** Type Checker
 **Meaning:** An expression has a different type than expected, or a qualified
 enum pattern names an enum other than the scrutinee's enum.
+
+**Wrong:**
 
 ```vow
 fn f() -> i32 {
@@ -10840,6 +12177,32 @@ fn f() -> i32 {
 **Fix:** Change the expression or declared type to match. For an enum pattern,
 qualify the variant with the scrutinee's enum name.
 
+**Right:**
+
+```vow
+fn f() -> bool {
+    true
+}
+```
+
+A struct literal must name every declared field. Each omitted field is a
+`TypeMismatch` in both compilers, reported once per field in declaration order
+at the literal's span; a field is never zero-initialised:
+
+**Wrong:**
+
+```vow
+struct Pair { a: i64, b: i64 }
+
+fn f() -> Pair {
+    Pair { a: 1 }
+}
+```
+
+**Output:** ``struct `Pair` literal is missing field `b` ``
+
+**Fix:** Initialise the field explicitly (`Pair { a: 1, b: 0 }`).
+
 The `drop` intrinsic also reports `TypeMismatch` when it is called with an argument
 count other than one or with a value that is not a linear owner
 (``drop requires a linear value, found `i64` ``); see
@@ -10849,6 +12212,8 @@ A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::truncate`
 argument must have exactly the type `u64`. An index of any other integer type
 (for example an `i64` counter) or of a non-integer type is a `TypeMismatch`
 in both compilers:
+
+**Wrong:**
 
 ```vow
 fn f(v: Vec<i64>, i: i64) -> i64 {
@@ -10865,6 +12230,14 @@ coerce to `u64` without a cast. `String` offsets (`byte_at`, `substring`,
 and `push_byte` takes exactly `u8`; see
 [String offsets](grammar.md#string-offsets).
 
+**Right:**
+
+```vow
+fn f(v: Vec<i64>, i: u64) -> i64 {
+    v[i]
+}
+```
+
 Only `Vec<T>` has an index operator. Indexing any other type (`HashMap`,
 `BTreeMap`, `String`, `Option`, ...) is a `TypeMismatch` whose message begins
 `index operation on non-indexable type` and prints the full receiver type (for example `HashMap<i64, i64>` or `String`, identically in both compilers); read a map entry
@@ -10874,6 +12247,8 @@ with `m.get(k)` and a string byte with `s.byte_at(i)`.
 and value types from the binding's annotation. A method call on a collection
 whose type was never annotated is a `TypeMismatch` in both compilers, one per
 call:
+
+**Wrong:**
 
 ```vow
 fn f() -> () {
@@ -10886,7 +12261,18 @@ fn f() -> () {
 
 **Fix:** Annotate the binding: `let m: HashMap<i64, i64> = HashMap::new();`.
 
+**Right:**
+
+```vow
+fn f() -> () {
+    let m: HashMap<i64, i64> = HashMap::new();
+    m.insert(1, 2);
+}
+```
+
 An undefined name is a `TypeMismatch` whose message begins `undefined variable`, in both compilers, and the expression then has an error type so it does not cascade into further type errors. A parameter `where` clause is name-resolved in a scope holding only its own parameter, so a sibling parameter or `result` is an undefined name there; the hint says to move such a condition to `requires`/`ensures`.
+
+**Wrong:**
 
 ```vow
 fn ordered(a: i64, b: i64 where b > a) -> i64 {
@@ -10898,10 +12284,22 @@ fn ordered(a: i64, b: i64 where b > a) -> i64 {
 
 **Fix:** State the condition in `requires: b > a`.
 
+**Right:**
+
+```vow
+fn ordered(a: i64, b: i64) -> i64 vow {
+    requires: b > a
+} {
+    b
+}
+```
+
 ### LiteralOutOfRange
 
 **Phase:** Type Checker
 **Meaning:** An integer literal appears in a typed context (annotated `let`, function argument, struct field, or const declaration) whose target type cannot hold the literal's value. The check runs after context coercion, so the offending literal is the one written in the source, not a widened intermediate.
+
+**Wrong:**
 
 ```vow
 let x: u8 = 300;
@@ -10913,10 +12311,20 @@ let y = 256u8;   // a suffixed literal is checked against its suffix type
 
 **Fix:** Use a value within the target type's range, change the target type, or write an explicit narrowing intrinsic (`i64_to_u8_try`, `i64_to_u8_wrap`, `i64_to_u8_sat`) if you intend to convert a wider value at runtime.
 
+**Right:**
+
+```vow
+let x: u8 = 255;
+const NEG: i16 = -1;
+let y = 255u8;
+```
+
 ### NarrowingCastNotAllowed
 
 **Phase:** Type Checker
 **Meaning:** The `as` operator was used to convert a wider integer type to a narrower one. `as` is widening-only; narrowing must use a named intrinsic so the agent chooses an explicit semantics (range-checked vs. truncating vs. saturating). See `grammar.md` §Type Cast.
+
+**Wrong:**
 
 ```vow
 fn f(big: i64) -> u8 {
@@ -10931,10 +12339,22 @@ fn f(big: i64) -> u8 {
 - `i64_to_u8_wrap(big) -> u8` — truncate (keep low bits)
 - `i64_to_u8_sat(big) -> u8` — clamp to `0..=255`
 
+**Right:**
+
+```vow
+fn f(big: i64) -> u8 {
+    i64_to_u8_wrap(big)
+}
+```
+
+`i128`/`u128` to `i64`/`u64` has no narrowing intrinsic family; the diagnostic's hint says so instead of naming one. Narrow through `i32` or smaller with `i128_to_i32_try`-style intrinsics, or keep the value as `i128`/`u128`. See `grammar.md` §Type Cast.
+
 ### ShiftCountOutOfRange
 
 **Phase:** Type Checker
-**Meaning:** A constant-expression shift count is negative or greater than or equal to the bit-width of the left operand. Shifting an `N`-bit value by `>= N` bits is undefined in the underlying C model and is rejected at compile time when the count is statically known. Dynamic shift counts (non-const expressions) are checked by ESBMC, which requires `0 <= count < width` at the shift (a negative signed count is a violation). At runtime only 8-bit shifts trap: an `i8`/`u8` shift whose count is `>= 8` aborts with `ArithmeticOverflow` in every build mode. Wider shifts are not trapped; the hardware shift masks the count to the operand width (`(x: i64) << 65` is `x << 1`), so only verification excludes them.
+**Meaning:** A constant-expression shift count is negative or greater than or equal to the bit-width of the left operand. Shifting an `N`-bit value by `>= N` bits is undefined in the underlying C model and is rejected at compile time when the count is statically known. Dynamic shift counts (non-const expressions) are checked by the verifier, which requires `0 <= count < width` at the shift (a negative signed count is a violation). At runtime only 8-bit shifts trap: an `i8`/`u8` shift whose count is `>= 8` aborts with `ArithmeticOverflow` in every build mode. Wider shifts are not trapped; the hardware shift masks the count to the operand width (`(x: i64) << 65` is `x << 1`), so only verification excludes them.
+
+**Wrong:**
 
 ```vow
 fn f(x: u8) -> u8 {
@@ -10946,12 +12366,22 @@ fn f(x: u8) -> u8 {
 
 **Fix:** Use a count less than the LHS bit-width. To shift a narrow value by a larger amount, widen first: `(x as u32) << 8` is legal (it shifts the widened `u32` value by 8), but the result is `u32`; to get back to `u8`, use a narrowing intrinsic such as `u32_to_u8_wrap`.
 
+**Right:**
+
+```vow
+fn f(x: u8) -> u32 {
+    (x as u32) << 8
+}
+```
+
 ### TautologicalComparison
 
 **Phase:** Type Checker
 **Meaning:** A comparison against a constant `0` can never fail (or can never hold) because the other operand has an unsigned integer type. `x >= 0` and `0 <= x` are always true for unsigned `x`; `x < 0` and `0 > x` are always false. Such a clause admits every implementation while reading like a real bound, so it is rejected rather than warned about — there is no suppression form. The const fold sees through `as` casts, so `x >= 0 as u64` is caught too.
 
 `x > 0`, `x <= 0`, `x == 0` and `x != 0` all constrain an unsigned value and keep compiling. Signed operands are untouched.
+
+**Wrong:**
 
 ```vow
 fn sum(n: u64) -> u64 vow {
@@ -10977,10 +12407,22 @@ A chain does not hide it either: `(x as i32 as i64) >= 0` with `x: u32` is rejec
 
 **Fix:** Drop the dead clause, or state the bound you actually meant. An index invariant becomes `invariant: i < v.len()`; a lower bound that matters on an unsigned counter is `i > 0`, not `i >= 0`. If the subject really can be negative, its type should be signed.
 
+**Right:**
+
+```vow
+fn sum(n: u64) -> u64 vow {
+    ensures: result == n
+} {
+    n
+}
+```
+
 ### StaticLiteralRequired
 
 **Phase:** Type Checker
 **Meaning:** A compiler intrinsic requires a string literal operand so it can be lowered without allocation.
+
+**Wrong:**
 
 ```vow
 fn f(s: String, key: String) -> i64 {
@@ -10992,10 +12434,20 @@ fn f(s: String, key: String) -> i64 {
 
 **Fix:** Pass a literal directly, for example `string_matches_literal_at(s, 0, "name")`.
 
+**Right:**
+
+```vow
+fn f(s: String) -> i64 {
+    string_matches_literal_at(s, 0, "name")
+}
+```
+
 ### EffectViolation
 
 **Phase:** Type Checker
 **Meaning:** A function calls another function with effects not declared in its own signature, **or** a `requires`/`ensures`/`invariant` clause or parameter `where` clause calls a function or builtin method that writes through one of its arguments. The second form is blamed on the callee, even in a `requires` clause, because the clause itself is at fault for evaluating the write — not the caller.
+
+**Wrong:**
 
 ```vow
 fn f() -> () {
@@ -11004,6 +12456,16 @@ fn f() -> () {
 ```
 
 **Fix:** Add the required effect to the function signature: `fn f() -> () [io]`. Effects are independent: `[io]` does not cover `read` or `write`, so a function that prints and reads a file declares `[io, read]`.
+
+**Right:**
+
+```vow
+fn f() -> () [io] {
+    print_str("hi");
+}
+```
+
+**Wrong:**
 
 ```vow
 fn mark(p: Point) -> bool {
@@ -11019,6 +12481,18 @@ fn make_point(x: i64, y: i64) -> Point vow {
 ```
 
 **Fix:** Move the write out of the clause — contracts may only read, e.g. `ensures: result.x == x`. See `docs/spec/grammar.md` → "Contract Purity".
+
+**Right:**
+
+```vow
+struct Point { x: i64, y: i64 }
+
+fn make_point(x: i64, y: i64) -> Point vow {
+    ensures: result.x == x
+} {
+    Point { x: x, y: y }
+}
+```
 
 ### LinearTypeViolation
 
@@ -11036,13 +12510,14 @@ wrapper consumes it and transfers the obligation to the selected payload. An
 unbound `_` catchall also violates the rule while any unhandled enum variant can
 carry a linear payload.
 
+**Wrong:**
+
 ```vow
 linear struct Handle { fd: i64 }
 
-fn f(h: Handle) -> Handle {
-    let h2: Handle = h;
-    let h3: Handle = h;  // h was already consumed
-    h2
+fn f(h: Handle) -> () {
+    drop(h);
+    drop(h);  // h was already consumed
 }
 ```
 
@@ -11052,10 +12527,22 @@ supported. In a match, add explicit arms that bind and consume or transfer every
 linear payload before using `_`. Obligations that are simply left live at scope
 exit are reported later as `RegionLinear`.
 
+**Right:**
+
+```vow
+linear struct Handle { fd: i64 }
+
+fn f(h: Handle) -> () {
+    drop(h);
+}
+```
+
 ### RegionLinear
 
 **Phase:** Region Inference
 **Meaning:** A `linear struct` value can remain live when its owning region closes. Returning the value transfers the linear obligation to the caller; consuming it before the close satisfies the obligation.
+
+**Wrong:**
 
 ```vow
 linear struct Handle { fd: i64 }
@@ -11068,10 +12555,23 @@ fn f() -> i64 {
 
 **Fix:** Consume the value before the region closes, or return it so the caller receives the obligation.
 
+**Right:**
+
+```vow
+linear struct Handle { fd: i64 }
+
+fn f() -> Handle {
+    let h: Handle = Handle { fd: 1 };
+    h
+}
+```
+
 ### NonExhaustiveMatch
 
 **Phase:** Type Checker
 **Meaning:** A `match` expression does not cover all possible variants.
+
+**Wrong:**
 
 ```vow
 fn f(o: Option<i64>) -> i64 {
@@ -11083,6 +12583,17 @@ fn f(o: Option<i64>) -> i64 {
 
 **Fix:** Add a `_ => ...` wildcard arm or cover all variants (`Option::None => ...`).
 
+**Right:**
+
+```vow
+fn f(o: Option<i64>) -> i64 {
+    match o {
+        Option::Some(x) => x,
+        Option::None => 0,
+    }
+}
+```
+
 ### UnsupportedPattern
 
 **Phase:** Type Checker
@@ -11093,6 +12604,8 @@ Match currently accepts enum-valued scrutinees, qualified unit variants,
 qualified tuple variants with `_` or immutable identifier payloads, and final
 catchall `_` or immutable identifier arms. A tuple-variant pattern must bind
 exactly the number of payloads declared by the variant.
+
+**Wrong:**
 
 ```vow
 fn f(n: i64) -> i64 {
@@ -11110,9 +12623,23 @@ payloads, provide exactly one `_` or immutable identifier for each declared
 payload and inspect bound values separately. Unsupported patterns fail before
 lowering and never produce an executable.
 
+**Right:**
+
+```vow
+fn f(n: i64) -> i64 {
+    if n == 0 {
+        5
+    } else {
+        9
+    }
+}
+```
+
 `let` only binds identifier, wildcard, and tuple patterns; all other pattern
 kinds (literals, enum variants, struct patterns, or-patterns) are refutable
 and rejected outright, since `let` requires the pattern to always match:
+
+**Wrong:**
 
 ```vow
 fn f(o: Option<i64>) -> i64 {
@@ -11123,11 +12650,26 @@ fn f(o: Option<i64>) -> i64 {
 
 **Output:** `let bindings only support identifier, wildcard, and tuple patterns`
 
+**Fix:** `match` the value and handle every variant.
+
+**Right:**
+
+```vow
+fn f(o: Option<i64>) -> i64 {
+    match o {
+        Option::Some(x) => x,
+        Option::None => 0,
+    }
+}
+```
+
 A tuple `let` pattern additionally requires the initializer to be a tuple
 literal of exactly the same arity, at every nesting level — tuple *values*
 have no runtime representation, so `let (a, b) = ...` is a compile-time
 desugaring into `let a = ...; let b = ...;`, never a projection out of a
 materialized tuple:
+
+**Wrong:**
 
 ```vow
 fn pair() -> (i64, i64) { (1, 2) }
@@ -11146,12 +12688,23 @@ elements once tuples are supported as first-class values (tracked separately;
 not yet implemented). A tuple `let` pattern also cannot bind a linear-typed
 element — bind the whole owner to a single identifier instead.
 
+**Right:**
+
+```vow
+fn f() -> i64 {
+    let (a, b) = (1, 2);
+    a + b
+}
+```
+
 ### ImmutableAssignment
 
 **Phase:** Type Checker
 **Meaning:** A binding not declared `mut` was reassigned. Bindings are immutable
 by default; `mut` is required only for whole-binding reassignment `x = e`. Field
 writes (`s.f = e`) and index writes (`v[i] = e`) are allowed through any binding.
+
+**Wrong:**
 
 ```vow
 fn f() -> i64 {
@@ -11163,12 +12716,24 @@ fn f() -> i64 {
 
 **Fix:** Declare the binding `mut`: `let mut x: i64 = 1;`.
 
+**Right:**
+
+```vow
+fn f() -> i64 {
+    let mut x: i64 = 1;
+    x = 2;
+    x
+}
+```
+
 ### UnusedMut
 
 **Phase:** Type Checker
 **Meaning:** A `let mut` binding is never reassigned, so the `mut` is dead. Only
 whole-binding reassignment counts as a use of `mut` — a binding mutated solely
 via `s.f = e`, `v[i] = e`, or a method call does not need `mut`.
+
+**Wrong:**
 
 ```vow
 fn f() -> i64 {
@@ -11179,10 +12744,21 @@ fn f() -> i64 {
 
 **Fix:** Remove `mut`: `let x: i64 = 1;`.
 
+**Right:**
+
+```vow
+fn f() -> i64 {
+    let x: i64 = 1;
+    x
+}
+```
+
 ### UnknownMethod
 
 **Phase:** Type Checker
 **Meaning:** A method call uses a name that does not exist on the receiver type.
+
+**Wrong:**
 
 ```vow
 fn f() -> () {
@@ -11195,10 +12771,21 @@ fn f() -> () {
 
 **Fix:** Check the method name for typos. Use `--help` to see available methods for each type. `Vec` has no `get` method: read an element with `v[i]` (see [Indexing](grammar.md#indexing)), and call `HashMap::get` or `BTreeMap::get` for maps. A `Vec` receiver calling `get` carries the structured hint ``use `v[i]` to read an element; `Vec` has no `get` `` in the diagnostic's `hints` array, identically in both compilers. Any other unknown method on a `String`, `Vec`, `HashMap`, `BTreeMap`, `Option` or `Result` receiver carries ``did you mean `push`?`` for the nearest builtin method within an edit distance of 3 (the earliest in the method list wins a tie; names over 128 bytes get none), and otherwise `available methods: len, push, pop, clear, truncate`, again identically in both compilers.
 
+**Right:**
+
+```vow
+fn f() -> () {
+    let v: Vec<i64> = Vec::new();
+    v.push(42);
+}
+```
+
 ### UnsupportedFeature
 
 **Phase:** Parser (`&expr`), Type Checker (everything else)
 **Meaning:** A language feature that is not supported in Vow was used, or a `HashMap`/`BTreeMap` was written with a key or value type the runtime cannot store (see [Map key and value types](#map-key-and-value-types)).
+
+**Wrong:**
 
 ```vow
 trait Foo {
@@ -11210,9 +12797,19 @@ trait Foo {
 
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
 
+**Right:**
+
+```vow
+fn bar() -> i64 {
+    0
+}
+```
+
 A prefix `&expr` (or `&mut expr`, `&&expr`) borrow expression is rejected by the parser, at the `&` or `&&` token, with
 the hint ``Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise
 AND operator``; the operand is still parsed, so the diagnostic is reported once:
+
+**Wrong:**
 
 ```vow
 fn f(x: i64) -> i64 {
@@ -11225,8 +12822,19 @@ fn f(x: i64) -> i64 {
 
 **Fix:** Use the value directly. `&` is the bitwise AND operator between two operands (`x & 1`).
 
+**Right:**
+
+```vow
+fn f(x: i64) -> i64 {
+    let r: i64 = x;
+    r
+}
+```
+
 A tuple expression, including the empty tuple `()`, inside a contract clause is also
 `UnsupportedFeature`, because tuples have no runtime or verifier representation:
+
+**Wrong:**
 
 ```vow
 fn f(a: i64, b: i64) -> i64 vow {
@@ -11240,9 +12848,21 @@ fn f(a: i64, b: i64) -> i64 vow {
 
 **Fix:** Compare the elements individually, e.g. `requires: a != 1 || b != 2`.
 
+**Right:**
+
+```vow
+fn f(a: i64, b: i64) -> i64 vow {
+    requires: a != 1 || b != 2
+} {
+    a
+}
+```
+
 #### Map key and value types
 
 The same code reports a map type whose key or value cannot be stored in the runtime's single 64-bit map slot: a `HashMap` key that is not an integer type of at most 64 bits or `bool`, a `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64`, and a `HashMap` value that is or contains a `linear struct` (see [HashMap key and value types](grammar.md#hashmap-methods)).
+
+**Wrong:**
 
 ```vow
 fn f() -> () {
@@ -11254,9 +12874,19 @@ fn f() -> () {
 
 **Fix:** Hash or intern the key to a `u64` at the call site and keep a side table for the originals. For a 128-bit value, store the two `u64` halves separately. For a linear value, keep it in a local binding and store only an integer handle in the map.
 
+**Right:**
+
+```vow
+fn f() -> () {
+    let m: HashMap<u64, i64> = HashMap::new();
+}
+```
+
 #### Linear collection elements
 
 The same code reports a `Vec<T>` whose element type is or contains a linear owner (a `linear struct`, or an `Option`, `Result`, or user enum wrapping one). Collections copy and shift elements bitwise, so a stored linear value would be duplicated or would escape the checker's consume-once tracking. A reference element (`Vec<&Token>`) borrows rather than owns and is accepted; a nested collection is reported once, where the innermost `Vec` is written, and a type alias once, at its definition.
+
+**Wrong:**
 
 ```vow
 linear struct Token { id: i64 }
@@ -11270,9 +12900,22 @@ fn f() -> () {
 
 **Fix:** Keep the linear value in a local binding and store an integer handle in the `Vec`. Consume a linear value that is no longer needed with `drop(value)`.
 
+**Right:**
+
+```vow
+linear struct Token { id: i64 }
+
+fn f(t: Token) -> () {
+    let ids: Vec<i64> = Vec::new();
+    drop(t);
+}
+```
+
 #### Slice types
 
 The same code reports a slice type `[T]` (see [Slice Types](grammar.md#slice-types)). Each bracket pair is reported once (`[[i64]]` gives two diagnostics, an alias once at its definition), with the hint ``use `Vec<T>` to hold a sequence of values``.
+
+**Wrong:**
 
 ```vow
 fn probe(sl: [i64]) -> i64 { 0 }
@@ -11282,9 +12925,17 @@ fn probe(sl: [i64]) -> i64 { 0 }
 
 **Fix:** Take a `Vec<T>` instead.
 
+**Right:**
+
+```vow
+fn probe(sl: Vec<i64>) -> i64 { 0 }
+```
+
 #### Reserved type names
 
 The same code reports a `struct`, `enum` or `type` alias named after a builtin type (see [User-Defined Types](grammar.md#user-defined-types)). It is reported once per declaration, at the declaration, with the hint `choose a different name for this type`.
+
+**Wrong:**
 
 ```vow
 struct Vec { x: i64 }
@@ -11294,9 +12945,17 @@ struct Vec { x: i64 }
 
 **Fix:** Rename the type.
 
+**Right:**
+
+```vow
+struct Coord { x: i64 }
+```
+
 #### Unit parameters
 
 The same code reports a parameter of type `()` (directly or through a type alias). The unit value carries no information and has no ABI slot, so such a parameter is rejected at the declaration.
+
+**Wrong:**
 
 ```vow
 fn f(u: ()) -> i64 { 0 }
@@ -11306,12 +12965,20 @@ fn f(u: ()) -> i64 { 0 }
 
 **Fix:** Remove the parameter.
 
-A 128-bit integer as an `Option`, `Result`, or `enum` payload is supported, so `HashMap<i64, Option<u128>>` is a valid map type (the map stores a pointer to the payload cell). A bare `u128` or `i128` map value is still rejected with the error above, because a map value occupies a single 64-bit slot. A 128-bit struct field or `Vec` element is not a map restriction: those aggregate positions cannot hold a 128-bit value yet, so codegen rejects them with `CodegenUnsupported` wherever they appear.
+**Right:**
+
+```vow
+fn f() -> i64 { 0 }
+```
+
+A 128-bit integer as an `Option`, `Result`, or `enum` payload is supported, so `HashMap<i64, Option<u128>>` is a valid map type (the map stores a pointer to the payload cell). A bare `u128` or `i128` map value is still rejected with the error above, because a map value occupies a single 64-bit slot. A 128-bit struct field or `Vec` element is not a map restriction: aggregates hold 128-bit values in two slots, so only a bare 128-bit map value is rejected.
 
 ### BTreeMapKeyTypeMustBeI64
 
 **Phase:** Type Checker
-**Meaning:** A `BTreeMap<K, V>` was instantiated with `K` not equal to `i64`. Phase 1 of the BTreeMap stdlib only supports `i64` keys; the runtime helpers and ESBMC C model are hard-coded to i64.
+**Meaning:** A `BTreeMap<K, V>` was instantiated with `K` not equal to `i64`. Phase 1 of the BTreeMap stdlib only supports `i64` keys; the runtime helpers and the verifier's model are hard-coded to i64.
+
+**Wrong:**
 
 ```vow
 fn f() -> () {
@@ -11324,10 +12991,21 @@ fn f() -> () {
 
 **Fix:** Use `BTreeMap<i64, V>`. If you need string or struct keys, hash or intern them to `i64` at the call site and keep a side-table for the originals.
 
+**Right:**
+
+```vow
+fn f() -> () {
+    let m: BTreeMap<i64, i64> = BTreeMap::new();
+    m.insert(1, 1);
+}
+```
+
 ### BTreeMapValueMustBeNonLinear
 
 **Phase:** Type Checker
 **Meaning:** A `BTreeMap<K, V>` was instantiated with a `V` that is or transitively contains a `linear struct`. Non-linear containers like `BTreeMap`, `Vec`, and `HashMap` cannot hold linear values because their internal shift/copy operations are bitwise and would silently duplicate the linear ownership obligation.
+
+**Wrong:**
 
 ```vow
 linear struct Token { id: i64 }
@@ -11340,14 +13018,27 @@ fn f() -> () {
 
 **Fix:** Either drop the `linear` qualifier on the struct, or keep handles in a `Vec<i64>` indirection and consume the linear values via direct function calls outside the map.
 
+**Right:**
+
+```vow
+linear struct Token { id: i64 }
+
+fn f(t: Token) -> () {
+    let m: BTreeMap<i64, i64> = BTreeMap::new();
+    drop(t);
+}
+```
+
 ### MissingContract
 
 **Phase:** Type Checker
 **Meaning:** An `extern "C"` block was declared without a `vow { ... }` contract. Every foreign function call requires a mandatory contract specifying expected behavior.
 
+**Wrong:**
+
 ```vow
 extern "C" {
-    fn write(fd: i32, ptr: i64, len: i64) -> i64 [io];
+    fn write_thing(fd: i32, ptr: i64, len: i64) -> i64 [io];
 }
 ```
 
@@ -11355,10 +13046,23 @@ extern "C" {
 
 **Fix:** Add a `vow { ... }` block to the extern declaration with `requires` and/or `ensures` clauses.
 
+**Right:**
+
+```vow
+extern "C" {
+    vow {
+        requires: fd >= 0
+    }
+    fn write_thing(fd: i32, ptr: i64, len: i64) -> i64 [io];
+}
+```
+
 ### ContractTypeMismatch
 
 **Phase:** Type Checker
 **Meaning:** A `requires`, `ensures`, or `invariant` clause expression, or a parameter `where` clause, does not have type `bool`.
+
+**Wrong:**
 
 ```vow
 fn add(a: i64, b: i64) -> i64 vow {
@@ -11372,33 +13076,129 @@ fn add(a: i64, b: i64) -> i64 vow {
 
 **Fix:** Ensure every contract clause is a boolean expression (comparison, logical operator, or a call to a predicate function returning `bool`).
 
+**Right:**
+
+```vow
+fn add(a: i64, b: i64) -> i64 vow {
+    requires: a >= 0 && b >= 0
+} {
+    a + b
+}
+```
+
 ### VowRequiresViolated
 
-**Phase:** Verification (ESBMC)
-**Meaning:** ESBMC found inputs that violate a `requires` precondition. This is a **static** verification error — it means the function's callers can reach it with invalid arguments.
+**Phase:** Verification
+**Meaning:** The verifier found inputs that violate a `requires` precondition. This is a **static** verification error — it means the function's callers can reach it with invalid arguments.
 
-**Fix:** Strengthen the `requires` clause, or fix the callers to pass valid arguments.
+**Wrong:**
+
+```vow
+fn dec(n: u64) -> u64 vow {
+    requires: n > 0
+} {
+    n - 1
+}
+
+fn caller(x: u64) -> u64 {
+    dec(x)
+}
+```
+
+**Fix:** Fix the callers to pass valid arguments, or, if the function is correct on a wider domain, state that real domain in the `requires` clause.
+
+**Right:** (`dec` unchanged)
+
+```vow
+fn caller(x: u64) -> u64 {
+    if x > 0 {
+        dec(x)
+    } else {
+        0
+    }
+}
+```
 
 ### VowEnsuresViolated
 
-**Phase:** Verification (ESBMC)
-**Meaning:** ESBMC found inputs where the function's return value does not satisfy the `ensures` postcondition.
+**Phase:** Verification
+**Meaning:** The verifier found inputs where the function's return value does not satisfy the `ensures` postcondition.
+
+**Wrong:**
+
+```vow
+fn max(a: i64, b: i64) -> i64 vow {
+    ensures: result >= a && result >= b
+} {
+    a
+}
+```
 
 **Fix:** Fix the function body to satisfy the postcondition, or weaken the `ensures` clause.
 
+**Right:**
+
+```vow
+fn max(a: i64, b: i64) -> i64 vow {
+    ensures: result >= a && result >= b
+} {
+    if a > b { a } else { b }
+}
+```
+
 ### VowInvariantViolated
 
-**Phase:** Verification (ESBMC)
-**Meaning:** ESBMC found a loop iteration where the `invariant` does not hold.
+**Phase:** Verification
+**Meaning:** The verifier found a loop iteration where the `invariant` does not hold.
 
-**Fix:** Strengthen the invariant or fix the loop body.
+**Wrong:**
+
+```vow
+fn count_up() -> u64 {
+    let mut i: u64 = 0;
+    while i < 10 vow {
+        invariant: i <= 10
+    } {
+        i = i + 3;
+    }
+    i
+}
+```
+
+**Fix:** Strengthen the invariant or fix the loop body. No compiler emits `VowInvariantViolated` today: a loop-invariant counterexample is reported with `error_code` `VowEnsuresViolated`, the message reads ``contract violation in `f`: invariant <predicate>``, and the counterexample `violation` starts with `invariant`.
+
+**Right:**
+
+```vow
+fn count_up() -> u64 {
+    let mut i: u64 = 0;
+    while i < 10 vow {
+        invariant: i <= 10
+    } {
+        i = i + 1;
+    }
+    i
+}
+```
 
 ### EsbmcNotFound
 
 **Phase:** Verification
-**Meaning:** ESBMC is not installed or not on `$PATH`. When verification is enabled (the default for `vowc build`, always for `vowc verify`), the compiler checks for ESBMC upfront before compilation. If ESBMC is not found, the build aborts immediately with exit code 1.
+**Meaning:** ESBMC is not installed or not on `$PATH`. When verification is enabled with the ESBMC backend (the default for `vowc build`, always for `vowc verify`), the compiler checks for ESBMC upfront before compilation. If ESBMC is not found, the build aborts immediately with exit code 1. Under `--backend native` the verifier is Bitwuzla instead: a missing `bitwuzla` is reported per function as `VerifyFailed` with `verify_status: "tool_not_found"` (clause `status` `error` in `vowc contracts --verify`), and ESBMC is never consulted.
+
+**Wrong:**
+
+```sh
+vowc build f.vow
+```
 
 **Fix:** Install ESBMC, or use `--no-verify` to skip verification: `vowc build --no-verify <file>`.
+
+**Right:**
+
+```sh
+vowc build --no-verify f.vow
+```
 
 ### RegionConflict
 
@@ -11435,6 +13235,18 @@ fn store_into(out: Vec<String>, prefix: String) [io] {
 
 **Fix:** Move the allocation to a wider scope, or copy the value into the target region (e.g., `String::from(s)` into the outer arena). For routings that compile cleanly but you'd like to know about (root-region placement), see `RegionRootEscape` below. See `docs/design/arena_memory.md` §4.4 for the full rejection vs. visibility distinction.
 
+Neither compiler rejects the snippet above today: it compiles and carries only a `RegionRootEscape` note (the self-hosted frontend reaches `RegionConflict` only through an internal-compiler-error path). Returning the value from the constructing function is the canonical shape and triggers neither:
+
+**Right:**
+
+```vow
+fn make_greeting(prefix: String) -> String {
+    let s: String = String::from(prefix);
+    s.push_str(String::from(" world"));
+    s
+}
+```
+
 ### RegionRootEscape
 
 **Phase:** Region Inference (arena-per-scope, Phase 3)
@@ -11447,6 +13259,14 @@ fn store_into(out: Vec<String>, prefix: String) [io] {
 This is a memory-cost decision the compiler surfaces visibly per `docs/design/arena_memory.md` §4.4: silent root-region placement caused growth-with-no-signal in earlier compiler versions, and the note restores that signal without conflating it with unsoundness (`RegionConflict`).
 
 The note is conservative — it fires for any qualifying allocation in a function that could route to a caller or that widens to root, even if the actual concrete chain in this program doesn't reach `main`. False positives are tolerated because the diagnostic is non-blocking. A widen-to-root allocation is flagged even when it is also returned: being returned does not undo a root-region placement.
+
+**Wrong:**
+
+```vow
+fn store_into(out: Vec<String>, prefix: String) {
+    out.push(String::from(prefix));
+}
+```
 
 ```json
 {
@@ -11461,6 +13281,14 @@ The note is conservative — it fires for any qualifying allocation in a functio
 
 **Fix:** Often none — if the program is short-lived (a checker, a CLI tool) or the values are genuinely program-lifetime, the note is informational. To free the allocation earlier, restructure so the value is **returned** from the constructing function rather than stored into a parameter container; the canonical `FreshInCaller` return path (`fn make_X() -> X`) does not trigger the note for the returned value or any allocation installed as a field of the returned struct (e.g. `Item { name: String::from("hi") }`). The exemption applies only to the *currently-installed* field initializers — a field overwritten before the return (`x.f = A; x.f = B; return x`) does not suppress the dead allocation `A`, which fires the note as expected (per-block last-write dedup, issue #326).
 
+**Right:**
+
+```vow
+fn make_name(prefix: String) -> String {
+    String::from(prefix)
+}
+```
+
 ### CodegenUnsupported
 
 **Phase:** Code Generation
@@ -11472,17 +13300,25 @@ build is left untouched, so branch on `status`/`executable` rather than on the
 output path existing. The diagnostic currently has a file-level span because
 backend errors do not carry an instruction origin.
 
+**Wrong:**
+
 ```vow
-fn main() -> i32 {
-    let values: Vec<i128> = Vec::new();
-    values.push(1);
-    0
+fn remainder(a: f64, b: f64) -> f64 {
+    a % b
 }
 ```
 
 **Fix:** Restructure the program to avoid the named backend limitation, or use
 a supported representation until the backend implements it. Agents may branch
 on `CodegenUnsupported` without parsing the human-readable `message` field.
+
+**Right:**
+
+```vow
+fn remainder(a: i64, b: i64) -> i64 {
+    a % b
+}
+```
 
 ### CodegenFailed
 
@@ -11496,6 +13332,8 @@ uses only documented supported operations, report a compiler bug with the
 source and diagnostic; changing source syntax or types may not resolve an
 internal backend failure.
 
+**Right:** No source rewrite applies; the program is not at fault. Keep it unchanged and report the bug.
+
 ### LinkFailed
 
 **Phase:** Linker
@@ -11503,9 +13341,21 @@ internal backend failure.
 not create the executable. A missing `libvow_runtime.a` is also reported with
 this code.
 
+**Wrong:**
+
+```sh
+vowc build f.vow   # libvow_runtime.a not found
+```
+
 **Fix:** Inspect the diagnostic message and verify that the host linker and Vow
 runtime archive are installed and accessible. When building Vow itself, run
 `cargo build --release --all` or set `VOW_RUNTIME_PATH` to the runtime archive.
+
+**Right:**
+
+```sh
+VOW_RUNTIME_PATH=target/release/libvow_runtime.a vowc build f.vow
+```
 
 ### IoError
 
@@ -11522,6 +13372,14 @@ the filesystem's answer rather than a backend defect — which is why it is not
 before type-checking, so diagnostics do not include follow-on errors for names
 from the missing module.
 
+**Wrong:**
+
+```vow
+module Main
+
+use util.mathh
+```
+
 **Fix:** Check the path in the diagnostic message. For a module load, verify
 the `use` path resolves relative to the importing file. For an object write,
 the compiler creates missing parent directories automatically; verify that no
@@ -11530,10 +13388,51 @@ and writing the object, and that the filesystem is writable and has free
 space. Re-running the same build after fixing the filesystem succeeds;
 changing the source will not help.
 
+For a module-load failure, the path must resolve to `util/math.vow` (or `util/math.vow.d`) next to the importing file:
+
+**Right:**
+
+```vow
+module Main
+
+use util.math
+```
+
 ### VerificationSkipped
 
 **Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)
-**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) A call to a user function that passes a `Vec`, `String`, map or `Option` argument is also not modelable (`Call target with a collection argument`): the model has no representation for a collection crossing a user-function boundary. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
+**Meaning:** The function carries a `vow {}` block but the verifier has no model for something its body does, so no proof is attempted. The contract becomes documentary: runtime checks still apply in `--mode debug`. A function is `Skipped` only for one of the reasons below; a timeout, a solver `unknown`, an unwinding failure and an out-of-memory worker are never `Skipped` (they are `timeout` / `unknown`, see `docs/spec/cli.md` → "Status Values").
+
+The native backend names the reason with a code from a **closed** list, written after the function name in the message (``skipped verification of `f`: <code>: <detail>``). `detail` is free-form (a function, opcode or builtin name) and is not part of the enumerated set; the message text is not a contract. A machine-readable `reason_code` field is specified additively but **not emitted yet**, so do not parse for it.
+
+| Code | When | Typical `detail` |
+|---|---|---|
+| `function-has-effects` | The function has an effect other than `panic` (`io`, `read`, `write`, `unsafe`). `panic`, the effect of `.unwrap()`, is modelled. | the effect |
+| `recursion-unsupported` | The function is directly or mutually recursive in the inlined call graph, or only reaches a recursive function. | the cycle, `a -> b -> a` |
+| `float-rem-unsupported` | The body uses float `%` (`RemF32`, `RemF64`). Lasts until codegen defines float `%`. | |
+| `ir-non-dominating-read` | The dominance validator rejects the IR (defensive gate). | |
+| `unmodeled-builtin` | An extern call whose runtime symbol has no `verifier_model: known` entry in `docs/spec/operations.json` (`String` and map operations, `Vec` `clear`/`sort`/..., a `Vec<i128>` element). Shrinks as builtins are modelled. | the runtime symbol |
+| `unsupported-opcode` | An opcode the symbolic executor does not encode (today floats other than `%`, string constants, `Load`/`Store`, `LinearBorrow`), a shape it cannot unroll, or an aggregate use outside the modelled subset. Shrinks. | `Op[type]`, or `irreducible loop (...)`, `loop value used outside its loop`, `entry block is a loop header`, `loop nest deeper than 8`, `FieldSet through a merged value`, `FieldSet on a parameter that may alias another parameter`, `FieldSet on a value that is neither an allocation nor a parameter` |
+| `non-modelable-callee` | An inlined callee is itself `Skipped`. | `<callee> (<code>)` |
+| `reserved-verifier-symbol` | The function name collides with a reserved checker symbol. Defined; not emitted yet. | |
+
+The list is closed: a function that fits no row is a verifier bug, not a new `Skipped` reason. Under the ESBMC backend the reason is the older free-text `non_modelable_reason` of the C emitter instead, for example an opcode the C model cannot represent (`RegionAlloc` and `FieldSet` from a struct construction the model does not cover, `Load`/`Store`, `RemF*`, `LinearBorrow`), a 128-bit checked operation or aggregate field, or a call that passes a `Vec`, `String`, map or `Option` argument to a user function (`Call target with a collection argument`). Native verification models the 128-bit cases, so those are `Skipped` only under ESBMC.
+
+Every non-modelable vowed function is reported, including when another function fails verification in the same run: the set of skipped functions depends only on the program, not on the verify cache or `--verify-jobs`.
+
+**Wrong:**
+
+```vow
+fn len_of(v: Vec<i64>) -> u64 {
+    v.len()
+}
+
+fn count(v: Vec<i64>) -> u64 vow {
+    ensures: result == v.len()
+} {
+    len_of(v)
+}
+```
 
 ```json
 {
@@ -11546,11 +13445,21 @@ changing the source will not help.
 }
 ```
 
-**Why the build fails closed.** Per `CLAUDE.md`'s "Contract Authoring" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier's bounded model checker cannot represent a function's body, the function is skipped with a structured warning instead of tripping the defense-in-depth `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")` that historically broke the bootstrap on every vowed struct-builder. But a skipped contract is still an unproved contract, so the build lifts its overall status to `Skipped` (exit 1). Use `--no-verify` if you explicitly want a non-failing path that does not invoke ESBMC at all (`Unverified`, exit 0).
+**Why the build fails closed.** Per `CLAUDE.md`'s "Contract Authoring" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier cannot represent a function's body, the function is skipped with a structured warning instead of tripping a defense-in-depth assertion (under ESBMC, `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")`, which historically broke the bootstrap on every vowed struct-builder). But a skipped contract is still an unproved contract, so the build lifts its overall status to `Skipped` (exit 1). Use `--no-verify` if you explicitly want a non-failing path that does not invoke a verifier at all (`Unverified`, exit 0).
 
 **Fix:** Refactor the function so its body uses only modelable opcodes — typically by splitting allocation/initialisation away from the contract-bearing computation. Alternatively, run with `--no-verify` if the contract is intentionally documentary.
 
-**Note form (uncontracted caller).** The same code also appears with `severity: "note"` for a function that has no `vow` block, cannot be modelled (effects such as `[io]`, unsupported operations, a collection passed to a user function), and calls contracted functions. The callee `requires` at those call sites are not statically checked, but no contract of its own went unproved, so the build status does **not** fail closed. The message ends with the reason, and the reasons need different fixes: `` `f` cannot be modelled `` (restructure `f`, or accept that it stays unverified), or `the verifier timed out for `f`` / `the verifier could not decide them for `f`` (the proof was attempted but not finished — constrain or simplify `f`, or raise the timeout):
+**Right:**
+
+```vow
+fn count(v: Vec<i64>) -> u64 vow {
+    ensures: result == v.len()
+} {
+    v.len()
+}
+```
+
+**Note form (uncontracted caller).** The same code also appears with `severity: "note"` for a function that has no `vow` block, cannot be modelled (effects such as `[io]`, unsupported operations, a collection passed to a user function), and calls contracted functions. The callee `requires` at those call sites are not statically checked, but no contract of its own went unproved, so the build status does **not** fail closed. This note form is produced by the ESBMC backend; under `--backend native` the uncontracted-caller selection is shared but a native timeout or `unknown` for such a caller is a hard `VerifyFailed`, not a note. The message ends with the reason, and the reasons need different fixes: `` `f` cannot be modelled `` (restructure `f`, or accept that it stays unverified), or `the verifier timed out for `f`` / `the verifier could not decide them for `f`` (the proof was attempted but not finished — constrain or simplify `f`, or raise the timeout):
 
 ```json
 {
@@ -11567,6 +13476,16 @@ changing the source will not help.
 
 **Phase:** Verification (Warning; the build status stays `Verified`)
 **Meaning:** The verifier proved that a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) can reach its `ArithmeticOverflow` abort for some input the function's `requires` admits. The operand span in `primary` points at the operator itself.
+
+**Wrong:**
+
+```vow
+fn twice(x: i64) -> i64 vow {
+    ensures: result == x + x
+} {
+    x +! x
+}
+```
 
 ```json
 {
@@ -11586,12 +13505,33 @@ The `message` names the cause: `addition overflows`, `subtraction overflows`, `m
 
 **Fix:** If the abort is unreachable in practice, say so in the contract — a `requires` that bounds the operands removes the warning, and the bound is then a genuine semantic constraint rather than a verifier appeasement. If wrapping is the intended behaviour, use the wrapping operator (`+`, `-`, `*`, `/`, `%`) and state the wrapped result in the contract. If the abort is a real possibility the caller must handle, the warning is informational.
 
+**Right:**
+
+```vow
+fn twice(x: i64) -> i64 vow {
+    requires: x >= -4611686018427387904 && x <= 4611686018427387903
+    ensures: result == x + x
+} {
+    x +! x
+}
+```
+
 **Not emitted when:** the contract itself fails. The verifier reports one violated property per run, so a contract counterexample takes precedence and no abort claim is made — the counterexample is the actionable finding.
 
 ### VerifierAssertionUnattributed
 
 **Phase:** Verification
-**Meaning:** ESBMC found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "None"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero and a dynamic shift count that exceeds the operand's bit width.
+**Meaning:** The verifier found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "None"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero, a dynamic shift count that exceeds the operand's bit width, signed `MIN / -1` (native backend only), `unwrap()` called on `None` or `Err` (native backend only) and an out-of-bounds `Vec` index (native backend only). Under `--backend native` the native `vow_id` is `4294967293` and blame is `None`.
+
+**Wrong:**
+
+```vow
+fn remainder(n: u64, d: u64) -> u64 vow {
+    ensures: result <= n
+} {
+    n % d
+}
+```
 
 ```json
 {
@@ -11602,14 +13542,25 @@ The `message` names the cause: `addition overflows`, `subtraction overflows`, `m
 }
 ```
 
-The structured counterexample's `violation` field carries the stable property description instead of raw ESBMC text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.
+The structured counterexample's `violation` field carries the stable property description instead of raw verifier text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.
 
-**Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
+**Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For `unwrap() called on None`, match on the value or require its discriminant instead of unwrapping. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
+
+**Right:**
+
+```vow
+fn remainder(n: u64, d: u64) -> u64 vow {
+    requires: d != 0
+    ensures: result <= n
+} {
+    n % d
+}
+```
 
 ### VerifierBug
 
 **Phase:** Verification (self-hosted `vowc verify --backend native --replay-cex` only)
-**Meaning:** Under the native backend, a counterexample did not replay: the `--mode debug` harness built from its concrete inputs did not reproduce the predicted `VowViolation` (same `vow_id` and blame) or, for a division or remainder abort, the predicted `ArithmeticOverflow` abort. The counterexample's `replay` is `"diverged"` or `"aborted"` and `replay_reason` says why. A `"skipped"` replay (a harness limitation such as an unsupported parameter type) never ran and is not reported. The verifier model and the runtime disagree, so this is a defect in the verifier, not in the program. One diagnostic is emitted per such counterexample; the `status` stays `VerifyFailed` and the exit code stays 1.
+**Meaning:** Under the native backend, a counterexample did not replay: the `--mode debug` harness built from its concrete inputs did not reproduce the predicted `VowViolation` (same `vow_id` and blame) or, for a division or remainder abort, the predicted `ArithmeticOverflow` abort, or, for an `unwrap()` abort, the predicted `UnwrapOnNone` abort. The counterexample's `replay` is `"diverged"` or `"aborted"` and `replay_reason` says why. A `"skipped"` replay (a harness limitation such as an unsupported parameter type) never ran and is not reported. The verifier model and the runtime disagree, so this is a defect in the verifier, not in the program. One diagnostic is emitted per such counterexample; the `status` stays `VerifyFailed` and the exit code stays 1.
 
 ```json
 {
@@ -11624,10 +13575,27 @@ The structured counterexample's `violation` field carries the stable property de
 
 **Fix:** Report the function, its counterexample `values` and `replay_reason` as a verifier bug. Do not weaken the contract to avoid the counterexample on the strength of this diagnostic alone.
 
+**Right:** No source rewrite applies; the program and its contract are not at fault. Keep both unchanged and report the bug.
+
 ### ModelCapacityAssumed
 
-**Phase:** Verification (Note; the build status stays `Verified`)
+**Phase:** Verification (Note; the build status stays `Verified`). **ESBMC backend only:** never emitted under `--backend native`, which models collections with a symbolic length and no capacity. The diagnostic is retired together with the ESBMC backend.
 **Meaning:** The function's contracts were proved, but the proof's model restricts at least one capacity to the verifier's model capacity (defaults: `Vec<T>` 128, `String` 256, `HashMap<K, V>` and `BTreeMap<K, V>` 64, user-struct `Heap` 1024 slots; the `String` capacity is raised to the longest string literal in the module, and the note's message reports the capacity actually applied; see [`contracts.md`](contracts.md#collection-models-for-verification)). A parameter, struct-field collection, `String::from_cstr` result, or non-constant `from_raw_parts_copy` length is modelled as nondeterministic *within* its capacity, and struct allocations stop at the heap capacity, so executions with longer collections or more struct allocations were pruned, not checked: `Verified` means "verified for executions up to the capacities".
+
+**Wrong:**
+
+```vow
+fn first_or_zero(v: Vec<i64>) -> i64 vow {
+    requires: v.len() <= 128
+    ensures: v.len() > 0 || result == 0
+} {
+    if v.len() > 0 {
+        v[0]
+    } else {
+        0
+    }
+}
+```
 
 ```json
 {
@@ -11646,6 +13614,20 @@ The `message` lists every bounded kind as `Kind: capacity`, in the fixed order `
 **Why this is a Note and not a failure.** The verdict is genuine for every execution inside the bound and the verifier never changes a verdict because of the note. It is informational so that an agent or CEGIS loop can tell a bounded proof from an unbounded one — for example, to treat a `Verified` function that handles untrusted-length collections with extra scrutiny, or to test it with the runtime checks of `--mode debug`.
 
 **Fix:** None is required. Do **not** add `requires: v.len() <= 128` (or any other capacity) to silence it: that distorts a true contract to fit a prover limitation, and an unbounded backend removes the note without any source change.
+
+**Right:** Remove the length bound and keep the note; the source needs no other change.
+
+```vow
+fn first_or_zero(v: Vec<i64>) -> i64 vow {
+    ensures: v.len() > 0 || result == 0
+} {
+    if v.len() > 0 {
+        v[0]
+    } else {
+        0
+    }
+}
+```
 
 **Ordering and presence.** Notes describe a *completed* proof run, so they are emitted only when the overall `status` is `Verified`, one per proved function, after every other diagnostic and in function declaration order. A run that ends in a counterexample, `unknown`, `timeout`, `error`, or a fail-closed skip carries no note: a halt cuts the set of verified functions short in a scheduling-dependent way, and a note about one of them would be noise next to the real failure.
 
@@ -11681,7 +13663,31 @@ magnitude, which can exceed the range an IEEE-754 double represents exactly —
 that acts on the exact value must read it with an arbitrary-precision JSON
 number parser; a default `double` parser silently rounds it.
 
+**Wrong:**
+
+```vow
+fn divide(a: i64, b: i64) -> i64 vow {
+    requires: b != 0
+} {
+    a / b
+}
+
+fn main() -> i32 {
+    let q: i64 = divide(10, 0);
+    0
+}
+```
+
 **Fix:** See the `description` and `values` fields to understand which predicate failed and with what runtime values.
+
+**Right:** (`divide` unchanged)
+
+```vow
+fn main() -> i32 {
+    let q: i64 = divide(10, 2);
+    0
+}
+```
 
 ### ArithmeticOverflow
 
@@ -11700,6 +13706,28 @@ if overflow is acceptable, or add bounds contracts to prevent overflow. For
 division and remainder, rule out a zero divisor and, for signed division, the
 `MIN / -1` case.
 
+**Wrong:**
+
+```vow
+fn main() -> i32 {
+    let a: i64 = 9223372036854775807;
+    let b: i64 = a +! 1;
+    0
+}
+```
+
+**Right:**
+
+```vow
+fn main() -> i32 {
+    let a: i64 = 9223372036854775807;
+    if a < 9223372036854775807 {
+        let b: i64 = a +! 1;
+    }
+    0
+}
+```
+
 The abort is emitted in every build mode, release included, so this cannot be
 deferred to a debug run. A checked operator's abort is part of the operator's
 meaning, not a debug-mode check. Division and remainder also abort when no
@@ -11714,8 +13742,31 @@ used.
 {"error":"UnwrapOnNone"}
 ```
 
+**Wrong:**
+
+```vow
+fn main() -> i32 [panic] {
+    let o: Option<i64> = Option::None;
+    let x: i64 = o.unwrap();
+    0
+}
+```
+
 **Fix:** Use `match` to handle the empty variant — `None` for `Option`, `Err` for
 `Result` — or add contracts that guarantee the value is `Some`/`Ok`.
+
+**Right:**
+
+```vow
+fn main() -> i32 {
+    let o: Option<i64> = Option::None;
+    match o {
+        Option::Some(x) => x,
+        Option::None => 0,
+    };
+    0
+}
+```
 
 The abort is emitted in every build mode, release included, so this cannot be
 deferred to a debug run.
@@ -11730,7 +13781,29 @@ Not gated by `[panic]`: the abort is a verification obligation of the (pure) ind
 {"error":"IndexOutOfBounds"}
 ```
 
+**Wrong:**
+
+```vow
+fn main() -> i32 {
+    let v: Vec<i64> = Vec::new();
+    let x: i64 = v[0];
+    0
+}
+```
+
 **Fix:** Add a bounds check before indexing, or add a contract: `requires: i < v.len()`. Do not pair it with `requires: i >= 0` — on an unsigned index that clause is always true and is rejected as [TautologicalComparison](#tautologicalcomparison).
+
+**Right:**
+
+```vow
+fn main() -> i32 {
+    let v: Vec<i64> = Vec::new();
+    if v.len() > 0 {
+        let x: i64 = v[0];
+    }
+    0
+}
+```
 
 ### RegionLiteralMutation
 
@@ -11750,7 +13823,27 @@ hint: construct a mutable HashMap and copy entries before mutating  # for HashMa
 
 The `operation` field identifies the source-level method that trapped (e.g., `Vec::push`, `Vec::pop`, `HashMap::insert`, `String::clear`). The `origin` field identifies the storage class of the immutable backing; today only `rodata` is emitted.
 
+**Wrong:**
+
+```vow
+fn main() -> i32 {
+    let s: String = "abc";
+    s.push_str("d");
+    0
+}
+```
+
 **Fix:** Obtain an explicit mutable copy before mutation: `String::from(value)`, or construct a fresh mutable container and copy the entries you need before mutating.
+
+**Right:**
+
+```vow
+fn main() -> i32 {
+    let s: String = String::from("abc");
+    s.push_str("d");
+    0
+}
+```
 
 ### StackOverflow
 
@@ -11768,7 +13861,36 @@ In debug or sanitize mode, the diagnostic includes call depth and the function t
 
 The signal handler is installed in **all** build modes. The `depth` and `function` fields are only available in debug/sanitize mode where call-depth instrumentation is emitted.
 
+**Wrong:**
+
+```vow
+fn count_down(n: u64) -> u64 {
+    count_down(n + 1)
+}
+
+fn main() -> i32 {
+    let r: u64 = count_down(1);
+    0
+}
+```
+
 **Fix:** Add a base case to recursive functions, or restructure the algorithm to use iteration instead of recursion.
+
+**Right:**
+
+```vow
+fn count_down(n: u64) -> u64 {
+    if n == 0 {
+        return 0;
+    }
+    count_down(n - 1)
+}
+
+fn main() -> i32 {
+    let r: u64 = count_down(1);
+    0
+}
+```
 
 ### OutOfMemory
 
@@ -11784,6 +13906,8 @@ Like every runtime abort, an OOM exits with the reserved status **`134`** (see *
 
 **Fix:** Reduce working-set size, raise the process memory limit, or run on a machine with more memory. This is not a Vow program error.
 
+**Right:** No source rewrite applies; the program is not at fault.
+
 ## Warnings
 
 ### LoweringWarning
@@ -11792,6 +13916,17 @@ Like every runtime abort, an OOM exits with the reserved status **`134`** (see *
 **Meaning:** The IR lowerer could not resolve a struct type tag or field name, defaulting to index 0. This usually indicates a missing type annotation on a `let` binding, causing the compiler to lose track of which struct type a pointer refers to.
 
 **Fix:** Add an explicit type annotation: `let x: MyStruct = ...;` so the compiler can track struct type tags through the IR.
+
+**Right:**
+
+```vow
+struct MyStruct { a: i64 }
+
+fn f() -> i64 {
+    let x: MyStruct = MyStruct { a: 1 };
+    x.a
+}
+```
 "#,
         ),
         (
@@ -11805,14 +13940,14 @@ under `stdlib/`. Each module is a self-contained directory: one or more library
 This is a **reference collection**, not a globally-importable package set. Vow has
 no module search path today (see [Consumption model](#consumption-model)). Modules
 carry contracts, but only some are statically verifiable under the current ESBMC
-model — read [Verification status](#verification-status) before relying on a
+backend model — read [Verification status](#verification-status) before relying on a
 contract as a proof rather than a runtime check.
 
 In all examples below, `vow` refers to `build/vowc`.
 
 ## Modules at a glance
 
-| Module path           | Provides                                                                 | ESBMC status |
+| Module path           | Provides                                                                 | ESBMC-backend status |
 |-----------------------|-------------------------------------------------------------------------|---------------------------|
 | `stdlib/math`         | `arithmetic`, `number_theory`, `vec_math` — integer & vector math        | VerifyFailed (env)        |
 | `stdlib/heap`         | `min_heap`, `max_heap` — binary heaps over `i64`                          | VerifyFailed (env)        |
@@ -11821,7 +13956,7 @@ In all examples below, `vow` refers to `build/vowc`.
 | `stdlib/bignum`       | `bignum` — arbitrary-precision signed integers                          | Skipped     |
 | `stdlib/gc`           | `gc` — mark-and-sweep garbage collector over `i64` slots                 | VerifyFailed              |
 
-These are the `vow verify <module>/main.vow` results, measured against ESBMC 8.3.0. `(env)` marks an environmental verifier limitation, not a contract
+These are the `vow verify <module>/main.vow` results, measured against ESBMC 8.3.0 (ESBMC backend; native results are not recorded here). `(env)` marks an environmental verifier limitation, not a contract
 defect. The statuses reflect the verifier's memory model, **not** the soundness of
 the contracts — see [Verification status](#verification-status).
 
@@ -11874,7 +14009,7 @@ alongside it.
 
 ## Verification status
 
-The verifier statuses below were measured with `vow verify` against ESBMC 8.3.0.
+The verifier statuses below were measured with `vow verify` (ESBMC backend) against ESBMC 8.3.0.
 They are **pre-existing properties of the code and the verifier**, unchanged by the
 move into `stdlib/`. A `Skipped`/`VerifyFailed` status does not mean a contract is
 wrong — in `--mode debug` every contract is still enforced at runtime via
@@ -12214,7 +14349,7 @@ $ vow build examples/divide.vow
 {"status":"Verified","executable":"examples/divide","diagnostics":[],"counterexamples":[]}
 ```
 
-ESBMC proves the contract: whenever `y != 0` holds, the division is safe.
+The verifier proves the contract: whenever `y != 0` holds, the division is safe.
 
 ### Step 3: Runtime behavior (debug mode)
 
@@ -12316,7 +14451,7 @@ $ vow build examples/cegis_fixed.vow
 {"status":"Verified","executable":"examples/cegis_fixed","diagnostics":[],"counterexamples":[]}
 ```
 
-Verified. With `a >= 0`, `b >= 0`, and `a >= b`, ESBMC proves `result >= 0`.
+Verified. With `a >= 0`, `b >= 0`, and `a >= b`, the verifier proves `result >= 0`.
 
 ---
 
@@ -12364,7 +14499,7 @@ $ vow verify examples/vec_fill.vow
 
 **Key points:**
 - `invariant: i <= n` is inductive: true on entry, preserved by the loop body. The lower bounds `i >= 0` and `n >= 0` are carried by the `u64` type, so they need no clause (and `TautologicalComparison` rejects one)
-- The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`
+- The Vec model tracks `len`, so the verifier can reason about `result.len() == n`
 - The contract states the algorithmic domain. An unwind or Vec-model limit must not be added as a precondition.
 - `VerifyFailed` with `verify_status: "unknown"` records the current verifier's limit; it does not make the contract false.
 
@@ -12650,7 +14785,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     "status": {
       "type": "string",
       "enum": ["Verified", "Unverified", "Skipped", "CompileFailed", "VerifyFailed"],
-      "description": "Build outcome. `Skipped` means ESBMC was invoked but at least one vowed function could not be modelled; the build fails closed with exit 1 (distinct from `Unverified`, which means ESBMC was not invoked, e.g. `--no-verify`/`--dump-ir`, exit 0)."
+      "description": "Build outcome. `Skipped` means verification was requested but at least one vowed function could not be modelled; the build fails closed with exit 1 (distinct from `Unverified`, which means no verifier was invoked, e.g. `--no-verify`/`--dump-ir`, exit 0)."
     },
     "executable": {
       "type": ["string", "null"],
@@ -12676,7 +14811,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     "counterexamples": {
       "type": "array",
       "items": { "$ref": "counterexample.schema.json" },
-      "description": "Structured counterexamples from ESBMC verification"
+      "description": "Structured counterexamples from verification (ESBMC or the native backend)"
     },
     "verify_status": {
       "type": "string",
@@ -12938,7 +15073,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
           "quality": {
             "type": "string",
             "enum": ["weak", "tautological", "substantive"],
-            "description": "Static, no-ESBMC classification of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md"
+            "description": "Static classification (no verifier is run) of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md"
           },
           "trivially_satisfiable": {
             "type": "boolean",
@@ -12987,7 +15122,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vow-lang.dev/schemas/counterexample.schema.json",
   "title": "Counterexample",
-  "description": "A structured counterexample from ESBMC verification failure",
+  "description": "A structured counterexample from a verification failure (ESBMC or the native backend)",
   "type": "object",
   "required": ["function", "values", "violation", "vow_id", "source", "blame"],
   "properties": {
@@ -12998,7 +15133,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     "values": {
       "type": "object",
       "additionalProperties": { "type": "string" },
-      "description": "Map of source names or $esbmc$-prefixed internal variable names to counterexample values"
+      "description": "Map of source names (or, under the ESBMC backend, $esbmc$-prefixed internal variable names) to counterexample values. Under the native backend a field of a struct, enum, Option or Result parameter is named <param>.<slot> (an enum's discriminant is slot 0), with a :bool or :<bits> suffix when the function reads that slot at two widths; bool values are true or false"
     },
     "violation": {
       "type": "string",
@@ -13335,7 +15470,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "status": {
           "type": "string",
           "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed", "contract_skipped"],
-          "description": "Per-test outcome (`contract_skipped`: ESBMC never invoked because a vowed function is non-modelable; fail-closed, counts toward `failed`)"
+          "description": "Per-test outcome (`contract_skipped`: no proof was attempted because a vowed function is non-modelable; fail-closed, counts toward `failed`)"
         },
         "exit_code": {
           "type": ["integer", "null"],
@@ -13352,7 +15487,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "counterexamples": {
           "type": "array",
           "items": { "$ref": "counterexample.schema.json" },
-          "description": "ESBMC counterexamples (on verify_failed)"
+          "description": "Verifier counterexamples (on verify_failed)"
         }
       }
     },
@@ -13458,12 +15593,24 @@ mod tests {
             !contents.contains("```json"),
             "SKILL.md entrypoint should link to schemas, not inline them"
         );
+        let do_nots = contents.find("## Do nots").expect("Do nots section");
+        let toolchain = contents.find("## Installed toolchain").unwrap();
+        assert!(do_nots < toolchain);
 
         let grammar = std::fs::read_to_string(skill_dir.join("reference/grammar.md")).unwrap();
         assert!(grammar.contains("# Vow Grammar Reference"));
         let schema =
             std::fs::read_to_string(skill_dir.join("schemas/build-result.schema.json")).unwrap();
         assert!(schema.contains("\"title\": \"BuildResult\""));
+    }
+
+    #[test]
+    fn skill_entrypoint_points_raw_harnesses_at_the_bundle() {
+        let entry = skill_entrypoint_markdown();
+        assert!(
+            entry.contains("`build/vowc skill print --bundle`"),
+            "entrypoint must name the self-contained bundle command"
+        );
     }
 
     #[test]
@@ -13607,6 +15754,276 @@ mod tests {
         );
     }
 
+    fn skills_entries(root: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(root.join(".claude/skills"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn seed_old_tree(root: &Path) -> PathBuf {
+        let target = root.join(".claude/skills/vow");
+        std::fs::create_dir_all(target.join("reference")).unwrap();
+        std::fs::write(target.join("SKILL.md"), "old").unwrap();
+        std::fs::write(target.join("reference/stale.md"), "stale").unwrap();
+        target
+    }
+
+    fn assert_old_tree_intact(target: &Path) {
+        assert_eq!(
+            std::fs::read_to_string(target.join("SKILL.md")).unwrap(),
+            "old"
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join("reference/stale.md")).unwrap(),
+            "stale"
+        );
+    }
+
+    const GOOD_FILES: &[(&str, &str)] = &[("reference/a.md", "a"), ("schemas/b.json", "{}")];
+    const BAD_FILES: &[(&str, &str)] = &[("a", "x"), ("a/b.md", "y")];
+
+    #[test]
+    fn atomic_install_failure_leaves_no_partial_tree() {
+        let dir = TempDir::new().unwrap();
+        let err = install_tree_atomic(dir.path(), "entry", BAD_FILES).unwrap_err();
+        assert!(err.to_string().contains("cannot create"), "{err}");
+        assert!(!dir.path().join(".claude/skills/vow").exists());
+        assert!(skills_entries(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn atomic_install_success_leaves_only_the_skill_directory() {
+        let dir = TempDir::new().unwrap();
+        install_skill_tree_to(dir.path()).unwrap();
+        assert_eq!(skills_entries(dir.path()), vec!["vow".to_string()]);
+        let skill_dir = dir.path().join(".claude/skills/vow");
+        for (rel, expected) in skill_support_files() {
+            assert_eq!(
+                &std::fs::read_to_string(skill_dir.join(rel)).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn write_skill_files_writes_entrypoint_last() {
+        let dir = TempDir::new().unwrap();
+        let err = write_skill_files(dir.path(), "entry", BAD_FILES).unwrap_err();
+        assert!(err.to_string().contains("cannot create"), "{err}");
+        assert!(!dir.path().join("SKILL.md").exists());
+    }
+
+    #[test]
+    fn atomic_install_rewrites_owned_files_and_carries_over_foreign_ones() {
+        let dir = TempDir::new().unwrap();
+        let target = seed_old_tree(dir.path());
+        std::fs::write(target.join("reference/a.md"), "edited").unwrap();
+        std::fs::create_dir_all(target.join("mine/deep")).unwrap();
+        std::fs::write(target.join("mine/deep/x.txt"), "deep").unwrap();
+        std::fs::write(target.join("notes.md"), "notes").unwrap();
+        let installed = install_tree_atomic(dir.path(), "new", GOOD_FILES).unwrap();
+        assert_eq!(installed, target.join("SKILL.md"));
+        assert_eq!(std::fs::read_to_string(&installed).unwrap(), "new");
+        let read = |rel: &str| std::fs::read_to_string(target.join(rel)).unwrap();
+        assert_eq!(read("reference/a.md"), "a");
+        assert_eq!(read("reference/stale.md"), "stale");
+        assert_eq!(read("mine/deep/x.txt"), "deep");
+        assert_eq!(read("notes.md"), "notes");
+        assert_eq!(skills_entries(dir.path()), vec!["vow".to_string()]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_install_carries_over_symlinks_as_links() {
+        let dir = TempDir::new().unwrap();
+        let target = seed_old_tree(dir.path());
+        std::os::unix::fs::symlink("missing-target", target.join("link")).unwrap();
+        install_tree_atomic(dir.path(), "new", GOOD_FILES).unwrap();
+        assert_eq!(
+            std::fs::read_link(target.join("link")).unwrap(),
+            PathBuf::from("missing-target")
+        );
+    }
+
+    #[test]
+    fn atomic_install_failure_keeps_existing_tree() {
+        let dir = TempDir::new().unwrap();
+        let target = seed_old_tree(dir.path());
+        install_tree_atomic(dir.path(), "new", BAD_FILES).unwrap_err();
+        assert_old_tree_intact(&target);
+        assert_eq!(skills_entries(dir.path()), vec!["vow".to_string()]);
+    }
+
+    #[test]
+    fn atomic_install_repairs_orphan_entrypoint_blocked_by_a_file() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join(".claude/skills/vow");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("reference"), "not a directory").unwrap();
+        install_tree_atomic(dir.path(), "new", GOOD_FILES).unwrap();
+        assert!(target.join("reference/a.md").is_file());
+        assert_eq!(
+            std::fs::read_to_string(target.join("SKILL.md")).unwrap(),
+            "new"
+        );
+    }
+
+    /// Fails the renames whose 1-based call number is in `failing`.
+    fn install_with_failing_renames(
+        root: &Path,
+        failing: &'static [u32],
+    ) -> std::io::Result<PathBuf> {
+        let calls = std::cell::Cell::new(0u32);
+        install_tree_with(root, "new", GOOD_FILES, &unique_token, &|from, to| {
+            calls.set(calls.get() + 1);
+            if failing.contains(&calls.get()) {
+                Err(std::io::Error::other("injected rename failure"))
+            } else {
+                std::fs::rename(from, to)
+            }
+        })
+    }
+
+    #[test]
+    fn commit_failure_on_fresh_install_cleans_the_stage() {
+        let dir = TempDir::new().unwrap();
+        let err = install_with_failing_renames(dir.path(), &[1]).unwrap_err();
+        assert!(err.to_string().contains("cannot install"), "{err}");
+        assert!(!dir.path().join(".claude/skills/vow").exists());
+        assert!(skills_entries(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn commit_failure_restores_the_previous_tree() {
+        let dir = TempDir::new().unwrap();
+        let target = seed_old_tree(dir.path());
+        let err = install_with_failing_renames(dir.path(), &[2]).unwrap_err();
+        assert!(err.to_string().contains("cannot install"), "{err}");
+        assert_old_tree_intact(&target);
+        assert_eq!(skills_entries(dir.path()), vec!["vow".to_string()]);
+    }
+
+    #[test]
+    fn failed_backup_rename_leaves_the_previous_tree_and_no_backup() {
+        let dir = TempDir::new().unwrap();
+        let target = seed_old_tree(dir.path());
+        install_with_failing_renames(dir.path(), &[1]).unwrap_err();
+        assert_old_tree_intact(&target);
+        assert_eq!(skills_entries(dir.path()), vec!["vow".to_string()]);
+    }
+
+    #[test]
+    fn failed_restore_reports_where_the_previous_tree_is_kept() {
+        let dir = TempDir::new().unwrap();
+        seed_old_tree(dir.path());
+        let err = install_with_failing_renames(dir.path(), &[2, 3]).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("previous tree kept at"), "{message}");
+        let backup = message.rsplit("kept at ").next().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(Path::new(backup).join("SKILL.md")).unwrap(),
+            "old"
+        );
+    }
+
+    #[test]
+    fn reserve_unique_dir_retries_taken_names() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir(dir.path().join(".s-a")).unwrap();
+        let token = |attempt: u32| if attempt == 0 { "a" } else { "b" }.to_string();
+        let reserved = reserve_unique_dir(dir.path(), "s", &token).unwrap();
+        assert_eq!(reserved, dir.path().join(".s-b"));
+    }
+
+    #[test]
+    fn reserve_unique_dir_gives_up_when_every_name_is_taken() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir(dir.path().join(".s-a")).unwrap();
+        let err = reserve_unique_dir(dir.path(), "s", &|_| "a".to_string()).unwrap_err();
+        assert!(err.to_string().contains("no unused name"), "{err}");
+    }
+
+    #[test]
+    fn reserve_unique_dir_reports_other_failures() {
+        let dir = TempDir::new().unwrap();
+        let missing = dir.path().join("missing");
+        let err = reserve_unique_dir(&missing, "s", &|_| "a".to_string()).unwrap_err();
+        assert!(err.to_string().contains("cannot create"), "{err}");
+    }
+
+    #[test]
+    fn install_fails_cleanly_when_skills_path_is_a_file() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        std::fs::write(dir.path().join(".claude/skills"), "file").unwrap();
+        let err = install_skill_tree_to(dir.path()).unwrap_err();
+        assert!(err.to_string().contains("cannot create"), "{err}");
+        maybe_auto_install(dir.path());
+        assert!(dir.path().join(".claude/skills").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_install_writes_through_a_symlinked_skill_directory() {
+        let dir = TempDir::new().unwrap();
+        let real = dir.path().join("dotfiles/vow");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude/skills")).unwrap();
+        let link = dir.path().join(".claude/skills/vow");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        install_tree_atomic(dir.path(), "new", GOOD_FILES).unwrap();
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(real.join("SKILL.md")).unwrap(),
+            "new"
+        );
+        assert!(real.join("schemas/b.json").is_file());
+        assert_eq!(skills_entries(dir.path()), vec!["vow".to_string()]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_install_failure_leaves_no_entrypoint() {
+        let dir = TempDir::new().unwrap();
+        let real = dir.path().join("dotfiles/vow");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude/skills")).unwrap();
+        std::os::unix::fs::symlink(&real, dir.path().join(".claude/skills/vow")).unwrap();
+
+        install_tree_atomic(dir.path(), "new", BAD_FILES).unwrap_err();
+        assert!(!real.join("SKILL.md").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unwritable_skills_directory_keeps_the_previous_tree() {
+        use std::os::unix::fs::PermissionsExt;
+
+        struct RestoreMode(PathBuf);
+        impl Drop for RestoreMode {
+            fn drop(&mut self) {
+                let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+            }
+        }
+
+        let dir = TempDir::new().unwrap();
+        let target = seed_old_tree(dir.path());
+        let skills = dir.path().join(".claude/skills");
+        let _restore = RestoreMode(skills.clone());
+        std::fs::set_permissions(&skills, std::fs::Permissions::from_mode(0o555)).unwrap();
+        if std::fs::File::create(skills.join("probe")).is_ok() {
+            return;
+        }
+
+        let err = install_tree_atomic(dir.path(), "new", GOOD_FILES).unwrap_err();
+        assert!(err.to_string().contains("cannot create"), "{err}");
+        assert_old_tree_intact(&target);
+    }
+
     #[test]
     fn auto_install_skill_skips_when_no_claude_dir() {
         let dir = TempDir::new().unwrap();
@@ -13642,6 +16059,63 @@ mod tests {
         maybe_auto_install(dir.path());
         let contents = std::fs::read_to_string(&target).unwrap();
         assert_eq!(contents, "user-managed content");
+        for support_dir in ["reference", "examples", "schemas"] {
+            assert!(
+                !target_dir.join(support_dir).exists(),
+                "auto-install must not add {support_dir}/ next to an existing SKILL.md"
+            );
+        }
+    }
+
+    fn local_project_with_monolithic_skill() -> (TempDir, PathBuf) {
+        let dir = TempDir::new().unwrap();
+        let skill_dir = dir.path().join(".claude/skills/vow");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(dir.path().join(".git"), "gitdir: ../real-git-dir\n").unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), "user-managed content").unwrap();
+        (dir, skill_dir)
+    }
+
+    fn install_local(cwd: &Path) -> PathBuf {
+        let mut stdin = std::io::Cursor::new(Vec::<u8>::new());
+        let mut stderr = Vec::new();
+        run_skill_install_scoped(cwd, None, true, false, &mut stdin, &mut stderr).unwrap()
+    }
+
+    #[test]
+    fn explicit_install_migrates_monolithic_skill_to_split_layout() {
+        let (dir, skill_dir) = local_project_with_monolithic_skill();
+
+        let installed = install_local(dir.path());
+
+        assert_eq!(installed, skill_dir.join("SKILL.md"));
+        assert_eq!(
+            std::fs::read_to_string(&installed).unwrap(),
+            entrypoint_markdown()
+        );
+        for (relative_path, contents) in skill_support_files() {
+            assert_eq!(
+                std::fs::read_to_string(skill_dir.join(relative_path)).unwrap(),
+                *contents,
+                "explicit install must write {relative_path}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_install_repairs_missing_support_files_and_keeps_foreign_files() {
+        let (dir, skill_dir) = local_project_with_monolithic_skill();
+        install_local(dir.path());
+        std::fs::remove_dir_all(skill_dir.join("reference")).unwrap();
+        std::fs::write(skill_dir.join("notes.md"), "mine").unwrap();
+
+        install_local(dir.path());
+
+        assert!(skill_dir.join("reference/cli.md").exists());
+        assert_eq!(
+            std::fs::read_to_string(skill_dir.join("notes.md")).unwrap(),
+            "mine"
+        );
     }
 
     #[test]
@@ -13649,12 +16123,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
         std::fs::write(dir.path().join(".git"), "gitdir: ../real-git-dir\n").unwrap();
-        let mut stdin = std::io::Cursor::new(Vec::<u8>::new());
-        let mut stderr = Vec::new();
 
-        let installed =
-            run_skill_install_scoped(dir.path(), None, true, false, &mut stdin, &mut stderr)
-                .unwrap();
+        let installed = install_local(dir.path());
 
         assert_eq!(installed, dir.path().join(".claude/skills/vow/SKILL.md"));
         assert!(installed.exists());

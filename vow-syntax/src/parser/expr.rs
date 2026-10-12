@@ -84,6 +84,18 @@ fn peek_infix_op(parser: &Parser) -> Option<(BinOp, usize)> {
 }
 
 impl Parser {
+    // Whether the unary chain `lhs`, just parsed by `parse_prefix`, ended in an
+    // unparenthesised block-like operand. That operand ends the expression, so
+    // no postfix operator or cast may follow the chain. A block operand that
+    // was parenthesised ends in `)` rather than `}`.
+    fn unary_chain_ends_in_block(&self, lhs: &Expr) -> bool {
+        let mut leaf = lhs;
+        while let ExprKind::UnaryOp { operand, .. } = &leaf.kind {
+            leaf = operand;
+        }
+        leaf.kind.is_block_like() && self.tokens[self.cursor - 1].kind != TokenKind::RParen
+    }
+
     pub fn parse_expr_inner(&mut self, min_bp: u8) -> Expr {
         let parenthesised = self.at(&TokenKind::LParen);
         let mut lhs = self.parse_prefix();
@@ -92,9 +104,12 @@ impl Parser {
             return lhs;
         }
 
-        // A postfix operator never applies to a whole unary, binary or
-        // assignment expression: when one follows, its operand ended in an
+        // A postfix operator never applies to a whole binary or assignment
+        // expression, nor to a unary one whose operand ended in an
         // unparenthesised block-like expression, which ends the expression.
+        // `as` is the one postfix operator that binds looser than a prefix
+        // operator: it applies to the finished unary (`-x as u64` is
+        // `(-x) as u64`), so a prefix operand leaves it for the caller.
         let mut postfix_ok = parenthesised || !matches!(lhs.kind, ExprKind::UnaryOp { .. });
 
         loop {
@@ -108,6 +123,15 @@ impl Parser {
                     | TokenKind::LBracket
                     | TokenKind::KwAs
             ) {
+                if kind == TokenKind::KwAs && min_bp >= PREFIX_BINDING_POWER {
+                    break;
+                }
+                if kind == TokenKind::KwAs
+                    && !postfix_ok
+                    && matches!(lhs.kind, ExprKind::UnaryOp { .. })
+                {
+                    postfix_ok = !self.unary_chain_ends_in_block(&lhs);
+                }
                 if !postfix_ok {
                     break;
                 }
@@ -217,6 +241,7 @@ impl Parser {
                     return self.parse_enum_construct(name, start);
                 }
                 if self.at(&TokenKind::LBrace)
+                    && !self.no_struct
                     && name.starts_with(|c: char| c.is_ascii_uppercase())
                     && self.looks_like_struct_literal()
                 {
@@ -338,7 +363,7 @@ impl Parser {
             };
         }
 
-        let first = self.parse_expr_inner(0);
+        let first = self.parse_delimited_expr();
 
         if self.at(&TokenKind::RParen) {
             self.advance();
@@ -352,7 +377,7 @@ impl Parser {
                 if self.at(&TokenKind::RParen) {
                     break;
                 }
-                elems.push(self.parse_expr_inner(0));
+                elems.push(self.parse_delimited_expr());
             }
             let end = self.current_span();
             self.expect(TokenKind::RParen);
@@ -417,7 +442,7 @@ impl Parser {
             }
             TokenKind::LBracket => {
                 self.advance();
-                let index = self.parse_expr_inner(0);
+                let index = self.parse_delimited_expr();
                 let end = self.current_span();
                 self.expect(TokenKind::RBracket);
                 Expr {
@@ -464,7 +489,7 @@ impl Parser {
     fn parse_call_args(&mut self) -> (Vec<Expr>, Span) {
         let mut args = Vec::new();
         while !self.at(&TokenKind::RParen) && !self.at_end() {
-            args.push(self.parse_expr_inner(0));
+            args.push(self.parse_delimited_expr());
             if self.at(&TokenKind::Comma) {
                 self.advance();
             } else {
@@ -475,10 +500,20 @@ impl Parser {
         (args, end)
     }
 
+    // The head of `if` / `while` / `for … in` / `match`: `Name {` there opens
+    // the body, so struct literals are not parsed until a delimiter re-enables them.
+    fn parse_head_expr(&mut self) -> Expr {
+        self.with_no_struct(true, |p| p.parse_expr_inner(0))
+    }
+
+    fn parse_delimited_expr(&mut self) -> Expr {
+        self.with_no_struct(false, |p| p.parse_expr_inner(0))
+    }
+
     fn parse_if_expr(&mut self) -> Expr {
         let start = self.current_span();
         self.expect(TokenKind::KwIf);
-        let condition = self.parse_expr_inner(0);
+        let condition = self.parse_head_expr();
         let then_branch = self.parse_block_required();
         let else_branch = if self.at(&TokenKind::KwElse) {
             self.advance();
@@ -512,7 +547,7 @@ impl Parser {
     fn parse_while_expr(&mut self) -> Expr {
         let start = self.current_span();
         self.expect(TokenKind::KwWhile);
-        let condition = self.parse_expr_inner(0);
+        let condition = self.parse_head_expr();
         let vow = if self.at(&TokenKind::KwVow) {
             self.parse_vow_block()
         } else {
@@ -537,7 +572,7 @@ impl Parser {
             .expect_ident()
             .unwrap_or(("<error>".to_string(), self.current_span()));
         self.expect(TokenKind::KwIn);
-        let iterable = self.parse_expr_inner(0);
+        let iterable = self.parse_head_expr();
         let vow = if self.at(&TokenKind::KwVow) {
             self.parse_vow_block()
         } else {
@@ -578,26 +613,29 @@ impl Parser {
     fn parse_match_expr(&mut self) -> Expr {
         let start = self.current_span();
         self.expect(TokenKind::KwMatch);
-        let scrutinee = self.parse_expr_inner(0);
+        let scrutinee = self.parse_head_expr();
         self.expect(TokenKind::LBrace);
-        let mut arms = Vec::new();
-        while !self.at(&TokenKind::RBrace) && !self.at_end() {
-            let arm_start = self.current_span();
-            let pattern = self.parse_pat_inner();
-            self.expect(TokenKind::FatArrow);
-            let body = self.parse_expr_inner(0);
-            let arm_end = body.span;
-            arms.push(MatchArm {
-                pattern,
-                body,
-                span: arm_start.merge(arm_end),
-            });
-            if self.at(&TokenKind::Comma) {
-                self.advance();
-            } else {
-                break;
+        let arms = self.with_no_struct(false, |p| {
+            let mut arms = Vec::new();
+            while !p.at(&TokenKind::RBrace) && !p.at_end() {
+                let arm_start = p.current_span();
+                let pattern = p.parse_pat_inner();
+                p.expect(TokenKind::FatArrow);
+                let body = p.parse_expr_inner(0);
+                let arm_end = body.span;
+                arms.push(MatchArm {
+                    pattern,
+                    body,
+                    span: arm_start.merge(arm_end),
+                });
+                if p.at(&TokenKind::Comma) {
+                    p.advance();
+                } else {
+                    break;
+                }
             }
-        }
+            arms
+        });
         let end = self.current_span();
         self.expect(TokenKind::RBrace);
         Expr {
@@ -684,7 +722,10 @@ impl Parser {
         let (fields, end) = if self.at(&TokenKind::LParen) {
             self.advance();
             self.parse_call_args()
-        } else if self.at(&TokenKind::LBrace) && path.len() > 1 && self.looks_like_struct_literal()
+        } else if self.at(&TokenKind::LBrace)
+            && !self.no_struct
+            && path.len() > 1
+            && self.looks_like_struct_literal()
         {
             self.advance();
             let mut args = Vec::new();
@@ -1476,8 +1517,25 @@ mod tests {
         ("x as u64 << 1", "x as u64 << 1"),
         ("x as u64 >> 1 == 0", "x as u64 >> 1 == 0"),
         ("x as u64 as i64", "x as u64 as i64"),
-        ("-x as u64", "-x as u64"),
+        ("-x as u64", "(-x) as u64"),
         ("(-x) as u64", "(-x) as u64"),
+        ("-(x as u64)", "-(x as u64)"),
+        ("!x as i64", "(!x) as i64"),
+        ("-1 as i8", "(-1) as i8"),
+        ("--x as u64", "(--x) as u64"),
+        ("-x as u64 + 1", "(-x) as u64 + 1"),
+        ("a - b as u64", "a - b as u64"),
+        ("a - -b as u64", "a - (-b) as u64"),
+        ("-x as u64 as i64", "(-x) as u64 as i64"),
+        ("-x as u64 < y", "(-x) as u64 < y"),
+        ("-x as u64 << 1", "(-x) as u64 << 1"),
+        ("-x.f as u64", "(-x.f) as u64"),
+        ("-v[0] as i64", "(-v[0]) as i64"),
+        ("-f(a) as i64", "(-f(a)) as i64"),
+        (
+            "-(if c { 1 } else { 2 }) as u64",
+            "(-if c {\n    1\n} else {\n    2\n}) as u64",
+        ),
         ("(x + 1) as i64", "(x + 1) as i64"),
         ("x + 1 as i64", "x + 1 as i64"),
         ("v.len() as i64 + 1", "v.len() as i64 + 1"),
@@ -1497,14 +1555,59 @@ mod tests {
     }
 
     #[test]
+    fn unary_minus_and_not_bind_tighter_than_cast() {
+        assert!(matches!(
+            parse_no_errors("-a as u64").kind,
+            ExprKind::Cast { ref expr, .. }
+                if matches!(expr.kind, ExprKind::UnaryOp { op: UnOp::Neg, .. })
+        ));
+        assert!(matches!(
+            parse_no_errors("!x as i64").kind,
+            ExprKind::Cast { ref expr, .. }
+                if matches!(expr.kind, ExprKind::UnaryOp { op: UnOp::Not, .. })
+        ));
+    }
+
+    #[test]
+    fn explicitly_parenthesised_cast_stays_under_the_unary() {
+        assert!(matches!(
+            parse_no_errors("-(a as u64)").kind,
+            ExprKind::UnaryOp { op: UnOp::Neg, ref operand }
+                if matches!(operand.kind, ExprKind::Cast { .. })
+        ));
+    }
+
+    #[test]
+    fn cast_of_unary_chains_and_composes_with_binary_operators() {
+        assert!(matches!(
+            parse_no_errors("-x as u64 + 1").kind,
+            ExprKind::BinaryOp { op: BinOp::Add, ref lhs, .. }
+                if matches!(&lhs.kind, ExprKind::Cast { expr, .. }
+                    if matches!(expr.kind, ExprKind::UnaryOp { .. }))
+        ));
+        assert!(matches!(
+            parse_no_errors("a - b as u64").kind,
+            ExprKind::BinaryOp { op: BinOp::Sub, ref rhs, .. }
+                if matches!(rhs.kind, ExprKind::Cast { .. })
+        ));
+        assert!(matches!(
+            parse_no_errors("--x as u64").kind,
+            ExprKind::Cast { ref expr, .. }
+                if matches!(&expr.kind, ExprKind::UnaryOp { operand, .. }
+                    if matches!(operand.kind, ExprKind::UnaryOp { .. }))
+        ));
+        assert!(matches!(
+            parse_no_errors("-x as u64?").kind,
+            ExprKind::Question { .. }
+        ));
+    }
+
+    #[test]
     fn parenthesised_block_like_operand_takes_postfix_and_cast() {
-        let expr = parse_no_errors("(if c { 1 } else { 2 }) as u64");
-        match &expr.kind {
-            ExprKind::Cast { expr: inner, .. } => {
-                assert!(matches!(inner.kind, ExprKind::If { .. }))
-            }
-            other => panic!("expected Cast, got {other:?}"),
-        }
+        assert!(matches!(
+            parse_no_errors("(if c { 1 } else { 2 }) as u64").kind,
+            ExprKind::Cast { ref expr, .. } if matches!(expr.kind, ExprKind::If { .. })
+        ));
         let expr = parse_no_errors("(if c { v } else { w }).len()");
         assert!(matches!(expr.kind, ExprKind::MethodCall { .. }));
     }
@@ -1553,6 +1656,7 @@ mod tests {
     fn postfix_after_an_operand_ending_in_a_block_like_expression_is_rejected() {
         for body in [
             "-if c { 1 } else { 2 } as u64",
+            "!-if c { 1 } else { 2 } as u64",
             "3 * if c { 1 } else { 2 } as u64",
             "3 * if c { 1 } else { 2 }.len()",
             "x = if c { 1 } else { 2 } as u64",
@@ -1610,6 +1714,125 @@ mod tests {
             let src = format!("module M\nfn f(x: i64) -> i64 {{\n    {body}\n    0\n}}\n");
             let (_, diagnostics) = crate::parser::parse_module(&src, "t.vow");
             assert!(diagnostics.is_empty(), "{body:?}: {diagnostics:?}");
+        }
+    }
+
+    const HEAD_PRELUDE: &str = "module M\nstruct S { a: i64 }\nenum Color { Red, Green }\nenum Shape { Circle { r: i64 } }\nconst DEBUG: bool = false;\n";
+
+    fn parse_fn_body(body: &str) -> (crate::ast::Module, Vec<vow_diag::Diagnostic>) {
+        let src = format!(
+            "{HEAD_PRELUDE}fn f(c: Color, x: S, v: Vec<i64>) -> i64 {{\n    {body}\n    0\n}}\n"
+        );
+        crate::parser::parse_module(&src, "t.vow")
+    }
+
+    fn assert_parses_with_literal(body: &str) {
+        let (module, diagnostics) = parse_fn_body(body);
+        assert!(diagnostics.is_empty(), "{body:?}: {diagnostics:?}");
+        let dump = format!("{module:?}");
+        assert!(
+            dump.contains("StructLiteral") || dump.contains("EnumConstruct { path: [\"Shape\""),
+            "{body:?}: no literal node"
+        );
+    }
+
+    #[test]
+    fn upper_case_and_enum_path_heads_before_an_empty_block_parse_in_every_form() {
+        for body in [
+            "if DEBUG { }",
+            "if DEBUG { } else { }",
+            "while DEBUG { }",
+            "for _i in ITEMS { }",
+            "match MODE { }",
+            "if c == Color::Red { }",
+            "if c == Color::Red { } else { }",
+            "match Color::Red { }",
+            "while c == Color::Red { }",
+        ] {
+            let (_, diagnostics) = parse_fn_body(body);
+            assert!(diagnostics.is_empty(), "{body:?}: {diagnostics:?}");
+        }
+    }
+
+    #[test]
+    fn upper_case_head_is_an_identifier_and_the_brace_is_the_body() {
+        let expr = parse_no_errors("if DEBUG { }");
+        match &expr.kind {
+            ExprKind::If {
+                condition,
+                then_branch,
+                ..
+            } => {
+                assert!(matches!(&condition.kind, ExprKind::Ident(n) if n == "DEBUG"));
+                assert!(then_branch.stmts.is_empty() && then_branch.trailing_expr.is_none());
+            }
+            other => panic!("expected If, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn enum_path_head_keeps_a_field_less_constructor_as_the_condition_rhs() {
+        let expr = parse_no_errors("if c == Color::Red { }");
+        match &expr.kind {
+            ExprKind::If { condition, .. } => match &condition.kind {
+                ExprKind::BinaryOp { rhs, .. } => {
+                    assert!(matches!(&rhs.kind, ExprKind::EnumConstruct { path, fields }
+                        if path == &["Color", "Red"] && fields.is_empty()))
+                }
+                other => panic!("expected BinaryOp, got {other:?}"),
+            },
+            other => panic!("expected If, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn delimiters_inside_a_head_re_enable_struct_literals_and_brace_constructors() {
+        for body in [
+            "if f(S { a: 1 }) { }",
+            "if g(Shape::Circle { r: 1 }) { }",
+            "if (S { a: 1 }).a == 1 { }",
+            "if (S { a: 1 }, 2) == t { }",
+            "if v[S { a: 1 }.a] == 1 { }",
+            "if h.m(S { a: 1 }) { }",
+            "if { let s = S { a: 1 }; s.a == 1 } { }",
+            "if match x { _ => S { a: 1 }.a == 1 } { }",
+            "if loop vow { invariant: S { a: 1 }.a == 1 } { break true; } { }",
+            "while (S { a: 1 }).a == 1 { }",
+            "for i in (S { a: 1 }).a { }",
+            "match (S { a: 1 }) { }",
+        ] {
+            assert_parses_with_literal(body);
+        }
+    }
+
+    #[test]
+    fn struct_literals_outside_heads_stay_literals() {
+        for body in [
+            "let p = S { a: 1 };",
+            "let u = Unit { };",
+            "if DEBUG { S { a: 1 } } else { S { a: 2 } }",
+            "match x { A => S { a: 1 }, }",
+            "let s = Shape::Circle { r: 1 };",
+            "while DEBUG { let s = S { a: 1 }; }",
+        ] {
+            assert_parses_with_literal(body);
+        }
+    }
+
+    #[test]
+    fn unparenthesised_struct_literal_in_a_head_is_rejected_and_restores_the_flag() {
+        for src in [
+            "{ if S { a: 1 }.a == 1 { } }",
+            "{ while S { a: 1 }.a == 1 { } }",
+            "{ match S { a: 1 } { } }",
+            "{ if f(S { a: 1 }) { let y = ; } }",
+            "{ if c { loop vow { bogus: 1 } { } } }",
+        ] {
+            let tokens = crate::lexer::Lexer::new(src).tokenize().expect("lex error");
+            let mut parser = Parser::new(tokens, String::new(), "<test>".to_string());
+            let _ = parser.parse_block();
+            assert!(!parser.diagnostics.is_empty(), "{src:?}: expected an error");
+            assert!(!parser.no_struct, "{src:?}: no_struct leaked");
         }
     }
 

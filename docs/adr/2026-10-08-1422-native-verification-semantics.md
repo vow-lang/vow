@@ -145,7 +145,8 @@ Properties that need `len <= CAP` to hold were never proven for the runtime.
 `/!`, `%!`) assert the absence of overflow and model the abort, as the
 runtime does. Shift counts follow the language's rules in `grammar.md` (count
 type `u32`, compile-time and dynamic range checks). Aggregates with 128-bit
-fields stay gated (`Skipped`) as they are today.
+fields stay gated (`Skipped`) as they are today. *Addendum (#1421):* a 128-bit
+struct field or enum payload is one `BitVec 128` term; the gate is lifted.
 
 The unbounded-integer fallback is dropped: there is no `proven-ir` result.
 A function ESBMC only proved under integer arithmetic after the bitvector run
@@ -191,10 +192,24 @@ known limits.
   exact on the `u64` side only; the `String` side is an uninterpreted relation.
   `format(parse(s)) == s` and decimal-text properties are `unknown`.
 - **Float `%`** is `Skipped` until codegen defines it.
-- **Recursion and effects** are `Skipped`.
+- **Recursion and effects** are `Skipped`, except `panic`: the abort of
+  `.unwrap()` on `None`/`Err` is a verification claim, reported unattributed
+  (vow id `4294967293`, blame `none`) like the division aborts (#1417).
+- **Aggregates** (structs, enums, `Option`, `Result`) are scalarised: one `i64`
+  or `Bool` term per field, merged field by field at joins. Parameter fields and
+  discriminants, and fields no construction wrote, are unconstrained. A field
+  write is modelled only on a value built in the same block; any other write,
+  and any aggregate nested in another, is `Skipped` (#1417). *Addendum (#1593):*
+  a field write is path-conditional (`ite(pc, new, old)`), so a write in a
+  branch, to a value built before one, or to the only pointer parameter is
+  modelled; a write through a merged value, or to a parameter of a function with
+  another pointer parameter, stays `Skipped`.
 - **Callee inlining** (epic D4) makes verification cost grow with the call tree;
   modular assume-guarantee verification is a separate future ADR.
-- **128-bit aggregates** (struct fields) stay gated.
+- **128-bit aggregates** (struct fields) stay gated. *Addendum (#1421):* struct
+  fields and enum payloads of 128 bits are modelled, one 128-bit term each;
+  `Vec<i128>` elements stay `Skipped`: the collection model of #1423 covers
+  elements of up to 64 bits (see its addendum).
 - **Solver limits.** Timeout or memory exhaustion yields `unknown` with a
   structured reason, never `proven`.
 - **Floating-point cost.** FP queries bit-blast and can be slow; they time out
@@ -236,3 +251,283 @@ weakened by this ADR.
   repeated here.
 - This ADR does not change language syntax, types, builtins, effects or CLI
   flags, so no `docs/spec` or help regeneration accompanies it.
+
+## Addendum (#1418): bounded loop unwinding
+
+Rule 2 is implemented for loops by unrolling the reducible natural loops of a
+function into an acyclic one before symbolic execution.
+
+- The bound counts back edges. A back edge past the bound goes to one sink block
+  whose reachability is the unwinding assertion: "no run takes more back edges
+  than the bound". It is a claim only and assumes nothing afterwards.
+- The internal schedule is 2, 4, 8, 16, 32, 64; the largest is at least ESBMC's
+  default `--max-k-step`. It is not a flag. All rounds share the function's
+  `--timeout`.
+- A failed hard claim inside the unrolled prefix is a real run and is `failed`
+  at once, whatever the unwinding claim says. An unwinding claim that is still
+  `sat` at the largest bound is `unknown`, never `proven`, unless invariant
+  induction closes the loops (addendum #1422).
+- `invariant` is a claim checked on every header visit and is not assumed by
+  bounded unwinding. Its inductive use is the addendum (#1422) below; automatic
+  k-induction for loops with no usable invariant is the addendum (#1425).
+- Soft arithmetic sites are collected per source site from the round that proves
+  the function, so a loop body does not repeat its warning once per iteration.
+
+## Addendum (#1416): inlined calls with blame and vow-id mapping
+
+The "callee inlining" decision is implemented in `compiler/vc_inline.vow`. The
+call graph below a verify target is flattened before symbolic execution; the
+executor still sees one acyclic function.
+
+- A call of a user function with integer, `Bool` or `Unit` arguments and result
+  is replaced by a copy of the callee: the call's block ends with a jump into
+  the copy, each `Return` becomes an Upsilon into the call's Phi (a Unit
+  result has a constant instead) and a jump to the continuation block. Every
+  copy gets fresh value and block ids, so a callee spliced twice shares
+  nothing. Aggregates do not cross a call yet; such a call is `Skipped` as
+  `unsupported-opcode`. Callees may build and use aggregates internally.
+- Clauses and abort-bearing instructions of a copy carry the frame they came
+  from in `IrInst.ds`. Inside a frame a `requires` is a claim blamed on the
+  caller, an `ensures` or loop `invariant` a claim blamed on the callee, and
+  both are assumed afterwards. The `vow_id` stays the callee-local id; the
+  result's `callee_precondition_*` / `callee_postcondition_*` carry the callee's
+  function id, which is what `build_ce_from_result` already consumes. A
+  callee's `requires` precedes its body, so a caller's violation is reported
+  before an `ensures` that would only fail because of it.
+- A function without a `vow` block that calls a contracted function is the
+  caller-precondition role: only callee `requires` (and the unwinding claim) are
+  obligations, every other claim is assumed, as `caller_preconditions_only_source`
+  does for ESBMC.
+- Recursion, direct or through other functions, is `Skipped` as
+  `recursion-unsupported` with the cycle as detail (`a -> b -> a`); a target
+  that merely reaches a recursive function gets the same code. A callee outside
+  the subset is `non-modelable-callee: <callee> (<code>)`. The gate vets the
+  flattened function, not the parts: splitting a block at a call can change the
+  aggregate and control-flow shape the gate sees.
+- The inlined instruction count is computed from a memoised call-tree walk
+  before anything is built. A tree above 200000 instructions (the unroller's
+  bound) is `unknown` with a reason that starts `inlining budget:`, never
+  `Skipped` (the code list is closed) and never `proven`.
+- A counterexample for a claim inside a callee carries the chain of calls that
+  leads to it in `call_sites`, outermost first (function the call is made in
+  and the call's source range). Argument values at depth 1 are recovered as
+  before; deeper `violating_args[].value` stay empty. Each call site's `file` is
+  the source file of the function the call is made in. `call_sites` is filled for
+  callee-blame counterexamples too, which the schema description ("caller-blame
+  failures") does not say yet; the wording is the spec rewrite's to widen.
+- The worker's result wire tag is `VOWRES2`: the failing claim's call chain
+  follows the arithmetic sites.
+
+## Addendum (#1422): invariant-based induction
+
+The first strategy of Rule 1 is implemented in `compiler/vc_induct.vow`. The
+implementation is an IR-to-IR cut, so the symbolic executor still walks one
+acyclic function.
+
+- **Obligations.** For every loop the cut yields three pieces. The *entry copy*
+  is the loop's invariant region (the header's Phis, the clause code and the
+  last `VowInv`) on the state the loop is entered with: the invariants are
+  claims there. The *header proper* is the original loop with each header Phi
+  replaced by an unconstrained constant of its type and each invariant of the
+  region by an assumption; its condition, body and exit are untouched, so the
+  claims of the body and of everything after the loop (including `ensures`) are
+  decided from an arbitrary state that satisfies the invariant. The *back copy*
+  is the region again, fed by the back edges: the invariants are claims there
+  (preservation), and it ends in a marker that carries no claim. A `&&`/`||` in
+  a clause lowers to branches, so the region may span several blocks; the cut
+  copies the blocks that lead to the last `VowInv` and stops right after it.
+- **Eligibility.** Every loop of the function must have an `invariant`, no
+  header Phi may be a pointer, and every `invariant` must lie in its loop's
+  region. Otherwise the cut does not apply and bounded unwinding decides alone,
+  as before. A loop without an invariant is never cut with an implicit `true`.
+- **Verdicts.** Induction only ever adds `proven`. A query that is not `unsat`
+  is "not proved inductively", never `failed` (Rule 1: a step-case failure is
+  `unknown`), because its counterexample may be a state no run reaches. A wrong
+  invariant is still `failed`: bounded unwinding checks the invariant on every
+  header visit and finds a real run. An invariant that is true but not
+  inductive (too weak to give the postcondition, not preserved from an
+  unreachable state), or violated only past the largest bound, is `unknown`.
+- **Order.** The inductive attempt always runs first and costs one query set.
+  When it proves a function that has no checked-arithmetic claim, the function is
+  `proven` without bounded unwinding, so an unbounded or nested loop is cheap.
+  When the function has such a claim, the bounded rounds also run, both to find
+  the abort sites and to supply the verdict: every proof, counterexample and
+  `ArithOverflowReachable` set they produce is unchanged, and the induction
+  proof is used only where they end `unknown`: open at the largest bound, over
+  the size budget, or undecided (solver unknown, timeout). A bounded
+  counterexample or a solver error is never overturned. This ordering cannot
+  change a verdict a bounded round reaches: an inductive proof holds for every
+  finite prefix, so it cannot coexist with a real counterexample. The attempt
+  shares `--timeout` with the rounds, so a bounded proof that finished just
+  under the budget can now run out of it.
+- **Warnings.** An inductive proof reports the abort sites of the last
+  completed bounded round, which are the ones reachable within the unrolled
+  prefix, plus any the round that ended undecided found before it ended. A
+  checked-arithmetic claim `sat` in the induction query is ignored: the
+  havoc state may be unreachable. A function proven only inductively can
+  therefore have reachable aborts that no warning names.
+- **Partial correctness.** A proof covers terminating runs: the exit obligation
+  is "from the invariant and the negated condition", so a loop that never exits
+  satisfies any `ensures` vacuously (`while true vow { invariant: true }` is
+  `proven`; bounded unwinding alone says `unknown` for it, and so does ESBMC).
+  This is a deliberate verdict change, pinned by
+  `tests/verify-native/pass/loop_nonterminating_partial_correctness.vow`.
+- **Inlined callees.** A callee's loop is cut like the target's. Its invariants
+  are claims blamed on the callee in the entry and back copies and a plain
+  assumption in the havoc copy (the frame marker is cleared there).
+- **Verdict impact.** Stronger, as Rule 1 and Rule 2 allow: a loop that bounded
+  unwinding leaves `unknown` (a parameter bound, a literal bound above 64) is
+  `proven` given an inductive invariant. `tests/verify-native/unknown/loop_literal_100.vow`
+  carried an invariant and was `unknown`; it is `pass/loop_literal_100_invariant.vow`
+  now, and the `unknown/` fixture kept the invariant-free loop until the
+  addendum (#1425) below proved it too. No ESBMC `proven` becomes weaker.
+
+## Addendum (#1423): `Vec` as an array plus a symbolic length
+
+Rule 3 is implemented for `Vec<T>` with `T` = `Bool` or an integer of at most 64
+bits, in `compiler/vc_vec.vow`. `String`, maps and wider elements are not part
+of this change and stay `Skipped`.
+
+- **Representation.** A Vec is a `vc_agg` object (so pointers still never become
+  terms) with a flow-sensitive state `(arr, len)`: `arr` is
+  `(Array (_ BitVec 64) (_ BitVec 64))`, `len` a 64-bit vector. `Vec::new()` is
+  length 0 over an unconstrained array; a parameter is an unconstrained array
+  and length declared at first use (`pK_varr`, `pK_vlen`). An element is the
+  8-byte slot the runtime keeps: sign-extended for a signed type,
+  zero-extended for an unsigned type, `ite(b, 1, 0)` for `Bool`. A function that
+  touches a Vec is queried in `QF_ABV`; every other function stays in `QF_BV`
+  byte for byte.
+- **Operations.** `new`, `push`, index read (`get`), index write (`set`), `len`
+  and `pop` (`len' = ite(len == 0, 0, len - 1)`). The bounds check of `get` and
+  `set` is a hard claim `idx <u len` (a negative `i64` index is a huge unsigned
+  one), labelled `vec bounds` like ESBMC's, unattributed (vow id `4294967293`,
+  blame `None`), and assumed afterwards. The index must be a 64-bit integer.
+  An element read is the raw slot as `i64`; the lowerer's own cast narrows it.
+  A `Vec<bool>` read reaches a `Branch` or `Return` as an `i64`, which the gate
+  already rejects, so it stays `Skipped` as `unsupported-opcode`.
+- **Merges.** Entering a block merges the exit states of its live in-edges with
+  the same `ite` chain a Phi uses, each merged term bound by a `define-fun`
+  (`vc_vec_enter`); a write replaces the state of the block being walked. State
+  is taken from edges only, never from the block walked before, so a push in one
+  arm is invisible in the other.
+- **Length invariant (the one length fact).** The runtime keeps a Vec's
+  capacity in 63 bits and `set_vow_vec_capacity` traps for a capacity of
+  `VOW_CAP_VALUE_MASK` (2^63 - 1) or more; the length never exceeds the
+  capacity. Every runtime Vec therefore has `len < 2^63 - 1`. A parameter's
+  length is assumed to satisfy it, and a `push` that returns is assumed to leave
+  the length below it (the push that would not is the runtime's `Vec::reserve`
+  trap, which never returns). This is a fact about the runtime's
+  representation, not a verifier cap: it passes the backend-independence test
+  (a stronger verifier would need exactly it) and it is what makes
+  `v.len() as i64 >= 0` true, which `tests/verify/string_param_verify.vow`
+  records for the ESBMC model as well. No other bound on a length, index or
+  capacity is introduced anywhere; in particular there is no `len <= 128`.
+- **Skipped classes, fail closed.** Any other `__vow_vec_*` symbol
+  (`clear`, `truncate`, `reserve`, `sort`, `from_raw_parts_copy`,
+  `pin_to_root`, the wide-slot variants, the `_in_arena` variants) is
+  `unmodeled-builtin`; a pushed or stored value, or a `get` result, that is not
+  `Bool` or an integer of up to 64 bits, and an index that is not 64-bit, is
+  `unsupported-opcode`. The shape rule (`vc_vec_shape_detail`) rejects, as
+  `unsupported-opcode`, a Vec used as a struct (`FieldGet`/`FieldSet`), a Vec
+  passed to a call, and a Vec merged by a Phi whose `Upsilon`s supply different
+  values (two model objects for one runtime Vec would diverge); a Phi that
+  always supplies the same value is a no-op. Only the length of a
+  `Vec<Vec<_>>`/`Vec<String>` is modelled (its elements are never read).
+- **Induction.** A function whose loop body writes a Vec (`push`, `set`, `pop`)
+  is not cut for invariant-based induction (`vc_induct_vec_written_in_loop`): a
+  Vec's `(array, length)` is the executor's flow-sensitive state, not a header
+  Phi, so the havoc copy of the header would keep the state the loop was entered
+  with and prove facts about the wrong length. Bounded unwinding decides such a
+  function alone; a loop that only reads a Vec is cut as before.
+- **Aliasing.** Two `Vec` parameters are distinct objects, as they are for
+  ESBMC and for every `vc_agg` parameter object.
+- **Op table.** The Vec symbols are listed by hand in `vc_vec_op_kind`, like
+  `__vow_unwrap_panic`, not in `docs/spec/operations.json`: the catalogue is
+  keyed by Vow builtin name and each entry needs a grammar row and help text.
+  A backfill by runtime symbol is the follow-up ADR-1430 anticipated.
+- **Frames.** A spliced `get`/`set` carries its frame in `dv2` (`frame + 1`),
+  the channel the unwrap abort uses (`vc_frame_in_dv2`), so a bounds failure in
+  an inlined callee has `call_sites` and the callee's function.
+- **Counterexamples.** Only integer parameters are listed; a Vec parameter's
+  length and contents are not reported (ESBMC does not either), and replay of a
+  bounds counterexample is `skipped`.
+
+*Verdict impact on the corpus* (`scripts/verify_diff.py`, native vs ESBMC, the
+only rows that moved relative to the previous native verifier):
+
+| fixture | ESBMC | native before | native now | class |
+| --- | --- | --- | --- | --- |
+| `verify/vec_fill` | proven | skipped | proven | match |
+| `verify/bounds_correct` | proven | skipped | proven | match |
+| `verify-fail/off_by_one_bounds` | refuted | skipped | refuted | match |
+| `verify-fail/vec_overcount` | refuted | skipped | refuted | match |
+| `verify-fail/replay_unattributed_bounds` | refuted | skipped | refuted | match |
+
+`verify/model_capacity_bound_note`, `raw_parts_copy_*` and the `String`/map
+fixtures stay `weaker` (file-level `Skipped`): they need `from_raw_parts_copy`,
+`String` or `HashMap`, which this change does not model. Capacity-only
+verdicts are explained per function, not per file, because the harness compares
+whole files: `tests/verify-native/pass/vec_param_len_unbounded.vow` and
+`vec_len_fits_i64.vow` are properties of an arbitrary-length parameter that
+ESBMC proves only for `len <= 128`, and the native result holds for every
+length.
+
+Follow-ups, not done here: `from_raw_parts_copy`/`pin_to_root` (and the harness
+decision for the `*_beyond_model_cap` fixtures, which would flip to class
+`soundness` because the corpus labels them failing only through ESBMC's cap),
+a Vec across a call boundary, `clear`/`truncate`, `Vec<i128>`, a Vec merged by a
+Phi, `String` (same model, exact `string_eq`), and the maps.
+
+## Addendum (#1425): automatic k-induction for loops with no usable invariant
+
+Rule 1's second strategy is implemented in the unroller (`vc_unroll_step`), the
+executor (hypothesis blocks) and the driver (`vc_step_attempt`). No new flag,
+no C-emitter or ESBMC change; it exists only in the self-hosted verifier.
+
+- **Step function.** After a bounded round at bound `k` ends open (base case
+  `unsat` for all hard claims, unwinding claim `sat`), the same function is
+  unrolled to `k` back edges from an arbitrary header state: each header Phi of
+  copy 0 is a havoc constant and the entry Upsilons into it are dropped; every
+  iteration copy below `k` is a hypothesis block, whose claims (guards, callee
+  clauses, the target's `invariant`) are assumed instead of asked; every edge
+  out of the loop from such a copy is cut, so only runs that took the back edge
+  continue; copy `k` asks its claims, then assumes its `invariant`, and its
+  back edge ends in a marker that claims and assumes nothing. Values defined
+  before the loop stay real, which is stronger than a full havoc and still
+  sound.
+- **Soundness.** The bounded round supplies the base case (copies `0..k` are
+  claim-checked) and the step proves that `k` consecutive iterations that hold
+  the property are followed by one that does, so it holds at every iteration of
+  every run. The loop condition of the earlier copies is an assumption, so a
+  plain counting loop closes at `k = 2` with no invariant at all. The
+  postcondition is a goal at the exit of copy `k`, never a hypothesis.
+- **Outcome.** All claims of the step `unsat` is `proven`, used exactly as a
+  1-induction proof is (addendum #1422): a function with a checked-arithmetic
+  claim keeps running the bounded rounds for its warnings and uses the proof
+  where they end `unknown`. Anything else says nothing: a counterexample to the
+  step may be a state no run reaches, so it is never `failed` and the bounded
+  schedule goes on. The step runs only after a bounded round that did not end
+  and was open, and only when the 1-induction of a user invariant did not
+  already prove the function, so it never changes a counterexample or a proof
+  a bounded round reaches. It shares `--timeout` with the rounds.
+- **Scope.** A function whose loop-closed form has exactly one loop (hence no
+  nesting), no pointer carried by its header Phi, no aggregate field written
+  and no Vec written (`push`, `set`, `pop`) in the loop. A written aggregate or
+  Vec would keep its entry state in copy 0 while the scalars are havoc'd, which
+  is not an arbitrary state; such a function and
+  a function with several loops keep their bounded and #1422 verdicts. The
+  step is tried at every bound of the schedule (2 to 64), the first one that
+  closes ends the check.
+- **Partial correctness.** As for invariant induction, a loop that never exits
+  has no run that reaches the `ensures`: `while true { ... }` with no invariant is
+  `proven` (`tests/verify-native/pass/loop_infinite_partial_correctness.vow`;
+  ESBMC's k-induction also reports success there).
+- **Verdict impact.** Stronger, as Rule 1 and Rule 2 allow. Moved from
+  `unknown/` to `pass/`: `loop_symbolic_bound`, `loop_literal_100`,
+  `loop_invariant_k_inductive` (was `loop_invariant_too_weak`: the invariant is
+  not enough for the 1-induction, the step case at `k = 2` closes it) and
+  `loop_infinite_partial_correctness`. Still `unknown/`: `loop_bug_beyond_bound`,
+  `loop_kinduction_not_inductive` and `loop_kinduction_break_not_inductive`,
+  where the step has a model for every `k`. New `pass/` fixtures that only the
+  step proves: `loop_kinduction_alternating_divisor`, `_callee_requires`,
+  `_invariant_not_one_inductive` and `_break`.

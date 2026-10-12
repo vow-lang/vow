@@ -1,0 +1,29 @@
+module TestDiagEmitFailure
+
+use diag
+
+// The pure pieces of frontend diagnostic emission failure handling: the status
+// codes diag_ctx_print_all returns and the CompileFailed JSON the build, verify
+// and contracts drivers print when stderr cannot be written.
+
+fn main() -> i32 {
+    if DIAG_EMIT_OK() != 0 { return 1; }
+    if DIAG_EMIT_BROKEN_PIPE() != 1 { return 2; }
+    if DIAG_EMIT_FAILED() != 2 { return 3; }
+
+    let msg: String = diag_emission_failure_message();
+    if string_starts_with(msg, String::from("failed to emit frontend diagnostics")) == 0 { return 4; }
+
+    let dctx: DiagCtx = diag_ctx_new();
+    let json: String = diag_compile_failed_json(dctx, msg);
+    if !json.contains(String::from("\"status\":\"CompileFailed\"")) { return 5; }
+    if !json.contains(String::from("\"executable\":null")) { return 6; }
+    if !json.contains(String::from("\"diagnostics\":[]")) { return 7; }
+    if !json.contains(String::from("\"counterexamples\":[]")) { return 8; }
+    if !json.contains(String::from("\"message\":\"failed to emit frontend diagnostics: stderr write failed\"")) { return 9; }
+
+    let quoted: String = diag_compile_failed_json(dctx, String::from("a \"b\"\n"));
+    if !quoted.contains(String::from("\"message\":\"a \\\"b\\\"\\n\"")) { return 10; }
+
+    0
+}

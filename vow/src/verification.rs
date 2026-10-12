@@ -84,6 +84,10 @@ fn classify_verification_result(
 /// Verify one vowed function with ESBMC, folding the raw
 /// [`VerificationResult`] into a [`PerFuncResult`].
 ///
+/// The function must be modelable: [`split_non_modelable`] removes the others
+/// before the pool runs, because the C emitter would emit `__ESBMC_assert(0)`
+/// traps for them.
+///
 /// Thread-safe: `verify_cache` writes are content-addressed.
 #[allow(clippy::too_many_arguments)]
 fn verify_one_function(
@@ -96,14 +100,6 @@ fn verify_one_function(
     limits: &VerifyLimits,
     config: &SolverConfig,
 ) -> PerFuncResult {
-    // Non-modelable vowed functions must be skipped here; the C emitter would emit __ESBMC_assert(0) traps for them.
-    if let Some(reason) = non_modelable_reason(func, ir_module, const_fns) {
-        return PerFuncResult::Warn(vec![VerifyWarning::Skipped(SkippedFunction {
-            function: func.name.clone(),
-            reason,
-        })]);
-    }
-
     // Resolve Auto solver via heuristic (Phase B).
     // Skip heuristic when encoding is Ir — that forces Z3 via resolve().
     let func_config = if config.solver == Solver::Auto && config.encoding != Encoding::Ir {
@@ -363,8 +359,10 @@ fn record_proof_span(
 
 /// Drive verification across a module's vowed functions.
 ///
-/// Collects the vowed functions, then hands the index space to [`run_pool`]
-/// with [`verify_one_function`] as the per-function verdict.
+/// Collects the vowed functions, reports every non-modelable one as a
+/// `VerificationSkipped` warning (lifting a clean run to `SkippedNonModelable`),
+/// then hands the modelable remainder to [`run_pool`] with
+/// [`verify_one_function`] as the per-function verdict.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_verification_sync(
     ir_module: &vow_ir::Module,
@@ -405,10 +403,17 @@ pub(crate) fn run_verification_sync(
     // Handoff origin: a flow arrow runs from here to each per-function proof.
     let verify_start = prof.map(|p| p.now_us()).unwrap_or(0);
 
-    let names: Vec<&str> = vowed.iter().map(|f| f.name.as_str()).collect();
-    let (outcome, mut warnings) = run_pool(jobs, prof, verify_start, &names, |idx| {
+    // A skip is a static fact about the program, so every one is reported
+    // before the pool runs. Left inside the pool, a skip whose index is claimed
+    // after a halt would be lost, making the warning set depend on how fast
+    // the failing function came back (cold vs warm cache, --verify-jobs).
+    let (mut warnings, modelable) = split_non_modelable(&vowed, ir_module, &const_fns);
+    let skipped = !warnings.is_empty();
+
+    let names: Vec<&str> = modelable.iter().map(|f| f.name.as_str()).collect();
+    let (mut outcome, pool_warnings) = run_pool(jobs, prof, verify_start, &names, |idx| {
         verify_one_function(
-            vowed[idx],
+            modelable[idx],
             ir_module,
             &const_fns,
             file,
@@ -418,8 +423,33 @@ pub(crate) fn run_verification_sync(
             config,
         )
     });
+    if skipped && matches!(outcome, VerifyOutcome::Proven) {
+        outcome = VerifyOutcome::SkippedNonModelable;
+    }
+    warnings.extend(pool_warnings);
     warnings.extend(unchecked);
     (outcome, warnings)
+}
+
+/// Partition vowed functions into the `VerificationSkipped` warnings for the
+/// non-modelable ones (in function order) and the modelable remainder.
+fn split_non_modelable<'a>(
+    vowed: &[&'a vow_ir::Function],
+    ir_module: &vow_ir::Module,
+    const_fns: &std::collections::HashMap<vow_ir::FuncId, ConstantValue>,
+) -> (Vec<VerifyWarning>, Vec<&'a vow_ir::Function>) {
+    let mut skips = Vec::new();
+    let mut modelable = Vec::new();
+    for &func in vowed {
+        match non_modelable_reason(func, ir_module, const_fns) {
+            Some(reason) => skips.push(VerifyWarning::Skipped(SkippedFunction {
+                function: func.name.clone(),
+                reason,
+            })),
+            None => modelable.push(func),
+        }
+    }
+    (skips, modelable)
 }
 
 /// The pool concurrency core, independent of ESBMC.
@@ -1231,5 +1261,50 @@ mod tests {
         };
         assert_eq!(s.function, "effectful");
         assert!(s.reason.contains("has effects"));
+    }
+
+    fn vowed_function(
+        id: u32,
+        name: &str,
+        effects: Vec<vow_syntax::ast::Effect>,
+    ) -> vow_ir::Function {
+        vow_ir::Function {
+            id: vow_ir::FuncId(id),
+            name: name.to_string(),
+            params: Vec::new(),
+            param_names: Vec::new(),
+            return_ty: vow_ir::Ty::Unit,
+            effects,
+            vows: vec![vow_ir::VowEntry {
+                id: vow_ir::VowId(id),
+                description: "ensures: true".to_string(),
+                blame: vow_diag::Blame::Callee,
+                bindings: Vec::new(),
+                file: "test.vow".to_string(),
+                offset: 0,
+            }],
+            blocks: Vec::new(),
+            local_names: std::collections::HashMap::new(),
+            summary: vow_ir::RegionSummary::default(),
+            source_file: "test.vow".to_string(),
+        }
+    }
+
+    #[test]
+    fn split_non_modelable_keeps_every_skip_in_function_order() {
+        use vow_syntax::ast::Effect;
+        let module = module_with_functions(vec![
+            vowed_function(0, "first_skip", vec![Effect::IO]),
+            vowed_function(1, "modelable", Vec::new()),
+            vowed_function(2, "second_skip", vec![Effect::IO]),
+        ]);
+        let vowed: Vec<&vow_ir::Function> = module.functions.iter().collect();
+
+        let (skips, modelable) =
+            split_non_modelable(&vowed, &module, &std::collections::HashMap::new());
+
+        assert_eq!(warned_functions(&skips), vec!["first_skip", "second_skip"]);
+        let names: Vec<&str> = modelable.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["modelable"]);
     }
 }

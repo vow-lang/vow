@@ -1,0 +1,26 @@
+// TEST: category callee-blame
+// TEST: counterexample-fn "pinned"
+// TEST: counterexample-blame Callee
+// TEST: counterexample-vow-id 1
+// TEST: replay confirmed
+//
+// Counterexample-replay fixture (#1550). `main` is declared with non-canonical
+// spacing (`fn   main () ...`), which a text search for `fn main(` does not
+// match: the harness would then contain two `main` functions and fail to
+// compile. Locating `main` by its AST span start and renaming it keeps the
+// harness well-formed.
+module ReplayConfirmMainSpaced
+
+fn pinned(x: i64) -> i64 vow {
+  requires: x == 3,
+  ensures: result == 0
+} {
+  x
+}
+
+fn   main () -> i32 [io] {
+  let a: i64 = 1;
+  let b: i64 = a + 1;
+  print_i64(b);
+  0
+}

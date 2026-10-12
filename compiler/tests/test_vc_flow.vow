@@ -1,0 +1,133 @@
+module TestVcFlow
+
+use vc_flow
+use vc_term
+use vc_smt
+
+fn entry_flow(ar: VcArena, blocks: u64) -> VcFlow {
+    let fl: VcFlow = vc_flow_new(blocks, 1);
+    fl.block_pc[0] = vc_tm_bool_const(ar, true);
+    fl
+}
+
+fn check_constant_branches() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let hdr: SmtScript = vc_script_new();
+    let yes: VcFlow = entry_flow(ar, 3);
+    vc_flow_branch(yes, ar, hdr, 0, vc_tm_bool_const(ar, true), 1, 2);
+    if !vc_flow_enter(yes, ar, hdr, 1) { return 1; }
+    if vc_flow_enter(yes, ar, hdr, 2) { return 2; }
+    let no: VcFlow = entry_flow(ar, 3);
+    vc_flow_branch(no, ar, hdr, 0, vc_tm_bool_const(ar, false), 1, 2);
+    if vc_flow_enter(no, ar, hdr, 1) { return 3; }
+    if !vc_flow_enter(no, ar, hdr, 2) { return 4; }
+    if vc_smt_render(ar, hdr) != String::from("") { return 5; }
+    0
+}
+
+fn check_known_outcomes_and_jump() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let hdr: SmtScript = vc_script_new();
+    let fl: VcFlow = entry_flow(ar, 10);
+    let c: i64 = vc_tm_var(ar, String::from("c"));
+    vc_flow_branch(fl, ar, hdr, 0, c, 1, 2);
+    if !vc_flow_enter(fl, ar, hdr, 1) { return 10; }
+    if !vc_flow_enter(fl, ar, hdr, 2) { return 11; }
+    vc_flow_jump(fl, 1, 3);
+    if !vc_flow_enter(fl, ar, hdr, 3) { return 12; }
+    vc_flow_branch(fl, ar, hdr, 3, c, 4, 5);
+    if !vc_flow_enter(fl, ar, hdr, 4) { return 13; }
+    if vc_flow_enter(fl, ar, hdr, 5) { return 14; }
+    let not_c: i64 = vc_tm_bind(ar, vc_tm_app1(ar, VC_OP_NOT(), c), String::from("nc"));
+    vc_flow_branch(fl, ar, hdr, 2, not_c, 6, 7);
+    if !vc_flow_enter(fl, ar, hdr, 6) { return 15; }
+    if vc_flow_enter(fl, ar, hdr, 7) { return 16; }
+    vc_flow_branch(fl, ar, hdr, 4, not_c, 8, 9);
+    if vc_flow_enter(fl, ar, hdr, 8) { return 17; }
+    if !vc_flow_enter(fl, ar, hdr, 9) { return 18; }
+    if vc_smt_render(ar, hdr) != String::from("(define-fun g0 () Bool (not c))\n") { return 19; }
+    0
+}
+
+fn check_names_and_phi_order() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let hdr: SmtScript = vc_script_new();
+    let fl: VcFlow = entry_flow(ar, 6);
+    let c: i64 = vc_tm_var(ar, String::from("c"));
+    let d: i64 = vc_tm_var(ar, String::from("d"));
+    vc_flow_branch(fl, ar, hdr, 0, c, 1, 2);
+    if !vc_flow_enter(fl, ar, hdr, 1) { return 20; }
+    vc_flow_branch(fl, ar, hdr, 1, d, 3, 4);
+    if !vc_flow_enter(fl, ar, hdr, 3) { return 21; }
+    if !vc_flow_enter(fl, ar, hdr, 4) { return 22; }
+    vc_flow_add_upsilon(fl, 0, 3, vc_tm_bv(ar, 64, 7, 0));
+    vc_flow_add_upsilon(fl, 0, 4, vc_tm_bv(ar, 64, 9, 0));
+    vc_flow_jump(fl, 3, 5);
+    vc_flow_jump(fl, 4, 5);
+    if !vc_flow_enter(fl, ar, hdr, 5) { return 23; }
+    vc_script_define_fun(hdr, String::from("picked"), 64, vc_flow_phi_value(fl, ar, 5, 0));
+    let want: String = String::from("(define-fun g0 () Bool (not c))\n");
+    want.push_str(String::from("(define-fun g1 () Bool (and c d))\n"));
+    want.push_str(String::from("(define-fun g2 () Bool (and c (not d)))\n"));
+    want.push_str(String::from("(define-fun g3 () Bool (or g2 g1))\n"));
+    want.push_str(String::from("(define-fun picked () (_ BitVec 64) (ite g1 #x0000000000000007 #x0000000000000009))\n"));
+    if vc_smt_render(ar, hdr) != want { return 24; }
+    0
+}
+
+fn check_join_intersects_known_outcomes() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let hdr: SmtScript = vc_script_new();
+    let fl: VcFlow = entry_flow(ar, 6);
+    let c: i64 = vc_tm_var(ar, String::from("c"));
+    vc_flow_branch(fl, ar, hdr, 0, c, 1, 2);
+    if !vc_flow_enter(fl, ar, hdr, 1) { return 30; }
+    if !vc_flow_enter(fl, ar, hdr, 2) { return 31; }
+    vc_flow_jump(fl, 1, 3);
+    vc_flow_jump(fl, 2, 3);
+    if !vc_flow_enter(fl, ar, hdr, 3) { return 32; }
+    vc_flow_branch(fl, ar, hdr, 3, c, 4, 5);
+    if !vc_flow_enter(fl, ar, hdr, 4) { return 33; }
+    if !vc_flow_enter(fl, ar, hdr, 5) { return 34; }
+    let same: VcFlow = entry_flow(ar, 4);
+    vc_flow_branch(same, ar, hdr, 0, c, 1, 1);
+    if !vc_flow_enter(same, ar, hdr, 1) { return 35; }
+    vc_flow_branch(same, ar, hdr, 1, c, 2, 3);
+    if !vc_flow_enter(same, ar, hdr, 2) { return 36; }
+    if !vc_flow_enter(same, ar, hdr, 3) { return 37; }
+    0
+}
+
+// The cap limits retained facts, not the semantic domain of a source contract.
+fn check_oldest_fact_eviction() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let hdr: SmtScript = vc_script_new();
+    let fl: VcFlow = entry_flow(ar, 73);
+    let conds: Vec<i64> = Vec::new();
+    let mut k: u64 = 0;
+    while k < 33 {
+        let name: String = String::from("c");
+        name.push_str(i64_to_string(k as i64));
+        let c: i64 = vc_tm_var(ar, name);
+        conds.push(c);
+        vc_flow_branch(fl, ar, hdr, k, c, k + 1, 40 + k);
+        if !vc_flow_enter(fl, ar, hdr, k + 1) { return 40; }
+        k = k + 1;
+    }
+    vc_flow_branch(fl, ar, hdr, 33, conds[1], 34, 35);
+    if !vc_flow_enter(fl, ar, hdr, 34) { return 41; }
+    if vc_flow_enter(fl, ar, hdr, 35) { return 42; }
+    vc_flow_branch(fl, ar, hdr, 34, conds[0], 36, 37);
+    if !vc_flow_enter(fl, ar, hdr, 36) { return 43; }
+    if !vc_flow_enter(fl, ar, hdr, 37) { return 44; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_constant_branches();
+    if r == 0 { r = check_known_outcomes_and_jump(); }
+    if r == 0 { r = check_names_and_phi_order(); }
+    if r == 0 { r = check_join_intersects_known_outcomes(); }
+    if r == 0 { r = check_oldest_fact_eviction(); }
+    i64_to_i32_wrap(r)
+}

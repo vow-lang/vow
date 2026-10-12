@@ -1,0 +1,14 @@
+// TEST: category unverifiable
+// TEST: skip-reason unmodeled-builtin
+module OptionStringPayload
+
+fn name_len(o: Option<String>) -> i64 [panic] vow {
+  ensures: result >= 0
+} {
+  o.unwrap().len() as i64
+}
+
+fn main() -> i32 [io, panic] {
+  print_i64(name_len(Option::Some(String::from("ab"))));
+  0
+}

@@ -52,7 +52,7 @@ jobs:
         # self-hosted source or in the Rust compiler's lowering of it; only a
         # fixed-point binary separates those two, and attributing a bug to the
         # wrong compiler is worse than not finding it.
-        run: scripts/bootstrap.sh --skip-cargo --stage3-no-verify
+        run: scripts/bootstrap.sh --skip-cargo
       - name: Differential equivalence sweep
         # A divergence is REPORTED rather than breaking the nightly: the
         # artifact and the summary below carry the verdict, triage is a human

@@ -1,0 +1,17 @@
+// TEST: counterexample-fn "classify"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+module EnumWrongArm
+
+enum Shape { Circle(i64), Rect(i64), Empty }
+
+fn classify(k: i64, v: i64) -> i64 vow {
+  ensures: result == v
+} {
+  let s: Shape = if k == 0 { Shape::Circle(v) } else if k == 1 { Shape::Rect(v) } else { Shape::Empty };
+  match s {
+    Shape::Circle(r) => r,
+    Shape::Rect(w) => w + 1,
+    Shape::Empty => 0,
+  }
+}

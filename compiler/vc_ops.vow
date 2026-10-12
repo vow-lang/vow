@@ -18,7 +18,6 @@ fn VC_SKIP_UNMODELED_BUILTIN() -> String { String::from("unmodeled-builtin") }
 fn VC_SKIP_UNSUPPORTED_OPCODE() -> String { String::from("unsupported-opcode") }
 fn VC_SKIP_NON_MODELABLE_CALLEE() -> String { String::from("non-modelable-callee") }
 fn VC_SKIP_RESERVED_SYMBOL() -> String { String::from("reserved-verifier-symbol") }
-fn VC_SKIP_WIDE_AGGREGATE_FIELD() -> String { String::from("wide-aggregate-field") }
 
 // The closed list; adding a code requires amending the ADR.
 fn vc_skip_code_valid(code: String) -> bool {
@@ -30,7 +29,6 @@ fn vc_skip_code_valid(code: String) -> bool {
         || code == VC_SKIP_UNSUPPORTED_OPCODE()
         || code == VC_SKIP_NON_MODELABLE_CALLEE()
         || code == VC_SKIP_RESERVED_SYMBOL()
-        || code == VC_SKIP_WIDE_AGGREGATE_FIELD()
 }
 
 fn VC_OPM_UNCLASSIFIED() -> i64 { -1 }
@@ -40,8 +38,6 @@ fn VC_OPM_MODELED() -> i64 { 0 }
 fn VC_OPM_UNSUPPORTED() -> i64 { 1 }
 // Decided per instruction: an extern call is looked up in the builtin model.
 fn VC_OPM_CALL() -> i64 { 2 }
-// Decided per instruction: `wide-aggregate-field` at 128-bit width.
-fn VC_OPM_FIELD() -> i64 { 3 }
 // `float-rem-unsupported` until codegen defines float `%`.
 fn VC_OPM_FLOAT_REM() -> i64 { 4 }
 
@@ -57,14 +53,16 @@ fn vc_op_modeled_int(op: i64) -> bool {
 }
 
 fn vc_op_modeled_core(op: i64) -> bool {
-    op == IOP_CONST_I64() || op == IOP_CONST_BOOL() || op == IOP_GET_ARG()
+    op == IOP_FIELD_GET() || op == IOP_FIELD_SET()
+        || op == IOP_CONST_I64() || op == IOP_CONST_BOOL() || op == IOP_GET_ARG()
         || op == IOP_WADD() || op == IOP_WSUB() || op == IOP_WMUL() || op == IOP_WDIV() || op == IOP_WREM()
         || op == IOP_BITAND() || op == IOP_BITOR() || op == IOP_BITXOR()
         || op == IOP_EQ() || op == IOP_NE() || op == IOP_LT() || op == IOP_LE() || op == IOP_GT() || op == IOP_GE()
         || op == IOP_NOT() || op == IOP_AND() || op == IOP_OR()
-        || op == IOP_VOW_REQ() || op == IOP_VOW_ENS() || op == IOP_RETURN()
+        || op == IOP_VOW_REQ() || op == IOP_VOW_ENS() || op == IOP_VOW_INV() || op == IOP_RETURN()
         || op == IOP_CONST_UNIT() || op == IOP_BRANCH() || op == IOP_JUMP() || op == IOP_UNREACHABLE()
         || op == IOP_PHI() || op == IOP_UPSILON()
+        || op == IOP_REGION_ALLOC() || op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE()
 }
 
 fn vc_op_unsupported(op: i64) -> bool {
@@ -76,9 +74,7 @@ fn vc_op_unsupported(op: i64) -> bool {
         || op == IOP_EQ_F64() || op == IOP_NE_F64() || op == IOP_LT_F64() || op == IOP_LE_F64()
         || op == IOP_GT_F64() || op == IOP_GE_F64()
         || op == IOP_LOAD() || op == IOP_STORE()
-        || op == IOP_VOW_INV()
         || op == IOP_DEBUG_CALL()
-        || op == IOP_REGION_ALLOC() || op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE()
         || op == IOP_COMPLEXITY_DESCRIPTOR()
         || op == IOP_LINEAR_CONSUME() || op == IOP_LINEAR_BORROW()
 }
@@ -89,11 +85,149 @@ fn vc_op_unsupported(op: i64) -> bool {
 // instruction classes come first: they are the ones the gate asks about.
 fn vc_op_model(op: i64) -> i64 {
     if op == IOP_CALL() { return VC_OPM_CALL(); }
-    if op == IOP_FIELD_GET() || op == IOP_FIELD_SET() { return VC_OPM_FIELD(); }
     if op == IOP_REM_F32() || op == IOP_REM_F64() { return VC_OPM_FLOAT_REM(); }
     if vc_op_modeled(op) { return VC_OPM_MODELED(); }
     if vc_op_unsupported(op) { return VC_OPM_UNSUPPORTED(); }
     VC_OPM_UNCLASSIFIED()
+}
+
+// The lowerer's own call to the unwrap abort: reaching it is the unwrap-on-None
+// failure. It is not a catalogue builtin, so the table lists it here; the
+// executor turns it into a claim that its path is infeasible.
+fn VC_INTERNAL_UNWRAP_PANIC() -> String { String::from("__vow_unwrap_panic") }
+
+fn vc_is_unwrap_abort(inst: IrInst) -> bool {
+    inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == VC_INTERNAL_UNWRAP_PANIC()
+}
+
+// `Vec` operations the symbolic executor models as an array plus a symbolic
+// length (`vc_vec`). They are listed here by runtime symbol, like the unwrap
+// abort, and not in the builtin catalogue: the catalogue is keyed by Vow builtin
+// name and its entries need a grammar row. A symbol not listed (`clear`,
+// `truncate`, `reserve`, `from_raw_parts_copy`, the wide-slot variants, ...) is an
+// unmodelled builtin.
+fn VC_VEC_NONE() -> i64 { 0 }
+fn VC_VEC_NEW() -> i64 { 1 }
+fn VC_VEC_PUSH() -> i64 { 2 }
+fn VC_VEC_GET() -> i64 { 3 }
+fn VC_VEC_SET() -> i64 { 4 }
+fn VC_VEC_LEN() -> i64 { 5 }
+fn VC_VEC_POP() -> i64 { 6 }
+
+// Dispatched on the symbol's length, so a call to anything else costs one
+// comparison instead of one per operation.
+fn vc_vec_op_kind(sym: String) -> i64 {
+    let n: u64 = sym.len();
+    if n == 13 {
+        if sym == String::from("__vow_vec_new") { return VC_VEC_NEW(); }
+        if sym == String::from("__vow_vec_len") { return VC_VEC_LEN(); }
+        if sym == String::from("__vow_vec_pop") { return VC_VEC_POP(); }
+    } else if n == 17 {
+        if sym == String::from("__vow_vec_get_val") { return VC_VEC_GET(); }
+        if sym == String::from("__vow_vec_set_val") { return VC_VEC_SET(); }
+    } else if n == 18 {
+        if sym == String::from("__vow_vec_push_val") { return VC_VEC_PUSH(); }
+    }
+    VC_VEC_NONE()
+}
+
+// The `Vec` operation an instruction is, or `VC_VEC_NONE`.
+fn vc_inst_vec_kind(inst: IrInst) -> i64 {
+    if inst.op != IOP_CALL() || inst.dk != IDATA_CALL_EXTERN() { return VC_VEC_NONE(); }
+    vc_vec_op_kind(inst.ds)
+}
+
+// The `Unreachable` the loop unroller puts where a back edge goes past the
+// bound. Reaching it means some run needs more iterations than the bound.
+fn VC_INTERNAL_UNWIND_SINK() -> String { String::from("__vc_unwind_sink") }
+
+fn vc_is_unwind_sink(inst: IrInst) -> bool {
+    inst.op == IOP_UNREACHABLE() && inst.ds == VC_INTERNAL_UNWIND_SINK()
+}
+
+// The two markers of the inductive loop cut (`vc_induct`) and of the k-induction
+// step function (`vc_unroll_step`). A havoc call defines
+// a header Phi's value as an unconstrained constant of its type; the `Unreachable`
+// ends the preservation copy of a loop header, where control returns to the
+// header and no claim is left to make.
+fn VC_INTERNAL_HAVOC() -> String { String::from("__vc_havoc") }
+
+fn vc_is_havoc(inst: IrInst) -> bool {
+    inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == VC_INTERNAL_HAVOC()
+}
+
+fn VC_INTERNAL_CUT_END() -> String { String::from("__vc_cut_end") }
+
+fn vc_is_cut_end(inst: IrInst) -> bool {
+    inst.op == IOP_UNREACHABLE() && inst.ds == VC_INTERNAL_CUT_END()
+}
+
+// Inlined callee bodies. The splicer (`vc_inline`) copies a callee into its
+// caller; every clause and abort-bearing instruction of the copy carries the
+// frame it came from in `ds`, which no such opcode uses otherwise and which
+// `vc_clone_inst` preserves, so the marker survives loop closing and unrolling.
+// Frame k of `VcFrames` is the k-th spliced call, in depth-first order: the
+// function it enters, the source range of the call and the frame of the call's
+// own caller (-1 for the verify target).
+struct VcFrames {
+    func_ids: Vec<i64>,
+    call_starts: Vec<i64>,
+    call_lens: Vec<i64>,
+    parents: Vec<i64>,
+}
+
+fn vc_frames_new() -> VcFrames {
+    VcFrames { func_ids: Vec::new(), call_starts: Vec::new(), call_lens: Vec::new(), parents: Vec::new() }
+}
+
+fn VC_FRAME_PREFIX() -> String { String::from("__vc_frame:") }
+
+fn vc_frame_mark(k: i64) -> String {
+    let out: String = VC_FRAME_PREFIX();
+    out.push_str(i64_to_string(k));
+    out
+}
+
+// An extern call that can fail keeps its symbol in `ds`, so the frame it was
+// spliced from travels in `dv2` (`frame + 1`; 0 for the target's own, which the
+// lowerer emits with `dv2` 0): the unwrap abort and a `Vec` `get`/`set`, whose
+// bounds check is a claim.
+fn vc_frame_in_dv2(inst: IrInst) -> bool {
+    if vc_is_unwrap_abort(inst) { return true; }
+    let k: i64 = vc_inst_vec_kind(inst);
+    k == VC_VEC_GET() || k == VC_VEC_SET()
+}
+
+// The frame an instruction was spliced from; -1 for the target's own.
+fn vc_frame_of(inst: IrInst) -> i64 {
+    if vc_frame_in_dv2(inst) { return inst.dv2 - 1; }
+    let pre: String = VC_FRAME_PREFIX();
+    if inst.ds.len() <= pre.len() || string_starts_with(inst.ds, pre) != 1 {
+        return -1;
+    }
+    match parse_i64(inst.ds.substring(pre.len(), inst.ds.len())) {
+        Option::Some(k) => { k },
+        Option::None => { -1 },
+    }
+}
+
+// The function that owns frame `k` (`root` for the target).
+fn vc_frame_func(fr: VcFrames, k: i64, root: i64) -> i64 {
+    if k < 0 || k >= fr.func_ids.len() as i64 { return root; }
+    fr.func_ids[k as u64]
+}
+
+// Opcodes whose instances carry a frame marker when spliced.
+fn vc_op_frame_marked(op: i64) -> bool {
+    op == IOP_VOW_REQ() || op == IOP_VOW_ENS() || op == IOP_VOW_INV()
+        || op == IOP_CADD() || op == IOP_CSUB() || op == IOP_CMUL() || op == IOP_CDIV() || op == IOP_CREM()
+        || op == IOP_WDIV() || op == IOP_WREM() || op == IOP_SHL() || op == IOP_SHR()
+}
+
+// Opcodes the gate looks at: modelled outright, or decided per instruction.
+fn vc_op_gate_candidate(op: i64) -> bool {
+    let model: i64 = vc_op_model(op);
+    model == VC_OPM_MODELED() || model == VC_OPM_CALL()
 }
 
 // Builtins are modelled only when `catalogue_verifier_known` lists their runtime

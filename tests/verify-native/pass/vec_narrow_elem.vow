@@ -1,0 +1,29 @@
+module VecNarrowElem
+
+fn byte_roundtrip(b: u8) -> u8 vow {
+  ensures: result == b
+} {
+  let v: Vec<u8> = Vec::new();
+  v.push(b);
+  v[0]
+}
+
+fn signed_roundtrip(x: i32) -> i32 vow {
+  ensures: result == x
+} {
+  let v: Vec<i32> = Vec::new();
+  v.push(x);
+  v[0]
+}
+
+fn byte_in_range(v: Vec<u8>) -> u64 vow {
+  requires: v.len() > 0
+  ensures: result <= 255
+} {
+  v[0] as u64
+}
+
+fn main() -> i32 [io] {
+  print_i64(signed_roundtrip(-4) as i64);
+  0
+}
