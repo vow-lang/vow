@@ -307,42 +307,253 @@ fn default_literal_integer_types(ty: &Ty) -> Ty {
     }
 }
 
-/// The exact type a builtin method demands of each argument position.
-///
-/// The `Vec` length position (`truncate`) and every `String` offset
-/// (`byte_at`, `substring`) are `Ty::U64`; the `push_byte` value is `Ty::U8`.
-/// An argument is accepted when it assignment-coerces to the expected type,
-/// so unsuffixed integer literals still fit and `Never` never cascades.
-fn method_argument_expectations(receiver: &Ty, method: &str) -> Vec<Ty> {
-    if *receiver == Ty::Str {
-        return match method {
-            "push_str" | "eq" | "contains" => vec![Ty::Str],
-            "byte_at" => vec![Ty::U64],
-            "push_byte" => vec![Ty::U8],
-            "substring" => vec![Ty::U64, Ty::U64],
-            _ => vec![],
-        };
+// Builtin method facts are resolved together before the caller applies
+// diagnostics or lowering metadata. Candidate names are allocated only on error.
+#[derive(Clone, Copy)]
+enum MethodArgs {
+    None,
+    String,
+    Offset,
+    Byte,
+    Offsets,
+    First,
+    Pair,
+}
+
+#[derive(Clone, Copy)]
+enum MethodResult {
+    Unit,
+    U64,
+    I64,
+    Bool,
+    String,
+    OptionI64,
+    OptionU64,
+    OptionValue,
+    Payload,
+}
+
+struct BuiltinMethodRule {
+    name: &'static str,
+    args: MethodArgs,
+    result: Option<MethodResult>,
+}
+
+struct BuiltinMethodTyping {
+    expected_args: Vec<Ty>,
+    result: Option<Ty>,
+    receiver_name: Option<&'static str>,
+    rules: &'static [BuiltinMethodRule],
+}
+
+const STRING_METHODS: &[BuiltinMethodRule] = &[
+    BuiltinMethodRule {
+        name: "len",
+        args: MethodArgs::None,
+        result: Some(MethodResult::U64),
+    },
+    BuiltinMethodRule {
+        name: "push_str",
+        args: MethodArgs::String,
+        result: Some(MethodResult::Unit),
+    },
+    BuiltinMethodRule {
+        name: "eq",
+        args: MethodArgs::String,
+        result: Some(MethodResult::Bool),
+    },
+    BuiltinMethodRule {
+        name: "contains",
+        args: MethodArgs::String,
+        result: Some(MethodResult::Bool),
+    },
+    BuiltinMethodRule {
+        name: "byte_at",
+        args: MethodArgs::Offset,
+        result: Some(MethodResult::I64),
+    },
+    BuiltinMethodRule {
+        name: "push_byte",
+        args: MethodArgs::Byte,
+        result: Some(MethodResult::Unit),
+    },
+    BuiltinMethodRule {
+        name: "substring",
+        args: MethodArgs::Offsets,
+        result: Some(MethodResult::String),
+    },
+    BuiltinMethodRule {
+        name: "parse_i64",
+        args: MethodArgs::None,
+        result: Some(MethodResult::OptionI64),
+    },
+    BuiltinMethodRule {
+        name: "parse_u64",
+        args: MethodArgs::None,
+        result: Some(MethodResult::OptionU64),
+    },
+    BuiltinMethodRule {
+        name: "clear",
+        args: MethodArgs::None,
+        result: Some(MethodResult::Unit),
+    },
+];
+
+const VEC_METHODS: &[BuiltinMethodRule] = &[
+    BuiltinMethodRule {
+        name: "len",
+        args: MethodArgs::None,
+        result: Some(MethodResult::U64),
+    },
+    BuiltinMethodRule {
+        name: "push",
+        args: MethodArgs::First,
+        result: Some(MethodResult::Unit),
+    },
+    BuiltinMethodRule {
+        name: "pop",
+        args: MethodArgs::None,
+        result: Some(MethodResult::Unit),
+    },
+    BuiltinMethodRule {
+        name: "clear",
+        args: MethodArgs::None,
+        result: Some(MethodResult::Unit),
+    },
+    BuiltinMethodRule {
+        name: "truncate",
+        args: MethodArgs::Offset,
+        result: Some(MethodResult::Unit),
+    },
+];
+
+const HASHMAP_METHODS: &[BuiltinMethodRule] = &[
+    BuiltinMethodRule {
+        name: "len",
+        args: MethodArgs::None,
+        result: Some(MethodResult::U64),
+    },
+    BuiltinMethodRule {
+        name: "insert",
+        args: MethodArgs::Pair,
+        result: Some(MethodResult::Unit),
+    },
+    BuiltinMethodRule {
+        name: "get",
+        args: MethodArgs::First,
+        result: Some(MethodResult::OptionValue),
+    },
+    BuiltinMethodRule {
+        name: "contains_key",
+        args: MethodArgs::First,
+        result: Some(MethodResult::Bool),
+    },
+    BuiltinMethodRule {
+        name: "remove",
+        args: MethodArgs::First,
+        result: Some(MethodResult::Unit),
+    },
+    BuiltinMethodRule {
+        name: "contains",
+        args: MethodArgs::First,
+        result: None,
+    },
+];
+
+const BTREEMAP_METHODS: &[BuiltinMethodRule] = &[
+    BuiltinMethodRule {
+        name: "len",
+        args: MethodArgs::None,
+        result: Some(MethodResult::U64),
+    },
+    BuiltinMethodRule {
+        name: "insert",
+        args: MethodArgs::Pair,
+        result: Some(MethodResult::OptionValue),
+    },
+    BuiltinMethodRule {
+        name: "get",
+        args: MethodArgs::First,
+        result: Some(MethodResult::OptionValue),
+    },
+    BuiltinMethodRule {
+        name: "contains",
+        args: MethodArgs::First,
+        result: Some(MethodResult::Bool),
+    },
+    BuiltinMethodRule {
+        name: "contains_key",
+        args: MethodArgs::First,
+        result: None,
+    },
+    BuiltinMethodRule {
+        name: "remove",
+        args: MethodArgs::First,
+        result: None,
+    },
+];
+
+const OPTION_METHODS: &[BuiltinMethodRule] = &[BuiltinMethodRule {
+    name: "unwrap",
+    args: MethodArgs::None,
+    result: Some(MethodResult::Payload),
+}];
+
+fn resolve_builtin_method(receiver: &Ty, method: &str) -> BuiltinMethodTyping {
+    let (receiver_name, rules, args): (_, _, &[Ty]) = if *receiver == Ty::Str {
+        (Some("String"), STRING_METHODS, &[])
+    } else if let Some(args) = receiver.applied_args(NominalKind::Struct, "Vec") {
+        (Some("Vec"), VEC_METHODS, args)
+    } else if let Some(args) = receiver.applied_args(NominalKind::Struct, "HashMap") {
+        (Some("HashMap"), HASHMAP_METHODS, args)
+    } else if let Some(args) = receiver.applied_args(NominalKind::Struct, "BTreeMap") {
+        (Some("BTreeMap"), BTREEMAP_METHODS, args)
+    } else if let Some(args) = receiver.applied_args(NominalKind::Enum, "Option") {
+        (Some("Option"), OPTION_METHODS, args)
+    } else if let Some(args) = receiver.applied_args(NominalKind::Enum, "Result") {
+        (Some("Result"), OPTION_METHODS, args)
+    } else {
+        (None, &[] as &[BuiltinMethodRule], &[])
+    };
+    let rule = rules.iter().find(|rule| rule.name == method);
+    let expected_args = match rule.map(|rule| rule.args).unwrap_or(MethodArgs::None) {
+        MethodArgs::None => vec![],
+        MethodArgs::String => vec![Ty::Str],
+        MethodArgs::Offset => vec![Ty::U64],
+        MethodArgs::Byte => vec![Ty::U8],
+        MethodArgs::Offsets => vec![Ty::U64, Ty::U64],
+        MethodArgs::First => args.first().cloned().into_iter().collect(),
+        MethodArgs::Pair => args.iter().take(2).cloned().collect(),
+    };
+    let option_of = |inner| Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![inner]);
+    let result = rule
+        .and_then(|rule| rule.result)
+        .map(|result| match result {
+            MethodResult::Unit => Ty::Unit,
+            MethodResult::U64 => Ty::U64,
+            MethodResult::I64 => Ty::I64,
+            MethodResult::Bool => Ty::Bool,
+            MethodResult::String => Ty::Str,
+            MethodResult::OptionI64 => option_of(Ty::I64),
+            MethodResult::OptionU64 => option_of(Ty::U64),
+            MethodResult::OptionValue => option_of(args.get(1).cloned().unwrap_or(Ty::I64)),
+            MethodResult::Payload => args.first().cloned().unwrap_or(Ty::Unit),
+        });
+    BuiltinMethodTyping {
+        expected_args,
+        result,
+        receiver_name,
+        rules,
     }
-    if let Some(args) = receiver.applied_args(NominalKind::Struct, "Vec") {
-        return match method {
-            "push" => args.first().cloned().into_iter().collect(),
-            "truncate" => vec![Ty::U64],
-            _ => vec![],
-        };
-    }
-    if let Some(args) = receiver
-        .applied_args(NominalKind::Struct, "HashMap")
-        .or_else(|| receiver.applied_args(NominalKind::Struct, "BTreeMap"))
-    {
-        return match method {
-            "insert" => args.iter().take(2).cloned().collect(),
-            "get" | "contains" | "contains_key" | "remove" => {
-                args.first().cloned().into_iter().collect()
-            }
-            _ => vec![],
-        };
-    }
-    vec![]
+}
+
+fn builtin_method_candidates(typing: &BuiltinMethodTyping) -> Vec<String> {
+    typing
+        .rules
+        .iter()
+        .filter(|rule| rule.result.is_some())
+        .map(|rule| rule.name.to_string())
+        .collect()
 }
 
 /// `HashMap` keys are stored and compared as one machine word, so only types
@@ -372,106 +583,6 @@ fn hashmap_key_supported(key: &Ty) -> bool {
 /// would be truncated and a float has no slot encoding.
 fn map_value_supported(value: &Ty) -> bool {
     !matches!(value, Ty::I128 | Ty::U128 | Ty::F32 | Ty::F64)
-}
-
-/// The result type of a builtin method call `receiver.method(..)`, or `None`
-/// when `receiver` exposes no builtin method by that name. Pure sibling of
-/// `method_argument_expectations`: it reads the receiver (including its type
-/// arguments) and the method name and performs no diagnostics — the caller
-/// owns error reporting, the `unwrap`-arity check, and pattern-aggregate
-/// recording. Keeping this policy here, beside the argument-expectation seam,
-/// is what makes builtin-method type resolution directly testable without a
-/// `Checker`.
-fn method_result_type(receiver: &Ty, method: &str) -> Option<Ty> {
-    let option_of = |inner: Ty| Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![inner]);
-    if *receiver == Ty::Str {
-        return match method {
-            "len" => Some(Ty::U64),
-            "byte_at" => Some(Ty::I64),
-            "push_str" | "clear" | "push_byte" => Some(Ty::Unit),
-            "eq" | "contains" => Some(Ty::Bool),
-            "substring" => Some(Ty::Str),
-            "parse_i64" => Some(option_of(Ty::I64)),
-            "parse_u64" => Some(option_of(Ty::U64)),
-            _ => None,
-        };
-    }
-    if receiver.applied_args(NominalKind::Struct, "Vec").is_some() {
-        return match method {
-            "len" => Some(Ty::U64),
-            "push" | "pop" | "clear" | "truncate" => Some(Ty::Unit),
-            _ => None,
-        };
-    }
-    if let Some(args) = receiver.applied_args(NominalKind::Struct, "HashMap") {
-        let value_ty = args.get(1).cloned().unwrap_or(Ty::I64);
-        return match method {
-            "len" => Some(Ty::U64),
-            "insert" | "remove" => Some(Ty::Unit),
-            "get" => Some(option_of(value_ty)),
-            "contains_key" => Some(Ty::Bool),
-            _ => None,
-        };
-    }
-    if let Some(args) = receiver.applied_args(NominalKind::Struct, "BTreeMap") {
-        let value_ty = args.get(1).cloned().unwrap_or(Ty::I64);
-        return match method {
-            "len" => Some(Ty::U64),
-            "insert" | "get" => Some(option_of(value_ty)),
-            "contains" => Some(Ty::Bool),
-            _ => None,
-        };
-    }
-    if let Some(args) = receiver
-        .applied_args(NominalKind::Enum, "Option")
-        .or_else(|| receiver.applied_args(NominalKind::Enum, "Result"))
-    {
-        return match method {
-            "unwrap" => Some(args.first().cloned().unwrap_or(Ty::Unit)),
-            _ => None,
-        };
-    }
-    None
-}
-
-/// The builtin method names a receiver exposes, used to build the
-/// "unknown method" hint. Pure sibling of `method_result_type`.
-fn builtin_method_names(receiver: &Ty) -> &'static [&'static str] {
-    if *receiver == Ty::Str {
-        return &[
-            "len",
-            "push_str",
-            "eq",
-            "contains",
-            "byte_at",
-            "push_byte",
-            "substring",
-            "parse_i64",
-            "parse_u64",
-            "clear",
-        ];
-    }
-    if receiver.applied_args(NominalKind::Struct, "Vec").is_some() {
-        return &["len", "push", "pop", "clear", "truncate"];
-    }
-    if receiver
-        .applied_args(NominalKind::Struct, "HashMap")
-        .is_some()
-    {
-        return &["len", "insert", "get", "contains_key", "remove"];
-    }
-    if receiver
-        .applied_args(NominalKind::Struct, "BTreeMap")
-        .is_some()
-    {
-        return &["len", "insert", "get", "contains"];
-    }
-    if receiver.applied_args(NominalKind::Enum, "Option").is_some()
-        || receiver.applied_args(NominalKind::Enum, "Result").is_some()
-    {
-        return &["unwrap"];
-    }
-    &[]
 }
 
 fn can_assignment_coerce(from: &Ty, to: &Ty) -> bool {
@@ -686,7 +797,7 @@ fn is_integer_or_lit_int(ty: &Ty) -> bool {
 /// The legality outcome of an `as` cast from `src` to `tgt`, as a neutral
 /// value the caller acts on. Pure and total in the two types alone: it names
 /// *which kind* of cast this is, never the `ErrorCode`, message, or hint —
-/// diagnostics stay at the call site, mirroring the `method_result_type` and
+/// diagnostics stay at the call site, mirroring the `resolve_builtin_method` and
 /// `integer_type_range` seams. `Ok` covers same-width/widening integer casts
 /// and an unreachable (`Never`) source, both of which report nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -939,11 +1050,11 @@ impl PayloadWrap {
 /// A compiler-known builtin enum constructor (`Option::Some`, `String::from`,
 /// `Vec::new`, ...), classified from its `Enum::variant` name pair. Pure and
 /// total in the two names — no field evaluation, no diagnostics — mirroring
-/// `method_result_type`/`cast_verdict`: it names *which* builtin this is and its
+/// `resolve_builtin_method`/`cast_verdict`: it names *which* builtin this is and its
 /// field-handling regime, while field evaluation, the FFI i64 range-check side
 /// effect, arity errors, and emission stay at the `EnumConstruct` call site.
 /// `None` means "not a compiler builtin", falling through to the
-/// user-defined-enum lookup exactly as `method_result_type`'s `None` falls
+/// user-defined-enum lookup exactly as an unresolved builtin method result falls
 /// through to the unknown-method path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum BuiltinConstructor {
@@ -973,7 +1084,7 @@ enum BuiltinConstructor {
 
 /// Classify a compiler-known builtin enum constructor from its name pair, or
 /// `None` for a user-defined enum. Pure sibling of the `EnumConstruct` arm,
-/// modelled on `method_result_type`: names in, neutral value out, no
+/// modelled on `resolve_builtin_method`: names in, neutral value out, no
 /// diagnostics.
 fn builtin_constructor(enum_name: &str, variant_name: &str) -> Option<BuiltinConstructor> {
     use BuiltinConstructor::*;
@@ -2645,10 +2756,11 @@ impl<'e> Checker<'e> {
                 if recv_ty.is_unknown() {
                     return Ty::Unknown;
                 }
+                let typing = resolve_builtin_method(&recv_ty, method);
                 for ((arg, arg_ty), expect) in args
                     .iter()
                     .zip(arg_tys.iter())
-                    .zip(method_argument_expectations(&recv_ty, method).iter())
+                    .zip(typing.expected_args.iter())
                 {
                     self.check_contextual_integer_literal_ranges(arg, expect);
                     if !can_assignment_coerce(arg_ty, expect)
@@ -2676,32 +2788,14 @@ impl<'e> Checker<'e> {
                     );
                     return Ty::Unknown;
                 }
-                let is_str = matches!(recv_ty, Ty::Str);
-                let is_vec = matches!(&recv_ty,
-                    Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Struct(n) if n == "Vec")
-                );
-                let is_hashmap = matches!(&recv_ty,
-                    Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Struct(n) if n == "HashMap")
-                );
-                let is_btreemap = matches!(&recv_ty,
-                    Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Struct(n) if n == "BTreeMap")
-                );
-                let is_option_or_result = matches!(&recv_ty,
-                    Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Enum(n) if n == "Option" || n == "Result")
-                );
-
-                // Result-type and known-method policy live in the pure
-                // `method_result_type` / `builtin_method_names` seams; the arm
-                // keeps only the diagnostics and side effects those cannot own.
-                let result_ty = method_result_type(&recv_ty, method);
-                if method == "push"
-                    && let Some(args) = recv_ty.applied_args(NominalKind::Struct, "Vec")
-                    && let Some(elem_ty) = args.first()
+                if typing.receiver_name == Some("Vec")
+                    && method == "push"
+                    && let Some(elem_ty) = typing.expected_args.first()
                 {
                     self.record_wide_vec_site(expr as *const Expr as usize, elem_ty);
                 }
-
-                if is_option_or_result {
+                let result_ty = typing.result.as_ref();
+                if matches!(typing.receiver_name, Some("Option" | "Result")) {
                     // `unwrap` takes no arguments. Without this the lowerer
                     // accepts them and drops them unevaluated, silently
                     // discarding their side effects (#1108 review).
@@ -2714,36 +2808,20 @@ impl<'e> Checker<'e> {
                     }
                     // The unwrap payload reaches IR through a FieldGet, so it
                     // needs the same scalar or aggregate metadata `?` records.
-                    if let Some(payload_ty) = result_ty.as_ref() {
+                    if let Some(payload_ty) = result_ty {
                         self.record_payload_metadata(expr as *const Expr as usize, payload_ty);
                     }
                 }
-                match result_ty {
+                match typing.result {
                     Some(ty) => ty,
                     None => {
-                        let type_name = if is_str {
-                            "String".to_string()
-                        } else if is_hashmap {
-                            "HashMap".to_string()
-                        } else if is_btreemap {
-                            "BTreeMap".to_string()
-                        } else if is_vec {
-                            "Vec".to_string()
-                        } else if matches!(&recv_ty, Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Enum(n) if n == "Option"))
-                        {
-                            "Option".to_string()
-                        } else if matches!(&recv_ty, Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Enum(n) if n == "Result"))
-                        {
-                            "Result".to_string()
-                        } else {
-                            format!("{recv_ty}")
-                        };
-                        let candidates: Vec<String> = builtin_method_names(&recv_ty)
-                            .iter()
-                            .map(|s| s.to_string())
-                            .collect();
+                        let type_name = typing
+                            .receiver_name
+                            .map(str::to_string)
+                            .unwrap_or_else(|| format!("{recv_ty}"));
+                        let candidates = builtin_method_candidates(&typing);
                         let mut hints = Vec::new();
-                        if is_vec && method == "get" {
+                        if typing.receiver_name == Some("Vec") && method == "get" {
                             hints.push(VEC_GET_HINT.to_string());
                         } else if let Some(s) = suggest_similar(method, &candidates, 3) {
                             hints.push(format!("did you mean `{s}`?"));
@@ -8502,7 +8580,7 @@ mod tests {
     #[test]
     fn string_offset_arguments_require_exactly_u64() {
         for method in ["byte_at", "substring"] {
-            let expects = method_argument_expectations(&Ty::Str, method);
+            let expects = resolve_builtin_method(&Ty::Str, method).expected_args;
             assert!(!expects.is_empty(), "{method} must constrain its offsets");
             assert!(
                 expects.iter().all(|e| *e == Ty::U64),
@@ -8533,7 +8611,7 @@ mod tests {
 
     #[test]
     fn push_byte_argument_requires_exactly_u8() {
-        let expects = method_argument_expectations(&Ty::Str, "push_byte");
+        let expects = resolve_builtin_method(&Ty::Str, "push_byte").expected_args;
         assert_eq!(expects, vec![Ty::U8]);
         for ty in [Ty::U8, Ty::LitInt, Ty::Never] {
             assert!(
@@ -8559,7 +8637,7 @@ mod tests {
 
     #[test]
     fn vec_truncate_argument_requires_exactly_u64() {
-        let expects = method_argument_expectations(&vec_of(Ty::I64), "truncate");
+        let expects = resolve_builtin_method(&vec_of(Ty::I64), "truncate").expected_args;
         assert_eq!(expects, vec![Ty::U64]);
         for ty in [Ty::U64, Ty::LitInt, Ty::Never] {
             assert!(
@@ -8586,18 +8664,19 @@ mod tests {
 
     #[test]
     fn value_shaped_method_arguments_require_the_declared_type() {
-        let expects = method_argument_expectations(&vec_of(Ty::I64), "push");
+        let expects = resolve_builtin_method(&vec_of(Ty::I64), "push").expected_args;
         assert_eq!(expects, vec![Ty::I64]);
         assert!(can_assignment_coerce(&Ty::I64, &expects[0]));
         assert!(can_assignment_coerce(&Ty::LitInt, &expects[0]));
         assert!(!can_assignment_coerce(&Ty::Str, &expects[0]));
         assert!(!can_assignment_coerce(&Ty::U64, &expects[0]));
 
-        let expects = method_argument_expectations(&Ty::Str, "push_str");
+        let expects = resolve_builtin_method(&Ty::Str, "push_str").expected_args;
         assert_eq!(expects, vec![Ty::Str]);
         assert!(!can_assignment_coerce(&Ty::LitInt, &expects[0]));
 
-        let expects = method_argument_expectations(&map_of("HashMap", Ty::I64, Ty::Bool), "insert");
+        let expects =
+            resolve_builtin_method(&map_of("HashMap", Ty::I64, Ty::Bool), "insert").expected_args;
         assert_eq!(expects, vec![Ty::I64, Ty::Bool]);
         assert!(!can_assignment_coerce(&Ty::Str, &expects[0]));
         assert!(!can_assignment_coerce(&Ty::I64, &expects[1]));
@@ -8615,18 +8694,42 @@ mod tests {
     #[test]
     fn a_malformed_generic_receiver_produces_no_expectation() {
         let bare_vec = Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![]);
-        assert!(method_argument_expectations(&bare_vec, "push").is_empty());
+        assert!(
+            resolve_builtin_method(&bare_vec, "push")
+                .expected_args
+                .is_empty()
+        );
 
         let bare_map = Ty::Applied(Box::new(Ty::Struct("HashMap".to_string())), vec![]);
-        assert!(method_argument_expectations(&bare_map, "insert").is_empty());
-        assert!(method_argument_expectations(&bare_map, "get").is_empty());
+        assert!(
+            resolve_builtin_method(&bare_map, "insert")
+                .expected_args
+                .is_empty()
+        );
+        assert!(
+            resolve_builtin_method(&bare_map, "get")
+                .expected_args
+                .is_empty()
+        );
     }
 
     #[test]
     fn unknown_methods_and_non_generic_receivers_constrain_nothing() {
-        assert!(method_argument_expectations(&Ty::Str, "len").is_empty());
-        assert!(method_argument_expectations(&vec_of(Ty::I64), "pop").is_empty());
-        assert!(method_argument_expectations(&Ty::I64, "byte_at").is_empty());
+        assert!(
+            resolve_builtin_method(&Ty::Str, "len")
+                .expected_args
+                .is_empty()
+        );
+        assert!(
+            resolve_builtin_method(&vec_of(Ty::I64), "pop")
+                .expected_args
+                .is_empty()
+        );
+        assert!(
+            resolve_builtin_method(&Ty::I64, "byte_at")
+                .expected_args
+                .is_empty()
+        );
     }
 
     fn opt_of(inner: Ty) -> Ty {
@@ -8965,93 +9068,294 @@ mod tests {
     }
 
     #[test]
+    fn builtin_method_typing_resolves_arguments_results_and_candidates_together() {
+        let rows = [
+            ("len", vec![], Ty::U64),
+            ("push_str", vec![Ty::Str], Ty::Unit),
+            ("eq", vec![Ty::Str], Ty::Bool),
+            ("contains", vec![Ty::Str], Ty::Bool),
+            ("byte_at", vec![Ty::U64], Ty::I64),
+            ("push_byte", vec![Ty::U8], Ty::Unit),
+            ("substring", vec![Ty::U64, Ty::U64], Ty::Str),
+            ("parse_i64", vec![], opt_of(Ty::I64)),
+            ("parse_u64", vec![], opt_of(Ty::U64)),
+            ("clear", vec![], Ty::Unit),
+        ];
+        for (method, args, result) in rows {
+            let typing = resolve_builtin_method(&Ty::Str, method);
+            assert_eq!(typing.expected_args, args, "String.{method}");
+            assert_eq!(typing.result, Some(result), "String.{method}");
+            assert_eq!(typing.receiver_name, Some("String"));
+        }
+        for (family, methods) in [
+            ("Vec", vec!["len", "push", "pop", "clear", "truncate"]),
+            (
+                "HashMap",
+                vec!["len", "insert", "get", "contains_key", "remove"],
+            ),
+            ("BTreeMap", vec!["len", "insert", "get", "contains"]),
+        ] {
+            let receiver = if family == "Vec" {
+                vec_of(Ty::U128)
+            } else {
+                map_of(family, Ty::U64, Ty::Bool)
+            };
+            let unknown = resolve_builtin_method(&receiver, "nope");
+            assert_eq!(unknown.result, None);
+            assert_eq!(unknown.receiver_name, Some(family));
+            assert_eq!(builtin_method_candidates(&unknown), methods);
+            for method in methods {
+                assert!(resolve_builtin_method(&receiver, method).result.is_some());
+            }
+        }
+        let push = resolve_builtin_method(&vec_of(Ty::U128), "push");
+        assert_eq!(push.expected_args, vec![Ty::U128]);
+        assert_eq!(push.result, Some(Ty::Unit));
+        for family in ["HashMap", "BTreeMap"] {
+            let receiver = map_of(family, Ty::U64, Ty::Bool);
+            let insert = resolve_builtin_method(&receiver, "insert");
+            assert_eq!(insert.expected_args, vec![Ty::U64, Ty::Bool]);
+            assert_eq!(
+                insert.result,
+                Some(if family == "HashMap" {
+                    Ty::Unit
+                } else {
+                    opt_of(Ty::Bool)
+                })
+            );
+            let get = resolve_builtin_method(&receiver, "get");
+            assert_eq!(get.expected_args, vec![Ty::U64]);
+            assert_eq!(get.result, Some(opt_of(Ty::Bool)));
+        }
+        // Rejected map aliases still constrain arguments in stage 0, but must
+        // never be accepted or advertised. The Vow twin keeps its own policy.
+        for (family, method) in [
+            ("HashMap", "contains"),
+            ("BTreeMap", "contains_key"),
+            ("BTreeMap", "remove"),
+        ] {
+            let typing = resolve_builtin_method(&map_of(family, Ty::U64, Ty::Bool), method);
+            assert_eq!(typing.expected_args, vec![Ty::U64]);
+            assert_eq!(typing.result, None);
+            assert!(!builtin_method_candidates(&typing).contains(&method.to_string()));
+        }
+        for family in ["Vec", "HashMap", "BTreeMap", "Option", "Result"] {
+            let base = if family == "Option" || family == "Result" {
+                Ty::Enum(family.to_string())
+            } else {
+                Ty::Struct(family.to_string())
+            };
+            let receiver = Ty::Applied(Box::new(base), vec![]);
+            let method = if family == "Vec" {
+                "push"
+            } else if family == "Option" || family == "Result" {
+                "unwrap"
+            } else {
+                "get"
+            };
+            let typing = resolve_builtin_method(&receiver, method);
+            assert!(typing.expected_args.is_empty());
+            assert_eq!(
+                typing.result,
+                Some(
+                    if family == "Vec" || family == "Option" || family == "Result" {
+                        Ty::Unit
+                    } else {
+                        opt_of(Ty::I64)
+                    }
+                )
+            );
+        }
+        let nested = opt_of(vec_of(Ty::I128));
+        assert_eq!(
+            resolve_builtin_method(&nested, "unwrap").result,
+            Some(vec_of(Ty::I128))
+        );
+        for receiver in [
+            Ty::I64,
+            Ty::Struct("Vec".into()),
+            Ty::Applied(Box::new(Ty::Enum("Vec".into())), vec![Ty::I64]),
+        ] {
+            let typing = resolve_builtin_method(&receiver, "len");
+            assert_eq!(typing.result, None);
+            assert_eq!(typing.receiver_name, None);
+            assert!(builtin_method_candidates(&typing).is_empty());
+        }
+    }
+
+    #[test]
     fn builtin_method_result_types_are_resolved_per_receiver() {
         // String
-        assert_eq!(method_result_type(&Ty::Str, "len"), Some(Ty::U64));
-        assert_eq!(method_result_type(&Ty::Str, "byte_at"), Some(Ty::I64));
-        assert_eq!(method_result_type(&Ty::Str, "push_str"), Some(Ty::Unit));
-        assert_eq!(method_result_type(&Ty::Str, "clear"), Some(Ty::Unit));
-        assert_eq!(method_result_type(&Ty::Str, "eq"), Some(Ty::Bool));
-        assert_eq!(method_result_type(&Ty::Str, "contains"), Some(Ty::Bool));
-        assert_eq!(method_result_type(&Ty::Str, "substring"), Some(Ty::Str));
         assert_eq!(
-            method_result_type(&Ty::Str, "parse_i64"),
+            resolve_builtin_method(&Ty::Str, "len").result,
+            Some(Ty::U64)
+        );
+        assert_eq!(
+            resolve_builtin_method(&Ty::Str, "byte_at").result,
+            Some(Ty::I64)
+        );
+        assert_eq!(
+            resolve_builtin_method(&Ty::Str, "push_str").result,
+            Some(Ty::Unit)
+        );
+        assert_eq!(
+            resolve_builtin_method(&Ty::Str, "clear").result,
+            Some(Ty::Unit)
+        );
+        assert_eq!(
+            resolve_builtin_method(&Ty::Str, "eq").result,
+            Some(Ty::Bool)
+        );
+        assert_eq!(
+            resolve_builtin_method(&Ty::Str, "contains").result,
+            Some(Ty::Bool)
+        );
+        assert_eq!(
+            resolve_builtin_method(&Ty::Str, "substring").result,
+            Some(Ty::Str)
+        );
+        assert_eq!(
+            resolve_builtin_method(&Ty::Str, "parse_i64").result,
             Some(opt_of(Ty::I64))
         );
         assert_eq!(
-            method_result_type(&Ty::Str, "parse_u64"),
+            resolve_builtin_method(&Ty::Str, "parse_u64").result,
             Some(opt_of(Ty::U64))
         );
-        assert_eq!(method_result_type(&Ty::Str, "nope"), None);
+        assert_eq!(resolve_builtin_method(&Ty::Str, "nope").result, None);
 
         // Vec has no `get`: element access is `v[i]`.
         let vec_i64 = vec_of(Ty::I64);
-        assert_eq!(method_result_type(&vec_i64, "len"), Some(Ty::U64));
-        assert_eq!(method_result_type(&vec_i64, "push"), Some(Ty::Unit));
-        assert_eq!(method_result_type(&vec_i64, "pop"), Some(Ty::Unit));
-        assert_eq!(method_result_type(&vec_i64, "clear"), Some(Ty::Unit));
-        assert_eq!(method_result_type(&vec_i64, "truncate"), Some(Ty::Unit));
-        assert_eq!(method_result_type(&vec_i64, "get"), None);
-        assert_eq!(method_result_type(&vec_of(Ty::Bool), "get"), None);
-        assert!(method_argument_expectations(&vec_i64, "get").is_empty());
-        assert_eq!(method_result_type(&vec_i64, "nope"), None);
+        assert_eq!(
+            resolve_builtin_method(&vec_i64, "len").result,
+            Some(Ty::U64)
+        );
+        assert_eq!(
+            resolve_builtin_method(&vec_i64, "push").result,
+            Some(Ty::Unit)
+        );
+        assert_eq!(
+            resolve_builtin_method(&vec_i64, "pop").result,
+            Some(Ty::Unit)
+        );
+        assert_eq!(
+            resolve_builtin_method(&vec_i64, "clear").result,
+            Some(Ty::Unit)
+        );
+        assert_eq!(
+            resolve_builtin_method(&vec_i64, "truncate").result,
+            Some(Ty::Unit)
+        );
+        assert_eq!(resolve_builtin_method(&vec_i64, "get").result, None);
+        assert_eq!(
+            resolve_builtin_method(&vec_of(Ty::Bool), "get").result,
+            None
+        );
+        assert!(
+            resolve_builtin_method(&vec_i64, "get")
+                .expected_args
+                .is_empty()
+        );
+        assert_eq!(resolve_builtin_method(&vec_i64, "nope").result, None);
 
         // HashMap: `get` is an `Option<V>` so a missing key is never a default value.
         let map = map_of("HashMap", Ty::I64, Ty::Bool);
-        assert_eq!(method_result_type(&map, "len"), Some(Ty::U64));
-        assert_eq!(method_result_type(&map, "insert"), Some(Ty::Unit));
-        assert_eq!(method_result_type(&map, "remove"), Some(Ty::Unit));
-        assert_eq!(method_result_type(&map, "get"), Some(opt_of(Ty::Bool)));
+        assert_eq!(resolve_builtin_method(&map, "len").result, Some(Ty::U64));
         assert_eq!(
-            method_result_type(&map_of("HashMap", Ty::I64, Ty::Str), "get"),
+            resolve_builtin_method(&map, "insert").result,
+            Some(Ty::Unit)
+        );
+        assert_eq!(
+            resolve_builtin_method(&map, "remove").result,
+            Some(Ty::Unit)
+        );
+        assert_eq!(
+            resolve_builtin_method(&map, "get").result,
+            Some(opt_of(Ty::Bool))
+        );
+        assert_eq!(
+            resolve_builtin_method(&map_of("HashMap", Ty::I64, Ty::Str), "get").result,
             Some(opt_of(Ty::Str))
         );
-        assert_eq!(method_result_type(&map, "contains_key"), Some(Ty::Bool));
-        assert_eq!(method_result_type(&map, "nope"), None);
+        assert_eq!(
+            resolve_builtin_method(&map, "contains_key").result,
+            Some(Ty::Bool)
+        );
+        assert_eq!(resolve_builtin_method(&map, "nope").result, None);
 
         // BTreeMap: value type flows into `insert`/`get` Option payloads.
         let bmap = map_of("BTreeMap", Ty::I64, Ty::Bool);
-        assert_eq!(method_result_type(&bmap, "len"), Some(Ty::U64));
-        assert_eq!(method_result_type(&bmap, "insert"), Some(opt_of(Ty::Bool)));
-        assert_eq!(method_result_type(&bmap, "get"), Some(opt_of(Ty::Bool)));
-        assert_eq!(method_result_type(&bmap, "contains"), Some(Ty::Bool));
-        assert_eq!(method_result_type(&bmap, "nope"), None);
+        assert_eq!(resolve_builtin_method(&bmap, "len").result, Some(Ty::U64));
+        assert_eq!(
+            resolve_builtin_method(&bmap, "insert").result,
+            Some(opt_of(Ty::Bool))
+        );
+        assert_eq!(
+            resolve_builtin_method(&bmap, "get").result,
+            Some(opt_of(Ty::Bool))
+        );
+        assert_eq!(
+            resolve_builtin_method(&bmap, "contains").result,
+            Some(Ty::Bool)
+        );
+        assert_eq!(resolve_builtin_method(&bmap, "nope").result, None);
 
         // Option/Result unwrap yields the payload; other methods are unknown.
         assert_eq!(
-            method_result_type(&opt_of(Ty::I64), "unwrap"),
+            resolve_builtin_method(&opt_of(Ty::I64), "unwrap").result,
             Some(Ty::I64)
         );
         let result_bool = Ty::Applied(Box::new(Ty::Enum("Result".to_string())), vec![Ty::Bool]);
-        assert_eq!(method_result_type(&result_bool, "unwrap"), Some(Ty::Bool));
-        assert_eq!(method_result_type(&opt_of(Ty::I64), "map"), None);
+        assert_eq!(
+            resolve_builtin_method(&result_bool, "unwrap").result,
+            Some(Ty::Bool)
+        );
+        assert_eq!(resolve_builtin_method(&opt_of(Ty::I64), "map").result, None);
 
         // Non-builtin receivers expose no builtin methods.
-        assert_eq!(method_result_type(&Ty::I64, "len"), None);
+        assert_eq!(resolve_builtin_method(&Ty::I64, "len").result, None);
         assert_eq!(
-            method_result_type(&Ty::Struct("Foo".to_string()), "bar"),
+            resolve_builtin_method(&Ty::Struct("Foo".to_string()), "bar").result,
             None
         );
     }
 
     #[test]
     fn builtin_method_names_list_the_known_methods() {
-        assert!(builtin_method_names(&Ty::Str).contains(&"substring"));
-        assert!(builtin_method_names(&Ty::Str).contains(&"parse_u64"));
+        assert!(
+            builtin_method_candidates(&resolve_builtin_method(&Ty::Str, ""))
+                .contains(&"substring".to_string())
+        );
+        assert!(
+            builtin_method_candidates(&resolve_builtin_method(&Ty::Str, ""))
+                .contains(&"parse_u64".to_string())
+        );
         assert_eq!(
-            builtin_method_names(&vec_of(Ty::I64)),
+            builtin_method_candidates(&resolve_builtin_method(&vec_of(Ty::I64), "")),
             &["len", "push", "pop", "clear", "truncate"]
         );
         assert_eq!(
-            builtin_method_names(&map_of("HashMap", Ty::I64, Ty::Bool)),
+            builtin_method_candidates(&resolve_builtin_method(
+                &map_of("HashMap", Ty::I64, Ty::Bool),
+                ""
+            )),
             &["len", "insert", "get", "contains_key", "remove"]
         );
         assert_eq!(
-            builtin_method_names(&map_of("BTreeMap", Ty::I64, Ty::Bool)),
+            builtin_method_candidates(&resolve_builtin_method(
+                &map_of("BTreeMap", Ty::I64, Ty::Bool),
+                ""
+            )),
             &["len", "insert", "get", "contains"]
         );
-        assert_eq!(builtin_method_names(&opt_of(Ty::I64)), &["unwrap"]);
-        assert!(builtin_method_names(&Ty::I64).is_empty());
-        assert!(builtin_method_names(&Ty::Struct("Foo".to_string())).is_empty());
+        assert_eq!(
+            builtin_method_candidates(&resolve_builtin_method(&opt_of(Ty::I64), "")),
+            &["unwrap"]
+        );
+        assert!(builtin_method_candidates(&resolve_builtin_method(&Ty::I64, "")).is_empty());
+        assert!(
+            builtin_method_candidates(&resolve_builtin_method(&Ty::Struct("Foo".to_string()), ""))
+                .is_empty()
+        );
     }
 }
