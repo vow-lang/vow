@@ -1,6 +1,5 @@
 // TEST: stdout "ok\n"
-// Float comparisons have a separate codegen issue (#1508), so this fixture checks
-// that each extracted value crosses a typed return or call boundary.
+// Checks that each extracted value crosses a typed return or call boundary.
 module Issue1124ScalarPayloads
 
 fn identity(v: f64) -> f64 { v }

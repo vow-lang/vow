@@ -1,0 +1,76 @@
+// TEST: stdout "1.5 vs 2.5: 011100\n2.5 vs 2.5: 100101\n3.5 vs 2.5: 010011\nloop: 3\nbranch: 1\nnan: 010\nlit: 1\n"
+// Regression fixture for #1508: f64 comparison operators lowered to integer
+// icmp opcodes, which Cranelift rejects on a float controlling type. The f32
+// functions are never called: float literals lower to f64 constants, so only
+// parameter-fed f32 comparisons are codegen-checked here.
+module FloatComparison
+
+fn bit(c: bool) -> i64 {
+    if c { 1 } else { 0 }
+}
+
+fn eq_f64(a: f64, b: f64) -> bool { a == b }
+fn ne_f64(a: f64, b: f64) -> bool { a != b }
+fn lt_f64(a: f64, b: f64) -> bool { a < b }
+fn le_f64(a: f64, b: f64) -> bool { a <= b }
+fn gt_f64(a: f64, b: f64) -> bool { a > b }
+fn ge_f64(a: f64, b: f64) -> bool { a >= b }
+
+fn eq_f32(a: f32, b: f32) -> bool { a == b }
+fn ne_f32(a: f32, b: f32) -> bool { a != b }
+fn lt_f32(a: f32, b: f32) -> bool { a < b }
+fn le_f32(a: f32, b: f32) -> bool { a <= b }
+fn gt_f32(a: f32, b: f32) -> bool { a > b }
+fn ge_f32(a: f32, b: f32) -> bool { a >= b }
+
+fn show(label: String, a: f64, b: f64) [io] {
+    print_str(label);
+    print_i64(bit(eq_f64(a, b)));
+    print_i64(bit(ne_f64(a, b)));
+    print_i64(bit(lt_f64(a, b)));
+    print_i64(bit(le_f64(a, b)));
+    print_i64(bit(gt_f64(a, b)));
+    print_i64(bit(ge_f64(a, b)));
+    print_str(String::from("\n"));
+}
+
+fn count_below(limit: f64) -> i64 {
+    let mut x: f64 = 0.0;
+    let mut n: i64 = 0;
+    while x < limit {
+        n = n + 1;
+        x = x + 1.0;
+    }
+    n
+}
+
+fn main() [io] {
+    show(String::from("1.5 vs 2.5: "), 1.5, 2.5);
+    show(String::from("2.5 vs 2.5: "), 2.5, 2.5);
+    show(String::from("3.5 vs 2.5: "), 3.5, 2.5);
+
+    print_str(String::from("loop: "));
+    print_i64(count_below(3.0));
+    print_str(String::from("\n"));
+
+    let t: f64 = 4.0;
+    print_str(String::from("branch: "));
+    if t >= 4.0 {
+        print_i64(1);
+    } else {
+        print_i64(0);
+    }
+    print_str(String::from("\n"));
+
+    let zero: f64 = 0.0;
+    let nan: f64 = zero / zero;
+    print_str(String::from("nan: "));
+    print_i64(bit(nan == nan));
+    print_i64(bit(nan != nan));
+    print_i64(bit(nan < 1.0));
+    print_str(String::from("\n"));
+
+    print_str(String::from("lit: "));
+    print_i64(bit(1.5 < 2.5));
+    print_str(String::from("\n"));
+}
