@@ -359,58 +359,6 @@ fn vc_exec_value(w: VcWalk, inst: IrInst, pc: i64) -> i64 {
     vc_exec_arith(w, inst, pc)
 }
 
-// Outcome of branching on `cond_id` at a block with known outcomes `foff`/`flen`:
-// 1 taken, 0 not taken, -1 undecided. A condition is decided when its term is a
-// constant or the path already fixed that term (or its negation).
-fn vc_branch_outcome(w: VcWalk, cond_id: i64, foff: i64, flen: i64) -> i64 {
-    let ar: VcArena = w.cs.arena;
-    let fl: VcFlow = w.fl;
-    let c: i64 = w.var_of[cond_id as u64];
-    if vc_tm_is_true(ar, c) { return 1; }
-    if vc_tm_is_false(ar, c) { return 0; }
-    if vc_flow_has_fact(fl, foff, flen, vc_flow_fact_lit(ar, c, true)) { return 1; }
-    if vc_flow_has_fact(fl, foff, flen, vc_flow_fact_lit(ar, c, false)) { return 0; }
-    -1
-}
-
-// Registers the edge of the branch at the end of block `bi` to block `dst`,
-// taken when the condition evaluates to `polarity`. With a decided condition
-// the edge keeps the block's path condition; otherwise it is conjoined with the
-// outcome, which is also recorded as a fact for the blocks it leads to.
-fn vc_branch_edge(w: VcWalk, bi: u64, cond_id: i64, outcome: bool, decided: bool, dst: i64) {
-    let cs: VcClaims = w.cs;
-    let ar: VcArena = cs.arena;
-    let fl: VcFlow = w.fl;
-    let hdr: SmtScript = cs.header;
-    let pc: i64 = fl.block_pc[bi];
-    let mut ec: i64 = pc;
-    let mut off: i64 = fl.block_foff[bi];
-    let mut len: i64 = fl.block_flen[bi];
-    if !decided {
-        let c: i64 = w.var_of[cond_id as u64];
-        if outcome {
-            ec = vc_flow_and(fl, ar, hdr, pc, c);
-        } else {
-            ec = vc_flow_and_not(fl, ar, hdr, pc, c);
-        }
-        off = vc_flow_extend_facts(fl, off, len, vc_flow_fact_lit(ar, c, outcome));
-        len = fl.pool.len() as i64 - off;
-    }
-    vc_flow_add_edge(fl, dst as u64, bi as i64, ec, off, len);
-}
-
-fn vc_walk_branch(w: VcWalk, inst: IrInst, bi: u64, then_idx: i64, else_idx: i64) {
-    let fl: VcFlow = w.fl;
-    let cond_id: i64 = inst.args[0];
-    let known: i64 = vc_branch_outcome(w, cond_id, fl.block_foff[bi], fl.block_flen[bi]);
-    if known != 0 {
-        vc_branch_edge(w, bi, cond_id, true, known == 1, then_idx);
-    }
-    if known != 1 {
-        vc_branch_edge(w, bi, cond_id, false, known == 0, else_idx);
-    }
-}
-
 // Aggregate instructions: pointers are objects (`obj_of`), never terms; a field
 // read defines a scalar value.
 fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
@@ -543,9 +491,10 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
     } else if op == IOP_VOW_REQ() || op == IOP_VOW_ENS() || op == IOP_VOW_INV() {
         vc_walk_clause(w, inst, pc);
     } else if op == IOP_JUMP() {
-        vc_flow_add_edge(fl, succ[bi * 2] as u64, bi as i64, pc, fl.block_foff[bi], fl.block_flen[bi]);
+        vc_flow_jump(fl, bi, succ[bi * 2] as u64);
     } else if op == IOP_BRANCH() {
-        vc_walk_branch(w, inst, bi, succ[bi * 2], succ[bi * 2 + 1]);
+        let cond: i64 = w.var_of[inst.args[0] as u64];
+        vc_flow_branch(fl, cs.arena, cs.header, bi, cond, succ[bi * 2] as u64, succ[bi * 2 + 1] as u64);
     } else if vc_is_havoc(inst) {
         let name: String = String::from("h");
         name.push_str(i64_to_string(inst.id));

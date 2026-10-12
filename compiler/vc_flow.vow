@@ -134,6 +134,55 @@ fn vc_flow_add_edge(fl: VcFlow, dst: u64, src: i64, cond: i64, foff: i64, flen: 
     fl.in_head[dst] = id;
 }
 
+// Outcome of branching on term `c` in a live block: 1 taken, 0 not taken,
+// -1 undecided. Constants and known outcomes (including negations) decide it.
+fn vc_flow_branch_outcome(fl: VcFlow, ar: VcArena, bi: u64, c: i64) -> i64 {
+    if vc_tm_is_true(ar, c) { return 1; }
+    if vc_tm_is_false(ar, c) { return 0; }
+    let off: i64 = fl.block_foff[bi];
+    let len: i64 = fl.block_flen[bi];
+    if vc_flow_has_fact(fl, off, len, vc_flow_fact_lit(ar, c, true)) { return 1; }
+    if vc_flow_has_fact(fl, off, len, vc_flow_fact_lit(ar, c, false)) { return 0; }
+    -1
+}
+
+// A decided edge shares the source path condition and facts. An undecided
+// edge conjoins its outcome and extends the capped, normalised fact history.
+fn vc_flow_branch_edge(fl: VcFlow, ar: VcArena, hdr: SmtScript, bi: u64, c: i64, outcome: bool, decided: bool, dst: u64) {
+    let pc: i64 = fl.block_pc[bi];
+    let mut ec: i64 = pc;
+    let mut off: i64 = fl.block_foff[bi];
+    let mut len: i64 = fl.block_flen[bi];
+    if !decided {
+        if outcome {
+            ec = vc_flow_and(fl, ar, hdr, pc, c);
+        } else {
+            ec = vc_flow_and_not(fl, ar, hdr, pc, c);
+        }
+        off = vc_flow_extend_facts(fl, off, len, vc_flow_fact_lit(ar, c, outcome));
+        len = fl.pool.len() as i64 - off;
+    }
+    vc_flow_add_edge(fl, dst, bi as i64, ec, off, len);
+}
+
+// Branch from an entered block on a resolved Bool term to dense block indices.
+// Register then before else, even for equal targets: incoming-edge and SMT
+// naming order are part of the executor's deterministic query construction.
+fn vc_flow_branch(fl: VcFlow, ar: VcArena, hdr: SmtScript, bi: u64, cond: i64, then_idx: u64, else_idx: u64) {
+    let known: i64 = vc_flow_branch_outcome(fl, ar, bi, cond);
+    if known != 0 {
+        vc_flow_branch_edge(fl, ar, hdr, bi, cond, true, known == 1, then_idx);
+    }
+    if known != 1 {
+        vc_flow_branch_edge(fl, ar, hdr, bi, cond, false, known == 0, else_idx);
+    }
+}
+
+// An unconditional successor inherits the entered source's path and facts.
+fn vc_flow_jump(fl: VcFlow, bi: u64, dst: u64) {
+    vc_flow_add_edge(fl, dst, bi as i64, fl.block_pc[bi], fl.block_foff[bi], fl.block_flen[bi]);
+}
+
 // Path condition and known outcomes of block `bi`, from the edges registered
 // into it. False when no live edge reaches it.
 fn vc_flow_enter(fl: VcFlow, ar: VcArena, hdr: SmtScript, bi: u64) -> bool {
