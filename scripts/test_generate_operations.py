@@ -780,8 +780,26 @@ def _pure_c_model(op):
 
 # The native verifier models none of these builtins yet. The two pure hash
 # builtins still say whether the ESBMC C model knows them.
+# The pure string builtins the native executor models (`vc_str_op_kind`).
+NATIVE_MODELLED_OPS = {
+    "parse_i8",
+    "parse_i16",
+    "parse_i32",
+    "parse_i64",
+    "parse_u8",
+    "parse_u16",
+    "parse_u32",
+    "int_to_string",
+    "uint_to_string",
+    "string_substr",
+}
+
 KNOWN_OPS = [
-    dict(op, verifier_model="unmodeled", **_pure_c_model(op))
+    dict(
+        op,
+        verifier_model="known" if op["name"] in NATIVE_MODELLED_OPS else "unmodeled",
+        **_pure_c_model(op),
+    )
     for op in (
         PRINT_OPS
         + FS_STDIN_ARGS_STDERR_OPS
@@ -2445,9 +2463,10 @@ class QueryUtilityCatalogueTest(unittest.TestCase):
         for name in ("i64_to_string", "string_matches_literal_at", "parse_u64"):
             self.assertNotIn(name, self.ops)
 
-    def test_native_verifier_models_none_of_them(self):
+    def test_native_verifier_models_only_the_opaque_string_helpers(self):
         for row in _QUERY_UTILITY_ROWS:
-            self.assertEqual(self.ops[row[0]]["verifier_model"], "unmodeled", row[0])
+            want = "known" if row[0] in NATIVE_MODELLED_OPS else "unmodeled"
+            self.assertEqual(self.ops[row[0]]["verifier_model"], want, row[0])
         block = go.gen_vow_vc_ops_block(self.catalogue, [])
         self.assertIn("return false;", block)
 
