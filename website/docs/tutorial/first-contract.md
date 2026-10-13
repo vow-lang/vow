@@ -8,13 +8,15 @@ you happened to test.
 
 ## A precondition
 
-Integer division by zero is undefined. Make that impossible to call wrong:
+Integer division has two abort cases: a zero divisor, and `i64::MIN / -1`, whose
+quotient does not fit in an `i64`. Make both impossible to call wrong:
 
 ```vow
 module Divide
 
 fn divide(x: i64, y: i64) -> i64 vow {
     requires: y != 0
+    requires: x >= -9223372036854775807 || y != -1
 } {
     x / y
 }
@@ -31,7 +33,7 @@ $ build/vowc build divide.vow
 ```
 
 `Verified` means the verifier established that, given the contract, the body is
-safe — and that `main`'s call `divide(10, 2)` satisfies `y != 0` — within its
+safe — and that `main`'s call `divide(10, 2)` satisfies both clauses — within its
 configured bounded model. The source contract still describes the function's
 real domain; verifier limits do not belong in `requires`.
 
