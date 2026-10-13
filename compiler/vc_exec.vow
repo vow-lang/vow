@@ -404,6 +404,13 @@ fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
     false
 }
 
+// A fresh aggregate object for the result of `inst`, allocated at the block's path condition.
+fn vc_walk_new_obj(w: VcWalk, bi: u64, inst: IrInst) -> i64 {
+    let obj: i64 = vc_agg_alloc(w.ag, w.fl.block_pc[bi]);
+    w.obj_of[inst.id as u64] = obj;
+    obj
+}
+
 // The result term of a `String` predicate: the 64-bit `1`/`0` of an `i64` result,
 // the Bool itself for a `Bool` one.
 fn vc_str_flag(ar: VcArena, inst: IrInst, t: i64) -> i64 {
@@ -444,17 +451,17 @@ fn vc_walk_str(w: VcWalk, bi: u64, inst: IrInst, pc: i64, kind: i64, s: i64) {
         let t: i64 = vc_vec_slot(vv, w.ag, ar, hdr, cs.assumed, w.obj_of[inst.args[1] as u64]);
         let ta: i64 = vc_vec_cur_arr(vv, t, b);
         let tl: i64 = vc_vec_cur_len(vv, t, b);
-        let mut r: i64 = vc_str_eq(vv, ar, hdr, cs.assumed, arr, len, ta, tl);
+        let mut r: i64 = 0;
         if kind == VC_STR_STARTS_WITH() { r = vc_str_starts_with(vv, ar, hdr, cs.assumed, arr, len, ta, tl); }
-        if kind == VC_STR_ENDS_WITH() { r = vc_str_ends_with(vv, ar, hdr, cs.assumed, arr, len, ta, tl); }
+        else if kind == VC_STR_ENDS_WITH() { r = vc_str_ends_with(vv, ar, hdr, cs.assumed, arr, len, ta, tl); }
+        else { r = vc_str_eq(vv, ar, hdr, cs.assumed, arr, len, ta, tl); }
         vc_define(w, inst, vc_str_flag(ar, inst, r));
     } else if kind == VC_STR_MATCHES_LITERAL_AT() {
         let lit: i64 = vc_vec_slot(vv, w.ag, ar, hdr, cs.assumed, w.obj_of[inst.args[2] as u64]);
         let m: i64 = vc_str_matches_literal(vv, ar, hdr, cs.assumed, arr, len, w.var_of[inst.args[1] as u64], vv.lit_text[lit as u64], vc_vec_cur_arr(vv, lit, b));
         vc_define(w, inst, vc_str_flag(ar, inst, m));
     } else {
-        let obj: i64 = vc_agg_alloc(w.ag, w.fl.block_pc[bi]);
-        w.obj_of[inst.id as u64] = obj;
+        let obj: i64 = vc_walk_new_obj(w, bi, inst);
         let mut narr: i64 = arr;
         let mut nlen: i64 = len;
         if kind == VC_STR_SUBSTRING() || kind == VC_STR_SUBSTR() {
@@ -481,21 +488,18 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
     let vv: VcVec = w.vv;
     let b: i64 = bi as i64;
     if inst.op == IOP_CONST_STR() {
-        let obj: i64 = vc_agg_alloc(w.ag, w.fl.block_pc[bi]);
-        w.obj_of[inst.id as u64] = obj;
+        let obj: i64 = vc_walk_new_obj(w, bi, inst);
         vc_str_literal(vv, ar, hdr, cs.assumed, obj, b, inst.ds);
         return true;
     }
     if kind == VC_VEC_NONE() { return false; }
     if kind == VC_VEC_NEW() || kind == VC_STR_NEW() {
-        let obj: i64 = vc_agg_alloc(w.ag, w.fl.block_pc[bi]);
-        w.obj_of[inst.id as u64] = obj;
+        let obj: i64 = vc_walk_new_obj(w, bi, inst);
         vc_vec_create(vv, w.ag, ar, hdr, obj, b);
         return true;
     }
     if kind == VC_STR_FROM_RAW_PARTS() {
-        let obj: i64 = vc_agg_alloc(w.ag, w.fl.block_pc[bi]);
-        w.obj_of[inst.id as u64] = obj;
+        let obj: i64 = vc_walk_new_obj(w, bi, inst);
         // The runtime copies nothing for a null source or a zero length; otherwise
         // the result is `n` bytes of unknown contents, and a length at the
         // capacity mask traps (`set_vow_vec_capacity`), which never returns.
