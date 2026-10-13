@@ -2074,11 +2074,27 @@ class ArenaRoutingInvariantsTest(unittest.TestCase):
         self.assertEqual(self._problems(scalar, []), [])
 
     def test_route_without_heap_fresh_is_reported(self):
+        scalar = dict(_heap_op(), doc_signature="fn() -> i64", **{"return": "i64"})
+        problems = self._problems(scalar, ["__vow_heap_op"])
+        self.assertEqual(len(problems), 1)
+        self.assertIn("has an arena route", problems[0])
+        self.assertIn("'heap_op'", problems[0])
+
+    def test_undeclared_heap_op_with_a_route_is_reported_once(self):
         problems = self._problems(_heap_op(), ["__vow_heap_op"])
-        self.assertTrue(
-            any("has an arena route" in p and "'heap_op'" in p for p in problems),
-            problems,
+        self.assertEqual(len(problems), 1)
+        self.assertIn("returns a heap value but has no arena_routing", problems[0])
+
+    def test_heap_fresh_needs_a_heap_result(self):
+        scalar = dict(
+            _heap_op(arena_routing="heap_fresh"),
+            doc_signature="fn() -> i64",
+            **{"return": "i64"},
         )
+        problems = self._problems(scalar, ["__vow_heap_op"])
+        self.assertEqual(len(problems), 1)
+        self.assertIn("'heap_op' is heap_fresh", problems[0])
+        self.assertIn("not a String, Vec or Option", problems[0])
 
     def test_heap_fresh_without_route_is_reported(self):
         problems = self._problems(_heap_op(arena_routing="heap_fresh"), [])
@@ -2126,8 +2142,10 @@ class ArenaRoutingInvariantsTest(unittest.TestCase):
 
     def test_real_catalogue_reasons_sit_only_on_heap_nones(self):
         for op in go.load_catalogue(REPO_ROOT):
-            has_reason = "arena_routing_reason" in op
-            self.assertEqual(has_reason, op.get("arena_routing") == "none", op["name"])
+            heap_none = (
+                op.get("arena_routing") == "none" and go.result_shape(op) is not None
+            )
+            self.assertEqual("arena_routing_reason" in op, heap_none, op["name"])
 
     def test_route_without_a_catalogued_op_stays_legal(self):
         self.assertEqual(go.check_arena_routing([], ["__vow_map_get"]), [])

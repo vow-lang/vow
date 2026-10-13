@@ -397,11 +397,18 @@ def check_arena_routing(ops: list[dict], routes: list[str]) -> list[str]:
         symbol = op["runtime_symbol"]
         routing = op.get("arena_routing")
         routed = symbol in routes
-        if routing is None and result_shape(op) is not None:
+        heap_result = result_shape(op) is not None
+        undeclared = routing is None and heap_result
+        if undeclared:
             problems.append(
                 f"docs/spec/operations.json: '{name}' returns a heap value but has "
                 "no arena_routing (set 'heap_fresh' with an arena route, or an "
                 "explicit 'none')"
+            )
+        if routing == "heap_fresh" and not heap_result:
+            problems.append(
+                f"docs/spec/operations.json: '{name}' is heap_fresh but its "
+                "return type is not a String, Vec or Option"
             )
         if routing == "heap_fresh" and not routed:
             problems.append(
@@ -413,7 +420,7 @@ def check_arena_routing(ops: list[dict], routes: list[str]) -> list[str]:
                 f"docs/spec/operations.json: '{name}' is arena_routing 'none' but "
                 f"its runtime_symbol '{symbol}' has an arena route"
             )
-        elif routing != "heap_fresh" and routed:
+        elif routing != "heap_fresh" and routed and not undeclared:
             problems.append(
                 f"docs/spec/operations.json: '{name}' has an arena route for "
                 f"'{symbol}' but is not heap_fresh"

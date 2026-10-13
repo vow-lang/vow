@@ -234,7 +234,10 @@ A call's result shape tag (`String`, `Vec` or `Option<T>` heap aggregate, which 
 arena inference read) is derived from the entry's documented return type, not stored: the Rust
 `catalogue_builtin_result_tag` and the self-hosted `catalogue_builtin_result_tag` are generated, and
 `arena_routing: heap_fresh` only records (and the generator validates) that the symbol has an
-`_in_arena` variant in `arena_routes`. `i64_to_string`, `string_matches_literal_at` (its literal operand
+`_in_arena` variant in `arena_routes`. Every op returning a `String`, `Vec` or `Option` must declare
+`arena_routing` (`heap_fresh` exactly when its symbol is a route; otherwise `none` plus a free-text
+`arena_routing_reason` saying why the heap result has no arena variant), and `--check` fails on any
+disagreement. `i64_to_string`, `string_matches_literal_at` (its literal operand
 lowers specially) and the narrowing intrinsics stay hand-written.
 
 `docs/spec/grammar.md`'s Builtin Function Signatures table and the generated help-JSON in
@@ -255,8 +258,8 @@ match `^\[(token(, token)*)?\]$` against the closed vocabulary `{read, write, io
 tokens in alphabetical order (matching `vow-syntax/src/printer.rs`'s `print_effects`, which sorts the
 same way); `doc_signature` must parse as `fn(...) -> Type` with arity and
 per-parameter/return types matching `params`/`return` (`String`/`Vec<...>` both denote `ptr`); the
-`verifier_model` (`known`/`unmodeled`; `main()` rejects an entry without one), the optional
-`arena_routing` (`none`/`heap_fresh`) and `c_model` (`unmodeled`/`base`/`base_and_arena`; `main()` rejects
+`verifier_model` (`known`/`unmodeled`; `main()` rejects an entry without one), the
+`arena_routing` (`none`/`heap_fresh`; `main()` rejects a heap-returning entry without one) and `c_model` (`unmodeled`/`base`/`base_and_arena`; `main()` rejects
 a pure entry without one) fields, when present, must be in their closed sets; an `Option<T>` return type
 needs a `T` the generator can tag; and any field name not in the recognized set (required or optional)
 is rejected outright, so a misspelled field can never silently defeat its own check. All
