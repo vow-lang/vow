@@ -192,11 +192,11 @@ The staleness detector `scripts/check_help_coverage.py` (run in `full_test.sh`) 
 `docs/spec/operations.json` is the Operation Catalogue: the single checked, hand-edited source of
 runtime-symbol, ABI, return-shape, and doc facts for the Builtin Operations in its `operations` array
 (the print, filesystem, stdin/args/stderr, process, hash, environment and query/utility builtins; epic
-#375), plus the top-level `arena_routes` list. It is deliberately narrower than
+#375; 83 operations), plus the top-level `arena_routes` list (84 base symbols) and the `excluded` section. It is deliberately narrower than
 `vow-types/src/env.rs::builtin_free_fn_signatures()` — that table (and its self-hosted counterpart in
 `compiler/env.vow`) remains the single source for signature/effects and is never read or replaced by
 this catalogue; the entry's `doc_signature`/`effects` are copies checked against `grammar.md` and the
-help text, not a second source. `cargo test -p vow-types` and `build/vowc test compiler/ --filter test_op_catalogue_env` compare them with both type-checker tables, via fact tables generated into `vow-types/src/env.rs` and `compiler/tests/catalogue_facts.vow` (`GENERATE:OPERATION_FACTS` markers).
+help text, not a second source. `cargo test -p vow-types` and `build/vowc test compiler/ --filter test_op_catalogue_env` compare them with both type-checker tables, via fact tables generated into `vow-types/src/env.rs` and `compiler/tests/catalogue_facts.vow`. They sit between their own `// GENERATE:OPERATION_FACTS:START` / `:END` markers, separate from the `GENERATE:OPERATIONS` pair below, and `generate_operations.py --check` fails when they are stale.
 
 Where the shipped catalogue departs from the epic's PRD (docs checked rather than generated, lookup
 functions rather than typed Rust records, the `c_model`/`verifier_model` split, the exclusion list),
@@ -237,8 +237,9 @@ arena inference read) is derived from the entry's documented return type, not st
 `arena_routing: heap_fresh` only records (and the generator validates) that the symbol has an
 `_in_arena` variant in `arena_routes`. Every op returning a `String`, `Vec` or `Option` must declare
 `arena_routing` (`heap_fresh` exactly when its symbol is a route; otherwise `none` plus a free-text
-`arena_routing_reason` saying why the heap result has no arena variant), and `--check` fails on any
-disagreement. `i64_to_string`, `string_matches_literal_at` (its literal operand
+`arena_routing_reason` saying why the heap result has no arena variant; today `stdin_read_line`, which
+returns a reused scratch buffer, and `proc_sample`, which allocates in the root arena and keeps each result
+until exit, tracked in #1639), and `--check` fails on any disagreement. `i64_to_string`, `string_matches_literal_at` (its literal operand
 lowers specially) and the narrowing intrinsics stay hand-written.
 
 `docs/spec/grammar.md`'s Builtin Function Signatures table and the generated help-JSON in
@@ -249,8 +250,8 @@ grammar.md row and with the `skill.rs` and `main.vow` help lines).
 `c_model` (ESBMC C model, parity until epic #1398 P6) and `verifier_model` (native verifier, exempt
 from parity) are separate per-entry fields, and only pure entries may be known to either.
 Builtins the type-checker tables hold that the catalogue deliberately does not describe (narrowing-conversion
-families, `__vow_clif_*`, `string_matches_literal_at`, the `debug_*` builtins, the `i64_to_string` alias) are listed
-with a reason in the `excluded` section of `operations.json`, each entry an explicit `names` list, a `prefix`, or
+families and the saturating `u8` operations, `__vow_clif_*`, `string_matches_literal_at`, the `debug_*` builtins, the
+`i64_to_string` alias; 135 of the 218 table entries) are listed with a reason in the `excluded` section of `operations.json`, each entry an explicit `names` list, a `prefix`, or
 a `contains` plus `suffixes` set (no regex). `load_excluded` rejects a missing reason, a malformed matcher and a
 name that is both catalogued and excluded; the vow-types and `test_op_catalogue_env` tests fail on a table entry
 that is neither catalogued nor excluded and on an exclusion that matches no table entry. `pin_to_root` and the
@@ -272,11 +273,11 @@ lets a bad catalogue surface as a raw Python traceback — a malformed `operatio
 entry prints a clean message to stderr and exits 1. `scripts/full_test.sh` runs
 `generate_operations.py --check` as its `ops/catalogue-drift` gate (Section 8), alongside CI's
 `ci.yml` step, so staleness is caught locally too, not only on push. The generator's own unit tests
-(`scripts/test_generate_operations.py`) run in `ci.yml`; `full_test.sh` does not run them yet.
+(`scripts/test_generate_operations.py`) run in both `ci.yml` and `full_test.sh` (gate
+`ops/catalogue-generator-tests`, right after `ops/catalogue-drift`).
 
-The operation-group slices (#1270–#1273, #1275) have all merged. Further work on the catalogue (#1274
-and the remaining epic #375 items) should add entries, fields and target files to the existing
-generator rather than inventing a new mechanism.
+All the catalogue slices of epic #375 (#1270–#1275) have merged. Further work on the catalogue should
+add entries, fields and target files to the existing generator rather than inventing a new mechanism.
 
 ## Architecture
 

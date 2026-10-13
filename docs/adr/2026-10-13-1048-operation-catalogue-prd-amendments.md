@@ -10,10 +10,11 @@ keep byte-identical C until epic #1398 P6).
 
 ## Context
 
-The PRD in #375 was written before any slice landed. Five slices have now
-merged (print, filesystem/stdin/args/stderr, process, query/utility, and the
-validation/docs hardening), and the catalogue covers 83 Builtin Operations plus
-the `arena_routes` section. Building it showed that four PRD decisions were
+The PRD in #375 was written before any slice landed. The operation-group
+slices (#1270 print, #1272 filesystem/stdin/args/stderr, #1273 process, #1271
+query/utility), the validation/docs hardening (#1275) and the verifier-model
+slice (#1274) have merged, and the catalogue covers 83 Builtin Operations plus
+the `arena_routes` section (84 base symbols) and the `excluded` section. Building it showed that four PRD decisions were
 either wrong or answered a narrower question than they appeared to. The epic
 can only close with no gaps if each such decision is either implemented or
 amended out of the PRD, with the reason recorded and a check that holds the
@@ -26,9 +27,8 @@ counterpart in `compiler/env.vow`.
 ## Decision
 
 Each item names what it amends, what replaces it, and the check that enforces
-the replacement. A check marked *pending* belongs to a sibling slice of #375
-that was open when this ADR was written; the amendment stands either way, and
-the item is closed by that slice.
+the replacement. Every check named below exists in the repository and runs in
+CI; none is deferred.
 
 ### (a) Docs are checked against the catalogue, not generated from it
 
@@ -85,7 +85,11 @@ markers:
   `catalogue_extern_sig`, a `match` over runtime symbols;
 - `vow-ir/src/region.rs` and `vow-clif-shim/src/lib.rs`: the
   `FRESH_ARENA_VARIANTS` table with hand-written lookups over it;
-- `vow-verify/src/c_emitter.rs`: `catalogue_c_model_known`.
+- `vow-verify/src/c_emitter.rs`: `catalogue_c_model_known`;
+- `vow-types/src/env.rs` and `compiler/tests/catalogue_facts.vow`: test-only
+  fact tables (the `CATALOGUE_FACTS` and `EXCLUDED_FACTS` consumers of (d)),
+  spliced between their own `GENERATE:OPERATION_FACTS` marker pair so that the
+  type-checker tests can compare the catalogue with the tables.
 
 A typed `Operation` record would be a second wide interface every caller goes
 through, to answer questions each of which needs one field. It would also have
@@ -140,9 +144,10 @@ classifier, but that rests on the catalogue's contents, not on the gate: a
 `known` effectful entry is a claim no symbolic executor model has been written
 for, which is why the rule is stated on the catalogue and not left to the gates.
 Every entry must decide explicitly: `check_verifier_models` rejects an op with
-no `verifier_model`, and `check_c_models` rejects a pure op with no `c_model`,
-an effectful op with `base`/`base_and_arena`, and `base_and_arena` on a symbol
-with no arena route.
+no `verifier_model` and an effectful op marked `known`, and `check_c_models`
+rejects a pure op with no `c_model`, an effectful op with
+`base`/`base_and_arena`, and `base_and_arena` on a symbol with no arena route.
+Both run on every invocation of `generate_operations.py`, `--check` included.
 
 **Rejected:** a single `verifier_model` field generating both the C-model and
 native classifiers.
@@ -156,8 +161,15 @@ invocation, including `--check`), with
 `test_real_catalogue_has_a_decision_for_every_pure_builtin` in
 `scripts/test_generate_operations.py`, and `scripts/parity.py c` over
 `tests/verify*/` in `full_test.sh` Section 2c for the emitted C. The same
-purity rule for `verifier_model: known`, and the controls that prove it, are
-*pending* (the verifier-model purity-invariant slice).
+purity rule holds for `verifier_model: known`: `check_verifier_models` rejects
+an effectful `known` entry, and `VerifierModelDriftTest` in the same file
+carries the controls that prove it
+(`test_effectful_builtin_cannot_be_known_to_the_native_verifier`,
+`test_every_effect_token_blocks_known`, which tries each effect token,
+`test_real_effectful_builtins_are_never_known`, which tries every effectful
+catalogued op, and `test_synthetic_pure_known_op_is_the_only_symbol_generated`,
+which shows that a pure `known` entry is the only kind that reaches
+`catalogue_verifier_known`).
 
 ### (d) The catalogue has an explicit exclusion list
 
@@ -165,22 +177,24 @@ purity rule for `verifier_model: known`, and the controls that prove it, are
 `string_matches_literal_at`, constructors and methods), which left the rest of
 the type-checker table's builtins neither catalogued nor declared otherwise,
 so a builtin missing from the catalogue was indistinguishable from a forgotten one. Slice
-by slice, the catalogue grew to 83 operations, covering 79 of the 96 names the
-type-checker table lists literally and the four `parse_<narrow int>` builtins
-it generates. The remaining literal names, and the families the table
-generates in loops, are deliberately not catalogued. That is recorded (by the
-coverage slice named below) as an `excluded` list in
-`docs/spec/operations.json`, each entry with a reason, so that every
-builtin name known to the type checker is either catalogued or excluded with a
-stated reason. The reasons:
+by slice, the catalogue grew to 83 operations. The type-checker table
+(`builtin_free_fn_signatures()`) holds 218 entries: those 83, plus 135 that are
+deliberately not catalogued, namely 20 literal names (3 `debug_*`,
+`string_matches_literal_at`, `i64_to_string`, 12 `__vow_clif_*` and
+3 saturating `u8` operations) and 115 members of the narrowing-conversion
+families the table generates in loops. That is recorded as the `excluded`
+section of `docs/spec/operations.json`, six entries each with a reason, so that
+every builtin name known to the type checker is either catalogued or excluded
+with a stated reason. An entry is an explicit `names` list, a `prefix`, or a
+`contains` fragment plus `suffixes` (no regex). The reasons:
 
 | Excluded | Why it is not a direct Builtin Operation fact |
 |---|---|
-| Narrowing-conversion families: `<src>_to_<dst>_{try,wrap,sat}` for u8, i8, i16, u16, i32, u32 targets, the 128-bit same-width sign changes `i128_to_u128_{wrap,sat}` and `u128_to_i128_{wrap,sat}` (no `_try`), and `add_sat_u8`, `sub_sat_u8`, `mul_sat_u8` | A combinatorial family the type-checker table builds in loops, lowered by hand-written arms after the catalogue lookup in `vow_static_builtin_to_runtime`. Listing every member would copy the family's structure into JSON; they need a family mechanism, not 100+ rows. The C emitter keeps its hand-written arms for them, outside the generated `catalogue_c_model_known`. |
+| Narrowing-conversion families: `<src>_to_<dst>_{try,wrap,sat}` for u8, i8, i16, u16, i32, u32 targets, the 128-bit same-width sign changes `i128_to_u128_{wrap,sat}` and `u128_to_i128_{wrap,sat}` (no `_try`), and `add_sat_u8`, `sub_sat_u8`, `mul_sat_u8` | A combinatorial family the type-checker table builds in loops, lowered by hand-written arms after the catalogue lookup in `vow_static_builtin_to_runtime`. Their narrow integer parameter and return types are outside the catalogue's token vocabulary, and listing every member would copy the family's structure into JSON; they need a family mechanism, not 100+ rows. In `operations.json` they are the entry `contains: _to_` with suffixes `_try`, `_wrap`, `_sat` and the entry naming the three `*_sat_u8` operations. The C emitter keeps its hand-written arms for them, outside the generated `catalogue_c_model_known`. |
 | `__vow_clif_*` (create, add_string, declare_extern, declare_function, fn_begin, fn_block, fn_inst, fn_vow, fn_end, finish, link, destroy) | The internal FFI of the self-hosted compiler to `vow-clif-shim`, not user surface (absent from grammar.md). Their ABI is owned by the shim crate, which is the consumer rather than a projection target. |
 | `pin_to_root` | A compiler intrinsic monomorphised per argument type with a hand-written lowering; it consumes the result-tag projection rather than being described by it. It is special-cased in the checkers (`vow-types/src/check.rs`, `compiler/checker.vow`), not listed in the type-checker tables, so it is documented here rather than in the gate's scope. |
 | `string_matches_literal_at` | Special lowering that rewrites the literal argument into a data pointer plus length before calling the runtime. |
-| `debug_str`, `debug_i64`, `debug_u64` | Pure by effect, but lowered to the `DebugCall` opcode (`vow_debug_builtin_to_runtime`), not the generic call path the catalogue projects. They are dropped in release and profile modes and are no-ops in verification, so they have no ABI or verifier fact to record. |
+| `debug_str`, `debug_i64`, `debug_u64` | Pure by effect, but lowered to the `DebugCall` opcode (`vow_debug_builtin_to_runtime`), not the generic call path the catalogue projects. They are emitted only in builds with debug checks (`has_debug_checks`) and are no-ops in verification, so they have no ABI or verifier fact to record. |
 | `i64_to_string` | A hand-written alias of the catalogued `int_to_string`; a second entry would need a second runtime symbol claim for the same `__vow_string_from_i64`, which `load_catalogue` rejects as a duplicate. |
 | Internal runtime ops (`__vow_vec_*`, `__vow_string_eq`, the `_in_arena` variants and similar) | Runtime Operations with no surface name, emitted by lowering rather than called from source. They are not in the type-checker tables, so there is no builtin to catalogue and they are documented here only, not entered in `excluded`; the `_in_arena` variants of the catalogued fresh-aggregate builtins are derived from `arena_routes`. |
 
@@ -189,30 +203,48 @@ single source for signatures and effects (this is user story 5, unchanged);
 the catalogue's `doc_signature` and `effects` are copies checked against
 grammar.md and the help text by (a). The purity rules of (c) read the
 catalogue's `effects`, so the coverage gate also compares them with the
-type-checker tables (see its requirement below). A
+type-checker tables (see the gate below). A
 builtin enters the catalogue by an entry in `operations`, leaves the exclusion
 list by deleting its line, and is never in both.
 
-**Enforced by:** the coverage gate and its generator unit tests (work item
-`ops-catalogue-coverage-and-type-env-tie`, landed as the `excluded` section of
-`operations.json`, the `vow-types` test `operation_catalogue_agrees_with_builtin_signature_table`
-and `compiler/tests/test_op_catalogue_env.vow`). The requirement on that
-slice: the gate must fail when a name in either compiler's type-checker table
-is neither an `operations` entry nor an `excluded` entry, when a name is in
-both, when an `excluded` entry has no reason, and when an `operations` entry's
-`doc_signature` or `effects` disagrees with the type-checker table's signature
-for that name in either compiler.
+**Enforced by:** the coverage gate, in three places that together fail when a
+name in either compiler's type-checker table is neither an `operations` entry
+nor an `excluded` entry, when an `operations` entry's name, parameter or return
+types, or `effects` disagree with the table's signature for that name in either
+compiler, and when an `excluded` entry matches no table entry:
+
+- `operation_catalogue_agrees_with_builtin_signature_table` in
+  `vow-types/src/env.rs` (run by `cargo test -p vow-types`) for the Rust table,
+  and `compiler/tests/test_op_catalogue_env.vow` (run by
+  `build/vowc test compiler/ --filter test_op_catalogue_env`) for
+  `compiler/env.vow`. Both read the generated fact tables between the
+  `GENERATE:OPERATION_FACTS` markers, and each has controls that drift one
+  effect, one signature, a dropped row, an unregistered row, an unaccounted
+  table entry, a dead exclusion and a name that is both catalogued and
+  excluded;
+- `load_excluded` in `scripts/generate_operations.py`, which rejects an
+  `excluded` entry with no reason, an unknown field, a malformed or ambiguous
+  matcher, a name excluded twice and a name that is both catalogued and
+  excluded (`LoadExcludedTest`, `ExcludedMatchesTest`);
+- `check_fact_tables` (inside `generate_operations.py --check`), which fails
+  when the generated fact tables are stale (`OperationFactTablesTest`).
 
 ## Consequences
 
 - The PRD's amended stories (8, 12, 13, 27, 29) are amended here rather than
   reimplemented, and the catalogue's shape is what the generator validates, not
-  what the PRD sketched. The remaining implementation is tracked in #1274 and
-  the pending slices named above. Stories 5 and 28, which the
-  amendments could be mistaken for touching, are unchanged.
-- `CLAUDE.md`'s Operation Catalogue section is updated in the same change to
-  describe the current scope, fields and gates, so that it stops describing
-  the print-only tracer bullet.
+  what the PRD sketched. Every slice named above has merged (#1270-#1275), so
+  no item of this ADR is waiting on another change. Stories 5 and 28, which
+  the amendments could be mistaken for touching, are unchanged.
+- `CLAUDE.md`'s Operation Catalogue section describes the current scope,
+  fields, gates and marker pairs, and points back here for the departures from
+  the PRD.
+- A heap-returning operation with no `_in_arena` variant must say why in
+  `arena_routing_reason` (`arena_routing: none`); today that is
+  `stdin_read_line`, which returns a reused per-thread scratch buffer, and
+  `proc_sample`, which allocates in the root arena and retains each result
+  until exit. The latter is a leak, tracked in #1639: the catalogue records
+  the fact, and fixing it will turn that entry into `heap_fresh`.
 - When epic #1398 P6 deletes `c_emitter.{rs,vow}`, `c_model` and its two
   generated targets are deleted with them; `verifier_model` stays.
 - Extending the catalogue to a family (for example the narrowing conversions)
