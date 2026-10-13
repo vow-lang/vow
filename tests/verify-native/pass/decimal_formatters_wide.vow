@@ -47,6 +47,22 @@ fn seven() -> bool vow {
   uint128_to_string(7u128).byte_at(0) == 55
 }
 
+fn one_digit_is_ascii_digit(n: u128) -> bool vow {
+  requires: n < 10u128
+  ensures: result == true
+} {
+  let b: i64 = uint128_to_string(n).byte_at(0);
+  ((b - 48) as u64) < 10u64
+}
+
+fn signed_leading_byte(n: i128) -> bool vow {
+  requires: n < 10i128
+  ensures: result == true
+} {
+  let b: i64 = int128_to_string(n).byte_at(0);
+  b == 45 || ((b - 48) as u64) < 10u64
+}
+
 fn main() -> i32 [io] {
   print_u64(one_digit(7u128));
   0
