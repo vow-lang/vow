@@ -796,14 +796,28 @@ def extract_builtin_signatures_table(grammar_text: str) -> dict[str, tuple[str, 
 
 def check_verifier_models(ops: list[dict]) -> list[str]:
     """Drift check: every catalogued builtin must say whether the native
-    verifier models it. A builtin added without a `verifier_model` would
-    otherwise be indistinguishable from one nobody has decided on."""
-    return [
-        f"docs/spec/operations.json: '{op['name']}' has no verifier_model "
-        "(set 'known' or an explicit 'unmodeled')"
-        for op in ops
-        if "verifier_model" not in op
-    ]
+    verifier models it, and an effectful one cannot be `known`. A builtin
+    added without a `verifier_model` would otherwise be indistinguishable
+    from one nobody has decided on. Verifier-model categories apply only to
+    pure operations (PRD #375), so an effectful `known` entry is rejected
+    even though the native gate admits callers whose only effect is `panic`;
+    modelling a `[panic]` builtin would be a deliberate change to this rule."""
+    problems: list[str] = []
+    for op in ops:
+        name = op["name"]
+        model = op.get("verifier_model")
+        if model is None:
+            problems.append(
+                f"docs/spec/operations.json: '{name}' has no verifier_model "
+                "(set 'known' or an explicit 'unmodeled')"
+            )
+        elif model == "known" and op["effects"] != "[]":
+            problems.append(
+                f"docs/spec/operations.json: '{name}' has effects {op['effects']} "
+                f"but verifier_model '{model}'; the native verifier only models "
+                "pure builtins"
+            )
+    return problems
 
 
 def check_c_models(ops: list[dict], routes: list[str]) -> list[str]:
