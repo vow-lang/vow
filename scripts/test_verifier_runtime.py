@@ -466,13 +466,30 @@ class GeneratedExpectationTest(unittest.TestCase):
 
     def test_a_lost_control_with_a_tracked_issue_is_reported_not_failed(self):
         out = verifier_runtime.apply_generated_expectations(
-            _soundness("not-applicable"),
+            {**_soundness("not-applicable"), "verify_status": "unknown"},
             GEN_CONTROL + "// TEST: known-control-gap #1645\n",
         )
 
         self.assertEqual("known-control-gap", out["verdict"])
         self.assertIn("#1645", out["detail"])
         self.assertNotIn(out["verdict"], verifier_runtime.FAILING_GENERATED)
+
+    def test_a_tracked_gap_only_excuses_an_open_unknown(self):
+        text = GEN_CONTROL + "// TEST: known-control-gap #1645\n"
+        cases = {
+            "skipped": _soundness("skipped"),
+            "timeout": {**_soundness("not-applicable"), "verify_status": "timeout"},
+            "counterexample": {
+                **_soundness("not-applicable"),
+                "verify_status": "unknown",
+                "counterexamples": 1,
+            },
+        }
+        for name, check in cases.items():
+            with self.subTest(name=name):
+                out = verifier_runtime.apply_generated_expectations(check, text)
+
+                self.assertEqual("CONTROL-LOST", out["verdict"])
 
     def test_a_tracked_gap_that_now_verifies_is_stale(self):
         out = verifier_runtime.apply_generated_expectations(

@@ -21,6 +21,7 @@ actionable. The seed is an explicit argument, never a clock read.
 import argparse
 import hashlib
 import random
+import re
 import sys
 from pathlib import Path
 
@@ -29,6 +30,7 @@ import gen_verifier_corpus
 # Weighted toward the surface where this repo's compilers have actually
 # diverged: integer width and signedness, checked vs wrapping arithmetic, match
 # and pattern handling, and loop-carried mutation (the #1087 family).
+GENERATED_NAME = re.compile(r"gen_\d{4}_[0-9a-f]{12}\.vow")
 INT_TYPES = ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"]
 ARITH = ["+", "-", "*"]
 CHECKED = ["+!", "-!", "*!"]
@@ -178,7 +180,8 @@ def main():
     # A directory regenerated under a new seed or axis must not keep the old
     # programs: a sweep would silently mix two corpora.
     for stale in outdir.glob("gen_*.vow"):
-        stale.unlink()
+        if GENERATED_NAME.fullmatch(stale.name):
+            stale.unlink()
 
     written = []
     for i in range(args.count):

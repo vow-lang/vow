@@ -67,6 +67,15 @@ class DeterminismTest(unittest.TestCase):
             )
             self.assertEqual(12, len(list(Path(a).iterdir())))
 
+    def test_regenerating_keeps_files_it_did_not_generate(self):
+        with tempfile.TemporaryDirectory() as out:
+            kept = Path(out) / "gen_handwritten.vow"
+            kept.write_text("fn main() -> i64 { return 0; }\n")
+
+            run_cli("--axis", "verifier", "--seed", "1", "--output-dir", out)
+
+            self.assertTrue(kept.exists())
+
     def test_regenerating_replaces_the_previous_corpus(self):
         with tempfile.TemporaryDirectory() as out:
             for seed in ("1", "2"):

@@ -357,6 +357,16 @@ bitwuzla --bv-output-format 2 z3-crosscheck.out/queries/<fixture>.<n>.smt2
 z3 -smt2 z3-crosscheck.out/queries/<fixture>.<n>.smt2
 ```
 
+```bash
+scripts/bootstrap.sh --skip-cargo --no-verify           # build/vowc
+python3 scripts/verifier_runtime.py --backend native --shard 0/4
+python3 scripts/z3_crosscheck.py --shard 0/4 --extra-root /path/to/generated
+```
+
+Not covered: incremental-session streams (a session `unsat` is not re-decided
+by the product), and runtime soundness depth beyond what each program's own
+`main` (or a generated verifier-axis `main`) exercises.
+
 ### Generated verifier corpus
 
 `gen_corpus.py --axis verifier --seed N --count M` (module
@@ -414,13 +424,3 @@ python3 scripts/gen_corpus.py --axis verifier --seed 1473 --count 300 --output-d
 python3 scripts/verifier_runtime.py --backend native --extra-root /tmp/gv
 python3 scripts/z3_crosscheck.py --extra-root /tmp/gv
 ```
-
-```bash
-scripts/bootstrap.sh --skip-cargo --no-verify           # build/vowc
-python3 scripts/verifier_runtime.py --backend native --shard 0/4
-python3 scripts/z3_crosscheck.py --shard 0/4 --extra-root /path/to/generated
-```
-
-Not covered: incremental-session streams (a session `unsat` is not re-decided
-by the product), and runtime soundness depth beyond each program's own `main`
-until the generated-corpus axis of #1473 lands.

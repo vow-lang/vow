@@ -85,8 +85,8 @@ KNOWN_DISAGREEMENTS = {
 # that shape, with its issue. Rendered as `// TEST: replay-skipped`, which the
 # runner already reports instead of failing.
 REPLAY_SKIPS = {
-    ("vec_param_clamp", CLASS_BUG): ("Vec parameter is not rebuilt by replay (#1649)"),
-    ("vec_param_last", CLASS_BUG): ("Vec parameter is not rebuilt by replay (#1649)"),
+    ("vec_param_clamp", CLASS_BUG): "Vec parameter is not rebuilt by replay (#1649)",
+    ("vec_param_last", CLASS_BUG): "Vec parameter is not rebuilt by replay (#1649)",
 }
 
 _ISSUE = re.compile(r"^#\d+$")
@@ -132,7 +132,7 @@ def shape_vec_len_literal(rng, honest, bound):
     n = bound + rng.randint(0, 3)
     claimed = n if honest else n - rng.randint(1, 2)
     src = (
-        f"fn fill() -> Vec<i64> vow {{\n"
+        "fn fill() -> Vec<i64> vow {\n"
         f"  ensures: result.len() == {claimed}\n"
         "} {\n" + _vec_fill(n) + "}\n"
     )

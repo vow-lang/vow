@@ -252,6 +252,8 @@ def check_soundness(vow_file, verifier, outdir, timeout, backend=None, runtime=N
             "direction": "soundness",
             "verdict": "not-applicable",
             "detail": f"status {verify.get('status')}",
+            "verify_status": verify.get("verify_status"),
+            "counterexamples": len(verify.get("counterexamples") or []),
         }
 
     violation, err = runtime or debug_run(vow_file, verifier, outdir, timeout)
@@ -420,7 +422,14 @@ def apply_generated_expectations(check, text):
     if DIRECTIVE_EXPECT_VERIFIED.search(text):
         gap = DIRECTIVE_KNOWN_CONTROL_GAP.search(text)
         lost = check["verdict"] in ("not-applicable", "skipped")
-        if lost and gap:
+        # A tracked gap is a completeness `unknown`; a counterexample, a
+        # timeout, an error or a skipped run is something else and stays lost.
+        open_unknown = (
+            check["verdict"] == "not-applicable"
+            and check.get("verify_status") == "unknown"
+            and not check.get("counterexamples")
+        )
+        if open_unknown and gap:
             return {
                 **check,
                 "verdict": "known-control-gap",
