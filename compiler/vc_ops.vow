@@ -72,16 +72,23 @@ fn vc_op_modeled_core(op: i64) -> bool {
         || op == IOP_CONST_UNIT() || op == IOP_BRANCH() || op == IOP_JUMP() || op == IOP_UNREACHABLE()
         || op == IOP_PHI() || op == IOP_UPSILON()
         || op == IOP_REGION_ALLOC() || op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE()
+        || vc_op_modeled_float(op)
 }
 
-fn vc_op_unsupported(op: i64) -> bool {
-    op == IOP_CONST_F32() || op == IOP_CONST_F64() || op == IOP_CONST_STR()
+// Float constants, `+ - * /` and the six comparisons (`vc_float`). Remainder is
+// `VC_OPM_FLOAT_REM`.
+fn vc_op_modeled_float(op: i64) -> bool {
+    op == IOP_CONST_F32() || op == IOP_CONST_F64()
         || op == IOP_ADD_F32() || op == IOP_SUB_F32() || op == IOP_MUL_F32() || op == IOP_DIV_F32()
         || op == IOP_EQ_F32() || op == IOP_NE_F32() || op == IOP_LT_F32() || op == IOP_LE_F32()
         || op == IOP_GT_F32() || op == IOP_GE_F32()
         || op == IOP_ADD_F64() || op == IOP_SUB_F64() || op == IOP_MUL_F64() || op == IOP_DIV_F64()
         || op == IOP_EQ_F64() || op == IOP_NE_F64() || op == IOP_LT_F64() || op == IOP_LE_F64()
         || op == IOP_GT_F64() || op == IOP_GE_F64()
+}
+
+fn vc_op_unsupported(op: i64) -> bool {
+    op == IOP_CONST_STR()
         || op == IOP_LOAD() || op == IOP_STORE()
         || op == IOP_DEBUG_CALL()
         || op == IOP_COMPLEXITY_DESCRIPTOR()

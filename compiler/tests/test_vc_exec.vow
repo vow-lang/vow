@@ -963,8 +963,209 @@ fn check_step_hypotheses_are_assumed() -> i64 {
     0
 }
 
+fn f64_const(id: i64, bits: i64) -> IrInst {
+    ir_inst_new(id, IOP_CONST_F64(), ITY_F64(), Vec::new(), IDATA_CONST_F64(), bits, 0, String::from(""))
+}
+
+fn f64_params2() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_F64());
+    p.push(ITY_F64());
+    p
+}
+
+// fn comm(a, b: f64) ensures a + b == b + a
+fn float_commutes() -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_F64(), 0));
+    i.push(mk_inst_arg(1, ITY_F64(), 1));
+    i.push(mk_inst(2, IOP_ADD_F64(), ITY_F64(), args2(0, 1)));
+    i.push(mk_inst(3, IOP_ADD_F64(), ITY_F64(), args2(1, 0)));
+    i.push(mk_inst(4, IOP_EQ_F64(), ITY_BOOL(), args2(2, 3)));
+    i.push(mk_vow(5, IOP_VOW_ENS(), 4, 0));
+    i.push(mk_inst_return(6, 2));
+    one_block(String::from("comm"), f64_params2(), ITY_F64(), i)
+}
+
+fn check_float_query() -> i64 {
+    let f: IrFunction = float_commutes();
+    if vc_skip_reason(f).len() != 0 { return 1; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 2; }
+    let q: String = query(cs, 0);
+    if !q.contains(String::from("(set-logic QF_BVFP)\n")) { return 3; }
+    if !q.contains(String::from("(declare-const p0 (_ FloatingPoint 11 53))\n")) { return 4; }
+    if !q.contains(String::from("(declare-const p1 (_ FloatingPoint 11 53))\n")) { return 5; }
+    if !q.contains(String::from("(define-fun v2 () (_ FloatingPoint 11 53) (fp.add RNE p0 p1))\n")) { return 6; }
+    if !q.contains(String::from("(define-fun v3 () (_ FloatingPoint 11 53) (fp.add RNE p1 p0))\n")) { return 7; }
+    if !q.contains(String::from("(define-fun v4 () Bool (fp.eq v2 v3))\n")) { return 8; }
+    if !q.contains(String::from("(get-value (p0 p1))\n")) { return 9; }
+    if cs.model_widths[0] != VC_SORT_F64() || cs.model_widths[1] != VC_SORT_F64() { return 10; }
+    if cs.model_tys[0] != ITY_F64() { return 11; }
+    0
+}
+
+// A function without a float keeps the bit-vector logic.
+fn check_no_float_keeps_bv_logic() -> i64 {
+    let cs: VcClaims = vc_claims(divide_with_requires(IOP_WDIV()));
+    if !query(cs, 0).contains(String::from("(set-logic QF_BV)\n")) { return 1; }
+    0
+}
+
+// A float constant needs the floating-point logic although no parameter is a float.
+fn check_literal_only_float_logic() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(f64_const(0, 4591870180066957722));
+    i.push(f64_const(1, 4596373779694328218));
+    i.push(mk_inst(2, IOP_ADD_F64(), ITY_F64(), args2(0, 1)));
+    i.push(f64_const(3, 4599075939470750515));
+    i.push(mk_inst(4, IOP_NE_F64(), ITY_BOOL(), args2(2, 3)));
+    i.push(mk_vow(5, IOP_VOW_ENS(), 4, 0));
+    i.push(mk_inst_return(6, 2));
+    let f: IrFunction = one_block(String::from("lit"), Vec::new(), ITY_F64(), i);
+    if vc_skip_reason(f).len() != 0 { return 1; }
+    let cs: VcClaims = vc_claims(f);
+    let q: String = query(cs, 0);
+    if !q.contains(String::from("(set-logic QF_BVFP)\n")) { return 2; }
+    if !q.contains(String::from("((_ to_fp 11 53) #x3fb999999999999a)")) { return 3; }
+    if !q.contains(String::from("(define-fun v3 () (_ FloatingPoint 11 53) ((_ to_fp 11 53) #x3fd3333333333333))\n")) { return 4; }
+    if !q.contains(String::from("(define-fun v4 () Bool (not (fp.eq v2 v3)))\n")) { return 5; }
+    0
+}
+
+// `!=` is the negation of `fp.eq`, never `distinct`, and every comparison maps to
+// its own predicate.
+fn check_float_comparison_mapping() -> i64 {
+    let ops: Vec<i64> = Vec::new();
+    ops.push(IOP_EQ_F64());
+    ops.push(IOP_NE_F64());
+    ops.push(IOP_LT_F64());
+    ops.push(IOP_LE_F64());
+    ops.push(IOP_GT_F64());
+    ops.push(IOP_GE_F64());
+    let want: Vec<String> = Vec::new();
+    want.push(String::from("(fp.eq p0 p1)"));
+    want.push(String::from("(not (fp.eq p0 p1))"));
+    want.push(String::from("(fp.lt p0 p1)"));
+    want.push(String::from("(fp.leq p0 p1)"));
+    want.push(String::from("(fp.gt p0 p1)"));
+    want.push(String::from("(fp.geq p0 p1)"));
+    let mut k: u64 = 0;
+    while k < ops.len() {
+        let i: Vec<IrInst> = Vec::new();
+        i.push(mk_inst_arg(0, ITY_F64(), 0));
+        i.push(mk_inst_arg(1, ITY_F64(), 1));
+        i.push(mk_inst(2, ops[k], ITY_BOOL(), args2(0, 1)));
+        i.push(mk_vow(3, IOP_VOW_ENS(), 2, 0));
+        i.push(mk_inst_const_bool(4, 1));
+        i.push(mk_inst_return(5, 4));
+        let f: IrFunction = one_block(String::from("cmp"), f64_params2(), ITY_BOOL(), i);
+        if vc_skip_reason(f).len() != 0 { return 1 + k as i64; }
+        let cs: VcClaims = vc_claims(f);
+        let q: String = query(cs, 0);
+        if !q.contains(want[k]) { return 10 + k as i64; }
+        if q.contains(String::from("(= p0 p1)")) || q.contains(String::from("distinct")) { return 20 + k as i64; }
+        k = k + 1;
+    }
+    0
+}
+
+// x != x is the NaN test: it is not folded to false.
+fn check_float_self_comparison_is_not_folded() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_F64(), 0));
+    i.push(mk_inst(1, IOP_EQ_F64(), ITY_BOOL(), args2(0, 0)));
+    i.push(mk_vow(2, IOP_VOW_ENS(), 1, 0));
+    i.push(mk_inst_const_bool(3, 1));
+    i.push(mk_inst_return(4, 3));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_F64());
+    let cs: VcClaims = vc_claims(one_block(String::from("self"), p, ITY_BOOL(), i));
+    if cs.kinds.len() != 1 { return 1; }
+    if !query(cs, 0).contains(String::from("(fp.eq p0 p0)")) { return 2; }
+    0
+}
+
+// A Phi of floats is an `ite`, in the floating-point logic.
+fn check_float_phi_is_ite() -> i64 {
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_arg(0, ITY_F64(), 0));
+    a.push(f64_const(1, 0));
+    a.push(mk_inst(2, IOP_GT_F64(), ITY_BOOL(), args2(0, 1)));
+    a.push(mk_inst_branch(3, 2, 1, 2));
+    let t: Vec<IrInst> = Vec::new();
+    t.push(mk_inst_upsilon(4, 0, 9));
+    t.push(mk_inst_jump(5, 3));
+    let e: Vec<IrInst> = Vec::new();
+    e.push(f64_const(6, 0));
+    e.push(mk_inst_upsilon(7, 6, 9));
+    e.push(mk_inst_jump(8, 3));
+    let m: Vec<IrInst> = Vec::new();
+    m.push(mk_inst_phi(9, ITY_F64()));
+    m.push(f64_const(10, 0));
+    m.push(mk_inst(11, IOP_GE_F64(), ITY_BOOL(), args2(9, 10)));
+    m.push(mk_vow(12, IOP_VOW_ENS(), 11, 0));
+    m.push(mk_inst_return(13, 9));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, a));
+    blocks.push(mk_block(1, t));
+    blocks.push(mk_block(2, e));
+    blocks.push(mk_block(3, m));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_F64());
+    let f: IrFunction = mk_function(1, String::from("fpick"), p, ITY_F64(), blocks);
+    if vc_skip_reason(f).len() != 0 { return 1; }
+    let cs: VcClaims = vc_claims(f);
+    let q: String = query(cs, 0);
+    if !q.contains(String::from("(define-fun v9 () (_ FloatingPoint 11 53) (ite ")) { return 2; }
+    if !q.contains(String::from("(set-logic QF_BVFP)\n")) { return 3; }
+    0
+}
+
+// f32 values are encoded at binary32.
+fn check_f32_encoding() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_F32(), 0));
+    i.push(ir_inst_new(1, IOP_CONST_F32(), ITY_F32(), Vec::new(), IDATA_CONST_F32(), 1065353216, 0, String::from("")));
+    i.push(mk_inst(2, IOP_MUL_F32(), ITY_F32(), args2(0, 1)));
+    i.push(mk_inst(3, IOP_LT_F32(), ITY_BOOL(), args2(2, 0)));
+    i.push(mk_vow(4, IOP_VOW_ENS(), 3, 0));
+    i.push(mk_inst_return(5, 2));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_F32());
+    let f: IrFunction = one_block(String::from("f32"), p, ITY_F32(), i);
+    if vc_skip_reason(f).len() != 0 { return 1; }
+    let cs: VcClaims = vc_claims(f);
+    let q: String = query(cs, 0);
+    if !q.contains(String::from("(declare-const p0 (_ FloatingPoint 8 24))\n")) { return 2; }
+    if !q.contains(String::from("((_ to_fp 8 24) #x3f800000)")) { return 3; }
+    if cs.model_widths[0] != VC_SORT_F32() { return 4; }
+    0
+}
+
+// Float remainder stays outside the native subset, with its own reason.
+fn check_float_remainder_has_no_claims() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_F64(), 0));
+    i.push(mk_inst(1, IOP_REM_F64(), ITY_F64(), args2(0, 0)));
+    i.push(mk_inst_return(2, 1));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_F64());
+    let f: IrFunction = one_block(String::from("frem"), p, ITY_F64(), i);
+    if !vc_skip_reason(f).contains(String::from("float-rem-unsupported")) { return 1; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_divide_with_requires();
+    if r == 0 { r = check_float_query(); }
+    if r == 0 { r = check_no_float_keeps_bv_logic(); }
+    if r == 0 { r = check_literal_only_float_logic(); }
+    if r == 0 { r = check_float_comparison_mapping(); }
+    if r == 0 { r = check_float_self_comparison_is_not_folded(); }
+    if r == 0 { r = check_float_phi_is_ite(); }
+    if r == 0 { r = check_f32_encoding(); }
+    if r == 0 { r = check_float_remainder_has_no_claims(); }
     if r == 0 { r = check_rem_has_only_zero_claim(); }
     if r == 0 { r = check_ensures_claim_golden(); }
     if r == 0 { r = check_requires_only_has_no_claims(); }

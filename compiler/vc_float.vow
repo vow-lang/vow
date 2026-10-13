@@ -1,0 +1,114 @@
+module VcFloat
+
+use ir
+use vc_term
+use vc_int
+
+// IEEE-754 `f32`/`f64` for the native verifier: SMT-LIB `FloatingPoint` terms,
+// round-to-nearest-even only (the only rounding mode the language has), IEEE
+// comparisons (`==`/`<`/... are false on NaN, `!=` is true), and the one
+// canonical NaN SMT-LIB defines, so a NaN payload or sign is not observable.
+// No float cast exists in the language, and float negation lowers to integer
+// IR the gate rejects, so no conversion or negation term is modelled; float `%`
+// is skipped by the op table (`float-rem-unsupported`).
+
+// The operation a float opcode performs, the same for both widths:
+// 0 add, 1 sub, 2 mul, 3 div, 4 rem, 5 eq, 6 ne, 7 lt, 8 le, 9 gt, 10 ge; -1
+// for any other opcode. Relies on the two opcode families being laid out in
+// that order, which the table test pins.
+fn vc_float_kind(op: i64) -> i64 {
+    if op >= IOP_ADD_F32() && op <= IOP_GE_F32() { return op - IOP_ADD_F32(); }
+    if op >= IOP_ADD_F64() && op <= IOP_GE_F64() { return op - IOP_ADD_F64(); }
+    -1
+}
+
+// The float type an arithmetic or comparison opcode works on; -1 otherwise.
+fn vc_float_op_ty(op: i64) -> i64 {
+    if op >= IOP_ADD_F32() && op <= IOP_GE_F32() { return ITY_F32(); }
+    if op >= IOP_ADD_F64() && op <= IOP_GE_F64() { return ITY_F64(); }
+    -1
+}
+
+// Modelled float opcodes: constants, add/sub/mul/div and the six comparisons.
+// Remainder (kind 4) is classified separately.
+fn vc_is_float_op(op: i64) -> bool {
+    let k: i64 = vc_float_kind(op);
+    (k >= 0 && k != 4) || op == IOP_CONST_F32() || op == IOP_CONST_F64()
+}
+
+fn vc_float_is_cmp(k: i64) -> bool {
+    k >= 5
+}
+
+// The float type of a constant opcode; -1 otherwise.
+fn vc_float_const_ty(op: i64) -> i64 {
+    if op == IOP_CONST_F32() { return ITY_F32(); }
+    if op == IOP_CONST_F64() { return ITY_F64(); }
+    -1
+}
+
+// True when `inst`, a float opcode, has the operand and result types the
+// executor encodes: constants are leaves of the matching type, arithmetic reads
+// and yields one float type, a comparison reads two of one float type and
+// yields Bool.
+fn vc_float_inst_ok(inst: IrInst, t0: i64, t1: i64) -> bool {
+    let n: u64 = inst.args.len();
+    let cty: i64 = vc_float_const_ty(inst.op);
+    if cty >= 0 { return n == 0 && inst.ty == cty; }
+    let ty: i64 = vc_float_op_ty(inst.op);
+    if ty < 0 || n != 2 || t0 != ty || t1 != ty { return false; }
+    if vc_float_is_cmp(vc_float_kind(inst.op)) { return inst.ty == ITY_BOOL(); }
+    inst.ty == ty
+}
+
+// The constant `dv` holds the IEEE bit pattern: 64 bits for `f64`, the low 32 for
+// `f32`.
+fn vc_float_const(ar: VcArena, op: i64, dv: i64) -> i64 {
+    if op == IOP_CONST_F32() {
+        return vc_tm_app1(ar, VC_OP_TO_FP32(), vc_tm_bv(ar, 32, dv, 0));
+    }
+    vc_tm_app1(ar, VC_OP_TO_FP64(), vc_tm_bv(ar, 64, dv, 0))
+}
+
+fn vc_float_smt_op(kind: i64) -> i64 {
+    if kind == 0 { return VC_OP_FP_ADD(); }
+    if kind == 1 { return VC_OP_FP_SUB(); }
+    if kind == 2 { return VC_OP_FP_MUL(); }
+    if kind == 3 { return VC_OP_FP_DIV(); }
+    if kind == 5 || kind == 6 { return VC_OP_FP_EQ(); }
+    if kind == 7 { return VC_OP_FP_LT(); }
+    if kind == 8 { return VC_OP_FP_LE(); }
+    if kind == 9 { return VC_OP_FP_GT(); }
+    VC_OP_FP_GE()
+}
+
+// Value of a float arithmetic or comparison opcode on `a` and `b`. `!=` is the
+// negation of `fp.eq`, never `distinct`: SMT-LIB `=` and `distinct` are
+// structural, so they equate NaN with itself.
+fn vc_float_value(ar: VcArena, op: i64, a: i64, b: i64) -> i64 {
+    let k: i64 = vc_float_kind(op);
+    let t: i64 = vc_tm_app2(ar, vc_float_smt_op(k), a, b);
+    if k == 6 { return vc_tm_app1(ar, VC_OP_NOT(), t); }
+    t
+}
+
+// SMT-LIB logic for a function: the bit-vector (and array) logics extended with
+// floating point only when the function has a float, so every other query, and
+// its cache key, is unchanged.
+fn vc_float_logic(has_float: bool, has_array: bool) -> String {
+    if has_float {
+        if has_array { return String::from("QF_ABVFP"); }
+        return String::from("QF_BVFP");
+    }
+    if has_array { return String::from("QF_ABV"); }
+    String::from("QF_BV")
+}
+
+fn vc_tys_have_float(tys: Vec<i64>) -> bool {
+    let mut i: u64 = 0;
+    while i < tys.len() {
+        if vc_ty_is_float(tys[i]) { return true; }
+        i = i + 1;
+    }
+    false
+}

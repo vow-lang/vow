@@ -236,8 +236,7 @@ fn check_op_details() -> i64 {
     f.push(mk_inst_return(2, 1));
     let pf: Vec<i64> = Vec::new();
     pf.push(ITY_F64());
-    let rf: String = vc_skip_reason(one_block(String::from("f"), pf, ITY_F64(), f));
-    if rf != String::from("unsupported-opcode: GetArg[f64]") { return 30; }
+    if vc_skip_reason(one_block(String::from("f"), pf, ITY_F64(), f)).len() != 0 { return 30; }
 
     let mixed: Vec<IrInst> = Vec::new();
     mixed.push(mk_inst_arg(0, ITY_I64(), 0));
@@ -499,6 +498,74 @@ fn check_reserved_symbol() -> i64 {
     0
 }
 
+fn float_const(id: i64, ty: i64, op: i64) -> IrInst {
+    ir_inst_new(id, op, ty, Vec::new(), IDATA_CONST_F64(), 4607182418800017408, 0, String::from(""))
+}
+
+fn float_fn(name: String, pty: i64, op: i64, rty: i64, rty_of_ret: i64) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, pty, 0));
+    i.push(mk_inst(1, op, rty, args2(0, 0)));
+    i.push(mk_inst_return(2, 1));
+    let p: Vec<i64> = Vec::new();
+    p.push(pty);
+    one_block(name, p, rty_of_ret, i)
+}
+
+fn check_floats() -> i64 {
+    let ops: Vec<i64> = Vec::new();
+    ops.push(IOP_ADD_F64());
+    ops.push(IOP_SUB_F64());
+    ops.push(IOP_MUL_F64());
+    ops.push(IOP_DIV_F64());
+    let mut i: u64 = 0;
+    while i < ops.len() {
+        if vc_skip_reason(float_fn(String::from("a"), ITY_F64(), ops[i], ITY_F64(), ITY_F64())).len() != 0 { return 100 + i as i64; }
+        if vc_skip_reason(float_fn(String::from("a"), ITY_F32(), ops[i] - 11, ITY_F32(), ITY_F32())).len() != 0 { return 110 + i as i64; }
+        i = i + 1;
+    }
+    let cmps: Vec<i64> = Vec::new();
+    cmps.push(IOP_EQ_F64());
+    cmps.push(IOP_NE_F64());
+    cmps.push(IOP_LT_F64());
+    cmps.push(IOP_LE_F64());
+    cmps.push(IOP_GT_F64());
+    cmps.push(IOP_GE_F64());
+    let mut c: u64 = 0;
+    while c < cmps.len() {
+        if vc_skip_reason(float_fn(String::from("c"), ITY_F64(), cmps[c], ITY_BOOL(), ITY_BOOL())).len() != 0 { return 120 + c as i64; }
+        if vc_skip_reason(float_fn(String::from("c"), ITY_F32(), cmps[c] - 11, ITY_BOOL(), ITY_BOOL())).len() != 0 { return 130 + c as i64; }
+        // A comparison yields Bool, arithmetic its operand type.
+        if vc_skip_reason(float_fn(String::from("c"), ITY_F64(), cmps[c], ITY_F64(), ITY_F64())).len() == 0 { return 140 + c as i64; }
+        c = c + 1;
+    }
+    if vc_skip_reason(float_fn(String::from("m"), ITY_F64(), IOP_ADD_F64(), ITY_BOOL(), ITY_BOOL())).len() == 0 { return 150; }
+    // An f32 opcode on an f64 argument, and an f64 opcode on f32.
+    if vc_skip_reason(float_fn(String::from("m"), ITY_F64(), IOP_ADD_F32(), ITY_F32(), ITY_F32())).len() == 0 { return 151; }
+    if vc_skip_reason(float_fn(String::from("m"), ITY_F32(), IOP_LT_F64(), ITY_BOOL(), ITY_BOOL())).len() == 0 { return 152; }
+    // Integer arithmetic on float operands (the shape float negation lowers to).
+    if vc_skip_reason(float_fn(String::from("n"), ITY_F64(), IOP_WSUB(), ITY_I64(), ITY_I64())).len() == 0 { return 153; }
+    if vc_skip_reason(float_fn(String::from("n"), ITY_F64(), IOP_WSUB(), ITY_F64(), ITY_F64())).len() == 0 { return 154; }
+    if vc_skip_reason(float_fn(String::from("n"), ITY_F64(), IOP_EQ(), ITY_BOOL(), ITY_BOOL())).len() == 0 { return 155; }
+    // Remainder keeps its own reason.
+    let rem: String = vc_skip_reason(float_fn(String::from("r"), ITY_F64(), IOP_REM_F64(), ITY_F64(), ITY_F64()));
+    if !rem.contains(String::from("float-rem-unsupported: ")) { return 156; }
+
+    let k: Vec<IrInst> = Vec::new();
+    k.push(float_const(0, ITY_F64(), IOP_CONST_F64()));
+    k.push(float_const(1, ITY_F32(), IOP_CONST_F32()));
+    k.push(mk_inst_return(2, 0));
+    if vc_skip_reason(one_block(String::from("k"), Vec::new(), ITY_F64(), k)).len() != 0 { return 160; }
+    let bad: Vec<IrInst> = Vec::new();
+    bad.push(float_const(0, ITY_F32(), IOP_CONST_F64()));
+    bad.push(mk_inst_return(1, 0));
+    if vc_skip_reason(one_block(String::from("k"), Vec::new(), ITY_F32(), bad)).len() == 0 { return 161; }
+    // A return type must match the returned value.
+    let wrong: IrFunction = float_fn(String::from("w"), ITY_F64(), IOP_ADD_F64(), ITY_F64(), ITY_F32());
+    if vc_skip_reason(wrong).len() == 0 { return 162; }
+    0
+}
+
 fn check_reason_codes() -> i64 {
     let fr: Vec<IrInst> = Vec::new();
     fr.push(mk_inst(0, IOP_CONST_F64(), ITY_F64(), Vec::new()));
@@ -647,6 +714,7 @@ fn main() -> i32 {
     if r == 0 { r = check_branch_to_unknown_block(); }
     if r == 0 { r = check_unreachable_terminator(); }
     if r == 0 { r = check_op_details(); }
+    if r == 0 { r = check_floats(); }
     if r == 0 { r = check_bool_param(); }
     if r == 0 { r = check_get_arg_must_match_param_type(); }
     if r == 0 { r = check_every_width_accepted(); }

@@ -5,6 +5,7 @@ use vc_ops
 use vc_term
 use vc_smt
 use vc_int
+use vc_float
 use vc_gate
 use vc_flow
 use vc_agg
@@ -340,6 +341,10 @@ fn vc_exec_value(w: VcWalk, inst: IrInst, pc: i64) -> i64 {
     if op == IOP_CONST_BOOL() { return vc_tm_bool_const(ar, inst.dv != 0); }
     if op == IOP_GET_ARG() { return vc_tm_var(ar, vc_param_name(inst.dv)); }
     if op == IOP_NOT() { return vc_tm_app1(ar, VC_OP_NOT(), w.var_of[inst.args[0] as u64]); }
+    if vc_is_float_op(op) {
+        if vc_float_const_ty(op) >= 0 { return vc_float_const(ar, op, inst.dv); }
+        return vc_float_value(ar, op, w.var_of[inst.args[0] as u64], w.var_of[inst.args[1] as u64]);
+    }
     if op == IOP_INT_CAST() { return vc_cast(ar, inst.dv, inst.ty, w.var_of[inst.args[0] as u64]); }
     let lhs: i64 = w.var_of[inst.args[0] as u64];
     let rhs: i64 = w.var_of[inst.args[1] as u64];
@@ -557,14 +562,14 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
     vc_script_set_option(hdr, String::from(":produce-models"), String::from("true"));
     let mut pi: u64 = 0;
     while pi < f.params.len() {
-        if vc_ty_is_int(f.params[pi]) {
+        if vc_ty_is_int(f.params[pi]) || vc_ty_is_float(f.params[pi]) {
             cs.model_hdr.push(hdr.kinds.len() as i64);
             cs.model_slots.push(-1);
             vc_script_declare_const(hdr, vc_param_name(pi as i64), vc_ty_sort(f.params[pi]));
             cs.model_names.push(vc_param_name(pi as i64));
             cs.model_params.push(pi as i64);
             cs.model_tys.push(f.params[pi]);
-            cs.model_widths.push(vc_ty_bits(f.params[pi]));
+            cs.model_widths.push(vc_ty_sort(f.params[pi]));
         }
         pi = pi + 1;
     }
@@ -610,8 +615,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         oi = oi + 1;
     }
     vc_claims_harvest_fields(cs, w.ag);
-    if vc_vec_count(w.vv) > 0 {
-        vc_script_replace_logic(hdr, String::from("QF_ABV"));
-    }
+    let has_float: bool = vc_tys_have_float(tys) || vc_tys_have_float(f.params);
+    vc_script_replace_logic(hdr, vc_float_logic(has_float, vc_vec_count(w.vv) > 0));
     cs
 }

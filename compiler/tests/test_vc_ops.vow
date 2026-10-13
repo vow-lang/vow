@@ -3,6 +3,7 @@ module TestVcOps
 use ir
 use ir_printer
 use vc_ops
+use vc_float
 
 // Every opcode of the IR has an entry in the op-model table, so adding an
 // opcode to ir.vow without deciding whether the verifier models it fails here.
@@ -31,6 +32,25 @@ fn check_classes_are_disjoint() -> i64 {
     0
 }
 
+// Every float arithmetic and comparison opcode but remainder is modelled, in
+// both widths, and `vc_float_kind` agrees between the two families.
+fn check_float_ops() -> i64 {
+    let mut k: i64 = 0;
+    while k <= 10 {
+        let f32op: i64 = IOP_ADD_F32() + k;
+        let f64op: i64 = IOP_ADD_F64() + k;
+        if vc_float_kind(f32op) != k || vc_float_kind(f64op) != k { return 630 + k; }
+        let want: i64 = { if k == 4 { VC_OPM_FLOAT_REM() } else { VC_OPM_MODELED() } };
+        if vc_op_model(f32op) != want || vc_op_model(f64op) != want { return 650 + k; }
+        k = k + 1;
+    }
+    if vc_float_kind(IOP_ADD_F32() - 1) != -1 || vc_float_kind(IOP_GE_F64() + 1) != -1 { return 670; }
+    if vc_float_kind(IOP_GE_F32() + 1) != 0 { return 671; }
+    if vc_float_op_ty(IOP_MUL_F32()) != ITY_F32() || vc_float_op_ty(IOP_LT_F64()) != ITY_F64() { return 672; }
+    if vc_float_op_ty(IOP_WADD()) != -1 { return 673; }
+    0
+}
+
 fn check_known_classes() -> i64 {
     if vc_op_model(IOP_WADD()) != VC_OPM_MODELED() { return 600; }
     if vc_op_model(IOP_LOAD()) != VC_OPM_UNSUPPORTED() { return 601; }
@@ -41,6 +61,8 @@ fn check_known_classes() -> i64 {
     if vc_op_model(IOP_CALL()) != VC_OPM_CALL() { return 602; }
     if vc_op_model(IOP_FIELD_SET()) != VC_OPM_MODELED() { return 603; }
     if vc_op_model(IOP_FIELD_GET()) != VC_OPM_MODELED() { return 611; }
+    if vc_op_model(IOP_CONST_F32()) != VC_OPM_MODELED() { return 620; }
+    if vc_op_model(IOP_CONST_F64()) != VC_OPM_MODELED() { return 621; }
     if vc_op_model(IOP_REM_F32()) != VC_OPM_FLOAT_REM() { return 604; }
     if vc_op_model(IOP_REM_F64()) != VC_OPM_FLOAT_REM() { return 605; }
     if vc_op_model(9999) != VC_OPM_UNCLASSIFIED() { return 606; }
@@ -101,6 +123,7 @@ fn check_closed_code_list() -> i64 {
 fn main() -> i32 {
     let mut r: i64 = check_every_opcode_classified();
     if r == 0 { r = check_classes_are_disjoint(); }
+    if r == 0 { r = check_float_ops(); }
     if r == 0 { r = check_known_classes(); }
     if r == 0 { r = check_builtin_model(); }
     if r == 0 { r = check_vec_op_table(); }
