@@ -137,6 +137,12 @@ python3 scripts/verify_eval.py
 scripts/bootstrap.sh
 python3 scripts/verify_eval.py --verifier build/vowc --output-dir /tmp/verify-eval-self
 
+# The native backend (self-hosted vowc only): `--backend` reaches the verify, vacuity and
+# replay runs. A program the corpus labels incorrect only because ESBMC refutes it through
+# its capacity assertion (`esbmc-capacity-artifact`) is reported as an explained extra proof,
+# not a soundness regression. The expected status mismatches for `Skipped` are expected.
+python3 scripts/verify_eval.py --verifier build/vowc --backend native
+
 # Authoring aid — print actual outcomes for every program:
 python3 scripts/verify_eval.py --discover
 
@@ -157,7 +163,8 @@ soundness, blame, or exact `vow_id` regression in either verifier blocks PRs.
 
 [`scripts/verify_diff.py`](../scripts/verify_diff.py) (epic #1398, issue #1414)
 runs the same corpus (`tests/verify`, `tests/verify-fail`, `tests/verify-skip`,
-with the ground truth `verify_eval.py` reads) under
+with the ground truth `verify_eval.py` reads, and `tests/verify-native/{pass,fail,skip,unknown}`,
+whose truth is the directory) under
 `vowc verify --backend esbmc` and `vowc verify --backend native`, and classifies
 every fixture:
 
@@ -169,11 +176,37 @@ every fixture:
 | `soundness` | Native proves a program ESBMC refutes, or one the corpus labels incorrect. **Fails the script.** |
 | `harness` | A backend printed no parseable JSON, so the row says nothing about the verifiers. A backend that hangs (killed at its budget) or dies from a signal is not a `harness` row: it is inconclusive (`verify_status` `timeout` / `crashed`). |
 
+Backends that agree on the verdict but not on which functions they left
+unanalysed (the `VerificationSkipped` *warnings*, not the notes about uncontracted
+callers) did not do the same work: native skipping a function ESBMC analyses is
+`weaker`, native analysing a function ESBMC skips is `more_precise`, so such a row
+is never `match` and never enters the performance ratios
+(`verify-skip/wide_enum_payload_skipped`: ESBMC skips four functions, native
+proves three of them).
+
 Native `verify_status` of `panicked`, `error` or `crashed` is `weaker` even when
 ESBMC is also inconclusive. File-level status is per module: native reports
 `Skipped` for a file when any one function is outside its subset, so a partly
 modelable file reads as `weaker` against an ESBMC `Verified` until the subset
 grows.
+
+### ESBMC model artefacts
+
+A fixture the native verifier proves and ESBMC refutes is a `soundness` row
+unless the fixture carries a written explanation, a `// TEST:` directive that
+`verify_eval.artifact_directives` parses (fail closed: a malformed or misspelled
+`esbmc-*` directive is an error). `verify_diff.py` and `verify_perf.py` classify
+through one function (`verify_diff.classify_outcomes`), and `verify_eval.py
+--backend native` reads the same directives, so the three harnesses agree.
+
+| Directive | Meaning |
+| --- | --- |
+| `// TEST: esbmc-capacity-artifact "<why>"` | ESBMC refutes only through its own `string`/`vec` capacity assertion. Needs the evidence of the run: every ESBMC counterexample is a capacity assertion. |
+| `// TEST: esbmc-model-artifact fn="<fn>" blame=<B> vow_id=<N> "<why>"` | One ESBMC counterexample comes from ESBMC's own model, not from the program (for example its nondeterministic `string_eq`). One directive per counterexample; the row is `more_precise` only when the corpus labels the fixture correct (`Verified`) and every ESBMC counterexample is declared, so any other ESBMC refutation of the file is still a `soundness` finding. |
+
+Add a directive only after the runtime differential
+(`scripts/verifier_runtime.py --backend native`) shows no false proof for the
+fixture, and write the reason as the explanation gate item 1 asks for.
 
 The report is one JSON document (`schema_version`, `summary`, `rows[]` with both
 backends' verdict, `verify_status`, counterexamples and wall-clock seconds) on
@@ -248,13 +281,21 @@ corpus drift and exits `2`):
   `gating: false` and never enter the ratios or the timeout criterion (times out
   by design).
 
-**Metrics.** Wall-clock is the process wall time. Peak RSS is the larger of the
-sampled sum over the whole process tree (driver plus solver children, 20 ms
-interval) and the kernel's `ru_maxrss` for the run. Linux seeds a child's
-`ru_maxrss` with the parent's high-water mark, so a kernel value at or below the
-harness's own peak is ignored. One discarded warm-up run per backend precedes
-the timed runs, and the timed runs alternate between backends so host drift hits
-both.
+**Metrics.** Wall-clock is the process wall time. Peak RSS is the largest of
+three readings (`scripts/peak_rss.py`): the sampled sum of resident sets over the
+whole process tree (driver plus solver children; sampled every 1 ms for the first
+250 ms, then every 20 ms), the largest kernel high-water mark (`VmHWM`) any
+sampled process reported (so a peak between two samples is still seen, and a run
+of a few milliseconds is caught by one late read), and the kernel's `ru_maxrss`
+for the reaped child when it is above the harness's own peak. Linux seeds a
+child's `ru_maxrss` with the parent's high-water mark, so a kernel value at or
+below that peak is not a measurement. When no reading saw the run, `ru_maxrss` is
+still an upper bound of the child's peak: it is used, labelled
+`ru_maxrss_upper_bound` in the row's `rss_sources`, for native (it can only raise
+the native/ESBMC ratio), and is a harness failure naming the fixture for ESBMC,
+whose peak is the denominator. A peak RSS of 0 never reaches a ratio. One
+discarded warm-up run per backend precedes the timed runs, and the timed runs
+alternate between backends so host drift hits both.
 
 **Gate.** A ratio is `native / esbmc` of the per-backend medians.
 
@@ -266,7 +307,7 @@ both.
 | Comparable rows | at least one |
 
 Only rows classed `match` by `verify_diff.py` (same verdict and counterexamples,
-so the same work) enter the ratios. `more_precise`, `weaker`, `soundness`,
+and the same set of skipped functions, so the same work) enter the ratios. `more_precise`, `weaker`, `soundness`,
 `harness`, a verdict that changes between runs of one backend (`unstable`) and
 rows where either backend timed out are listed with their reason and left out of
 the ratios. Verdict parity is gate item 1 and stays with `verify_diff.py`. The

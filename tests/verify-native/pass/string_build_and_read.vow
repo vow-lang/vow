@@ -1,5 +1,7 @@
 module StringBuildAndRead
 
+// TEST: esbmc-capacity-artifact "ESBMC fails its String capacity assertion in append_length; the postcondition is the length equation, which holds for every length the runtime accepts"
+
 // Construction, push, append, clear and byte reads over strings of any length.
 fn append_length(a: String, b: String) -> u64 vow {
   ensures: result == a.len() + b.len()

@@ -1,5 +1,7 @@
 module StringEqualBuilds
 
+// TEST: esbmc-model-artifact fn="same_build_is_equal" blame=Callee vow_id=0 "ESBMC models string_eq as a cached nondeterministic Bool, so it does not relate equal strings; the native model is exact; its counterexample has every string empty and string_eq returning 0"
+
 // The same sequence of appends over the same operands builds one array, so two
 // such strings compare equal without relating two quantified definitions, and a
 // chain of equalities between parameters closes by transitivity.
