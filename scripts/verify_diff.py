@@ -100,6 +100,16 @@ CAPACITY_ARTIFACT = re.compile(
     r'^//\s*TEST:\s*esbmc-capacity-artifact\s+"([^"]+)"\s*$', re.MULTILINE
 )
 
+# `// TEST: native-divergence "<why>"` marks a fixture whose `contracts --verify`
+# report lists a clause the native verifier leaves `unknown` where ESBMC says
+# `proven`, for a reason the docs name (a `requires` is `proven` only when its
+# whole function is; a function's clause is `unknown` once a callee's clause
+# refutes the call tree). The reason is mandatory and only that one clause shape
+# is excused: any other disagreement in the fixture keeps its class.
+NATIVE_DIVERGENCE = re.compile(
+    r'^//\s*TEST:\s*native-divergence\s+"([^"]+)"\s*$', re.MULTILINE
+)
+
 FN_DECL = re.compile(r"^\s*(?:pub\s+)?fn\s", re.MULTILINE)
 MAIN_DECL = re.compile(r"^\s*fn\s+main\s*\(", re.MULTILINE)
 
@@ -109,6 +119,16 @@ def capacity_artifact(path):
     try:
         with open(path, "r", encoding="utf-8") as fh:
             m = CAPACITY_ARTIFACT.search(fh.read())
+    except OSError:
+        return None
+    return m.group(1) if m else None
+
+
+def native_divergence(path):
+    """The reason of the fixture's `native-divergence` directive, or None."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            m = NATIVE_DIVERGENCE.search(fh.read())
     except OSError:
         return None
     return m.group(1) if m else None
@@ -343,9 +363,22 @@ def aborting_functions(verify_result, native_table):
     return refuted - failed
 
 
-def classify_clause(truth, key, esbmc, native, esbmc_table, aborting=frozenset()):
-    """Class and detail for one clause present in both `contracts` reports."""
+def classify_clause(
+    truth, key, esbmc, native, esbmc_table, aborting=frozenset(), divergence=None
+):
+    """Class and detail for one clause present in both `contracts` reports.
+
+    `divergence` is the text of the fixture's `native-divergence` directive: it
+    turns a clause ESBMC proves and native leaves `unknown` into an explained
+    divergence instead of a weaker row.
+    """
     e, n = esbmc["status"], native["status"]
+    if divergence and e == "proven" and n == "unknown":
+        return (
+            MORE_PRECISE,
+            f"documented native divergence ({divergence}); ESBMC reports the "
+            "clause proven",
+        )
     if n == "unknown" and e in ("proven", "failed") and key[0] in aborting:
         return (
             MORE_PRECISE,
@@ -383,7 +416,9 @@ def classify_clause(truth, key, esbmc, native, esbmc_table, aborting=frozenset()
     return classify(truth, ev, nv, native_status=n if n == "error" else None)
 
 
-def compare_contracts(truth, esbmc_result, native_result, aborting=frozenset()):
+def compare_contracts(
+    truth, esbmc_result, native_result, aborting=frozenset(), divergence=None
+):
     """(class, detail) of two `contracts --verify` reports of one fixture."""
     if esbmc_result is None or native_result is None:
         return HARNESS, "no usable contracts result"
@@ -400,7 +435,7 @@ def compare_contracts(truth, esbmc_result, native_result, aborting=frozenset()):
     worst, detail = MATCH, None
     for key in sorted(etable, key=repr):
         e, n = etable[key], ntable[key]
-        cls, why = classify_clause(truth, key, e, n, etable, aborting)
+        cls, why = classify_clause(truth, key, e, n, etable, aborting, divergence)
         if cls == MATCH and e["trivially_satisfiable"] != n["trivially_satisfiable"]:
             cls = WEAKER
             why = (
@@ -488,7 +523,11 @@ def diff_clauses(vowc, timeout, sub, exp, command, truth, max_fns):
         verify_result, _ = run_backend(vowc, "native", exp.path, timeout, max_fns)
         aborting = aborting_functions(verify_result, clause_table(results["native"]))
         row["class"], row["detail"] = compare_contracts(
-            truth, results["esbmc"], results["native"], aborting
+            truth,
+            results["esbmc"],
+            results["native"],
+            aborting,
+            native_divergence(exp.path),
         )
     else:
         row["class"], row["detail"] = classify_test(
