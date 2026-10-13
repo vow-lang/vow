@@ -10,7 +10,8 @@ use tests.catalogue_facts
 // derived from docs/spec/operations.json (via the generated
 // compiler/tests/catalogue_facts.vow). Extern symbols and return types are
 // covered by test_op_catalogue.vow; the Rust twin is
-// `every_catalogue_op_carries_its_result_tag` in vow-ir/src/lower/mod.rs.
+// `every_catalogue_op_lowers_to_its_runtime_symbol_return_type_and_result_tag`
+// in vow-ir/src/lower/mod.rs.
 
 // BRT_* / ITY code of a result-tag token (`none`, `string`, `vec`,
 // `option:<elem>`), -9 for an unknown token. Option tags are the element's
@@ -56,36 +57,20 @@ fn tag_problems(facts: Vec<OpFact>) -> Vec<String> {
 fn check_every_catalogue_op_carries_its_tag() -> i32 [io] {
     let facts: Vec<OpFact> = op_facts_all();
     if facts.len() == 0u64 { return 1; }
-    let problems: Vec<String> = tag_problems(facts);
-    let mut i: u64 = 0u64;
-    while i < problems.len() {
-        eprintln_str(problems[i]);
-        i = i + 1u64;
-    }
-    if problems.len() != 0u64 { return 2; }
+    if report_problems(tag_problems(facts)) != 0u64 { return 2; }
     0
-}
-
-fn facts_with_tag(facts: Vec<OpFact>, name: String, tag: String) -> Vec<OpFact> {
-    let out: Vec<OpFact> = Vec::new();
-    let mut i: u64 = 0u64;
-    while i < facts.len() {
-        let f: OpFact = facts[i];
-        let fname: String = f.name;
-        if fname == name {
-            out.push(op_fact(fname, f.effects, f.params, f.ret, f.doc_params, f.doc_ret, f.symbol, tag));
-        } else {
-            out.push(f);
-        }
-        i = i + 1u64;
-    }
-    out
 }
 
 // Controls: a drifted tag in any fact row must be reported against that op
 // alone, whichever tag family it belongs to.
+fn with_tag(name: String, tag: String) -> Vec<OpFact> {
+    let facts: Vec<OpFact> = op_facts_all();
+    let f: OpFact = fact_named(facts, name);
+    facts_with(facts, name, f.symbol, f.ret, tag)
+}
+
 fn check_a_drifted_container_tag_names_the_op() -> i32 {
-    let mutated: Vec<OpFact> = facts_with_tag(op_facts_all(), String::from("string_split"), String::from("string"));
+    let mutated: Vec<OpFact> = with_tag(String::from("string_split"), String::from("string"));
     let problems: Vec<String> = tag_problems(mutated);
     if problems.len() != 2u64 { return 10; }
     if !problems_mention(problems, String::from("'string_split': catalogue_builtin_result_tag")) { return 11; }
@@ -94,7 +79,7 @@ fn check_a_drifted_container_tag_names_the_op() -> i32 {
 }
 
 fn check_a_drifted_option_element_names_the_op() -> i32 {
-    let mutated: Vec<OpFact> = facts_with_tag(op_facts_all(), String::from("parse_u8"), String::from("option:u16"));
+    let mutated: Vec<OpFact> = with_tag(String::from("parse_u8"), String::from("option:u16"));
     let problems: Vec<String> = tag_problems(mutated);
     if problems.len() != 2u64 { return 20; }
     if !problems_mention(problems, String::from("'parse_u8': builtin_result_tag")) { return 21; }
@@ -102,7 +87,7 @@ fn check_a_drifted_option_element_names_the_op() -> i32 {
 }
 
 fn check_a_dropped_tag_names_the_op() -> i32 {
-    let mutated: Vec<OpFact> = facts_with_tag(op_facts_all(), String::from("fs_read"), String::from("none"));
+    let mutated: Vec<OpFact> = with_tag(String::from("fs_read"), String::from("none"));
     let problems: Vec<String> = tag_problems(mutated);
     if problems.len() != 2u64 { return 30; }
     if !problems_mention(problems, String::from("'fs_read': catalogue_builtin_result_tag")) { return 31; }
@@ -110,7 +95,7 @@ fn check_a_dropped_tag_names_the_op() -> i32 {
 }
 
 fn check_an_invented_tag_is_reported() -> i32 {
-    let mutated: Vec<OpFact> = facts_with_tag(op_facts_all(), String::from("hash_str"), String::from("vec"));
+    let mutated: Vec<OpFact> = with_tag(String::from("hash_str"), String::from("vec"));
     if !problems_mention(tag_problems(mutated), String::from("'hash_str': builtin_result_tag")) { return 40; }
     0
 }

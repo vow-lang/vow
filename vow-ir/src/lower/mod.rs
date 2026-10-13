@@ -6766,7 +6766,7 @@ type PairView = PairAlias;
         problems
     }
 
-    fn fact_with(name: &str, edit: impl Fn(&mut LoweringFact)) -> Vec<LoweringFact> {
+    fn fact_with(name: &str, edit: fn(&mut LoweringFact)) -> Vec<LoweringFact> {
         let mut facts = LOWERING_FACTS.to_vec();
         let fact = facts
             .iter_mut()
@@ -6787,30 +6787,23 @@ type PairView = PairAlias;
 
     #[test]
     fn a_drifted_catalogue_column_names_the_op() {
-        let drifted = fact_with("fs_status", |f| f.symbol = "__vow_fs_status_x");
-        let problems = lowering_problems(&drifted);
-        assert_eq!(problems.len(), 2, "{problems:?}");
-        assert!(problems.iter().all(|p| p.starts_with("'fs_status':")));
-
-        let drifted = fact_with("fs_status", |f| f.ret = "u64");
-        let problems = lowering_problems(&drifted);
-        assert_eq!(problems.len(), 2, "{problems:?}");
-        assert!(problems.iter().all(|p| p.starts_with("'fs_status':")));
-
-        let drifted = fact_with("string_split", |f| f.tag = "string");
-        let problems = lowering_problems(&drifted);
-        assert_eq!(problems.len(), 2, "{problems:?}");
-        assert!(problems.iter().all(|p| p.starts_with("'string_split':")));
-
-        let drifted = fact_with("parse_u8", |f| f.tag = "option:u16");
-        let problems = lowering_problems(&drifted);
-        assert_eq!(problems.len(), 2, "{problems:?}");
-        assert!(problems.iter().all(|p| p.starts_with("'parse_u8':")));
-
-        let drifted = fact_with("fs_read", |f| f.tag = "none");
-        let problems = lowering_problems(&drifted);
-        assert_eq!(problems.len(), 2, "{problems:?}");
-        assert!(problems.iter().all(|p| p.starts_with("'fs_read':")));
+        type Edit = fn(&mut LoweringFact);
+        let drifts: [(&str, Edit); 5] = [
+            ("fs_status", |f| f.symbol = "__vow_fs_status_x"),
+            ("fs_status", |f| f.ret = "u64"),
+            ("string_split", |f| f.tag = "string"),
+            ("parse_u8", |f| f.tag = "option:u16"),
+            ("fs_read", |f| f.tag = "none"),
+        ];
+        for (name, edit) in drifts {
+            let problems = lowering_problems(&fact_with(name, edit));
+            assert_eq!(problems.len(), 2, "{problems:?}");
+            let prefix = format!("'{name}':");
+            assert!(
+                problems.iter().all(|p| p.starts_with(&prefix)),
+                "{problems:?}"
+            );
+        }
     }
 
     #[test]

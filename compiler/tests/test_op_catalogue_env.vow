@@ -172,13 +172,7 @@ fn check_env_agrees_with_catalogue() -> i32 [io] {
     let excl: Vec<OpExcluded> = op_facts_excluded();
     if facts.len() == 0u64 { return 1; }
     if excl.len() == 0u64 { return 2; }
-    let problems: Vec<String> = all_problems(fresh_env(), facts, excl);
-    let mut i: u64 = 0u64;
-    while i < problems.len() {
-        eprintln_str(problems[i]);
-        i = i + 1u64;
-    }
-    if problems.len() != 0u64 { return 3; }
+    if report_problems(all_problems(fresh_env(), facts, excl)) != 0u64 { return 3; }
     0
 }
 

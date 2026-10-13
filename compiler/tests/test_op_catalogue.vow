@@ -11,8 +11,8 @@ use tests.catalogue_facts
 // generated catalogue_* halves must return the catalogued runtime symbol and
 // return type. Result tags are covered the same way by
 // test_lower_catalogue_result_tags.vow. The Rust twin is
-// `every_catalogue_op_lowers_to_its_runtime_symbol_and_return_type` in
-// vow-ir/src/lower/mod.rs; both read the same generated columns.
+// `every_catalogue_op_lowers_to_its_runtime_symbol_return_type_and_result_tag`
+// in vow-ir/src/lower/mod.rs; both read the same generated columns.
 
 // ITY code of a catalogue return token, -2 for an unknown token.
 fn ret_token_ity(token: String) -> i64 {
@@ -56,42 +56,8 @@ fn lowering_problems(facts: Vec<OpFact>) -> Vec<String> {
 fn check_every_catalogue_op_lowers_as_catalogued() -> i32 [io] {
     let facts: Vec<OpFact> = op_facts_all();
     if facts.len() == 0u64 { return 1; }
-    let problems: Vec<String> = lowering_problems(facts);
-    let mut i: u64 = 0u64;
-    while i < problems.len() {
-        eprintln_str(problems[i]);
-        i = i + 1u64;
-    }
-    if problems.len() != 0u64 { return 2; }
+    if report_problems(lowering_problems(facts)) != 0u64 { return 2; }
     0
-}
-
-fn fact_named(facts: Vec<OpFact>, name: String) -> OpFact {
-    let mut i: u64 = 0u64;
-    while i < facts.len() {
-        let f: OpFact = facts[i];
-        let fname: String = f.name;
-        if fname == name { return f; }
-        i = i + 1u64;
-    }
-    facts[0u64]
-}
-
-// The same facts with `name`'s symbol and return token replaced.
-fn facts_with(facts: Vec<OpFact>, name: String, symbol: String, ret: String) -> Vec<OpFact> {
-    let out: Vec<OpFact> = Vec::new();
-    let mut i: u64 = 0u64;
-    while i < facts.len() {
-        let f: OpFact = facts[i];
-        let fname: String = f.name;
-        if fname == name {
-            out.push(op_fact(fname, f.effects, f.params, ret, f.doc_params, f.doc_ret, symbol, f.result_tag));
-        } else {
-            out.push(f);
-        }
-        i = i + 1u64;
-    }
-    out
 }
 
 // Controls: a one-column drift in any fact row must be reported against that
@@ -100,7 +66,7 @@ fn check_a_drifted_symbol_names_the_op() -> i32 {
     let facts: Vec<OpFact> = op_facts_all();
     if !any_fact_named(facts, String::from("fs_status")) { return 9; }
     let f: OpFact = fact_named(facts, String::from("fs_status"));
-    let mutated: Vec<OpFact> = facts_with(facts, String::from("fs_status"), String::from("__vow_fs_status_X"), f.ret);
+    let mutated: Vec<OpFact> = facts_with(facts, String::from("fs_status"), String::from("__vow_fs_status_X"), f.ret, f.result_tag);
     let problems: Vec<String> = lowering_problems(mutated);
     if problems.len() != 2u64 { return 10; }
     if !problems_mention(problems, String::from("'fs_status': catalogue_builtin_to_extern")) { return 11; }
@@ -112,7 +78,7 @@ fn check_a_drifted_return_type_names_the_op() -> i32 {
     let facts: Vec<OpFact> = op_facts_all();
     if !any_fact_named(facts, String::from("fs_status")) { return 19; }
     let f: OpFact = fact_named(facts, String::from("fs_status"));
-    let mutated: Vec<OpFact> = facts_with(facts, String::from("fs_status"), f.symbol, String::from("u64"));
+    let mutated: Vec<OpFact> = facts_with(facts, String::from("fs_status"), f.symbol, String::from("u64"), f.result_tag);
     let problems: Vec<String> = lowering_problems(mutated);
     if problems.len() != 2u64 { return 20; }
     if !problems_mention(problems, String::from("'fs_status': catalogue_builtin_ret_ty")) { return 21; }

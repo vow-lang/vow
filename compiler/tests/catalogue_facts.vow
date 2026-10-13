@@ -233,3 +233,40 @@ fn problems_all_mention(problems: Vec<String>, needle: String) -> bool {
     }
     true
 }
+
+fn report_problems(problems: Vec<String>) -> u64 [io] {
+    let mut i: u64 = 0u64;
+    while i < problems.len() {
+        eprintln_str(problems[i]);
+        i = i + 1u64;
+    }
+    problems.len()
+}
+
+fn fact_named(facts: Vec<OpFact>, name: String) -> OpFact {
+    let mut i: u64 = 0u64;
+    while i < facts.len() {
+        let f: OpFact = facts[i];
+        let fname: String = f.name;
+        if fname == name { return f; }
+        i = i + 1u64;
+    }
+    facts[0u64]
+}
+
+// The same facts with `name`'s symbol, return token and result tag replaced.
+fn facts_with(facts: Vec<OpFact>, name: String, symbol: String, ret: String, tag: String) -> Vec<OpFact> {
+    let out: Vec<OpFact> = Vec::new();
+    let mut i: u64 = 0u64;
+    while i < facts.len() {
+        let f: OpFact = facts[i];
+        let fname: String = f.name;
+        if fname == name {
+            out.push(op_fact(fname, f.effects, f.params, ret, f.doc_params, f.doc_ret, symbol, tag));
+        } else {
+            out.push(f);
+        }
+        i = i + 1u64;
+    }
+    out
+}
