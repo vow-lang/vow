@@ -86,3 +86,40 @@ arithmetic nodes, so a rule that follows a name must re-check the node kind.
 
 Not folded, tracked as follow-ups: the dual `(x / d) * d + x % d` to `x`, bounds
 such as `x / d * d <= x`, and an interval domain for `bvmul`/`bvsdiv`.
+
+## Amendment (#1682, 2026-10-14)
+
+A second rule, for the other idiom that makes the solver diverge: a
+multiplication-overflow guard written with a division. `v <= c / d` and its
+mirror `c / d >= v`, and the negations `v > c / d` and `c / d < v`, with `c` a
+constant (non-negative for the signed `bvsdiv`; any value for `bvudiv`) and `v`
+and `d` non-constant terms, become
+
+    ite(d > 0, inner, original)
+
+where `inner` is `not umulo(v, d) and v * d <= c` unsigned and
+`smulo(v, d) ? v < 0 : v * d <= c` signed, negated for the `>` and `<` forms,
+and `original` is the comparison as it was built. For `d > 0` and `c >= 0`,
+`v <= floor(c / d)` holds exactly when the unbounded product `v * d` is at most
+`c`, and an overflowing product has the sign of `v`. For a zero or negative
+divisor the else branch keeps the SMT-LIB meaning of the division, so the rule
+holds at every divisor with no side condition. It uses only the width carried by
+`c` and no 128-bit term, so it applies at every width up to 64 bits.
+
+The reason it cannot be left to the solver: `requires: w >= 0, h >= 0,
+h == 0 || w <= MAX / h` with `ensures: w * h >= 0` over 64-bit values is
+answered by ESBMC in about 5 s but ran for more than 300 s in Bitwuzla (a
+`bvsdiv` by a variable feeding the `bvmul` it guards). The `u32` version of the
+same shape also timed out. With the rewrite the queries are decided in
+milliseconds. The solver options (`--bv-solver`, `--abstraction`) did not help.
+
+The guard is `check_quotient_cmp_exhaustive` in
+`compiler/tests/test_vc_term.vow`: for both signednesses, all eight comparison
+forms and constants at the edges (0, 1, 5, 127, 128, 255) it compares the raw
+and simplified terms over all 65 536 width-8 operand pairs and checks that
+exactly the four covered forms (and non-negative signed constants) are
+rewritten; `check_quotient_rules` pins the shapes that must not match (a
+constant `v`, a variable or wide or negative dividend, the other signedness).
+
+Not folded: the strict `v < c / d` and `v >= c / d`, which are not overflow
+guards, and a guard whose dividend is not a constant (`a * b / b == a`).
