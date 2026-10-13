@@ -14,6 +14,7 @@ use vc_strops
 use vc_strdeep
 use vc_str
 use vc_hooks
+use vc_numeric
 use ir_dominance
 
 // Symbolic execution of an acyclic integer/Bool function (one that
@@ -590,6 +591,10 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
     }
     // Region markers only scope an allocation's lifetime; they change no value.
     if op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE() {
+        return;
+    }
+    if vc_inst_scalar_kind(inst) == VC_SCALAR_HASH_U64() {
+        vc_define(w, inst, vc_num_hash_mix(cs.arena, w.var_of[inst.args[0] as u64]));
         return;
     }
     if vc_walk_agg(w, bi, inst) || vc_walk_vec(w, bi, inst, pc) {

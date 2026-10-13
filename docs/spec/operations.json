@@ -388,8 +388,7 @@
       "return": "u64",
       "doc_signature": "fn(x: u64) -> u64",
       "effects": "[]",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "SplitMix64 is expressible over 64-bit vectors but no executor encoding of catalogue calls exists yet; a caller is skipped, never approximated.",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {

@@ -54,8 +54,8 @@ fn check_known_classes() -> i64 {
     0
 }
 
-// Only substr, starts_with and ends_with are known by catalogue symbol (the String
-// model, `vc_str`); every other catalogued builtin (pure or effectful) and every symbol
+// Only substr, starts_with, ends_with, the two float text hooks and hash_u64 are known by
+// catalogue symbol (the String model `vc_str`, `vc_hooks`, `vc_numeric`); every other catalogued builtin (pure or effectful) and every symbol
 // the catalogue lacks is not. An effectful builtin can never become known; the generator
 // rejects it (scripts/test_generate_operations.py).
 fn check_builtin_model() -> i64 {
@@ -64,7 +64,7 @@ fn check_builtin_model() -> i64 {
     if catalogue_verifier_known(String::from("__vow_vec_len")) { return 702; }
     if catalogue_verifier_known(String::from("__vow_vec_push_val")) { return 704; }
     if catalogue_verifier_known(String::from("")) { return 703; }
-    if catalogue_verifier_known(String::from("__vow_hash_u64")) { return 705; }
+    if !catalogue_verifier_known(String::from("__vow_hash_u64")) { return 705; }
     if catalogue_verifier_known(String::from("__vow_hash_str")) { return 706; }
     if catalogue_verifier_known(String::from("__vow_fs_read")) { return 707; }
     if catalogue_verifier_known(String::from("__vow_process_run")) { return 708; }

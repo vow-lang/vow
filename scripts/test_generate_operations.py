@@ -774,15 +774,16 @@ def _pure_c_model(op):
 
 
 # The native verifier models the String slice builtins by runtime symbol
-# (`vc_str`, #1426) and the float text hooks (`vc_hooks`, #1646), and none of the
-# others yet. The two pure hash builtins still say whether the ESBMC C model knows
-# them.
+# (`vc_str`, #1426), the float text hooks (`vc_hooks`, #1646) and the numeric
+# builtins (`vc_numeric`, #1654), and none of the others yet. The two pure hash
+# builtins still say whether the ESBMC C model knows them.
 VERIFIER_KNOWN_NAMES = {
     "string_substr",
     "string_starts_with",
     "string_ends_with",
     "parse_f64_bits",
     "format_f64_bits",
+    "hash_u64",
 }
 
 
@@ -2195,12 +2196,12 @@ class VerifierModelDriftTest(unittest.TestCase):
                 self.assertNotEqual(by_name[name]["effects"], "[]")
                 self.assertEqual(by_name[name]["verifier_model"], "unmodeled")
 
-    def test_real_pure_hash_builtins_are_unmodeled(self):
+    def test_real_pure_hash_builtins_say_what_the_native_verifier_models(self):
         by_name = {op["name"]: op for op in go.load_catalogue(REPO_ROOT)}
-        for name in ("hash_u64", "hash_str"):
+        for name, model in (("hash_u64", "known"), ("hash_str", "unmodeled")):
             with self.subTest(op=name):
                 self.assertEqual(by_name[name]["effects"], "[]")
-                self.assertEqual(by_name[name]["verifier_model"], "unmodeled")
+                self.assertEqual(by_name[name]["verifier_model"], model)
 
     def test_synthetic_pure_known_op_is_the_only_symbol_generated(self):
         pure = {

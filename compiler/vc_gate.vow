@@ -311,6 +311,9 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
         if vc_is_unwrap_abort(inst) { return n == 0 && inst.ty == ITY_UNIT(); }
         let vk: i64 = vc_inst_vec_kind(inst);
         if vk != VC_VEC_NONE() { return vc_vec_call_ok(inst, tys, vk); }
+        if vc_inst_scalar_kind(inst) == VC_SCALAR_HASH_U64() {
+            return n == 1 && inst.ty == ITY_U64() && vc_vec_index_ok(t0);
+        }
         return calls && vc_call_scalar(inst, tys);
     }
     if vc_is_arith_op(op) {

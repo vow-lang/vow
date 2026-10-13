@@ -143,6 +143,18 @@ fn vc_vec_kind_mutates(k: i64) -> bool {
     k == VC_VEC_PUSH() || k == VC_VEC_SET() || k == VC_VEC_POP() || vc_str_kind_mutates(k)
 }
 
+// A pure scalar builtin the executor encodes as a closed term of its integer
+// operand (`vc_numeric`). It has no object operand, so it takes no part in the
+// `Vec`/`String` kinds above.
+fn VC_SCALAR_NONE() -> i64 { 0 }
+fn VC_SCALAR_HASH_U64() -> i64 { 1 }
+
+fn vc_inst_scalar_kind(inst: IrInst) -> i64 {
+    if inst.op != IOP_CALL() || inst.dk != IDATA_CALL_EXTERN() { return VC_SCALAR_NONE(); }
+    if inst.ds == String::from("__vow_hash_u64") { return VC_SCALAR_HASH_U64(); }
+    VC_SCALAR_NONE()
+}
+
 // The `Vec` operation an instruction is, or `VC_VEC_NONE`.
 fn vc_inst_vec_kind(inst: IrInst) -> i64 {
     if inst.op != IOP_CALL() || inst.dk != IDATA_CALL_EXTERN() { return VC_VEC_NONE(); }
@@ -257,6 +269,9 @@ fn vc_op_gate_candidate(op: i64) -> bool {
 // GENERATE:OPERATIONS:START
 fn catalogue_verifier_known(sym: String) -> bool {
     let n: u64 = sym.len();
+    if n == 14 {
+        return sym == String::from("__vow_hash_u64");
+    }
     if n == 19 {
         return sym == String::from("__vow_string_substr");
     }

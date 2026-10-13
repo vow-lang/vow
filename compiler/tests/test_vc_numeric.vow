@@ -1,0 +1,130 @@
+module TestVcNumeric
+
+use ir
+use vc_ops
+use vc_term
+use vc_smt
+use vc_exec
+use vc_gate
+use vc_numeric
+use verifier
+use tests.builders
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn args2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = args1(a);
+    v.push(b);
+    v
+}
+
+fn one_block(params: Vec<i64>, ret: i64, insts: Vec<IrInst>) -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(1, String::from("f"), params, ret, blocks)
+}
+
+fn contains(hay: String, needle: String) -> bool {
+    str_find_str(hay, needle) >= 0
+}
+
+fn mk_ens(id: i64, pred: i64, vow_id: i64) -> IrInst {
+    ir_inst_new(id, IOP_VOW_ENS(), ITY_UNIT(), args1(pred), IDATA_VOW_ID(), vow_id, 0, String::from(""))
+}
+
+fn mk_eq(id: i64, a: i64, b: i64) -> IrInst {
+    ir_inst_new(id, IOP_EQ(), ITY_BOOL(), args2(a, b), IDATA_NONE(), 0, 0, String::from(""))
+}
+
+fn hash(id: i64, x: i64) -> IrInst {
+    mk_inst_call_extern(id, ITY_U64(), args1(x), String::from("__vow_hash_u64"))
+}
+
+// fn f(a: u64, b: u64) -> bool { hash(a) == hash(<second>) } with `ensures: result`.
+fn hash_pair(second: i64) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_U64(), 0));
+    insts.push(mk_inst_arg(1, ITY_U64(), 1));
+    insts.push(hash(2, 0));
+    insts.push(hash(3, second));
+    insts.push(mk_eq(4, 2, 3));
+    insts.push(mk_ens(5, 4, 0));
+    insts.push(mk_inst_return(6, 4));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_U64());
+    p.push(ITY_U64());
+    one_block(p, ITY_BOOL(), insts)
+}
+
+fn check_op_table() -> i64 {
+    if !catalogue_verifier_known(String::from("__vow_hash_u64")) { return 1; }
+    if vc_inst_scalar_kind(hash(2, 0)) != VC_SCALAR_HASH_U64() { return 2; }
+    if vc_inst_scalar_kind(mk_inst_call_extern(2, ITY_U64(), args1(0), String::from("__vow_hash_str"))) != VC_SCALAR_NONE() { return 3; }
+    if vc_inst_scalar_kind(mk_inst_const_i64(2, 0)) != VC_SCALAR_NONE() { return 4; }
+    if vc_inst_vec_kind(hash(2, 0)) != VC_VEC_NONE() { return 5; }
+    0
+}
+
+// The mixer is a closed term: the same operand gives the same term, so no
+// obligation is left and no constant or axiom is declared for the result.
+fn check_same_operand_is_one_term() -> i64 {
+    let f: IrFunction = hash_pair(0);
+    if vc_skip_reason(f).len() != 0 { return 10; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 0 { return 11; }
+    if cs.assumed.len() != 0 { return 12; }
+    if cs.hook_vars.len() != 0 { return 13; }
+    0
+}
+
+// Two operands give two closed terms and no axiom between them: injectivity is
+// the solver's to decide, not the model's to assume.
+fn check_distinct_operands_are_two_terms() -> i64 {
+    let f: IrFunction = hash_pair(1);
+    if vc_skip_reason(f).len() != 0 { return 20; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 21; }
+    if cs.assumed.len() != 0 { return 22; }
+    let q: String = vc_smt_render(cs.arena, vc_claim_script(cs, 0));
+    if !contains(q, String::from("(declare-const p0 (_ BitVec 64))")) { return 23; }
+    if contains(q, String::from("forall")) { return 24; }
+    if !contains(q, String::from("bvmul")) { return 25; }
+    if !contains(q, String::from("#x9e3779b97f4a7c15")) { return 26; }
+    0
+}
+
+// A constant operand is folded all the way to the runtime's value: the first
+// output of SplitMix64 seeded with 0 (a literal `0` is a 64-bit constant).
+fn check_literal_folds() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let t: i64 = vc_num_hash_mix(ar, vc_tm_bv(ar, 64, 0, 0));
+    if ar.kinds[t as u64] != VC_T_BV() { return 30; }
+    if ar.aux[t as u64] != -2152535657050944081 { return 31; }
+    0
+}
+
+// The operand must be a 64-bit integer and the result a `u64`.
+fn check_gate_types() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_U8(), 0));
+    insts.push(hash(1, 0));
+    insts.push(mk_inst_return(2, 1));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_U8());
+    let f: IrFunction = one_block(p, ITY_U64(), insts);
+    if vc_skip_reason(f).len() == 0 { return 40; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_op_table();
+    if r == 0 { r = check_same_operand_is_one_term(); }
+    if r == 0 { r = check_distinct_operands_are_two_terms(); }
+    if r == 0 { r = check_literal_folds(); }
+    if r == 0 { r = check_gate_types(); }
+    i64_to_i32_wrap(r)
+}

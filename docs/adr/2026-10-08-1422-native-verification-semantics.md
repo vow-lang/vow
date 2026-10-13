@@ -732,3 +732,20 @@ their parity are untouched.
   direction, and `unknown/float_bits_hook_opaque_*` pin the claims about a value or a text.
 - **Verdict impact.** Strictly more than before: these calls were `Skipped` as
   `unmodeled-builtin`, which `skip/unmodeled_builtin_skipped.vow` still pins for other builtins.
+
+## Addendum (#1654): numeric and string helper builtins
+
+The helpers of #1654 each get an exact model or a `verifier_skip_reason` that names the
+semantics the model would have to encode. Rule 3 stands: a helper is never havoced, and no
+model caps a length. The exact models are native verifier only (`compiler/vc_numeric.vow`
+and the kinds of `compiler/vc_strops.vow`); `c_model` is untouched, so the C emitters and
+their parity are unchanged.
+
+- **`hash_u64`** is the runtime's SplitMix64 output function as one closed 64-bit term
+  (`vc_num_hash_mix`): `z = x + 0x9E3779B97F4A7C15`, two xor-shift-multiply rounds and a final
+  xor-shift, every operation wrapping. It is a term of the operand, not a fresh constant, so
+  equal operands agree with no axiom, a constant operand folds to the runtime's value
+  (`hash_u64(0) == 0xE220A8397B1DCDAF`, pinned by `tests/verify-native/pass/hash_u64_exact.vow`
+  and `compiler/tests/test_vc_numeric.vow`), and a counterexample is a real run (replay
+  confirms it). The term is a call of the executor on a scalar: it has no object operand
+  and takes no part in the `String` kinds (`vc_inst_scalar_kind`).

@@ -1,0 +1,22 @@
+module VcNumeric
+
+use vc_term
+
+// Exact models of the numeric builtins of the native verifier (ADR-2026-10-08-1422,
+// #1654 addendum): the `hash_u64` mixer, a closed 64-bit term, and the decimal
+// expansion `int_to_string` / `uint_to_string` produce. Both are total functions of
+// their integer operand and are encoded as bit-vector terms, never as a fresh
+// constant, so two calls on equal operands agree without an axiom.
+
+fn vc_num_c64(ar: VcArena, v: i64) -> i64 {
+    vc_tm_bv(ar, 64, v, 0)
+}
+
+// `hash_u64(x)`: the SplitMix64 output function, as the runtime computes it
+// (`hash_mix_u64`): every operation wraps modulo 2^64.
+fn vc_num_hash_mix(ar: VcArena, x: i64) -> i64 {
+    let mut z: i64 = vc_tm_app2(ar, VC_OP_BVADD(), x, vc_num_c64(ar, -7046029254386353131));
+    z = vc_tm_app2(ar, VC_OP_BVMUL(), vc_tm_app2(ar, VC_OP_BVXOR(), z, vc_tm_app2(ar, VC_OP_BVLSHR(), z, vc_num_c64(ar, 30))), vc_num_c64(ar, -4658895280553007687));
+    z = vc_tm_app2(ar, VC_OP_BVMUL(), vc_tm_app2(ar, VC_OP_BVXOR(), z, vc_tm_app2(ar, VC_OP_BVLSHR(), z, vc_num_c64(ar, 27))), vc_num_c64(ar, -7723592293110705685));
+    vc_tm_app2(ar, VC_OP_BVXOR(), z, vc_tm_app2(ar, VC_OP_BVLSHR(), z, vc_num_c64(ar, 31)))
+}
