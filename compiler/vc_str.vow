@@ -26,6 +26,11 @@ use vc_strdeep
 // append, a substring) is a fresh array with such a defining assumption: a conservative
 // extension, which cannot make a query unsatisfiable by itself.
 //
+// The byte read at the witness index goes through the appends that built an array
+// (`vc_strdeep`), so differently built equal strings need no quantifier instantiation.
+// Every range operation guards its range with the lengths, so a read never lands past
+// a built string's length, where that unfolded read and the axioms could differ.
+//
 // None of this is a bound: the unfolding below `VC_STR_UNFOLD` is an encoding choice,
 // the quantified form is exact for every length.
 
