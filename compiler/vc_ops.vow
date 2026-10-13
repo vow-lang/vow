@@ -31,6 +31,15 @@ fn vc_skip_code_valid(code: String) -> bool {
         || code == VC_SKIP_RESERVED_SYMBOL()
 }
 
+// A function named after one of the checker's own intrinsics is never verified
+// (the ESBMC model's reserved set, kept so both backends skip the same
+// functions). No native query contains a function name, so this is a verdict
+// policy, not a collision the encoding could suffer.
+fn vc_reserved_symbol(name: String) -> bool {
+    string_starts_with(name, String::from("__ESBMC_")) == 1
+        || string_starts_with(name, String::from("__VERIFIER_")) == 1
+}
+
 fn VC_OPM_UNCLASSIFIED() -> i64 { -1 }
 // The symbolic executor encodes the opcode (the gate still checks operand types).
 fn VC_OPM_MODELED() -> i64 { 0 }

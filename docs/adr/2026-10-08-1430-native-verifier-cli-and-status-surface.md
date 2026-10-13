@@ -159,7 +159,7 @@ opcode or builtin name); `detail` is never part of the enumerated set.
 | `unmodeled-builtin` | An extern call whose runtime symbol has no entry with `verifier_model: known` in `docs/spec/operations.json`: the entry is absent or says `unmodeled` (D10). `detail` is the builtin. | Shrinks as builtins are modelled. |
 | `unsupported-opcode` | An opcode absent from `compiler/vc_ops.vow`, a module the `vc_ops` child introduces (today `Load`, `Store`, `LinearBorrow`). `detail` is the opcode (D10). | Shrinks. |
 | `non-modelable-callee` | An inlined callee is itself `Skipped`. `detail` is `<callee> (<code>)`, the callee's own code (#1416). | Permanent. |
-| `reserved-verifier-symbol` | The function name collides with a reserved checker symbol. | Permanent; the reserved set is fixed in P1. |
+| `reserved-verifier-symbol` | The function name starts with a reserved checker prefix (`__ESBMC_`, `__VERIFIER_`). | Permanent; the reserved set is the ESBMC model's (#1409). |
 
 **Prerequisite for `unmodeled-builtin`.** Absent stays fail-closed, so the gate
 can only be enabled once the catalogue says which builtins are modelled. Today
@@ -236,8 +236,17 @@ reported in preference to a generic
 `unmodeled-builtin` and `unsupported-opcode`. `recursion-unsupported` and
 `non-modelable-callee` need the call graph the per-function gate does not have;
 the module-level check that inlines calls emits them (#1416).
-`reserved-verifier-symbol` is defined but not yet emitted: it waits for the
-reserved set to be fixed (no native query contains a user function name).
+`reserved-verifier-symbol` is emitted by the per-function gate (#1409, first
+check, ahead of effects): the reserved set is the ESBMC model's, a function name
+starting `__ESBMC_` or `__VERIFIER_`, so both backends skip the same functions.
+No native query contains a user function name, so this is a verdict-parity
+policy and not a collision the encoding could suffer; a callee with such a name
+makes its callers `non-modelable-callee`. `scripts/test_spec_surface.py` fails
+when the code list of `vc_skip_code_valid` differs from the table in section 4,
+and when a code has neither a `tests/verify-native/skip/` fixture with a
+`// TEST: skip-reason <code>` directive nor an exemption naming the unit test
+that covers it (only `ir-non-dominating-read`, which no source program can
+produce).
 
 **Addendum (issue #1421, 128-bit aggregates).** The transitional
 `wide-aggregate-field` code is removed: the native verifier models a 128-bit
