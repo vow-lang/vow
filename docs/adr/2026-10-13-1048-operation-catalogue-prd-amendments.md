@@ -14,8 +14,8 @@ The PRD in #375 was written before any slice landed. The operation-group
 slices (#1270 print, #1272 filesystem/stdin/args/stderr, #1273 process, #1271
 query/utility), the validation/docs hardening (#1275) and the verifier-model
 slice (#1274) have merged, and the catalogue covers 83 Builtin Operations plus
-the `arena_routes` section (84 base symbols) and the `excluded` section. Building it showed that four PRD decisions were
-either wrong or answered a narrower question than they appeared to. The epic
+the `arena_routes` section (84 base symbols) and the `excluded` section. Building it showed that four
+PRD decisions were either wrong or answered a narrower question than they appeared to. The epic
 can only close with no gaps if each such decision is either implemented or
 amended out of the PRD, with the reason recorded and a check that holds the
 replacement in place. This ADR is that record. It changes no code.
@@ -27,8 +27,10 @@ counterpart in `compiler/env.vow`.
 ## Decision
 
 Each item names what it amends, what replaces it, and the check that enforces
-the replacement. Every check named below exists in the repository and runs in
-CI; none is deferred.
+the replacement. Every check named below exists in the repository; none is
+deferred. The generator checks and `cargo test -p vow-types` run on every pull
+request; the self-hosted `build/vowc test compiler/` run happens on push to `main`
+and nightly (`full-test.yml`, `bootstrap.yml`), not per PR.
 
 ### (a) Docs are checked against the catalogue, not generated from it
 

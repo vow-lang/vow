@@ -192,11 +192,16 @@ The staleness detector `scripts/check_help_coverage.py` (run in `full_test.sh`) 
 `docs/spec/operations.json` is the Operation Catalogue: the single checked, hand-edited source of
 runtime-symbol, ABI, return-shape, and doc facts for the Builtin Operations in its `operations` array
 (the print, filesystem, stdin/args/stderr, process, hash, environment and query/utility builtins; epic
-#375; 83 operations), plus the top-level `arena_routes` list (84 base symbols) and the `excluded` section. It is deliberately narrower than
+#375; 83 operations), plus the top-level `arena_routes` list (84 base symbols) and the `excluded`
+section. It is deliberately narrower than
 `vow-types/src/env.rs::builtin_free_fn_signatures()` — that table (and its self-hosted counterpart in
 `compiler/env.vow`) remains the single source for signature/effects and is never read or replaced by
 this catalogue; the entry's `doc_signature`/`effects` are copies checked against `grammar.md` and the
-help text, not a second source. `cargo test -p vow-types` and `build/vowc test compiler/ --filter test_op_catalogue_env` compare them with both type-checker tables, via fact tables generated into `vow-types/src/env.rs` and `compiler/tests/catalogue_facts.vow`. They sit between their own `// GENERATE:OPERATION_FACTS:START` / `:END` markers, separate from the `GENERATE:OPERATIONS` pair below, and `generate_operations.py --check` fails when they are stale.
+help text, not a second source. `cargo test -p vow-types` and
+`build/vowc test compiler/ --filter test_op_catalogue_env` compare them with both type-checker tables, via
+fact tables generated into `vow-types/src/env.rs` and `compiler/tests/catalogue_facts.vow`. They sit
+between their own `// GENERATE:OPERATION_FACTS:START` / `:END` markers, separate from the
+`GENERATE:OPERATIONS` pair below, and `generate_operations.py --check` fails when they are stale.
 
 Where the shipped catalogue departs from the epic's PRD (docs checked rather than generated, lookup
 functions rather than typed Rust records, the `c_model`/`verifier_model` split, the exclusion list),
@@ -239,8 +244,9 @@ arena inference read) is derived from the entry's documented return type, not st
 `arena_routing` (`heap_fresh` exactly when its symbol is a route; otherwise `none` plus a free-text
 `arena_routing_reason` saying why the heap result has no arena variant; today `stdin_read_line`, which
 returns a reused scratch buffer, and `proc_sample`, which allocates in the root arena and keeps each result
-until exit, tracked in #1639), and `--check` fails on any disagreement. `i64_to_string`, `string_matches_literal_at` (its literal operand
-lowers specially) and the narrowing intrinsics stay hand-written.
+until exit, tracked in #1639), and `--check` fails on any disagreement. `i64_to_string`,
+`string_matches_literal_at` (its literal operand lowers specially) and the narrowing intrinsics stay
+hand-written.
 
 `docs/spec/grammar.md`'s Builtin Function Signatures table and the generated help-JSON in
 `compiler/main.vow`/`vow/src/skill.rs` are **checked against** the catalogue (not generated from it) —
@@ -251,8 +257,9 @@ grammar.md row and with the `skill.rs` and `main.vow` help lines).
 from parity) are separate per-entry fields, and only pure entries may be known to either.
 Builtins the type-checker tables hold that the catalogue deliberately does not describe (narrowing-conversion
 families and the saturating `u8` operations, `__vow_clif_*`, `string_matches_literal_at`, the `debug_*` builtins, the
-`i64_to_string` alias; 135 of the 218 table entries) are listed with a reason in the `excluded` section of `operations.json`, each entry an explicit `names` list, a `prefix`, or
-a `contains` plus `suffixes` set (no regex). `load_excluded` rejects a missing reason, a malformed matcher and a
+`i64_to_string` alias; 135 of the 218 table entries) are listed with a reason in the `excluded` section of
+`operations.json`, each entry an explicit `names` list, a `prefix`, or a `contains` plus `suffixes` set
+(no regex). `load_excluded` rejects a missing reason, a malformed matcher and a
 name that is both catalogued and excluded; the vow-types and `test_op_catalogue_env` tests fail on a table entry
 that is neither catalogued nor excluded and on an exclusion that matches no table entry. `pin_to_root` and the
 internal runtime ops are not table entries, so they are documented in the ADR above only.
