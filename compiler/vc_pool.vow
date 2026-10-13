@@ -333,6 +333,29 @@ fn vc_pool_unclaimed(p: VcPool) -> i64 [read] {
     n
 }
 
+// Retries waiting for a fresh worker.
+fn vc_pool_retries(p: VcPool) -> i64 [read] {
+    let mut n: i64 = 0;
+    let mut k: u64 = 0;
+    while k < p.phase.len() {
+        if (k as i64) < p.state[VC_ST_LIMIT()] && p.phase[k] == VC_TASK_PENDING() && vc_q_is_retry(vc_pool_root(p), k as i64) { n = n + 1; }
+        k = k + 1;
+    }
+    n
+}
+
+// Live sessions that have not taken a task yet: any of them can still take a
+// retry, since a session looks for one before it takes anything else.
+fn vc_pool_fresh_sessions(p: VcPool) -> i64 {
+    let mut n: i64 = 0;
+    let mut s: u64 = 0;
+    while s < p.s_handle.len() {
+        if p.s_handle[s] >= 0 && p.s_begun[s] == 0 { n = n + 1; }
+        s = s + 1;
+    }
+    n
+}
+
 fn vc_pool_launch_one(p: VcPool) [io, read] {
     let w: i64 = p.s_handle.len() as i64;
     p.s_handle.push(-1);
@@ -355,12 +378,16 @@ fn vc_pool_launch_one(p: VcPool) [io, read] {
 
 // Sessions are started while there are fewer than `jobs` of them and more
 // unclaimed tasks than sessions to take them: a session costs one frontend, so
-// the pool never grows past the work that is left.
+// the pool never grows past the work that is left. A retry needs a session that
+// has taken nothing before, so one more is started for it unless a fresh one is
+// already on its way.
 fn vc_pool_launch(p: VcPool) [io, read, write] {
     vc_pool_prepare(p);
     if vc_pool_root(p).len() == 0 { return; }
     while p.state[VC_ST_LIVE()] < p.jobs && p.state[VC_ST_IDLE_DEATHS()] < VC_POOL_IDLE_DEATH_LIMIT() {
-        if vc_pool_unclaimed(p) <= p.state[VC_ST_LIVE()] { break; }
+        let waiting: i64 = vc_pool_unclaimed(p);
+        if waiting == 0 { break; }
+        if waiting <= p.state[VC_ST_LIVE()] && vc_pool_retries(p) <= vc_pool_fresh_sessions(p) { break; }
         vc_pool_launch_one(p);
     }
 }

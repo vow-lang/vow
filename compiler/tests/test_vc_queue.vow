@@ -133,7 +133,8 @@ fn check_queue_on_disk() -> i64 [io, read, write] {
     if vc_q_claim(root, 1, 2) { return 20; }
     if !vc_q_requeue(root, 1) { return 21; }
     if !vc_q_is_unclaimed(root, 1) || vc_q_has_result(root, 1) { return 22; }
-    if !vc_q_claim(root, 1, 1) { return 23; }
+    if vc_q_claim(root, 1, 1) { return 23; }
+    if vc_q_claim_retry(root, 1, 3) != 1 { return 25; }
     fs_remove_dir_all(root);
     if fs_exists(root) == 1 { return 24; }
     0
@@ -154,6 +155,31 @@ fn check_claims_are_sorted() -> i64 [io, read, write] {
     0
 }
 
+// A retry is on the queue like any task, but an ordinary claim cannot take it:
+// only a session that has taken nothing asks for one, so it runs in a worker
+// that has decided nothing before it.
+fn check_retry_is_not_claimable_as_ordinary() -> i64 [io, read, write] {
+    let root: String = mktemp_dir(String::from("vow-queue-test"));
+    if root.len() == 0 { return 1; }
+    if !vc_q_init(root, sample_tasks()) { return 2; }
+    if fs_mkdir(vc_q_session_dir(root, 0)) != 0 || fs_mkdir(vc_q_session_dir(root, 1)) != 0 { return 3; }
+    if !vc_q_claim(root, 0, 1) { return 4; }
+    if !vc_q_requeue(root, 1) { return 5; }
+    if !vc_q_is_unclaimed(root, 1) || !vc_q_is_retry(root, 1) { return 6; }
+    if vc_q_is_retry(root, 0) { return 7; }
+    if vc_q_claim(root, 1, 1) { return 8; }
+    if vc_q_claim_retry(root, 1, 1) != -1 { return 9; }
+    if vc_q_claim_retry(root, 1, 3) != 1 { return 10; }
+    if vc_q_is_unclaimed(root, 1) || vc_q_is_retry(root, 1) { return 11; }
+    if vc_q_claim_retry(root, 1, 3) != -1 { return 12; }
+    vc_q_withdraw(root, 2);
+    if !vc_q_requeue(root, 2) { return 13; }
+    vc_q_withdraw(root, 2);
+    if vc_q_is_unclaimed(root, 2) { return 14; }
+    fs_remove_dir_all(root);
+    0
+}
+
 fn main() -> i32 [io, read, write] {
     let mut r: i64 = check_tasks_round_trip();
     if r == 0 { r = check_empty_table_round_trips(); }
@@ -163,5 +189,6 @@ fn main() -> i32 [io, read, write] {
     if r == 0 { r = check_stderr_framing(); }
     if r == 0 { r = check_queue_on_disk(); }
     if r == 0 { r = check_claims_are_sorted(); }
+    if r == 0 { r = check_retry_is_not_claimable_as_ordinary(); }
     i64_to_i32_wrap(r)
 }

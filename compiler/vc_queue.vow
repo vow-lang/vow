@@ -10,6 +10,9 @@ use vc_worker
 //
 //   <root>/tasks             the task table (`vc_q_tasks_encode`), written once
 //   <root>/q/<k>             task k is unclaimed
+//   <root>/r/<k>             task k is unclaimed and is a retry: only a session
+//                            that has taken no task yet may claim it, so a
+//                            retry always runs in a fresh worker
 //   <root>/s<w>/claim.<k>    session w owns task k (the claim IS the ownership
 //                            record, so a worker that dies right after claiming
 //                            still leaves its task attributable to it)
@@ -116,6 +119,7 @@ fn vc_q_tasks_decode(text: String) -> Option<VcQTasks> {
 fn vc_q_init(root: String, t: VcQTasks) -> bool [io, read, write] {
     if fs_mkdir(vc_q_join(root, String::from("q"))) != 0 { return false; }
     if fs_mkdir(vc_q_join(root, String::from("res"))) != 0 { return false; }
+    if fs_mkdir(vc_q_join(root, String::from("r"))) != 0 { return false; }
     if fs_write(vc_q_tasks_path(root), vc_q_tasks_encode(t)) != 0 { return false; }
     let mut k: u64 = 0;
     while k < t.idx.len() {
@@ -125,19 +129,29 @@ fn vc_q_init(root: String, t: VcQTasks) -> bool [io, read, write] {
     true
 }
 
+fn vc_q_retry_path(root: String, k: i64) -> String {
+    vc_q_join(vc_q_join(root, String::from("r")), i64_to_string(k))
+}
+
+fn vc_q_is_retry(root: String, k: i64) -> bool [read] {
+    fs_exists(vc_q_retry_path(root, k)) == 1
+}
+
+// Task k is on the queue, as an ordinary task or as a retry.
 fn vc_q_is_unclaimed(root: String, k: i64) -> bool [read] {
-    fs_exists(vc_q_pending_path(root, k)) == 1
+    fs_exists(vc_q_pending_path(root, k)) == 1 || vc_q_is_retry(root, k)
 }
 
 // Takes task k off the queue so no worker starts it (a halted run).
 fn vc_q_withdraw(root: String, k: i64) [io, read] {
     fs_remove(vc_q_pending_path(root, k));
+    fs_remove(vc_q_retry_path(root, k));
 }
 
-// Puts task k back on the queue.
+// Puts task k back on the queue as a retry.
 fn vc_q_requeue(root: String, k: i64) -> bool [io, read, write] {
     fs_remove(vc_q_result_path(root, k));
-    fs_write(vc_q_pending_path(root, k), String::from("")) == 0
+    fs_write(vc_q_retry_path(root, k), String::from("")) == 0
 }
 
 fn vc_q_has_result(root: String, k: i64) -> bool [read] {
@@ -198,6 +212,17 @@ fn vc_q_ack(root: String, w: i64, k: i64) [io, read] {
 // Claims task k for session `w`. Exactly one racing worker succeeds.
 fn vc_q_claim(root: String, w: i64, k: i64) -> bool [io, read] {
     fs_rename(vc_q_pending_path(root, k), vc_q_claim_path(root, w, k)) == 0
+}
+
+// Claims one retry among tasks 0..n for session `w`, which must not have taken
+// any task yet, and returns it, or -1 when there is none.
+fn vc_q_claim_retry(root: String, w: i64, n: i64) -> i64 [io, read] {
+    let mut k: i64 = 0;
+    while k < n {
+        if fs_rename(vc_q_retry_path(root, k), vc_q_claim_path(root, w, k)) == 0 { return k; }
+        k = k + 1;
+    }
+    -1
 }
 
 // Publishes task k's answer whole.

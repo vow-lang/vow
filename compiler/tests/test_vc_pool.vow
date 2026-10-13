@@ -146,6 +146,34 @@ fn check_halt_withdraws_queue() -> i64 [io, read, write] {
     0
 }
 
+// A retry counts as unclaimed work and as a retry; a live session that has taken
+// nothing can still take it, one that has begun a task cannot.
+fn check_retry_accounting() -> i64 [io, read, write] {
+    let p: VcPool = pool_of(3, 2);
+    let root: String = mktemp_dir(String::from("vow-pool-test"));
+    if root.len() == 0 { return 1; }
+    let t: VcQTasks = VcQTasks { idx: p.fn_idx, names: p.fn_names, kinds: p.kinds };
+    if !vc_q_init(root, t) { return 2; }
+    p.root[0] = root;
+    if vc_pool_unclaimed(p) != 3 || vc_pool_retries(p) != 0 { return 3; }
+    fs_mkdir(vc_q_session_dir(root, 0));
+    if !vc_q_claim(root, 0, 1) { return 4; }
+    if vc_pool_unclaimed(p) != 2 { return 5; }
+    if !vc_q_requeue(root, 1) { return 6; }
+    if vc_pool_unclaimed(p) != 3 || vc_pool_retries(p) != 1 { return 7; }
+    if vc_pool_fresh_sessions(p) != 0 { return 8; }
+    p.s_handle.push(1234);
+    p.s_cur.push(-1);
+    p.s_done.push(0);
+    p.s_begun.push(0);
+    if vc_pool_fresh_sessions(p) != 1 { return 9; }
+    p.s_begun[0] = 1;
+    if vc_pool_fresh_sessions(p) != 0 { return 10; }
+    p.s_handle[0] = -1;
+    vc_pool_abort(p);
+    0
+}
+
 fn main() -> i32 [io, read, write] {
     let mut r: i64 = check_session_argv();
     if r == 0 { r = check_clause_mode_flag(); }
@@ -154,5 +182,6 @@ fn main() -> i32 [io, read, write] {
     if r == 0 { r = check_pool_halt(); }
     if r == 0 { r = check_pool_settled(); }
     if r == 0 { r = check_halt_withdraws_queue(); }
+    if r == 0 { r = check_retry_accounting(); }
     i64_to_i32_wrap(r)
 }
