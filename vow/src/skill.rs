@@ -1135,10 +1135,24 @@ fn skill_json() -> String {
       "i64_to_string": "fn(v: i64) -> String (alias of int_to_string) []",
       "int128_to_string": "fn(v: i128) -> String []",
       "uint128_to_string": "fn(v: u128) -> String []",
+      "parse_i8": "fn(s: String) -> Option<i8> []",
+      "parse_i16": "fn(s: String) -> Option<i16> []",
+      "parse_i32": "fn(s: String) -> Option<i32> []",
+      "parse_i64": "fn(s: String) -> Option<i64> []",
+      "parse_i128": "fn(s: String) -> Option<i128> []",
+      "parse_u8": "fn(s: String) -> Option<u8> []",
+      "parse_u16": "fn(s: String) -> Option<u16> []",
+      "parse_u32": "fn(s: String) -> Option<u32> []",
+      "parse_u128": "fn(s: String) -> Option<u128> []",
+      "parse_f64_bits": "fn(s: String) -> u64 []",
+      "format_f64_bits": "fn(bits: u64) -> String []",
       "vec_sort": "fn(v: Vec<i64>) -> Vec<i64> []",
       "time_unix": "fn() -> i64 [io]",
       "time_unix_ms": "fn() -> i64 [io]",
+      "time_micros": "fn() -> i64 [io]",
       "num_cpus": "fn() -> i64 [io]",
+      "proc_sample": "fn() -> String [io]",
+      "gzip_write_file": "fn(path: String, data: String) -> i64 [io]",
       "memory_root_arena_bytes": "fn() -> u64 [io]",
       "memory_peak_bytes": "fn() -> u64 [io]",
       "memory_alloc_count_since_start": "fn() -> u64 [io]",
@@ -1459,7 +1473,7 @@ LANGUAGE SUMMARY
 TYPES     : i8  i16  i32  i64  i128  u8  u16  u32  u64  u128  f32  f64  bool  ()  !  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>  BTreeMap<K, V>
 EFFECTS   : io  read  write  panic  unsafe
 BUILTINS  : pin_to_root: fn(value: String) -> String and fn<T>(value: Vec<T>) -> Vec<T> for one-slot scalar T []   drop: fn(value: L) -> () for a linear owner L []   print_str: fn(s: String) -> () [io]
-            print_i64: fn(v: i64) -> () [io]   print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   try_eprintln_str: fn(s: String) -> i64 [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_read_status: fn() -> i64 [read]   getenv: fn(name: String) -> String [read]   path_lookup: fn(name: String) -> String [read]   mktemp_dir: fn(prefix: String) -> String [io]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_remove_dir_all: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: u64, len: u64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: u64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   int_to_string: fn(v: i64) -> String []   uint_to_string: fn(v: u64) -> String []   i64_to_string: fn(v: i64) -> String (alias of int_to_string) []   int128_to_string: fn(v: i128) -> String []   uint128_to_string: fn(v: u128) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   hash_u64: fn(x: u64) -> u64 []   hash_str: fn(s: String) -> u64 []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_start_capped: fn(cmd: String, args: Vec<String>, mem_kb: i64) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_poll_wait: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]   process_start_piped: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_write_stdin: fn(pid: i64, data: String) -> i64 [io]   process_close_stdin: fn(pid: i64) -> i64 [io]   process_read_line: fn(pid: i64, timeout_ms: i64) -> String [io]   process_read_status: fn(pid: i64) -> i64 [io]
+            print_i64: fn(v: i64) -> () [io]   print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   try_eprintln_str: fn(s: String) -> i64 [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_read_status: fn() -> i64 [read]   getenv: fn(name: String) -> String [read]   path_lookup: fn(name: String) -> String [read]   mktemp_dir: fn(prefix: String) -> String [io]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_remove_dir_all: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: u64, len: u64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: u64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   int_to_string: fn(v: i64) -> String []   uint_to_string: fn(v: u64) -> String []   i64_to_string: fn(v: i64) -> String (alias of int_to_string) []   int128_to_string: fn(v: i128) -> String []   uint128_to_string: fn(v: u128) -> String []   parse_i8: fn(s: String) -> Option<i8> []   parse_i16: fn(s: String) -> Option<i16> []   parse_i32: fn(s: String) -> Option<i32> []   parse_i64: fn(s: String) -> Option<i64> []   parse_i128: fn(s: String) -> Option<i128> []   parse_u8: fn(s: String) -> Option<u8> []   parse_u16: fn(s: String) -> Option<u16> []   parse_u32: fn(s: String) -> Option<u32> []   parse_u128: fn(s: String) -> Option<u128> []   parse_f64_bits: fn(s: String) -> u64 []   format_f64_bits: fn(bits: u64) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   time_micros: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   proc_sample: fn() -> String [io]   gzip_write_file: fn(path: String, data: String) -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   hash_u64: fn(x: u64) -> u64 []   hash_str: fn(s: String) -> u64 []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_start_capped: fn(cmd: String, args: Vec<String>, mem_kb: i64) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_poll_wait: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]   process_start_piped: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_write_stdin: fn(pid: i64, data: String) -> i64 [io]   process_close_stdin: fn(pid: i64) -> i64 [io]   process_read_line: fn(pid: i64, timeout_ms: i64) -> String [io]   process_read_status: fn(pid: i64) -> i64 [io]
 METHODS   : Vec: Vec::new/Vec::from_raw_parts_copy/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/String::new/String::from_raw_parts_copy/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64
             HashMap: HashMap::new/insert/get/contains_key/remove/len   BTreeMap: BTreeMap::new/insert/get/contains/len   Option: unwrap
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! ?
@@ -3054,20 +3068,22 @@ let small: u8 = 42;
 print_str(uint_to_string(small as u64));  // widen then format
 ```
 
-**Parsing** exposes a try-form for every integer width:
+**Parsing** exposes a try-form for every integer width but `u64`:
 
-| Function       | Signature                                |
-|----------------|------------------------------------------|
-| `parse_i8`     | `fn(s: String) -> Option<i8>`            |
-| `parse_i16`    | `fn(s: String) -> Option<i16>`           |
-| `parse_i32`    | `fn(s: String) -> Option<i32>`           |
-| `parse_i64`    | `fn(s: String) -> Option<i64>` (also see `String.parse_i64()`) |
-| `parse_i128`   | `fn(s: String) -> Option<i128>`          |
-| `parse_u8`     | `fn(s: String) -> Option<u8>`            |
-| `parse_u16`    | `fn(s: String) -> Option<u16>`           |
-| `parse_u32`    | `fn(s: String) -> Option<u32>`           |
-| `parse_u64`    | `fn(s: String) -> Option<u64>` (also see `String.parse_u64()`) |
-| `parse_u128`   | `fn(s: String) -> Option<u128>`          |
+| Function       | Signature                                | Effects |
+|----------------|------------------------------------------|---------|
+| `parse_i8`     | `fn(s: String) -> Option<i8>`            | `[]`    |
+| `parse_i16`    | `fn(s: String) -> Option<i16>`           | `[]`    |
+| `parse_i32`    | `fn(s: String) -> Option<i32>`           | `[]`    |
+| `parse_i64`    | `fn(s: String) -> Option<i64>`           | `[]`    |
+| `parse_i128`   | `fn(s: String) -> Option<i128>`          | `[]`    |
+| `parse_u8`     | `fn(s: String) -> Option<u8>`            | `[]`    |
+| `parse_u16`    | `fn(s: String) -> Option<u16>`           | `[]`    |
+| `parse_u32`    | `fn(s: String) -> Option<u32>`           | `[]`    |
+| `parse_u128`   | `fn(s: String) -> Option<u128>`          | `[]`    |
+
+`parse_i64` is also available as the `String` method `.parse_i64()`. There is
+no free `parse_u64`; parse a `u64` with the method `.parse_u64()`.
 
 Each `parse_X` returns `Option::None` for malformed input, empty strings, or
 values outside the target type's range. Parsing never substitutes a numeric
@@ -3083,6 +3099,20 @@ surrounding Unicode whitespace is trimmed first; a leading `+` and leading zeros
 are accepted (`"+7"` and `"0007"` parse as `7`); `"-0"` is `Some(0)` for a signed
 type and `None` for an unsigned one; and `"+"`, `"-"`, the empty string, and any
 interior non-digit (`"1 2"`) are `None`.
+
+**Float bit patterns.** The compiler's own float literals go through two
+helpers that carry an `f64` as its IEEE-754 bit pattern in a `u64`:
+
+| Function          | Signature                          | Effects |
+|-------------------|------------------------------------|---------|
+| `parse_f64_bits`  | `fn(s: String) -> u64`             | `[]`    |
+| `format_f64_bits` | `fn(bits: u64) -> String`          | `[]`    |
+
+`parse_f64_bits` trims surrounding whitespace and returns the bits of the
+parsed `f64`, or the bits of `0.0` (`0`) for text that is not a float; it never
+fails. `format_f64_bits` renders the `f64` with those bits in the shortest
+decimal form that reads back as the same value. The verifier has no model of
+either: a function that calls one is reported `Skipped`.
 
 **Narrowing intrinsics** (per [Type Cast](#type-cast)): for every narrowing
 pair the compiler emits `<src>_to_<tgt>_try`, `<src>_to_<tgt>_wrap`, and
@@ -3101,17 +3131,24 @@ section.
 |------------------|--------------------------------------------|------------|
 | `time_unix`      | `fn() -> i64`                              | `[io]`     |
 | `time_unix_ms`   | `fn() -> i64`                              | `[io]`     |
+| `time_micros`    | `fn() -> i64`                              | `[io]`     |
+
+`time_unix()` and `time_unix_ms()` return wall-clock seconds and milliseconds since the Unix epoch (`0` if the clock is before it). `time_micros()` is a monotonic clock in microseconds counted from its first call in the process (the first call returns about `0`); use it to measure elapsed time, never as a timestamp.
 
 #### System
 
 | Function         | Signature                                  | Effects    |
 |------------------|--------------------------------------------|------------|
 | `num_cpus`       | `fn() -> i64`                              | `[io]`     |
+| `proc_sample`    | `fn() -> String`                           | `[io]`     |
+| `gzip_write_file` | `fn(path: String, data: String) -> i64`   | `[io]`     |
 | `memory_root_arena_bytes` | `fn() -> u64`                    | `[io]`     |
 | `memory_peak_bytes` | `fn() -> u64`                           | `[io]`     |
 | `memory_alloc_count_since_start` | `fn() -> u64`              | `[io]`     |
 
 `num_cpus()` returns the number of available logical CPUs (from `std::thread::available_parallelism`), or `1` if the query fails. Used to size worker pools (e.g. the default `--verify-jobs` value).
+
+`proc_sample()` samples the calling process and its child processes and returns one `group|rss_kb|cpu_pct` line per group, separated by newlines (all integers); it returns the empty string where the sample cannot be read (non-Linux hosts). `gzip_write_file(path, data)` writes `data` gzip-compressed to `path` and returns `0` on success or `-1` when either argument is not a valid path/string or the file cannot be written. Both exist for the `--perfetto` tracer.
 
 `memory_root_arena_bytes()` returns the current bytes retained by root-region
 arena chunks. It is a gauge, not a monotone counter: adding a root chunk raises
@@ -10034,20 +10071,22 @@ let small: u8 = 42;
 print_str(uint_to_string(small as u64));  // widen then format
 ```
 
-**Parsing** exposes a try-form for every integer width:
+**Parsing** exposes a try-form for every integer width but `u64`:
 
-| Function       | Signature                                |
-|----------------|------------------------------------------|
-| `parse_i8`     | `fn(s: String) -> Option<i8>`            |
-| `parse_i16`    | `fn(s: String) -> Option<i16>`           |
-| `parse_i32`    | `fn(s: String) -> Option<i32>`           |
-| `parse_i64`    | `fn(s: String) -> Option<i64>` (also see `String.parse_i64()`) |
-| `parse_i128`   | `fn(s: String) -> Option<i128>`          |
-| `parse_u8`     | `fn(s: String) -> Option<u8>`            |
-| `parse_u16`    | `fn(s: String) -> Option<u16>`           |
-| `parse_u32`    | `fn(s: String) -> Option<u32>`           |
-| `parse_u64`    | `fn(s: String) -> Option<u64>` (also see `String.parse_u64()`) |
-| `parse_u128`   | `fn(s: String) -> Option<u128>`          |
+| Function       | Signature                                | Effects |
+|----------------|------------------------------------------|---------|
+| `parse_i8`     | `fn(s: String) -> Option<i8>`            | `[]`    |
+| `parse_i16`    | `fn(s: String) -> Option<i16>`           | `[]`    |
+| `parse_i32`    | `fn(s: String) -> Option<i32>`           | `[]`    |
+| `parse_i64`    | `fn(s: String) -> Option<i64>`           | `[]`    |
+| `parse_i128`   | `fn(s: String) -> Option<i128>`          | `[]`    |
+| `parse_u8`     | `fn(s: String) -> Option<u8>`            | `[]`    |
+| `parse_u16`    | `fn(s: String) -> Option<u16>`           | `[]`    |
+| `parse_u32`    | `fn(s: String) -> Option<u32>`           | `[]`    |
+| `parse_u128`   | `fn(s: String) -> Option<u128>`          | `[]`    |
+
+`parse_i64` is also available as the `String` method `.parse_i64()`. There is
+no free `parse_u64`; parse a `u64` with the method `.parse_u64()`.
 
 Each `parse_X` returns `Option::None` for malformed input, empty strings, or
 values outside the target type's range. Parsing never substitutes a numeric
@@ -10063,6 +10102,20 @@ surrounding Unicode whitespace is trimmed first; a leading `+` and leading zeros
 are accepted (`"+7"` and `"0007"` parse as `7`); `"-0"` is `Some(0)` for a signed
 type and `None` for an unsigned one; and `"+"`, `"-"`, the empty string, and any
 interior non-digit (`"1 2"`) are `None`.
+
+**Float bit patterns.** The compiler's own float literals go through two
+helpers that carry an `f64` as its IEEE-754 bit pattern in a `u64`:
+
+| Function          | Signature                          | Effects |
+|-------------------|------------------------------------|---------|
+| `parse_f64_bits`  | `fn(s: String) -> u64`             | `[]`    |
+| `format_f64_bits` | `fn(bits: u64) -> String`          | `[]`    |
+
+`parse_f64_bits` trims surrounding whitespace and returns the bits of the
+parsed `f64`, or the bits of `0.0` (`0`) for text that is not a float; it never
+fails. `format_f64_bits` renders the `f64` with those bits in the shortest
+decimal form that reads back as the same value. The verifier has no model of
+either: a function that calls one is reported `Skipped`.
 
 **Narrowing intrinsics** (per [Type Cast](#type-cast)): for every narrowing
 pair the compiler emits `<src>_to_<tgt>_try`, `<src>_to_<tgt>_wrap`, and
@@ -10081,17 +10134,24 @@ section.
 |------------------|--------------------------------------------|------------|
 | `time_unix`      | `fn() -> i64`                              | `[io]`     |
 | `time_unix_ms`   | `fn() -> i64`                              | `[io]`     |
+| `time_micros`    | `fn() -> i64`                              | `[io]`     |
+
+`time_unix()` and `time_unix_ms()` return wall-clock seconds and milliseconds since the Unix epoch (`0` if the clock is before it). `time_micros()` is a monotonic clock in microseconds counted from its first call in the process (the first call returns about `0`); use it to measure elapsed time, never as a timestamp.
 
 #### System
 
 | Function         | Signature                                  | Effects    |
 |------------------|--------------------------------------------|------------|
 | `num_cpus`       | `fn() -> i64`                              | `[io]`     |
+| `proc_sample`    | `fn() -> String`                           | `[io]`     |
+| `gzip_write_file` | `fn(path: String, data: String) -> i64`   | `[io]`     |
 | `memory_root_arena_bytes` | `fn() -> u64`                    | `[io]`     |
 | `memory_peak_bytes` | `fn() -> u64`                           | `[io]`     |
 | `memory_alloc_count_since_start` | `fn() -> u64`              | `[io]`     |
 
 `num_cpus()` returns the number of available logical CPUs (from `std::thread::available_parallelism`), or `1` if the query fails. Used to size worker pools (e.g. the default `--verify-jobs` value).
+
+`proc_sample()` samples the calling process and its child processes and returns one `group|rss_kb|cpu_pct` line per group, separated by newlines (all integers); it returns the empty string where the sample cannot be read (non-Linux hosts). `gzip_write_file(path, data)` writes `data` gzip-compressed to `path` and returns `0` on success or `-1` when either argument is not a valid path/string or the file cannot be written. Both exist for the `--perfetto` tracer.
 
 `memory_root_arena_bytes()` returns the current bytes retained by root-region
 arena chunks. It is a gauge, not a monotone counter: adding a root chunk raises

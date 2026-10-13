@@ -11,6 +11,8 @@ Builtin Operations) and splices generated lookup functions into:
   - vow-ir/src/region.rs              (FRESH_ARENA_VARIANTS)
   - compiler/ir.vow                   (fresh_arena_base_extern)
   - compiler/vc_ops.vow               (catalogue_verifier_known)
+  - vow-verify/src/c_emitter.rs       (catalogue_c_model_known)
+  - compiler/c_emitter.vow            (catalogue_c_model_known)
 between `// GENERATE:OPERATIONS:START` / `// GENERATE:OPERATIONS:END` markers.
 
 Usage:
@@ -48,6 +50,23 @@ PARAM_TOKENS = {
     "ptr": "types::I64",
     "i64": "types::I64",
     "u64": "types::I64",
+    "i128": "types::I128",
+    "u128": "types::I128",
+}
+
+# Element types an `Option<T>` result may carry. A fresh Option cell is a heap
+# aggregate whose payload type the lowerer must remember (see
+# `result_shape`), so each element needs both spellings.
+OPTION_ELEMS = {
+    "i8": {"rust_ty": "Ty::I8", "ity_const": "ITY_I8()"},
+    "u8": {"rust_ty": "Ty::U8", "ity_const": "ITY_U8()"},
+    "i16": {"rust_ty": "Ty::I16", "ity_const": "ITY_I16()"},
+    "u16": {"rust_ty": "Ty::U16", "ity_const": "ITY_U16()"},
+    "i32": {"rust_ty": "Ty::I32", "ity_const": "ITY_I32()"},
+    "u32": {"rust_ty": "Ty::U32", "ity_const": "ITY_U32()"},
+    "i64": {"rust_ty": "Ty::I64", "ity_const": "ITY_I64()"},
+    "i128": {"rust_ty": "Ty::I128", "ity_const": "ITY_I128()"},
+    "u128": {"rust_ty": "Ty::U128", "ity_const": "ITY_U128()"},
 }
 
 # Effect keyword spellings, sourced from vow-syntax/src/token.rs's effect
@@ -82,11 +101,16 @@ def _split_top_level_commas(s: str) -> list[str]:
 
 def _doc_type_to_token(type_str: str) -> str | None:
     """Map a doc_signature parameter/return Type spelling to its catalogue
-    token. `String` and any `Vec<...>` both denote a heap pointer, so both
-    map to `ptr` -- this is a many-to-one mapping, not a bijection."""
-    if type_str == "String" or re.match(r"^Vec<.*>$", type_str):
+    token. `String`, any `Vec<...>` and any `Option<...>` all denote a heap
+    pointer, so all map to `ptr` -- this is a many-to-one mapping, not a
+    bijection."""
+    if (
+        type_str == "String"
+        or re.match(r"^Vec<.*>$", type_str)
+        or re.match(r"^Option<.*>$", type_str)
+    ):
         return "ptr"
-    if type_str in ("i64", "u64", "bool"):
+    if type_str in ("i64", "u64", "i128", "u128", "bool"):
         return type_str
     if type_str in ("()", "!"):
         # `!` (never-returns, e.g. process_exit) produces no value either --
@@ -108,12 +132,22 @@ REQUIRED_FIELDS = [
 # vocabulary. Field names/values agreed with sibling in-progress catalogue
 # slices (#1271/#1273) so a future rebase is a clean superset merge.
 #
-# "arena_routing: heap_fresh" means the op returns a freshly heap-allocated
-# String that pin_to_root/arena tracking must tag; "none" (or omitting the
-# field) means no tagging is needed.
+# "arena_routing: heap_fresh" means the op returns a fresh heap aggregate whose
+# runtime symbol has an `_in_arena` variant (the `arena_routes` section lists
+# it); "none" (or omitting the field) means it has no arena variant. The shape
+# tag the lowerer attaches to a result is a separate fact, derived from the
+# doc_signature return type (`result_shape`).
+#
+# "verifier_model" is the native verifier's category (`known` means its
+# symbolic executor models the call). "c_model" is the ESBMC C model's: `base`
+# means the model knows the runtime symbol, `base_and_arena` also its
+# `_in_arena` variant, `unmodeled` neither. The two differ on purpose: a
+# `known` native entry changes the native skip code of every caller, while the
+# C model is the stage 0 verifier's and goes away with it (epic #1398, P6).
 OPTIONAL_FIELD_VALUES = {
     "verifier_model": {"known", "unmodeled"},
     "arena_routing": {"none", "heap_fresh"},
+    "c_model": {"unmodeled", "base", "base_and_arena"},
 }
 
 ALLOWED_FIELDS = set(REQUIRED_FIELDS) | set(OPTIONAL_FIELD_VALUES)
@@ -266,11 +300,38 @@ def load_catalogue(repo_root: Path) -> list[dict]:
                             f"({sig_match.group('ret')!r}) does not match return "
                             f"token '{ret}': {doc_signature!r}"
                         )
+                option = OPTION_DOC_RE.match(sig_match.group("ret").strip())
+                if option and option.group("elem") not in OPTION_ELEMS:
+                    errors.append(
+                        f"operation '{name}' has Option element type "
+                        f"'{option.group('elem')}' with no result tag "
+                        f"(known: {sorted(OPTION_ELEMS)})"
+                    )
 
     if errors:
         raise ValueError("\n".join(errors))
 
     return ops
+
+
+OPTION_DOC_RE = re.compile(r"^Option<(?P<elem>.+)>$")
+
+
+def result_shape(op: dict) -> tuple[str, str | None] | None:
+    """The shape tag the lowerer attaches to the op's result, read from the
+    doc_signature return type: ("string", None), ("vec", None) or
+    ("option", <element type>); None for a scalar or unit result. The tag is
+    what `pin_to_root` and the arena inference use to know a direct builtin
+    result is a fresh heap aggregate."""
+    ret = DOC_SIGNATURE_RE.match(op["doc_signature"]).group("ret").strip()
+    if ret == "String":
+        return ("string", None)
+    if re.match(r"^Vec<.*>$", ret):
+        return ("vec", None)
+    option = OPTION_DOC_RE.match(ret)
+    if option:
+        return ("option", option.group("elem"))
+    return None
 
 
 ARENA_SYMBOL_RE = re.compile(r"^__vow_[a-z0-9_]+$")
@@ -350,6 +411,24 @@ def _wrap_marker_block(body: str) -> str:
     return f"{MARKER_START}\n{body}{MARKER_END}"
 
 
+def _rust_result_tag(shape: tuple[str, str | None]) -> str:
+    kind, elem = shape
+    if kind == "string":
+        return "BuiltinResultTag::StringHeap"
+    if kind == "vec":
+        return "BuiltinResultTag::VecHeap"
+    return f"BuiltinResultTag::OptionOf({OPTION_ELEMS[elem]['rust_ty']})"
+
+
+def _vow_result_tag(shape: tuple[str, str | None]) -> str:
+    kind, elem = shape
+    if kind == "string":
+        return "BRT_STRING()"
+    if kind == "vec":
+        return "BRT_VEC()"
+    return OPTION_ELEMS[elem]["ity_const"]
+
+
 def gen_rust_ir_block(ops: list[dict], routes: list[str]) -> str:
     arms = "\n".join(
         f'        "{op["name"]}" => Some(("{op["runtime_symbol"]}", '
@@ -357,9 +436,9 @@ def gen_rust_ir_block(ops: list[dict], routes: list[str]) -> str:
         for op in ops
     )
     tag_arms = "\n".join(
-        f'        "{op["name"]}" => Some(BuiltinResultTag::StringHeap),'
+        f'        "{op["name"]}" => Some({_rust_result_tag(shape)}),'
         for op in ops
-        if op.get("arena_routing") == "heap_fresh"
+        if (shape := result_shape(op)) is not None
     )
     tag_arms_block = f"{tag_arms}\n" if tag_arms else ""
     return _wrap_marker_block(
@@ -495,6 +574,41 @@ def gen_vow_vc_ops_block(ops: list[dict], routes: list[str]) -> str:
     return _wrap_marker_block(_vow_symbol_set_fn("catalogue_verifier_known", known))
 
 
+def c_model_symbols(ops: list[dict]) -> list[str]:
+    """Every runtime symbol the ESBMC C model knows: the base symbol of a
+    `base`/`base_and_arena` entry, and the `_in_arena` variant of a
+    `base_and_arena` one."""
+    symbols: list[str] = []
+    for op in ops:
+        model = op.get("c_model", "unmodeled")
+        if model == "unmodeled":
+            continue
+        symbols.append(op["runtime_symbol"])
+        if model == "base_and_arena":
+            symbols.append(arena_variant(op["runtime_symbol"]))
+    return symbols
+
+
+def gen_rust_c_model_block(ops: list[dict], routes: list[str]) -> str:
+    """`catalogue_c_model_known`, in the shape rustfmt gives a `matches!` over
+    string literals, so the splice survives `cargo fmt --check`."""
+    symbols = c_model_symbols(ops)
+    if len(symbols) == 1:
+        body = f'    matches!(name, "{symbols[0]}")\n'
+    else:
+        alternatives = "\n            | ".join(f'"{s}"' for s in symbols)
+        body = f"    matches!(\n        name,\n        {alternatives}\n    )\n"
+    return _wrap_marker_block(
+        f"fn catalogue_c_model_known(name: &str) -> bool {{\n{body}}}\n"
+    )
+
+
+def gen_vow_c_model_block(ops: list[dict], routes: list[str]) -> str:
+    return _wrap_marker_block(
+        _vow_symbol_set_fn("catalogue_c_model_known", c_model_symbols(ops))
+    )
+
+
 def gen_vow_lower_block(ops: list[dict], routes: list[str]) -> str:
     extern_arms = "\n".join(
         f'    if name == String::from("{op["name"]}") '
@@ -507,9 +621,10 @@ def gen_vow_lower_block(ops: list[dict], routes: list[str]) -> str:
         for op in ops
     )
     tag_arms = "\n".join(
-        f'    if name == String::from("{op["name"]}") {{ return BRT_STRING(); }}'
+        f'    if name == String::from("{op["name"]}") '
+        f"{{ return {_vow_result_tag(shape)}; }}"
         for op in ops
-        if op.get("arena_routing") == "heap_fresh"
+        if (shape := result_shape(op)) is not None
     )
     tag_arms_block = f"{tag_arms}\n" if tag_arms else ""
     return _wrap_marker_block(
@@ -630,6 +745,33 @@ def check_verifier_models(ops: list[dict]) -> list[str]:
     ]
 
 
+def check_c_models(ops: list[dict], routes: list[str]) -> list[str]:
+    """Drift check for the ESBMC C-model category: every pure builtin must say
+    whether the model knows it, an effectful one cannot be known (the model's
+    gate takes only effect-free functions), and an `_in_arena` variant must be
+    a real arena route."""
+    problems: list[str] = []
+    for op in ops:
+        name = op["name"]
+        model = op.get("c_model")
+        if op["effects"] == "[]" and model is None:
+            problems.append(
+                f"docs/spec/operations.json: pure builtin '{name}' has no c_model "
+                "(set 'base', 'base_and_arena' or an explicit 'unmodeled')"
+            )
+        if model in ("base", "base_and_arena") and op["effects"] != "[]":
+            problems.append(
+                f"docs/spec/operations.json: '{name}' has effects {op['effects']} "
+                f"but c_model '{model}'; the C model only knows pure builtins"
+            )
+        if model == "base_and_arena" and op["runtime_symbol"] not in routes:
+            problems.append(
+                f"docs/spec/operations.json: '{name}' has c_model 'base_and_arena' "
+                f"but '{op['runtime_symbol']}' has no arena route"
+            )
+    return problems
+
+
 def check_doc_facts(ops: list[dict], repo_root: Path) -> list[str]:
     """Cross-check each op's doc facts against grammar.md, main.vow and
     skill.rs. Collects every mismatch instead of failing on the first."""
@@ -675,6 +817,8 @@ TARGET_FILES = [
     (Path("vow-ir/src/region.rs"), gen_region_block),
     (Path("compiler/ir.vow"), gen_vow_ir_block),
     (Path("compiler/vc_ops.vow"), gen_vow_vc_ops_block),
+    (Path("vow-verify/src/c_emitter.rs"), gen_rust_c_model_block),
+    (Path("compiler/c_emitter.vow"), gen_vow_c_model_block),
 ]
 
 
@@ -718,7 +862,7 @@ def main() -> None:
         print(str(e), file=sys.stderr)
         sys.exit(1)
 
-    undecided = check_verifier_models(ops)
+    undecided = check_verifier_models(ops) + check_c_models(ops, routes)
     if undecided:
         for m in undecided:
             print(m, file=sys.stderr)

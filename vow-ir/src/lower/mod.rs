@@ -78,12 +78,54 @@ fn catalogue_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "getenv" => Some(("__vow_getenv", Ty::Ptr)),
         "path_lookup" => Some(("__vow_path_lookup", Ty::Ptr)),
         "mktemp_dir" => Some(("__vow_mktemp_dir", Ty::Ptr)),
+        "memory_root_arena_bytes" => Some(("__vow_memory_root_arena_bytes", Ty::U64)),
+        "memory_peak_bytes" => Some(("__vow_memory_peak_bytes", Ty::U64)),
+        "memory_alloc_count_since_start" => Some(("__vow_memory_alloc_count_since_start", Ty::U64)),
+        "time_unix" => Some(("__vow_time_unix", Ty::I64)),
+        "time_unix_ms" => Some(("__vow_time_unix_ms", Ty::I64)),
+        "time_micros" => Some(("__vow_time_micros", Ty::I64)),
+        "num_cpus" => Some(("__vow_num_cpus", Ty::I64)),
+        "proc_sample" => Some(("__vow_proc_sample", Ty::Ptr)),
+        "gzip_write_file" => Some(("__vow_gzip_write_file", Ty::I64)),
+        "hex_encode" => Some(("__vow_hex_encode", Ty::Ptr)),
+        "hex_decode" => Some(("__vow_hex_decode", Ty::Ptr)),
+        "parse_i64" => Some(("__vow_string_parse_i64_opt", Ty::Ptr)),
+        "parse_i8" => Some(("__vow_string_parse_i8_opt", Ty::Ptr)),
+        "parse_i16" => Some(("__vow_string_parse_i16_opt", Ty::Ptr)),
+        "parse_i32" => Some(("__vow_string_parse_i32_opt", Ty::Ptr)),
+        "parse_i128" => Some(("__vow_string_parse_i128_opt", Ty::Ptr)),
+        "parse_u8" => Some(("__vow_string_parse_u8_opt", Ty::Ptr)),
+        "parse_u16" => Some(("__vow_string_parse_u16_opt", Ty::Ptr)),
+        "parse_u32" => Some(("__vow_string_parse_u32_opt", Ty::Ptr)),
+        "parse_u128" => Some(("__vow_string_parse_u128_opt", Ty::Ptr)),
+        "parse_f64_bits" => Some(("__vow_parse_f64_bits", Ty::U64)),
+        "format_f64_bits" => Some(("__vow_format_f64_bits", Ty::Ptr)),
+        "int_to_string" => Some(("__vow_string_from_i64", Ty::Ptr)),
+        "uint_to_string" => Some(("__vow_string_from_u64", Ty::Ptr)),
+        "int128_to_string" => Some(("__vow_string_from_i128", Ty::Ptr)),
+        "uint128_to_string" => Some(("__vow_string_from_u128", Ty::Ptr)),
+        "string_substr" => Some(("__vow_string_substr", Ty::Ptr)),
+        "string_split" => Some(("__vow_string_split", Ty::Ptr)),
+        "string_starts_with" => Some(("__vow_string_starts_with", Ty::I64)),
+        "string_ends_with" => Some(("__vow_string_ends_with", Ty::I64)),
+        "string_trim" => Some(("__vow_string_trim", Ty::Ptr)),
+        "string_to_upper" => Some(("__vow_string_to_upper", Ty::Ptr)),
+        "string_to_lower" => Some(("__vow_string_to_lower", Ty::Ptr)),
+        "string_replace" => Some(("__vow_string_replace", Ty::Ptr)),
+        "string_join" => Some(("__vow_string_join", Ty::Ptr)),
+        "vec_sort" => Some(("__vow_vec_sort", Ty::Ptr)),
         _ => None,
     }
 }
 
 fn catalogue_builtin_result_tag(name: &str) -> Option<BuiltinResultTag> {
     match name {
+        "fs_read" => Some(BuiltinResultTag::StringHeap),
+        "fs_read_line" => Some(BuiltinResultTag::StringHeap),
+        "fs_listdir" => Some(BuiltinResultTag::VecHeap),
+        "args" => Some(BuiltinResultTag::VecHeap),
+        "stdin_read" => Some(BuiltinResultTag::StringHeap),
+        "stdin_read_line" => Some(BuiltinResultTag::StringHeap),
         "process_get_stdout" => Some(BuiltinResultTag::StringHeap),
         "process_get_stderr" => Some(BuiltinResultTag::StringHeap),
         "process_stdout_for" => Some(BuiltinResultTag::StringHeap),
@@ -92,6 +134,31 @@ fn catalogue_builtin_result_tag(name: &str) -> Option<BuiltinResultTag> {
         "getenv" => Some(BuiltinResultTag::StringHeap),
         "path_lookup" => Some(BuiltinResultTag::StringHeap),
         "mktemp_dir" => Some(BuiltinResultTag::StringHeap),
+        "proc_sample" => Some(BuiltinResultTag::StringHeap),
+        "hex_encode" => Some(BuiltinResultTag::StringHeap),
+        "hex_decode" => Some(BuiltinResultTag::VecHeap),
+        "parse_i64" => Some(BuiltinResultTag::OptionOf(Ty::I64)),
+        "parse_i8" => Some(BuiltinResultTag::OptionOf(Ty::I8)),
+        "parse_i16" => Some(BuiltinResultTag::OptionOf(Ty::I16)),
+        "parse_i32" => Some(BuiltinResultTag::OptionOf(Ty::I32)),
+        "parse_i128" => Some(BuiltinResultTag::OptionOf(Ty::I128)),
+        "parse_u8" => Some(BuiltinResultTag::OptionOf(Ty::U8)),
+        "parse_u16" => Some(BuiltinResultTag::OptionOf(Ty::U16)),
+        "parse_u32" => Some(BuiltinResultTag::OptionOf(Ty::U32)),
+        "parse_u128" => Some(BuiltinResultTag::OptionOf(Ty::U128)),
+        "format_f64_bits" => Some(BuiltinResultTag::StringHeap),
+        "int_to_string" => Some(BuiltinResultTag::StringHeap),
+        "uint_to_string" => Some(BuiltinResultTag::StringHeap),
+        "int128_to_string" => Some(BuiltinResultTag::StringHeap),
+        "uint128_to_string" => Some(BuiltinResultTag::StringHeap),
+        "string_substr" => Some(BuiltinResultTag::StringHeap),
+        "string_split" => Some(BuiltinResultTag::VecHeap),
+        "string_trim" => Some(BuiltinResultTag::StringHeap),
+        "string_to_upper" => Some(BuiltinResultTag::StringHeap),
+        "string_to_lower" => Some(BuiltinResultTag::StringHeap),
+        "string_replace" => Some(BuiltinResultTag::StringHeap),
+        "string_join" => Some(BuiltinResultTag::StringHeap),
+        "vec_sort" => Some(BuiltinResultTag::VecHeap),
         _ => None,
     }
 }
@@ -102,23 +169,6 @@ fn vow_static_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         return Some(hit);
     }
     match name {
-        "string_substr" => Some(("__vow_string_substr", Ty::Ptr)),
-        "string_split" => Some(("__vow_string_split", Ty::Ptr)),
-        "string_starts_with" => Some(("__vow_string_starts_with", Ty::I64)),
-        "string_ends_with" => Some(("__vow_string_ends_with", Ty::I64)),
-        "string_trim" => Some(("__vow_string_trim", Ty::Ptr)),
-        "string_to_upper" => Some(("__vow_string_to_upper", Ty::Ptr)),
-        "string_to_lower" => Some(("__vow_string_to_lower", Ty::Ptr)),
-        "string_replace" => Some(("__vow_string_replace", Ty::Ptr)),
-        "string_join" => Some(("__vow_string_join", Ty::Ptr)),
-        "parse_i64" => Some(("__vow_string_parse_i64_opt", Ty::Ptr)),
-        "parse_u8" => Some(("__vow_string_parse_u8_opt", Ty::Ptr)),
-        "parse_i8" => Some(("__vow_string_parse_i8_opt", Ty::Ptr)),
-        "parse_i16" => Some(("__vow_string_parse_i16_opt", Ty::Ptr)),
-        "parse_u16" => Some(("__vow_string_parse_u16_opt", Ty::Ptr)),
-        "parse_u32" => Some(("__vow_string_parse_u32_opt", Ty::Ptr)),
-        "parse_i128" => Some(("__vow_string_parse_i128_opt", Ty::Ptr)),
-        "parse_u128" => Some(("__vow_string_parse_u128_opt", Ty::Ptr)),
         "i16_to_u8_try" => Some(("__vow_i16_to_u8_try", Ty::Ptr)),
         "i16_to_u8_wrap" => Some(("__vow_i16_to_u8_wrap", Ty::U8)),
         "i16_to_u8_sat" => Some(("__vow_i16_to_u8_sat", Ty::U8)),
@@ -146,7 +196,6 @@ fn vow_static_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "add_sat_u8" => Some(("__vow_add_sat_u8", Ty::U8)),
         "sub_sat_u8" => Some(("__vow_sub_sat_u8", Ty::U8)),
         "mul_sat_u8" => Some(("__vow_mul_sat_u8", Ty::U8)),
-        "parse_i32" => Some(("__vow_string_parse_i32_opt", Ty::Ptr)),
         "i64_to_i32_try" => Some(("__vow_i64_to_i32_try", Ty::Ptr)),
         "i64_to_i32_wrap" => Some(("__vow_i64_to_i32_wrap", Ty::I32)),
         "i64_to_i32_sat" => Some(("__vow_i64_to_i32_sat", Ty::I32)),
@@ -162,24 +211,7 @@ fn vow_static_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "u128_to_i32_try" => Some(("__vow_u128_to_i32_try", Ty::Ptr)),
         "u128_to_i32_wrap" => Some(("__vow_u128_to_i32_wrap", Ty::I32)),
         "u128_to_i32_sat" => Some(("__vow_u128_to_i32_sat", Ty::I32)),
-        "int_to_string" | "i64_to_string" => Some(("__vow_string_from_i64", Ty::Ptr)),
-        "uint_to_string" => Some(("__vow_string_from_u64", Ty::Ptr)),
-        "int128_to_string" => Some(("__vow_string_from_i128", Ty::Ptr)),
-        "uint128_to_string" => Some(("__vow_string_from_u128", Ty::Ptr)),
-        "vec_sort" => Some(("__vow_vec_sort", Ty::Ptr)),
-        "time_unix" => Some(("__vow_time_unix", Ty::I64)),
-        "time_unix_ms" => Some(("__vow_time_unix_ms", Ty::I64)),
-        "num_cpus" => Some(("__vow_num_cpus", Ty::I64)),
-        "memory_root_arena_bytes" => Some(("__vow_memory_root_arena_bytes", Ty::U64)),
-        "memory_peak_bytes" => Some(("__vow_memory_peak_bytes", Ty::U64)),
-        "memory_alloc_count_since_start" => Some(("__vow_memory_alloc_count_since_start", Ty::U64)),
-        "time_micros" => Some(("__vow_time_micros", Ty::I64)),
-        "proc_sample" => Some(("__vow_proc_sample", Ty::Ptr)),
-        "gzip_write_file" => Some(("__vow_gzip_write_file", Ty::I64)),
-        "hex_encode" => Some(("__vow_hex_encode", Ty::Ptr)),
-        "hex_decode" => Some(("__vow_hex_decode", Ty::Ptr)),
-        "parse_f64_bits" => Some(("__vow_parse_f64_bits", Ty::U64)),
-        "format_f64_bits" => Some(("__vow_format_f64_bits", Ty::Ptr)),
+        "i64_to_string" => Some(("__vow_string_from_i64", Ty::Ptr)),
         "__vow_clif_create" => Some(("__vow_clif_create", Ty::I64)),
         "__vow_clif_add_string" => Some(("__vow_clif_add_string", Ty::Unit)),
         "__vow_clif_declare_extern" => Some(("__vow_clif_declare_extern", Ty::Unit)),
@@ -263,27 +295,14 @@ fn builtin_result_tag(name: &str) -> Option<BuiltinResultTag> {
         return Some(BuiltinResultTag::OptionOf(target));
     }
     match name {
-        "fs_read" | "fs_read_line" | "stdin_read" | "stdin_read_line" | "string_substr"
-        | "string_trim" | "string_to_upper" | "string_to_lower" | "string_replace"
-        | "string_join" | "int_to_string" | "uint_to_string" | "i64_to_string"
-        | "int128_to_string" | "uint128_to_string" | "hex_encode" | "format_f64_bits"
-        | "proc_sample" => Some(BuiltinResultTag::StringHeap),
-        "args" | "fs_listdir" | "string_split" | "vec_sort" | "hex_decode" => {
-            Some(BuiltinResultTag::VecHeap)
-        }
-        "parse_i8" => Some(BuiltinResultTag::OptionOf(Ty::I8)),
-        "parse_i16" => Some(BuiltinResultTag::OptionOf(Ty::I16)),
-        "parse_u16" => Some(BuiltinResultTag::OptionOf(Ty::U16)),
-        "parse_u32" => Some(BuiltinResultTag::OptionOf(Ty::U32)),
-        "parse_i128" => Some(BuiltinResultTag::OptionOf(Ty::I128)),
-        "parse_u128" => Some(BuiltinResultTag::OptionOf(Ty::U128)),
-        "parse_u8" | "i16_to_u8_try" | "i32_to_u8_try" | "i64_to_u8_try" | "i128_to_u8_try"
+        // `i64_to_string` is a hand-written alias of the catalogued `int_to_string`.
+        "i64_to_string" => Some(BuiltinResultTag::StringHeap),
+        "i16_to_u8_try" | "i32_to_u8_try" | "i64_to_u8_try" | "i128_to_u8_try"
         | "u16_to_u8_try" | "u32_to_u8_try" | "u64_to_u8_try" | "u128_to_u8_try" => {
             Some(BuiltinResultTag::OptionOf(Ty::U8))
         }
-        "parse_i32" | "i64_to_i32_try" | "u32_to_i32_try" | "u64_to_i32_try"
-        | "i128_to_i32_try" | "u128_to_i32_try" => Some(BuiltinResultTag::OptionOf(Ty::I32)),
-        "parse_i64" => Some(BuiltinResultTag::OptionOf(Ty::I64)),
+        "i64_to_i32_try" | "u32_to_i32_try" | "u64_to_i32_try" | "i128_to_i32_try"
+        | "u128_to_i32_try" => Some(BuiltinResultTag::OptionOf(Ty::I32)),
         _ => None,
     }
 }
@@ -6705,6 +6724,135 @@ type PairView = PairAlias;
             assert_eq!(vow_builtin_to_runtime(name), Some((symbol.to_string(), ty)));
         }
         assert_eq!(vow_builtin_to_runtime("missing_builtin"), None);
+    }
+
+    #[test]
+    fn query_utility_builtins_resolve_through_the_catalogue() {
+        let cases = [
+            (
+                "memory_root_arena_bytes",
+                "__vow_memory_root_arena_bytes",
+                Ty::U64,
+            ),
+            ("memory_peak_bytes", "__vow_memory_peak_bytes", Ty::U64),
+            (
+                "memory_alloc_count_since_start",
+                "__vow_memory_alloc_count_since_start",
+                Ty::U64,
+            ),
+            ("time_unix", "__vow_time_unix", Ty::I64),
+            ("time_unix_ms", "__vow_time_unix_ms", Ty::I64),
+            ("time_micros", "__vow_time_micros", Ty::I64),
+            ("num_cpus", "__vow_num_cpus", Ty::I64),
+            ("proc_sample", "__vow_proc_sample", Ty::Ptr),
+            ("gzip_write_file", "__vow_gzip_write_file", Ty::I64),
+            ("hex_encode", "__vow_hex_encode", Ty::Ptr),
+            ("hex_decode", "__vow_hex_decode", Ty::Ptr),
+            ("parse_i64", "__vow_string_parse_i64_opt", Ty::Ptr),
+            ("parse_i8", "__vow_string_parse_i8_opt", Ty::Ptr),
+            ("parse_i16", "__vow_string_parse_i16_opt", Ty::Ptr),
+            ("parse_i32", "__vow_string_parse_i32_opt", Ty::Ptr),
+            ("parse_i128", "__vow_string_parse_i128_opt", Ty::Ptr),
+            ("parse_u8", "__vow_string_parse_u8_opt", Ty::Ptr),
+            ("parse_u16", "__vow_string_parse_u16_opt", Ty::Ptr),
+            ("parse_u32", "__vow_string_parse_u32_opt", Ty::Ptr),
+            ("parse_u128", "__vow_string_parse_u128_opt", Ty::Ptr),
+            ("parse_f64_bits", "__vow_parse_f64_bits", Ty::U64),
+            ("format_f64_bits", "__vow_format_f64_bits", Ty::Ptr),
+            ("int_to_string", "__vow_string_from_i64", Ty::Ptr),
+            ("uint_to_string", "__vow_string_from_u64", Ty::Ptr),
+            ("int128_to_string", "__vow_string_from_i128", Ty::Ptr),
+            ("uint128_to_string", "__vow_string_from_u128", Ty::Ptr),
+            ("string_substr", "__vow_string_substr", Ty::Ptr),
+            ("string_split", "__vow_string_split", Ty::Ptr),
+            ("string_starts_with", "__vow_string_starts_with", Ty::I64),
+            ("string_ends_with", "__vow_string_ends_with", Ty::I64),
+            ("string_trim", "__vow_string_trim", Ty::Ptr),
+            ("string_to_upper", "__vow_string_to_upper", Ty::Ptr),
+            ("string_to_lower", "__vow_string_to_lower", Ty::Ptr),
+            ("string_replace", "__vow_string_replace", Ty::Ptr),
+            ("string_join", "__vow_string_join", Ty::Ptr),
+            ("vec_sort", "__vow_vec_sort", Ty::Ptr),
+        ];
+        for (name, symbol, ty) in cases {
+            assert_eq!(
+                catalogue_builtin_to_runtime(name),
+                Some((symbol, ty)),
+                "{name} is not in the catalogue projection"
+            );
+            assert_eq!(
+                vow_builtin_to_runtime(name),
+                Some((symbol.to_string(), ty)),
+                "{name}"
+            );
+        }
+        // `i64_to_string` is a hand-written alias of `int_to_string`: it shares
+        // that entry's runtime symbol, so the catalogue (keyed by symbol too)
+        // does not list it twice.
+        assert_eq!(catalogue_builtin_to_runtime("i64_to_string"), None);
+        assert_eq!(
+            vow_builtin_to_runtime("i64_to_string"),
+            Some(("__vow_string_from_i64".to_string(), Ty::Ptr))
+        );
+    }
+
+    #[test]
+    fn catalogue_result_tags_cover_every_heap_returning_catalogue_entry() {
+        use BuiltinResultTag::{OptionOf, StringHeap, VecHeap};
+
+        let tagged = [
+            ("hex_encode", StringHeap),
+            ("proc_sample", StringHeap),
+            ("format_f64_bits", StringHeap),
+            ("int_to_string", StringHeap),
+            ("uint_to_string", StringHeap),
+            ("int128_to_string", StringHeap),
+            ("uint128_to_string", StringHeap),
+            ("string_substr", StringHeap),
+            ("string_trim", StringHeap),
+            ("string_to_upper", StringHeap),
+            ("string_to_lower", StringHeap),
+            ("string_replace", StringHeap),
+            ("string_join", StringHeap),
+            ("fs_read", StringHeap),
+            ("fs_read_line", StringHeap),
+            ("stdin_read", StringHeap),
+            ("stdin_read_line", StringHeap),
+            ("hex_decode", VecHeap),
+            ("string_split", VecHeap),
+            ("vec_sort", VecHeap),
+            ("args", VecHeap),
+            ("fs_listdir", VecHeap),
+            ("parse_i8", OptionOf(Ty::I8)),
+            ("parse_i16", OptionOf(Ty::I16)),
+            ("parse_i32", OptionOf(Ty::I32)),
+            ("parse_i64", OptionOf(Ty::I64)),
+            ("parse_i128", OptionOf(Ty::I128)),
+            ("parse_u8", OptionOf(Ty::U8)),
+            ("parse_u16", OptionOf(Ty::U16)),
+            ("parse_u32", OptionOf(Ty::U32)),
+            ("parse_u128", OptionOf(Ty::U128)),
+        ];
+        for (name, tag) in tagged {
+            assert_eq!(catalogue_builtin_result_tag(name), Some(tag), "{name}");
+            assert_eq!(builtin_result_tag(name), Some(tag), "{name}");
+        }
+        for name in [
+            "parse_f64_bits",
+            "string_starts_with",
+            "string_ends_with",
+            "time_unix",
+            "time_micros",
+            "num_cpus",
+            "gzip_write_file",
+            "memory_peak_bytes",
+        ] {
+            assert_eq!(catalogue_builtin_result_tag(name), None, "{name}");
+            assert_eq!(builtin_result_tag(name), None, "{name}");
+        }
+        // The hand-written alias keeps its tag next to the catalogue.
+        assert_eq!(catalogue_builtin_result_tag("i64_to_string"), None);
+        assert_eq!(builtin_result_tag("i64_to_string"), Some(StringHeap));
     }
 
     #[test]

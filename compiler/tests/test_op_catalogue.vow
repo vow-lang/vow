@@ -96,6 +96,135 @@ fn check_process_result_tags() -> i64 {
     r
 }
 
+// The query and utility builtins (#1271) resolve through the generated
+// catalogue lookups: the extern symbol and the IR return type of each come from
+// docs/spec/operations.json, not from a hand-written table in lower.vow.
+fn expect_catalogued(name: String, sym: String, ret: i64, code: i64) -> i64 {
+    if catalogue_builtin_to_extern(name) != sym { return code; }
+    if catalogue_builtin_ret_ty(name) != ret { return code + 1; }
+    if builtin_to_extern(name) != sym { return code + 2; }
+    if builtin_ret_ty(name) != ret { return code + 3; }
+    0
+}
+
+fn check_query_utility_rows_0() -> i64 {
+    let mut r: i64 = 0;
+    if r == 0 { r = expect_catalogued(String::from("memory_root_arena_bytes"), String::from("__vow_memory_root_arena_bytes"), ITY_U64(), 200); }
+    if r == 0 { r = expect_catalogued(String::from("memory_peak_bytes"), String::from("__vow_memory_peak_bytes"), ITY_U64(), 204); }
+    if r == 0 { r = expect_catalogued(String::from("memory_alloc_count_since_start"), String::from("__vow_memory_alloc_count_since_start"), ITY_U64(), 208); }
+    if r == 0 { r = expect_catalogued(String::from("time_unix"), String::from("__vow_time_unix"), ITY_I64(), 212); }
+    if r == 0 { r = expect_catalogued(String::from("time_unix_ms"), String::from("__vow_time_unix_ms"), ITY_I64(), 216); }
+    if r == 0 { r = expect_catalogued(String::from("time_micros"), String::from("__vow_time_micros"), ITY_I64(), 220); }
+    if r == 0 { r = expect_catalogued(String::from("num_cpus"), String::from("__vow_num_cpus"), ITY_I64(), 224); }
+    if r == 0 { r = expect_catalogued(String::from("proc_sample"), String::from("__vow_proc_sample"), ITY_PTR(), 228); }
+    if r == 0 { r = expect_catalogued(String::from("gzip_write_file"), String::from("__vow_gzip_write_file"), ITY_I64(), 232); }
+    r
+}
+
+fn check_query_utility_rows_1() -> i64 {
+    let mut r: i64 = 0;
+    if r == 0 { r = expect_catalogued(String::from("hex_encode"), String::from("__vow_hex_encode"), ITY_PTR(), 236); }
+    if r == 0 { r = expect_catalogued(String::from("hex_decode"), String::from("__vow_hex_decode"), ITY_PTR(), 240); }
+    if r == 0 { r = expect_catalogued(String::from("parse_i64"), String::from("__vow_string_parse_i64_opt"), ITY_PTR(), 244); }
+    if r == 0 { r = expect_catalogued(String::from("parse_i8"), String::from("__vow_string_parse_i8_opt"), ITY_PTR(), 248); }
+    if r == 0 { r = expect_catalogued(String::from("parse_i16"), String::from("__vow_string_parse_i16_opt"), ITY_PTR(), 252); }
+    if r == 0 { r = expect_catalogued(String::from("parse_i32"), String::from("__vow_string_parse_i32_opt"), ITY_PTR(), 256); }
+    if r == 0 { r = expect_catalogued(String::from("parse_i128"), String::from("__vow_string_parse_i128_opt"), ITY_PTR(), 260); }
+    if r == 0 { r = expect_catalogued(String::from("parse_u8"), String::from("__vow_string_parse_u8_opt"), ITY_PTR(), 264); }
+    if r == 0 { r = expect_catalogued(String::from("parse_u16"), String::from("__vow_string_parse_u16_opt"), ITY_PTR(), 268); }
+    r
+}
+
+fn check_query_utility_rows_2() -> i64 {
+    let mut r: i64 = 0;
+    if r == 0 { r = expect_catalogued(String::from("parse_u32"), String::from("__vow_string_parse_u32_opt"), ITY_PTR(), 272); }
+    if r == 0 { r = expect_catalogued(String::from("parse_u128"), String::from("__vow_string_parse_u128_opt"), ITY_PTR(), 276); }
+    if r == 0 { r = expect_catalogued(String::from("parse_f64_bits"), String::from("__vow_parse_f64_bits"), ITY_U64(), 280); }
+    if r == 0 { r = expect_catalogued(String::from("format_f64_bits"), String::from("__vow_format_f64_bits"), ITY_PTR(), 284); }
+    if r == 0 { r = expect_catalogued(String::from("int_to_string"), String::from("__vow_string_from_i64"), ITY_PTR(), 288); }
+    if r == 0 { r = expect_catalogued(String::from("uint_to_string"), String::from("__vow_string_from_u64"), ITY_PTR(), 292); }
+    if r == 0 { r = expect_catalogued(String::from("int128_to_string"), String::from("__vow_string_from_i128"), ITY_PTR(), 296); }
+    if r == 0 { r = expect_catalogued(String::from("uint128_to_string"), String::from("__vow_string_from_u128"), ITY_PTR(), 300); }
+    if r == 0 { r = expect_catalogued(String::from("string_substr"), String::from("__vow_string_substr"), ITY_PTR(), 304); }
+    r
+}
+
+fn check_query_utility_rows_3() -> i64 {
+    let mut r: i64 = 0;
+    if r == 0 { r = expect_catalogued(String::from("string_split"), String::from("__vow_string_split"), ITY_PTR(), 308); }
+    if r == 0 { r = expect_catalogued(String::from("string_starts_with"), String::from("__vow_string_starts_with"), ITY_I64(), 312); }
+    if r == 0 { r = expect_catalogued(String::from("string_ends_with"), String::from("__vow_string_ends_with"), ITY_I64(), 316); }
+    if r == 0 { r = expect_catalogued(String::from("string_trim"), String::from("__vow_string_trim"), ITY_PTR(), 320); }
+    if r == 0 { r = expect_catalogued(String::from("string_to_upper"), String::from("__vow_string_to_upper"), ITY_PTR(), 324); }
+    if r == 0 { r = expect_catalogued(String::from("string_to_lower"), String::from("__vow_string_to_lower"), ITY_PTR(), 328); }
+    if r == 0 { r = expect_catalogued(String::from("string_replace"), String::from("__vow_string_replace"), ITY_PTR(), 332); }
+    if r == 0 { r = expect_catalogued(String::from("string_join"), String::from("__vow_string_join"), ITY_PTR(), 336); }
+    if r == 0 { r = expect_catalogued(String::from("vec_sort"), String::from("__vow_vec_sort"), ITY_PTR(), 340); }
+    r
+}
+
+// `i64_to_string` shares `int_to_string`'s runtime symbol, so the catalogue does
+// not list it; the alias stays a one-line hand-written arm next to the lookup.
+fn check_i64_to_string_alias() -> i64 {
+    if catalogue_builtin_to_extern(String::from("i64_to_string")) != String::from("") { return 500; }
+    if builtin_to_extern(String::from("i64_to_string")) != String::from("__vow_string_from_i64") { return 501; }
+    if builtin_ret_ty(String::from("i64_to_string")) != ITY_PTR() { return 502; }
+    if builtin_result_tag(String::from("i64_to_string")) != BRT_STRING() { return 503; }
+    0
+}
+
+// Result tags the catalogue derives from each entry's documented return type.
+fn check_query_utility_result_tags() -> i64 {
+    let mut r: i64 = 0;
+    if r == 0 && catalogue_builtin_result_tag(String::from("string_split")) != BRT_VEC() { r = 600; }
+    if r == 0 && builtin_result_tag(String::from("string_split")) != BRT_VEC() { r = 700; }
+    if r == 0 && catalogue_builtin_result_tag(String::from("vec_sort")) != BRT_VEC() { r = 601; }
+    if r == 0 && builtin_result_tag(String::from("vec_sort")) != BRT_VEC() { r = 701; }
+    if r == 0 && catalogue_builtin_result_tag(String::from("hex_decode")) != BRT_VEC() { r = 602; }
+    if r == 0 && builtin_result_tag(String::from("hex_decode")) != BRT_VEC() { r = 702; }
+    if r == 0 && catalogue_builtin_result_tag(String::from("hex_encode")) != BRT_STRING() { r = 603; }
+    if r == 0 && builtin_result_tag(String::from("hex_encode")) != BRT_STRING() { r = 703; }
+    if r == 0 && catalogue_builtin_result_tag(String::from("string_substr")) != BRT_STRING() { r = 604; }
+    if r == 0 && builtin_result_tag(String::from("string_substr")) != BRT_STRING() { r = 704; }
+    if r == 0 && catalogue_builtin_result_tag(String::from("proc_sample")) != BRT_STRING() { r = 605; }
+    if r == 0 && builtin_result_tag(String::from("proc_sample")) != BRT_STRING() { r = 705; }
+    if r == 0 && catalogue_builtin_result_tag(String::from("int128_to_string")) != BRT_STRING() { r = 606; }
+    if r == 0 && builtin_result_tag(String::from("int128_to_string")) != BRT_STRING() { r = 706; }
+    if r == 0 && catalogue_builtin_result_tag(String::from("parse_i64")) != ITY_I64() { r = 607; }
+    if r == 0 && builtin_result_tag(String::from("parse_i64")) != ITY_I64() { r = 707; }
+    if r == 0 && catalogue_builtin_result_tag(String::from("parse_i8")) != ITY_I8() { r = 608; }
+    if r == 0 && builtin_result_tag(String::from("parse_i8")) != ITY_I8() { r = 708; }
+    if r == 0 && catalogue_builtin_result_tag(String::from("parse_i16")) != ITY_I16() { r = 609; }
+    if r == 0 && builtin_result_tag(String::from("parse_i16")) != ITY_I16() { r = 709; }
+    if r == 0 && catalogue_builtin_result_tag(String::from("parse_i32")) != ITY_I32() { r = 610; }
+    if r == 0 && builtin_result_tag(String::from("parse_i32")) != ITY_I32() { r = 710; }
+    if r == 0 && catalogue_builtin_result_tag(String::from("parse_i128")) != ITY_I128() { r = 611; }
+    if r == 0 && builtin_result_tag(String::from("parse_i128")) != ITY_I128() { r = 711; }
+    if r == 0 && catalogue_builtin_result_tag(String::from("parse_u8")) != ITY_U8() { r = 612; }
+    if r == 0 && builtin_result_tag(String::from("parse_u8")) != ITY_U8() { r = 712; }
+    if r == 0 && catalogue_builtin_result_tag(String::from("parse_u16")) != ITY_U16() { r = 613; }
+    if r == 0 && builtin_result_tag(String::from("parse_u16")) != ITY_U16() { r = 713; }
+    if r == 0 && catalogue_builtin_result_tag(String::from("parse_u32")) != ITY_U32() { r = 614; }
+    if r == 0 && builtin_result_tag(String::from("parse_u32")) != ITY_U32() { r = 714; }
+    if r == 0 && catalogue_builtin_result_tag(String::from("parse_u128")) != ITY_U128() { r = 615; }
+    if r == 0 && builtin_result_tag(String::from("parse_u128")) != ITY_U128() { r = 715; }
+    if r == 0 && catalogue_builtin_result_tag(String::from("parse_f64_bits")) != BRT_NONE() { r = 616; }
+    if r == 0 && builtin_result_tag(String::from("parse_f64_bits")) != BRT_NONE() { r = 716; }
+    if r == 0 && catalogue_builtin_result_tag(String::from("string_starts_with")) != BRT_NONE() { r = 617; }
+    if r == 0 && builtin_result_tag(String::from("string_starts_with")) != BRT_NONE() { r = 717; }
+    if r == 0 && catalogue_builtin_result_tag(String::from("string_ends_with")) != BRT_NONE() { r = 618; }
+    if r == 0 && builtin_result_tag(String::from("string_ends_with")) != BRT_NONE() { r = 718; }
+    if r == 0 && catalogue_builtin_result_tag(String::from("time_micros")) != BRT_NONE() { r = 619; }
+    if r == 0 && builtin_result_tag(String::from("time_micros")) != BRT_NONE() { r = 719; }
+    if r == 0 && catalogue_builtin_result_tag(String::from("num_cpus")) != BRT_NONE() { r = 620; }
+    if r == 0 && builtin_result_tag(String::from("num_cpus")) != BRT_NONE() { r = 720; }
+    if r == 0 && catalogue_builtin_result_tag(String::from("gzip_write_file")) != BRT_NONE() { r = 621; }
+    if r == 0 && builtin_result_tag(String::from("gzip_write_file")) != BRT_NONE() { r = 721; }
+    if r == 0 && catalogue_builtin_result_tag(String::from("memory_peak_bytes")) != BRT_NONE() { r = 622; }
+    if r == 0 && builtin_result_tag(String::from("memory_peak_bytes")) != BRT_NONE() { r = 722; }
+    r
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_print_ops();
     if r == 0 { r = check_process_externs(); }
@@ -103,5 +232,11 @@ fn main() -> i32 {
     if r == 0 { r = check_process_result_tags(); }
     if r == 0 { r = check_hash_ops(); }
     if r == 0 { r = check_env_ops(); }
+    if r == 0 { r = check_query_utility_rows_0(); }
+    if r == 0 { r = check_query_utility_rows_1(); }
+    if r == 0 { r = check_query_utility_rows_2(); }
+    if r == 0 { r = check_query_utility_rows_3(); }
+    if r == 0 { r = check_i64_to_string_alias(); }
+    if r == 0 { r = check_query_utility_result_tags(); }
     i64_to_i32_wrap(r)
 }

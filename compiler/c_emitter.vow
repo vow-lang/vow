@@ -170,8 +170,96 @@ fn is_string_fresh_helper(name: String) -> bool {
     || name == String::from("__vow_string_to_lower_in_arena")
 }
 
+// GENERATE:OPERATIONS:START
+fn catalogue_c_model_known(sym: String) -> bool {
+    let n: u64 = sym.len();
+    if n == 17 {
+        return sym == String::from("__vow_string_trim");
+    }
+    if n == 19 {
+        return sym == String::from("__vow_string_substr");
+    }
+    if n == 21 {
+        let c0: i64 = sym.byte_at(18);
+        if c0 == 105 {
+            return sym == String::from("__vow_string_from_i64");
+        }
+        if c0 == 112 {
+            return sym == String::from("__vow_string_to_upper");
+        }
+        if c0 == 117 {
+            return sym == String::from("__vow_string_from_u64");
+        }
+        if c0 == 119 {
+            return sym == String::from("__vow_string_to_lower");
+        }
+    }
+    if n == 25 {
+        let c0: i64 = sym.byte_at(19);
+        if c0 == 105 {
+            return sym == String::from("__vow_string_parse_i8_opt");
+        }
+        if c0 == 117 {
+            return sym == String::from("__vow_string_parse_u8_opt");
+        }
+    }
+    if n == 26 {
+        let c0: i64 = sym.byte_at(20);
+        if c0 == 49 {
+            let c1: i64 = sym.byte_at(19);
+            if c1 == 105 {
+                return sym == String::from("__vow_string_parse_i16_opt");
+            }
+            if c1 == 117 {
+                return sym == String::from("__vow_string_parse_u16_opt");
+            }
+        }
+        if c0 == 51 {
+            let c1: i64 = sym.byte_at(19);
+            if c1 == 105 {
+                return sym == String::from("__vow_string_parse_i32_opt");
+            }
+            if c1 == 117 {
+                return sym == String::from("__vow_string_parse_u32_opt");
+            }
+        }
+        if c0 == 54 {
+            return sym == String::from("__vow_string_parse_i64_opt");
+        }
+        if c0 == 95 {
+            return sym == String::from("__vow_string_trim_in_arena");
+        }
+    }
+    if n == 28 {
+        return sym == String::from("__vow_string_substr_in_arena");
+    }
+    if n == 30 {
+        let c0: i64 = sym.byte_at(18);
+        if c0 == 105 {
+            return sym == String::from("__vow_string_from_i64_in_arena");
+        }
+        if c0 == 112 {
+            return sym == String::from("__vow_string_to_upper_in_arena");
+        }
+        if c0 == 117 {
+            return sym == String::from("__vow_string_from_u64_in_arena");
+        }
+        if c0 == 119 {
+            return sym == String::from("__vow_string_to_lower_in_arena");
+        }
+    }
+    if n == 35 {
+        return sym == String::from("__vow_string_parse_i64_opt_in_arena");
+    }
+    return false;
+}
+// GENERATE:OPERATIONS:END
+
+// The builtin runtime symbols the C model recognises. The query/utility builtins it
+// models come from docs/spec/operations.json (`c_model`, via `catalogue_c_model_known`);
+// what is listed here is the rest, whose model is not catalogued.
 fn is_known_builtin(name: String) -> bool {
-    if is_string_fresh_helper(name) || is_u8_numeric_intrinsic(name) ||
+    if catalogue_c_model_known(name) || is_u8_numeric_intrinsic(name) ||
        is_i32_numeric_intrinsic(name) || cemit_narrow_intrinsic_target(name) != -1 { return true; }
     name == String::from("__vow_unwrap_panic")
     || name == String::from("__vow_vec_new")
@@ -207,23 +295,9 @@ fn is_known_builtin(name: String) -> bool {
     || name == String::from("__vow_string_eq")
     || name == String::from("__vow_string_contains")
     || name == String::from("__vow_string_matches_literal_at")
-    || name == String::from("__vow_string_substr")
-    || name == String::from("__vow_string_substr_in_arena")
     || name == String::from("__vow_string_substring")
     || name == String::from("__vow_string_substring_in_arena")
-    || name == String::from("__vow_string_from_i64")
-    || name == String::from("__vow_string_from_i64_in_arena")
-    || name == String::from("__vow_string_from_u64")
-    || name == String::from("__vow_string_from_u64_in_arena")
-    || name == String::from("__vow_string_parse_i64_opt")
-    || name == String::from("__vow_string_parse_i64_opt_in_arena")
     || name == String::from("__vow_string_parse_u64_opt")
-    || name == String::from("__vow_string_parse_i8_opt")
-    || name == String::from("__vow_string_parse_u8_opt")
-    || name == String::from("__vow_string_parse_i16_opt")
-    || name == String::from("__vow_string_parse_u16_opt")
-    || name == String::from("__vow_string_parse_u32_opt")
-    || name == String::from("__vow_string_parse_i32_opt")
     || name == String::from("__vow_string_print")
     || name == String::from("__vow_map_new")
     || name == String::from("__vow_map_new_in_arena")

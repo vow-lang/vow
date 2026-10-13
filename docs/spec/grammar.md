@@ -1446,20 +1446,22 @@ let small: u8 = 42;
 print_str(uint_to_string(small as u64));  // widen then format
 ```
 
-**Parsing** exposes a try-form for every integer width:
+**Parsing** exposes a try-form for every integer width but `u64`:
 
-| Function       | Signature                                |
-|----------------|------------------------------------------|
-| `parse_i8`     | `fn(s: String) -> Option<i8>`            |
-| `parse_i16`    | `fn(s: String) -> Option<i16>`           |
-| `parse_i32`    | `fn(s: String) -> Option<i32>`           |
-| `parse_i64`    | `fn(s: String) -> Option<i64>` (also see `String.parse_i64()`) |
-| `parse_i128`   | `fn(s: String) -> Option<i128>`          |
-| `parse_u8`     | `fn(s: String) -> Option<u8>`            |
-| `parse_u16`    | `fn(s: String) -> Option<u16>`           |
-| `parse_u32`    | `fn(s: String) -> Option<u32>`           |
-| `parse_u64`    | `fn(s: String) -> Option<u64>` (also see `String.parse_u64()`) |
-| `parse_u128`   | `fn(s: String) -> Option<u128>`          |
+| Function       | Signature                                | Effects |
+|----------------|------------------------------------------|---------|
+| `parse_i8`     | `fn(s: String) -> Option<i8>`            | `[]`    |
+| `parse_i16`    | `fn(s: String) -> Option<i16>`           | `[]`    |
+| `parse_i32`    | `fn(s: String) -> Option<i32>`           | `[]`    |
+| `parse_i64`    | `fn(s: String) -> Option<i64>`           | `[]`    |
+| `parse_i128`   | `fn(s: String) -> Option<i128>`          | `[]`    |
+| `parse_u8`     | `fn(s: String) -> Option<u8>`            | `[]`    |
+| `parse_u16`    | `fn(s: String) -> Option<u16>`           | `[]`    |
+| `parse_u32`    | `fn(s: String) -> Option<u32>`           | `[]`    |
+| `parse_u128`   | `fn(s: String) -> Option<u128>`          | `[]`    |
+
+`parse_i64` is also available as the `String` method `.parse_i64()`. There is
+no free `parse_u64`; parse a `u64` with the method `.parse_u64()`.
 
 Each `parse_X` returns `Option::None` for malformed input, empty strings, or
 values outside the target type's range. Parsing never substitutes a numeric
@@ -1475,6 +1477,20 @@ surrounding Unicode whitespace is trimmed first; a leading `+` and leading zeros
 are accepted (`"+7"` and `"0007"` parse as `7`); `"-0"` is `Some(0)` for a signed
 type and `None` for an unsigned one; and `"+"`, `"-"`, the empty string, and any
 interior non-digit (`"1 2"`) are `None`.
+
+**Float bit patterns.** The compiler's own float literals go through two
+helpers that carry an `f64` as its IEEE-754 bit pattern in a `u64`:
+
+| Function          | Signature                          | Effects |
+|-------------------|------------------------------------|---------|
+| `parse_f64_bits`  | `fn(s: String) -> u64`             | `[]`    |
+| `format_f64_bits` | `fn(bits: u64) -> String`          | `[]`    |
+
+`parse_f64_bits` trims surrounding whitespace and returns the bits of the
+parsed `f64`, or the bits of `0.0` (`0`) for text that is not a float; it never
+fails. `format_f64_bits` renders the `f64` with those bits in the shortest
+decimal form that reads back as the same value. The verifier has no model of
+either: a function that calls one is reported `Skipped`.
 
 **Narrowing intrinsics** (per [Type Cast](#type-cast)): for every narrowing
 pair the compiler emits `<src>_to_<tgt>_try`, `<src>_to_<tgt>_wrap`, and
@@ -1493,17 +1509,24 @@ section.
 |------------------|--------------------------------------------|------------|
 | `time_unix`      | `fn() -> i64`                              | `[io]`     |
 | `time_unix_ms`   | `fn() -> i64`                              | `[io]`     |
+| `time_micros`    | `fn() -> i64`                              | `[io]`     |
+
+`time_unix()` and `time_unix_ms()` return wall-clock seconds and milliseconds since the Unix epoch (`0` if the clock is before it). `time_micros()` is a monotonic clock in microseconds counted from its first call in the process (the first call returns about `0`); use it to measure elapsed time, never as a timestamp.
 
 #### System
 
 | Function         | Signature                                  | Effects    |
 |------------------|--------------------------------------------|------------|
 | `num_cpus`       | `fn() -> i64`                              | `[io]`     |
+| `proc_sample`    | `fn() -> String`                           | `[io]`     |
+| `gzip_write_file` | `fn(path: String, data: String) -> i64`   | `[io]`     |
 | `memory_root_arena_bytes` | `fn() -> u64`                    | `[io]`     |
 | `memory_peak_bytes` | `fn() -> u64`                           | `[io]`     |
 | `memory_alloc_count_since_start` | `fn() -> u64`              | `[io]`     |
 
 `num_cpus()` returns the number of available logical CPUs (from `std::thread::available_parallelism`), or `1` if the query fails. Used to size worker pools (e.g. the default `--verify-jobs` value).
+
+`proc_sample()` samples the calling process and its child processes and returns one `group|rss_kb|cpu_pct` line per group, separated by newlines (all integers); it returns the empty string where the sample cannot be read (non-Linux hosts). `gzip_write_file(path, data)` writes `data` gzip-compressed to `path` and returns `0` on success or `-1` when either argument is not a valid path/string or the file cannot be written. Both exist for the `--perfetto` tracer.
 
 `memory_root_arena_bytes()` returns the current bytes retained by root-region
 arena chunks. It is a gauge, not a monotone counter: adding a root chunk raises

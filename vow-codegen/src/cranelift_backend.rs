@@ -2622,6 +2622,187 @@ fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool {
             sig.returns.push(AbiParam::new(types::I64));
             true
         }
+        "__vow_memory_root_arena_bytes" => {
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_memory_peak_bytes" => {
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_memory_alloc_count_since_start" => {
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_time_unix" => {
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_time_unix_ms" => {
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_time_micros" => {
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_num_cpus" => {
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_proc_sample" => {
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_gzip_write_file" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_hex_encode" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_hex_decode" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_string_parse_i64_opt" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_string_parse_i8_opt" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_string_parse_i16_opt" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_string_parse_i32_opt" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_string_parse_i128_opt" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_string_parse_u8_opt" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_string_parse_u16_opt" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_string_parse_u32_opt" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_string_parse_u128_opt" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_parse_f64_bits" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_format_f64_bits" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_string_from_i64" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_string_from_u64" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_string_from_i128" => {
+            sig.params.push(AbiParam::new(types::I128));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_string_from_u128" => {
+            sig.params.push(AbiParam::new(types::I128));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_string_substr" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_string_split" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_string_starts_with" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_string_ends_with" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_string_trim" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_string_to_upper" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_string_to_lower" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_string_replace" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_string_join" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_vec_sort" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
         _ => false,
     }
 }
@@ -2837,121 +3018,15 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.params.push(AbiParam::new(types::I64)); // byte value
         }
-        "__vow_string_from_i64" | "__vow_string_from_u64" => {
-            sig.params.push(AbiParam::new(types::I64)); // value
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
-        "__vow_string_from_i128" | "__vow_string_from_u128" => {
-            sig.params.push(AbiParam::new(types::I128)); // value
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
-        "__vow_string_substr" => {
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.params.push(AbiParam::new(types::I64)); // start
-            sig.params.push(AbiParam::new(types::I64)); // len
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
         "__vow_string_substring" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.params.push(AbiParam::new(types::I64)); // start
             sig.params.push(AbiParam::new(types::I64)); // end (exclusive)
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
-        "__vow_string_parse_i64_opt"
-        | "__vow_string_parse_u64_opt"
-        | "__vow_string_parse_i8_opt"
-        | "__vow_string_parse_u8_opt"
-        | "__vow_string_parse_i16_opt"
-        | "__vow_string_parse_u16_opt"
-        | "__vow_string_parse_u32_opt"
-        | "__vow_string_parse_i32_opt"
-        | "__vow_string_parse_i128_opt"
-        | "__vow_string_parse_u128_opt" => {
+        "__vow_string_parse_u64_opt" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *Option enum (16 bytes: tag+payload)
-        }
-        "__vow_string_split" => {
-            sig.params.push(AbiParam::new(types::I64)); // haystack ptr
-            sig.params.push(AbiParam::new(types::I64)); // separator ptr
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<String>
-        }
-        "__vow_string_starts_with" => {
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.params.push(AbiParam::new(types::I64)); // prefix ptr
-            sig.returns.push(AbiParam::new(types::I64)); // 1/0
-        }
-        "__vow_string_ends_with" => {
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.params.push(AbiParam::new(types::I64)); // suffix ptr
-            sig.returns.push(AbiParam::new(types::I64)); // 1/0
-        }
-        "__vow_string_trim" => {
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
-        "__vow_string_to_upper" => {
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
-        "__vow_string_to_lower" => {
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
-        "__vow_string_replace" => {
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.params.push(AbiParam::new(types::I64)); // from ptr
-            sig.params.push(AbiParam::new(types::I64)); // to ptr
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
-        "__vow_string_join" => {
-            sig.params.push(AbiParam::new(types::I64)); // vec ptr
-            sig.params.push(AbiParam::new(types::I64)); // separator ptr
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
-        "__vow_vec_sort" => {
-            sig.params.push(AbiParam::new(types::I64)); // vec ptr
-            sig.returns.push(AbiParam::new(types::I64)); // new sorted vec ptr
-        }
-        "__vow_time_unix" => {
-            sig.returns.push(AbiParam::new(types::I64)); // unix timestamp
-        }
-        "__vow_time_unix_ms" => {
-            sig.returns.push(AbiParam::new(types::I64)); // unix timestamp ms
-        }
-        "__vow_time_micros" => {
-            sig.returns.push(AbiParam::new(types::I64)); // monotonic micros
-        }
-        "__vow_proc_sample" => {
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8> (sample string)
-        }
-        "__vow_gzip_write_file" => {
-            sig.params.push(AbiParam::new(types::I64)); // path string ptr
-            sig.params.push(AbiParam::new(types::I64)); // data string ptr
-            sig.returns.push(AbiParam::new(types::I64)); // 0 ok / nonzero error
-        }
-        "__vow_num_cpus" => {
-            sig.returns.push(AbiParam::new(types::I64)); // available CPU count
-        }
-        "__vow_memory_root_arena_bytes"
-        | "__vow_memory_peak_bytes"
-        | "__vow_memory_alloc_count_since_start" => {
-            sig.returns.push(AbiParam::new(types::I64)); // u64 counter
-        }
-        "__vow_hex_encode" => {
-            sig.params.push(AbiParam::new(types::I64)); // vec ptr
-            sig.returns.push(AbiParam::new(types::I64)); // string ptr
-        }
-        "__vow_hex_decode" => {
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.returns.push(AbiParam::new(types::I64)); // vec ptr
-        }
-        "__vow_parse_f64_bits" => {
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.returns.push(AbiParam::new(types::I64)); // f64 bit pattern (as u64)
-        }
-        "__vow_format_f64_bits" => {
-            sig.params.push(AbiParam::new(types::I64)); // f64 bit pattern (as u64)
-            sig.returns.push(AbiParam::new(types::I64)); // string ptr
         }
         "__vow_debug_str" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
@@ -3740,6 +3815,80 @@ mod tests {
             let sig = extern_sig(sym);
             assert_eq!(sig.params.len(), 1, "{sym}");
             assert_eq!(sig.params[0].value_type, types::I64, "{sym}");
+            assert_eq!(sig.returns.len(), 1, "{sym}");
+            assert_eq!(sig.returns[0].value_type, types::I64, "{sym}");
+        }
+    }
+
+    // Coverage-parity twin of vow-clif-shim's
+    // `catalogue_query_utility_externs_have_expected_shape` -- both crates get
+    // the same generated `catalogue_extern_sig` block. Pins the ABI of every
+    // query and utility builtin against the hand-written arms the catalogue
+    // replaced, so a transcription typo in docs/spec/operations.json cannot
+    // silently change an extern's arity or width.
+    #[test]
+    fn catalogue_query_utility_externs_have_expected_shape() {
+        let i64_ret_no_params = [
+            "__vow_time_unix",
+            "__vow_time_unix_ms",
+            "__vow_time_micros",
+            "__vow_num_cpus",
+            "__vow_memory_root_arena_bytes",
+            "__vow_memory_peak_bytes",
+            "__vow_memory_alloc_count_since_start",
+            "__vow_proc_sample",
+        ];
+        let i64_ret_one_param = [
+            "__vow_hex_encode",
+            "__vow_hex_decode",
+            "__vow_string_parse_i64_opt",
+            "__vow_string_parse_i8_opt",
+            "__vow_string_parse_i16_opt",
+            "__vow_string_parse_i32_opt",
+            "__vow_string_parse_i128_opt",
+            "__vow_string_parse_u8_opt",
+            "__vow_string_parse_u16_opt",
+            "__vow_string_parse_u32_opt",
+            "__vow_string_parse_u128_opt",
+            "__vow_parse_f64_bits",
+            "__vow_format_f64_bits",
+            "__vow_string_from_i64",
+            "__vow_string_from_u64",
+            "__vow_string_trim",
+            "__vow_string_to_upper",
+            "__vow_string_to_lower",
+            "__vow_vec_sort",
+        ];
+        let i64_ret_two_params = [
+            "__vow_gzip_write_file",
+            "__vow_string_split",
+            "__vow_string_starts_with",
+            "__vow_string_ends_with",
+            "__vow_string_join",
+        ];
+        let i64_ret_three_params = ["__vow_string_substr", "__vow_string_replace"];
+        let cases: [(&[&str], usize); 4] = [
+            (&i64_ret_no_params, 0),
+            (&i64_ret_one_param, 1),
+            (&i64_ret_two_params, 2),
+            (&i64_ret_three_params, 3),
+        ];
+        for (syms, arity) in cases {
+            for sym in syms {
+                let sig = extern_sig(sym);
+                assert_eq!(sig.params.len(), arity, "{sym}");
+                assert!(
+                    sig.params.iter().all(|p| p.value_type == types::I64),
+                    "{sym}"
+                );
+                assert_eq!(sig.returns.len(), 1, "{sym}");
+                assert_eq!(sig.returns[0].value_type, types::I64, "{sym}");
+            }
+        }
+        for sym in ["__vow_string_from_i128", "__vow_string_from_u128"] {
+            let sig = extern_sig(sym);
+            assert_eq!(sig.params.len(), 1, "{sym}");
+            assert_eq!(sig.params[0].value_type, types::I128, "{sym}");
             assert_eq!(sig.returns.len(), 1, "{sym}");
             assert_eq!(sig.returns[0].value_type, types::I64, "{sym}");
         }

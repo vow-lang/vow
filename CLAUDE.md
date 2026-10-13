@@ -190,8 +190,8 @@ The staleness detector `scripts/check_help_coverage.py` (run in `full_test.sh`) 
 ## Operation Catalogue
 
 `docs/spec/operations.json` is the Operation Catalogue: the single checked, hand-edited source of
-runtime-symbol, ABI, return-shape, and doc facts for a growing set of Builtin Operations (currently
-`print_str`/`print_i64`/`print_u64`, epic #375's tracer bullet). It is deliberately narrower than
+runtime-symbol, ABI, return-shape, and doc facts for a growing set of Builtin Operations (the print,
+filesystem, stdin/args/stderr, process, hash, environment and query/utility builtins; epic #375). It is deliberately narrower than
 `vow-types/src/env.rs::builtin_free_fn_signatures()` — that table (and its self-hosted counterpart in
 `compiler/env.vow`) remains the single source for signature/effects and is never read or replaced by
 this catalogue.
@@ -212,10 +212,23 @@ same marker convention `scripts/generate_help.py` uses for `// GENERATE:SKILL_*`
 - `compiler/vc_ops.vow` (`catalogue_verifier_known`, the native verifier's
   builtin model keyed by runtime symbol; `generate_operations.py` fails when an entry has no `verifier_model`;
   `known` alone does not make a call verifiable until the executor encodes calls)
+- `vow-verify/src/c_emitter.rs` and `compiler/c_emitter.vow` (`catalogue_c_model_known`, the ESBMC C
+  model's known-symbol set, from the `c_model` field: `base` knows the runtime symbol, `base_and_arena`
+  also its `_in_arena` variant, `unmodeled` neither; required on every pure (`[]`) entry, and only a pure
+  entry can be known. It is separate from `verifier_model` on purpose: a `known` native entry changes
+  the native skip code of every caller, and the C model goes away with the ESBMC path in epic #1398, P6.
+  The hand-written `is_known_builtin` lists keep only what is not catalogued)
 - `vow-ir/src/region.rs`, `vow-clif-shim/src/lib.rs` and `compiler/ir.vow` (the `arena_routes` section, a
   plain list of the base symbols of every fresh-aggregate builtin; the variant is always
   `<symbol>_in_arena`. Rust gets the `FRESH_ARENA_VARIANTS` table with hand-written lookups over it, Vow
   gets the `fresh_arena_base_extern` decision tree, and `fresh_arena_variant_extern` strips the suffix)
+
+A call's result shape tag (`String`, `Vec` or `Option<T>` heap aggregate, which `pin_to_root` and the
+arena inference read) is derived from the entry's documented return type, not stored: the Rust
+`catalogue_builtin_result_tag` and the self-hosted `catalogue_builtin_result_tag` are generated, and
+`arena_routing: heap_fresh` only records (and the generator validates) that the symbol has an
+`_in_arena` variant in `arena_routes`. `i64_to_string`, `string_matches_literal_at` (its literal operand
+lowers specially) and the narrowing intrinsics stay hand-written.
 
 `docs/spec/grammar.md`'s Builtin Function Signatures table and the generated help-JSON in
 `compiler/main.vow`/`vow/src/skill.rs` are **checked against** the catalogue (not generated from it) —
@@ -226,8 +239,10 @@ match `^\[(token(, token)*)?\]$` against the closed vocabulary `{read, write, io
 tokens in alphabetical order (matching `vow-syntax/src/printer.rs`'s `print_effects`, which sorts the
 same way); `doc_signature` must parse as `fn(...) -> Type` with arity and
 per-parameter/return types matching `params`/`return` (`String`/`Vec<...>` both denote `ptr`); the
-`verifier_model` (`known`/`unmodeled`; `main()` rejects an entry without one) and the optional
-`arena_routing` (`none`/`heap_fresh`) fields, when present, must be in their closed sets; and any field
+`verifier_model` (`known`/`unmodeled`; `main()` rejects an entry without one), the optional
+`arena_routing` (`none`/`heap_fresh`) and `c_model` (`unmodeled`/`base`/`base_and_arena`; `main()` rejects
+a pure entry without one) fields, when present, must be in their closed sets; an `Option<T>` return type
+needs a `T` the generator can tag; and any field
 name not in the recognized set (required or optional) is rejected outright, so a misspelled field can never silently defeat its own check. All
 violations across all entries are collected and reported together, not just the first. `main()` never
 lets a bad catalogue surface as a raw Python traceback — a malformed `operations.json` or a rejected
