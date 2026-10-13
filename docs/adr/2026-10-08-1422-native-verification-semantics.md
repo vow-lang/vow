@@ -531,3 +531,53 @@ no C-emitter or ESBMC change; it exists only in the self-hosted verifier.
   where the step has a model for every `k`. New `pass/` fixtures that only the
   step proves: `loop_kinduction_alternating_divisor`, `_callee_requires`,
   `_invariant_not_one_inductive` and `_break`.
+
+## Addendum (#1415): floats
+
+Rule 5 is implemented for `f32` and `f64`; the verifier-only exception (#1421)
+applies, so there is no Rust twin.
+
+- **Terms.** A float is an SMT-LIB `(_ FloatingPoint 8 24)` or `(_ FloatingPoint
+  11 53)` (sort codes `VC_SORT_F32`/`VC_SORT_F64`, 2000 plus the width, so they
+  never collide with a bit-vector width). `+ - * /` print as `fp.add`/`fp.sub`/
+  `fp.mul`/`fp.div` with `RNE` inside the operator symbol, which keeps a rounding
+  mode out of the arena. A constant is `((_ to_fp e s) #x<IEEE bits>)`; the
+  self-hosted lowerer only emits `f64` constants (`CONST_F32` is encoded and
+  covered by unit tests with hand-built IR).
+- **Logic.** A function with a float anywhere in its type table, or a float
+  parameter, runs under `QF_BVFP` (`QF_ABVFP` with a `Vec`). Every other
+  function keeps `QF_BV`/`QF_ABV`, so its query text and cache key are unchanged.
+- **Comparisons.** `==`, `<`, `<=`, `>`, `>=` map to `fp.eq`, `fp.lt`, `fp.leq`,
+  `fp.gt`, `fp.geq`, and `!=` to `not (fp.eq ..)`, never to SMT `=`/`distinct`
+  (structural: they equate NaN with itself). No float operator is in any
+  simplifier fold, identity or comparison-flip rule: NaN breaks every one
+  (`x < x`, `not (x < y)` as `x >= y`, `x == x`). This matches codegen, whose
+  `fcmp` is ordered except `!=`. `x != x` is how a contract tests for NaN.
+- **Casts and negation.** The checker rejects every `as` with a float side, so
+  Rule 5's "casts follow the runtime" has nothing to apply to. Float unary minus
+  lowers to integer `WrappingSub` on a float operand (a lowering defect outside
+  this change); the gate's operand-type checks reject it as `unsupported-opcode`.
+- **Bit hooks.** `format_f64_bits` consumes its `u64` argument whole and returns a
+  fresh opaque string object; `parse_f64_bits` returns an unconstrained `u64`
+  that is one value per string object. It is not constrained to a NaN payload:
+  that would model the string side, which stays opaque and would add to the
+  trusted base. The over-approximation keeps proofs sound; a refutation that
+  depends on the parsed bits is not meaningful. A string literal is not modelled,
+  so `parse_f64_bits("...")` stays `Skipped` (`unmodeled-builtin`/`unsupported-opcode`).
+  Sharing the parse result per object is sound because every `String` mutator is
+  an unmodelled extern the gate rejects.
+- **Counterexamples.** The solver's `(fp s e m)` model is parsed into the raw IEEE
+  bits (fail closed on any other spelling) and printed as the runtime prints an
+  `f64`: shortest round-trip digits, `inf`, `-inf`, `NaN`, `-0`. An `f32` is
+  widened exactly to `f64` first. Float counterexamples are never replayed: the
+  replay harness rebuilds only `i64`/`u64`/`bool` parameters, so a float fixture
+  carries `replay-skipped`.
+- **Limits.** Not modelled, hence `Skipped`: float `%`, float negation, floats in
+  struct fields, enum payloads, `Vec` elements and across inlined calls (a
+  follow-up). `tests/verify/float_enum_payload.vow` and
+  `tests/verify-fail/float_enum_payload_wrong.vow` therefore stay native-`Skipped`
+  and `weaker` in the local differential until then. The random-DAG evaluator of
+  `test_vc_term.vow` is not extended to floats (no independent float evaluator),
+  so the simplifier's float safety rests on the opaque-operator tests. Float
+  `*` and `/` bit-blast; the corpus fixtures finish in well under a second with
+  Bitwuzla 0.9.1, and a query that does not finish is `unknown`.

@@ -243,7 +243,9 @@ corpus drift and exits `2`):
 - `tests/verify`, `tests/verify-fail`, `tests/verify-skip` (honouring `// TEST: skip`);
 - `tests/verify-fail-multi/*/main.vow`;
 - `tests/verify-native/{pass,fail,skip,unknown}` (truth from the directory);
-- the float fixtures, which live inside the sets above;
+- the float fixtures, which live inside the sets above: `tests/verify/float_*`,
+  `tests/verify-native/{pass,fail}/float_*` (IEEE comparisons, NaN, infinity,
+  signed zero, rounding, f32, the bit hooks) and `skip/float_rem_skipped`;
 - `tests/verify-stress` only with `--include-stress`. Its rows are reported with
   `gating: false` and never enter the ratios or the timeout criterion (times out
   by design).

@@ -153,8 +153,8 @@ pub fn api_function(x: i64) -> i64 {
 | `u32`  | 32-bit unsigned integer  |
 | `u64`  | 64-bit unsigned integer  |
 | `u128` | 128-bit unsigned integer (verifier may time out; see below) |
-| `f32`  | 32-bit float (limited support — avoid in contracts; `--backend native` does not model float operations yet, so a contracted function using them is `Skipped`) |
-| `f64`  | 64-bit float (limited support — avoid in contracts; `--backend native` does not model float operations yet, so a contracted function using them is `Skipped`) |
+| `f32`  | 32-bit float (IEEE 754; `--backend native` models `+ - * /` and the comparisons, `%` and negation are `Skipped` there, and ESBMC support is limited — avoid floats in contracts under `--backend esbmc`) |
+| `f64`  | 64-bit float (IEEE 754; `--backend native` models `+ - * /` and the comparisons, `%` and negation are `Skipped` there, and ESBMC support is limited — avoid floats in contracts under `--backend esbmc`) |
 | `bool` | Boolean                  |
 | `()`   | Unit type; its only value is also written `()` (not allowed as a parameter type) |
 | `!`    | Never type (diverges)    |
@@ -1489,8 +1489,11 @@ helpers that carry an `f64` as its IEEE-754 bit pattern in a `u64`:
 `parse_f64_bits` trims surrounding whitespace and returns the bits of the
 parsed `f64`, or the bits of `0.0` (`0`) for text that is not a float; it never
 fails. `format_f64_bits` renders the `f64` with those bits in the shortest
-decimal form that reads back as the same value. The verifier has no model of
-either: a function that calls one is reported `Skipped`.
+decimal form that reads back as the same value. `--backend native` models the
+`u64` side exactly (`format_f64_bits` accepts every bit pattern;
+`parse_f64_bits` returns an unconstrained `u64`, the same for the same string
+object) and the `String` side as opaque; `--backend esbmc` has no model of
+either, so a function that calls one is reported `Skipped` there.
 
 **Narrowing intrinsics** (per [Type Cast](#type-cast)): for every narrowing
 pair the compiler emits `<src>_to_<tgt>_try`, `<src>_to_<tgt>_wrap`, and

@@ -351,7 +351,7 @@ states what the compiler does today where it differs from the targets above:
   `verification` span, not per-claim worker or solver spans or per-worker RSS.
 - **`--timeout 0`** is a zero budget natively (no solver spawn) and an immediate
   watchdog kill under ESBMC.
-- **Floats** are `unsupported-opcode` natively; IEEE semantics are a target.
+- **Floats** are modelled natively (#1415, ADR-1422 addendum): `+ - * /` and the comparisons verify; float `%` is `float-rem-unsupported`, float negation and floats in aggregates or inlined calls stay `unsupported-opcode`.
 - **`esbmc error: <message>`** remains the legacy `counterexample` text for
   `verify_status: "error"` under both backends.
 - **Uncontracted callers** keep ESBMC's selection and its Note form; a native
