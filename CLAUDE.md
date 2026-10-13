@@ -217,7 +217,8 @@ same marker convention `scripts/generate_help.py` uses for `// GENERATE:SKILL_*`
 - `vow-codegen/src/cranelift_backend.rs` and `vow-clif-shim/src/lib.rs` (`catalogue_extern_sig`)
 - `compiler/lower.vow` (`catalogue_builtin_to_extern`, `catalogue_builtin_ret_ty`)
 - `compiler/vc_ops.vow` (`catalogue_verifier_known`, the native verifier's
-  builtin model keyed by runtime symbol; `generate_operations.py` fails when an entry has no `verifier_model`;
+  builtin model keyed by runtime symbol; `generate_operations.py` fails when an entry has no `verifier_model`
+  or an effectful entry is `known`;
   `known` alone does not make a call verifiable until the executor encodes calls)
 - `vow-verify/src/c_emitter.rs` and `compiler/c_emitter.vow` (`catalogue_c_model_known`, the ESBMC C
   model's known-symbol set, from the `c_model` field: `base` knows the runtime symbol, `base_and_arena`
@@ -258,9 +259,10 @@ match `^\[(token(, token)*)?\]$` against the closed vocabulary `{read, write, io
 tokens in alphabetical order (matching `vow-syntax/src/printer.rs`'s `print_effects`, which sorts the
 same way); `doc_signature` must parse as `fn(...) -> Type` with arity and
 per-parameter/return types matching `params`/`return` (`String`/`Vec<...>` both denote `ptr`); the
-`verifier_model` (`known`/`unmodeled`; `main()` rejects an entry without one), the
-`arena_routing` (`none`/`heap_fresh`; `main()` rejects a heap-returning entry without one) and `c_model`
-(`unmodeled`/`base`/`base_and_arena`; `main()` rejects a pure entry without one) fields, when present, must be in their closed sets; an `Option<T>` return type
+`verifier_model` (`known`/`unmodeled`; `main()` rejects an entry without one, and an effectful entry
+marked `known`), the `arena_routing` (`none`/`heap_fresh`; `main()` rejects a heap-returning entry without
+one) and `c_model` (`unmodeled`/`base`/`base_and_arena`; `main()` rejects a pure entry without one)
+fields, when present, must be in their closed sets; an `Option<T>` return type
 needs a `T` the generator can tag; and any field name not in the recognized set (required or optional)
 is rejected outright, so a misspelled field can never silently defeat its own check. All
 violations across all entries are collected and reported together, not just the first. `main()` never

@@ -64,8 +64,8 @@ fn check_builtin_model() -> i64 {
     if catalogue_verifier_known(String::from("__vow_fs_read")) { return 707; }
     if catalogue_verifier_known(String::from("__vow_process_run")) { return 708; }
     if catalogue_verifier_known(String::from("__vow_getenv")) { return 709; }
-    if catalogue_verifier_known(String::from("__vow_mktemp_dir")) { return 720; }
-    if catalogue_verifier_known(String::from("__vow_path_lookup")) { return 721; }
+    if catalogue_verifier_known(String::from("__vow_mktemp_dir")) { return 710; }
+    if catalogue_verifier_known(String::from("__vow_path_lookup")) { return 711; }
     0
 }
 
