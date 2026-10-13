@@ -353,6 +353,9 @@ fn vc_skip_reason_calls(src: IrFunction) -> String {
 }
 
 fn vc_skip_reason_with(src: IrFunction, calls: bool) -> String {
+    if vc_reserved_symbol(src.name) {
+        return vc_reason(VC_SKIP_RESERVED_SYMBOL(), src.name);
+    }
     if !vc_effects_modeled(src.effects) {
         return vc_reason(VC_SKIP_FUNCTION_HAS_EFFECTS(), effects_str(src.effects));
     }

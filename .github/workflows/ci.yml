@@ -103,6 +103,8 @@ jobs:
         run: python3 scripts/test_install_z3_action.py
       - name: Z3 cross-check unit tests
         run: python3 scripts/test_z3_crosscheck.py
+      - name: Generated verifier-corpus unit tests
+        run: python3 scripts/test_gen_verifier_corpus.py
       - name: Docs site link-rewrite unit tests
         run: python3 scripts/test_build_docs_site.py
       - name: Help-coverage staleness-gate unit tests
@@ -113,6 +115,10 @@ jobs:
         run: python3 scripts/test_spec_surface.py
       - name: Memory-bound gate unit tests
         run: python3 scripts/test_check_memory_bounds.py
+      - name: Native skip-code coverage gate
+        run: python3 scripts/check_skip_codes.py
+      - name: Native skip-code coverage unit tests
+        run: python3 scripts/test_check_skip_codes.py
       - name: Operation Catalogue projection freshness
         run: python3 scripts/generate_operations.py --check
       - name: Operation Catalogue generator unit tests

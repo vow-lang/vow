@@ -1,0 +1,18 @@
+// TEST: category unverifiable
+// TEST: skip-reason non-modelable-callee
+module ReservedSymbolCallee
+
+fn __ESBMC_identity(x: i64) -> i64 {
+  x
+}
+
+fn outer(x: i64) -> i64 vow {
+  ensures: result == x
+} {
+  __ESBMC_identity(x)
+}
+
+fn main() -> i32 [io] {
+  print_i64(outer(3));
+  0
+}

@@ -474,6 +474,31 @@ fn check_emitted_codes_are_closed() -> i64 {
     0
 }
 
+fn reserved_probe(name: String) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_const_i64(0, 1));
+    i.push(mk_inst_return(1, 0));
+    one_block(name, Vec::new(), ITY_I64(), i)
+}
+
+fn check_reserved_symbol() -> i64 {
+    let r: String = vc_skip_reason(reserved_probe(String::from("__ESBMC_assume")));
+    if r != String::from("reserved-verifier-symbol: __ESBMC_assume") { return 100; }
+    let v: String = vc_skip_reason(reserved_probe(String::from("__VERIFIER_nondet_int")));
+    if v != String::from("reserved-verifier-symbol: __VERIFIER_nondet_int") { return 101; }
+    if !vc_skip_code_valid(vc_reason_code(r)) { return 102; }
+    // Only the two checker prefixes are reserved; ordinary and near-miss names are not.
+    if vc_skip_reason(reserved_probe(String::from("abs"))).len() != 0 { return 103; }
+    if vc_skip_reason(reserved_probe(String::from("_ESBMC_x"))).len() != 0 { return 104; }
+    if vc_skip_reason(reserved_probe(String::from("my__VERIFIER_x"))).len() != 0 { return 105; }
+    if vc_skip_reason(reserved_probe(String::from("__ESBMC"))).len() != 0 { return 106; }
+    // The reserved name wins over an effect, as in the ESBMC model.
+    let fe: IrFunction = reserved_probe(String::from("__VERIFIER_x"));
+    fe.effects = 1;
+    if vc_reason_code(vc_skip_reason(fe)) != String::from("reserved-verifier-symbol") { return 107; }
+    0
+}
+
 fn check_reason_codes() -> i64 {
     let fr: Vec<IrInst> = Vec::new();
     fr.push(mk_inst(0, IOP_CONST_F64(), ITY_F64(), Vec::new()));
@@ -633,5 +658,6 @@ fn main() -> i32 {
     if r == 0 { r = check_shape(); }
     if r == 0 { r = check_reason_codes(); }
     if r == 0 { r = check_emitted_codes_are_closed(); }
+    if r == 0 { r = check_reserved_symbol(); }
     i64_to_i32_wrap(r)
 }

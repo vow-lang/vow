@@ -9,6 +9,13 @@ name: Native verifier oracles
 #     backend sends to Bitwuzla is re-run under Z3 and a sat/unsat
 #     disagreement fails the run.
 #
+# Both sweep two generated corpora next to the fixtures (#1473): the #905
+# equivalence axis for query volume, and the verifier axis
+# (`gen_corpus.py --axis verifier`), whose `main` calls each contracted function
+# past a collection or loop boundary so the runtime is a soundness oracle, with
+# an honest-control class that must stay `Verified`. Known disagreements are
+# tracked by issue number in `scripts/gen_verifier_corpus.py`.
+#
 # Z3 is CI-only: it is installed by this workflow and nowhere else, and no
 # product code depends on it. Neither oracle needs ESBMC, so the compiler is
 # built with `bootstrap.sh --no-verify`.
@@ -24,7 +31,12 @@ on:
     # 05:37 UTC -- clear of cargo-mutants (02:17), bootstrap (03:53),
     # equivalence (04:41), arena-verify (06:29) and full-test (07:20).
     - cron: "37 5 * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: Generated-corpus seed (default 1431 for the equivalence axis, 1473 for the verifier axis)
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -74,27 +86,40 @@ jobs:
         # Verification does not change codegen, so the fixed point is as
         # meaningful as in bootstrap.yml; ESBMC is simply not involved here.
         run: scripts/bootstrap.sh --no-verify
-      - name: Generate the seeded corpus
+      - name: Generate the seeded corpora
         id: corpus
         # Pinned on pushes so a red run is reproducible from the commit alone;
-        # date-derived on the nightly so the corpus keeps moving. The seed is
-        # echoed either way.
+        # date-derived on the nightly so the corpora keep moving; an explicit
+        # input on a manual run. The seed is echoed either way, and the
+        # generators are deterministic from it, so `gen_corpus.py --axis
+        # verifier --seed <seed>` rebuilds exactly what a red run swept.
+        env:
+          INPUT_SEED: ${{ github.event.inputs.seed }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
-            seed="$(date -u +%Y%m%d)"
+          if [ -n "$INPUT_SEED" ]; then
+            equivalence_seed="$INPUT_SEED"
+            verifier_seed="$INPUT_SEED"
+          elif [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+            equivalence_seed="$(date -u +%Y%m%d)"
+            verifier_seed="$equivalence_seed"
           else
-            seed=1431
+            equivalence_seed=1431
+            verifier_seed=1473
           fi
-          echo "generated-corpus seed: $seed"
-          python3 scripts/gen_corpus.py --seed "$seed" --count 100 \
-            --output-dir "$RUNNER_TEMP/generated"
+          echo "equivalence-axis seed: $equivalence_seed"
+          echo "verifier-axis seed: $verifier_seed"
+          python3 scripts/gen_corpus.py --seed "$equivalence_seed" --count 100 \
+            --output-dir "$RUNNER_TEMP/generated/equivalence"
+          python3 scripts/gen_corpus.py --axis verifier \
+            --seed "$verifier_seed" --count 300 \
+            --output-dir "$RUNNER_TEMP/generated/verifier"
           echo "dir=$RUNNER_TEMP/generated" >> "$GITHUB_OUTPUT"
       - name: Native verifier versus runtime
         env:
           CORPUS: ${{ steps.corpus.outputs.dir }}
         run: |
           python3 scripts/verifier_runtime.py --backend native \
-            --shard "$SHARD" --min-checked 30 \
+            --shard "$SHARD" --min-checked 60 \
             --extra-root "$CORPUS" \
             --output-dir "$RUNNER_TEMP/verifier-runtime"
       - name: Z3 cross-check of the native queries
@@ -108,6 +133,29 @@ jobs:
             --shard "$SHARD" --min-agreed 250 \
             --extra-root "$CORPUS" \
             --output-dir "$RUNNER_TEMP/z3-crosscheck"
+      - name: Summarize the generated corpus
+        # Surfaces the class/regime/verdict table in the job summary, so a reader
+        # sees what the generated programs measured (and which controls are
+        # tracked gaps) without downloading the artifact.
+        if: ${{ !cancelled() }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["RUNNER_TEMP"]) / "verifier-runtime" / "results.json"
+          if not path.exists():
+              print("### Shard: the verifier-runtime differential produced no results.json")
+          else:
+              d = json.loads(path.read_text())
+              print(f"### Shard {os.environ['SHARD']}: generated verifier corpus")
+              print()
+              print("| class / regime: verdict | programs |")
+              print("|---|---|")
+              for key, count in sorted(d.get("generated_outcomes", {}).items()):
+                  print(f"| {key} | {count} |")
+          PY
       - name: Upload oracle results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -21,12 +21,16 @@ actionable. The seed is an explicit argument, never a clock read.
 import argparse
 import hashlib
 import random
+import re
 import sys
 from pathlib import Path
+
+import gen_verifier_corpus
 
 # Weighted toward the surface where this repo's compilers have actually
 # diverged: integer width and signedness, checked vs wrapping arithmetic, match
 # and pattern handling, and loop-carried mutation (the #1087 family).
+GENERATED_NAME = re.compile(r"gen_\d{4}_[0-9a-f]{12}\.vow")
 INT_TYPES = ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"]
 ARITH = ["+", "-", "*"]
 CHECKED = ["+!", "-!", "*!"]
@@ -53,11 +57,7 @@ def lit(rng, ty):
 
 def gen_arith_fn(rng, name, ty):
     op = rng.choice(CHECKED if rng.random() < 0.4 else ARITH)
-    return (
-        f"fn {name}(a: {ty}, b: {ty}) -> {ty} {{\n"
-        f"  a {op} b\n"
-        f"}}\n"
-    )
+    return f"fn {name}(a: {ty}, b: {ty}) -> {ty} {{\n  a {op} b\n}}\n"
 
 
 def gen_loop_carry_fn(rng, name, ty):
@@ -75,8 +75,8 @@ def gen_loop_carry_fn(rng, name, ty):
     if rng.random() < 0.6:
         body += [
             f"    let tmp: {ty} = acc;",
-            f"    acc = i;",
-            f"    i = tmp;" if rng.random() < 0.5 else "    i = i - 1;",
+            "    acc = i;",
+            "    i = tmp;" if rng.random() < 0.5 else "    i = i - 1;",
         ]
     else:
         body += [
@@ -104,11 +104,7 @@ def gen_match_fn(rng, name, ty):
 
 
 def gen_cmp_fn(rng, name, ty):
-    return (
-        f"fn {name}(a: {ty}, b: {ty}) -> bool {{\n"
-        f"  a {rng.choice(CMP)} b\n"
-        f"}}\n"
-    )
+    return f"fn {name}(a: {ty}, b: {ty}) -> bool {{\n  a {rng.choice(CMP)} b\n}}\n"
 
 
 def gen_contract_fn(rng, name, ty):
@@ -123,8 +119,13 @@ def gen_contract_fn(rng, name, ty):
     )
 
 
-GENERATORS = [gen_arith_fn, gen_loop_carry_fn, gen_match_fn, gen_cmp_fn,
-              gen_contract_fn]
+GENERATORS = [
+    gen_arith_fn,
+    gen_loop_carry_fn,
+    gen_match_fn,
+    gen_cmp_fn,
+    gen_contract_fn,
+]
 
 
 def gen_program(rng, index):
@@ -155,19 +156,39 @@ def gen_program(rng, index):
 
 def main():
     ap = argparse.ArgumentParser(description="Generate a Vow corpus (#905)")
-    ap.add_argument("--seed", type=int, required=True,
-                    help="RNG seed; required, so every run is reproducible")
+    ap.add_argument(
+        "--seed",
+        type=int,
+        required=True,
+        help="RNG seed; required, so every run is reproducible",
+    )
     ap.add_argument("--count", type=int, default=100)
     ap.add_argument("--output-dir", default="generated-corpus")
+    ap.add_argument(
+        "--axis",
+        choices=("equivalence", "verifier"),
+        default="equivalence",
+        help="equivalence: programs for scripts/equivalence.py (#905); "
+        "verifier: contracted collection/loop programs whose `main` exercises "
+        "them, for scripts/verifier_runtime.py and z3_crosscheck.py (#1473)",
+    )
     args = ap.parse_args()
 
     rng = random.Random(args.seed)
     outdir = Path(args.output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
+    # A directory regenerated under a new seed or axis must not keep the old
+    # programs: a sweep would silently mix two corpora.
+    for stale in outdir.glob("gen_*.vow"):
+        if GENERATED_NAME.fullmatch(stale.name):
+            stale.unlink()
 
     written = []
     for i in range(args.count):
-        text = gen_program(rng, i)
+        if args.axis == "verifier":
+            text = gen_verifier_corpus.gen_program(rng, i)
+        else:
+            text = gen_program(rng, i)
         # Name by content hash so a regenerated corpus with the same seed
         # produces byte-identical filenames, and a divergence found in
         # gen_<hash>.vow is re-findable from the seed alone.
@@ -177,7 +198,13 @@ def main():
         written.append(p)
 
     print(f"wrote {len(written)} programs to {outdir} (seed {args.seed})")
-    print(f"next: python3 scripts/equivalence.py {outdir} --no-ledger")
+    if args.axis == "verifier":
+        print(
+            f"next: python3 scripts/verifier_runtime.py --backend native "
+            f"--extra-root {outdir}"
+        )
+    else:
+        print(f"next: python3 scripts/equivalence.py {outdir} --no-ledger")
     return 0
 
 

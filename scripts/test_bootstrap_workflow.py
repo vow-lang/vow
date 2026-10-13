@@ -547,10 +547,35 @@ class NativeOracleWorkflowTest(unittest.TestCase):
             self.oracles.index("scripts/verifier_runtime.py"),
         )
 
-    def test_sweeps_a_seed_pinned_generated_corpus(self) -> None:
-        self.assertRegex(self.oracles, r"gen_corpus\.py --seed \"\$seed\"")
-        self.assertRegex(self.oracles, r"(?m)^\s+seed=1431$")
+    def test_sweeps_seed_pinned_generated_corpora(self) -> None:
+        self.assertRegex(self.oracles, r"gen_corpus\.py --seed \"\$equivalence_seed\"")
+        self.assertRegex(
+            self.oracles,
+            r"gen_corpus\.py --axis verifier\s+\\\s+--seed \"\$verifier_seed\"",
+        )
+        self.assertRegex(self.oracles, r"(?m)^\s+equivalence_seed=1431$")
+        self.assertRegex(self.oracles, r"(?m)^\s+verifier_seed=1473$")
         self.assertIn("--extra-root", self.oracles)
+
+    def test_seeds_are_echoed_so_a_red_run_is_reproducible(self) -> None:
+        self.assertIn('echo "verifier-axis seed: $verifier_seed"', self.oracles)
+        self.assertIn('echo "equivalence-axis seed: $equivalence_seed"', self.oracles)
+
+    def test_the_nightly_rotates_the_seed_and_a_manual_run_can_set_it(self) -> None:
+        self.assertIn('"$GITHUB_EVENT_NAME" = "schedule"', self.oracles)
+        self.assertRegex(
+            header(self.text), r"workflow_dispatch:\s*\n\s+inputs:\s*\n\s+seed:"
+        )
+
+    def test_both_oracles_sweep_both_generated_corpora(self) -> None:
+        # One directory holds both axes, so a single --extra-root reaches both.
+        self.assertIn('--output-dir "$RUNNER_TEMP/generated/equivalence"', self.oracles)
+        self.assertIn('--output-dir "$RUNNER_TEMP/generated/verifier"', self.oracles)
+        self.assertEqual(2, self.oracles.count('--extra-root "$CORPUS"'))
+
+    def test_the_generated_outcomes_reach_the_job_summary(self) -> None:
+        self.assertIn("generated_outcomes", self.oracles)
+        self.assertIn("GITHUB_STEP_SUMMARY", self.oracles)
 
     def test_failures_are_blocking(self) -> None:
         self.assertNotIn("continue-on-error", self.text)
