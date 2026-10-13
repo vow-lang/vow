@@ -547,7 +547,10 @@ machinery.
   compares masked bytes, so the junk is never observable. A pushed byte is the
   zero-extended `u8`.
 - **Operations**, listed by runtime symbol like `Vec`'s: `new` (a null pointer
-  and length 0, checked by the shape rule), `literal`, `clone`, `len`,
+  and length 0, checked by the shape rule), `literal`, `clone`,
+  `from_raw_parts_copy` (Rule 3's null-pointer rule: empty for a null source or
+  a zero length, else `n` bytes of unknown contents, assuming `n` below the
+  capacity mask, where the runtime traps), `len`,
   `push_byte`, `push_str`, `clear`, `byte_at`, `eq`, `substring`, `substr`,
   `starts_with`, `ends_with` and `matches_literal_at`, with the clamping and the
   no-wrap rule of `grammar.md`. `byte_at` at or past the length is a hard claim
@@ -599,6 +602,15 @@ machinery.
   directions) and `fail/string_eq_*` keep the refuting direction, so a binder that
   were too strong or too weak flips a fixture; the nightly Z3 cross-check
   (ADR-2026-10-11-0510) decides the same queries with an independent solver.
+- **Capacity artifacts in the corpus.** `tests/verify-fail/string_push_str_overflow.vow` and
+  the two `raw_parts_copy_string_len_beyond_*` fixtures are refuted by ESBMC only through
+  its own `string capacity` assertion; the properties hold on every returning run and the
+  native verifier proves them. This is the "harness decision" the #1423 addendum left open.
+  `scripts/verify_diff.py` reads a `// TEST: esbmc-capacity-artifact "<why>"` directive: when
+  it is present and every ESBMC counterexample is a capacity assertion, a native proof is
+  `more_precise` with the explanation in the row; without the directive, or for any other
+  ESBMC counterexample, it stays a `soundness` finding. The Vec fixtures stay skipped until
+  #1613.
 - **Verdict impact.** Stronger or equal to the C model, whose `string_eq` is a
   cached nondeterministic Bool and whose strings are capped at `string_max`. Every
   `tests/verify/string_*.vow` fixture matches ESBMC; the new `pass/` fixtures
