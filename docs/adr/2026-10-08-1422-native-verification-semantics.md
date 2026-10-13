@@ -534,7 +534,7 @@ no C-emitter or ESBMC change; it exists only in the self-hosted verifier.
 
 ## Addendum (#1415): floats
 
-Rule 5 is implemented for `f32` and `f64`; the verifier-only exception (#1421)
+Rule 5 is implemented for `f32` and `f64`; the verifier-only exception (ADR-2026-10-08-1421)
 applies, so there is no Rust twin.
 
 - **Terms.** A float is an SMT-LIB `(_ FloatingPoint 8 24)` or `(_ FloatingPoint
@@ -556,7 +556,7 @@ applies, so there is no Rust twin.
 - **Casts and negation.** The checker rejects every `as` with a float side, so
   Rule 5's "casts follow the runtime" has nothing to apply to. Float unary minus
   lowers to integer `WrappingSub` on a float operand (a lowering defect outside
-  this change); the gate's operand-type checks reject it as `unsupported-opcode`.
+  this change, #1655); the gate's operand-type checks reject it as `unsupported-opcode`.
 - **Bit hooks.** `format_f64_bits` consumes its `u64` argument whole and returns a
   fresh opaque string object; `parse_f64_bits` returns an unconstrained `u64`
   that is one value per string object. It is not constrained to a NaN payload:
@@ -572,9 +572,8 @@ applies, so there is no Rust twin.
   widened exactly to `f64` first. Float counterexamples are never replayed: the
   replay harness rebuilds only `i64`/`u64`/`bool` parameters, so a float fixture
   carries `replay-skipped`.
-- **Limits.** Not modelled, hence `Skipped`: float `%`, float negation, floats in
-  struct fields, enum payloads, `Vec` elements and across inlined calls (a
-  follow-up). `tests/verify/float_enum_payload.vow` and
+- **Limits.** Not modelled, hence `Skipped`: float `%`, float negation (#1655), floats in
+  struct fields, enum payloads, `Vec` elements and across inlined calls (#1656). `tests/verify/float_enum_payload.vow` and
   `tests/verify-fail/float_enum_payload_wrong.vow` therefore stay native-`Skipped`
   and `weaker` in the local differential until then. The random-DAG evaluator of
   `test_vc_term.vow` is not extended to floats (no independent float evaluator),

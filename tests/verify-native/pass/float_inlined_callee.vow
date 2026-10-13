@@ -1,0 +1,18 @@
+module FloatInlinedCallee
+
+fn is_pos(x: i64) -> bool vow {
+  ensures: result == (x > 0)
+} {
+  let h: f64 = 0.5 + 0.25;
+  h > 0.0 && x > 0
+}
+
+fn caller(y: i64) -> bool vow {
+  ensures: result == (y > 0)
+} {
+  is_pos(y)
+}
+
+fn main() -> i32 [io] {
+  0
+}

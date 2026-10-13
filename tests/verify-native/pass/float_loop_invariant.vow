@@ -1,0 +1,20 @@
+module FloatLoopInvariant
+
+fn running_sum(n: i64) -> f64 vow {
+  requires: n >= 0
+  ensures: result >= 0.0
+} {
+  let mut acc: f64 = 0.0;
+  let mut i: i64 = 0;
+  while i < n vow {
+    invariant: acc >= 0.0
+  } {
+    acc = acc + 1.0;
+    i = i + 1;
+  }
+  acc
+}
+
+fn main() -> i32 [io] {
+  0
+}
