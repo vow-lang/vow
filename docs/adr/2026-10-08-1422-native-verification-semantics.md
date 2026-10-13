@@ -769,14 +769,33 @@ their parity are unchanged.
   never returns its argument (`__vow_string_pin_to_root`), so the model gives it the kind of
   `String::from` (`VC_STR_CLONE`): the same `(array, length)` in a fresh object. The arena
   placement it exists for has no value-level effect.
+- **`String::contains`** is exact for any length (`vc_str_contains`, `compiler/vc_strsearch.vow`). The
+  result is a fresh Bool `e` tied to the statement by two assumptions, one per direction:
+  `e => |p| <= |s| and w <= |s| - |p| and (p matches s at w)` with a fresh witness start `w` (the
+  match is the byte-range equality of #1426), and `not e => |p| > |s| or (for every start
+  i <= |s| - |p|: sk[i] < |p| and p[sk[i]] != s[i + sk[i]])` with a fresh Skolem array `sk` that
+  names, per start, a position where the needle differs. The for-all/exists alternation of the
+  false direction is the one for-all over `i` with the existential read off `sk`, written with two
+  new binders next to `VC_T_QEQ`: `VC_T_QLT` (`forall i <= l. a[i] < b`) and `VC_T_QDIFF`
+  (`forall i <= l. low8(a[c[i]]) != low8(b[i + c[i]])`). They obey the rule of #1426: built only in an
+  assumption, in a positive position, never in a goal, so the quantifier is never in the negated
+  query. The assumptions define `e`, `w` and `sk` from the operands, so they cannot make a query
+  unsatisfiable. The for-all is also stated as two plain facts at the first and the last start, which
+  are instances of it (they add no information) but are the starts a prefix and a suffix test relate to,
+  so the solver does not have to find them by instantiation. Calls on the same operand terms share one
+  result. A needle that is a prefix, a suffix, an appended part or a substring is proven contained
+  in milliseconds; a property that chains the false directions of two searches
+  (`a.contains(b) && b.contains(c)` implies `a.contains(c)`) is `unknown`/`timeout`, never a proof.
+  The ESBMC model is a bounded loop, so `tests/verify-native/pass/string_contains_exact.vow` has
+  functions it fails or times out on that native proves (PR evidence), and
+  `tests/verify/string_contains_basic.vow` keeps the corpus row both decide.
 - **Skipped with a stated reason** (each in `verifier_skip_reason` of `docs/spec/operations.json`, or
   `vc_str_unmodeled_reason` for a runtime symbol the catalogue lacks): `string_trim`,
   `string_to_upper`, `string_to_lower` (Rust's Unicode `str` methods: the length can change,
   invalid UTF-8 gives the empty string; a byte-wise map would be unsound), `string_replace`,
   `parse_*` (a fold over the digits after a Unicode trim and an `Option` built by the call),
   `hash_str` (FNV-1a fold), `hex_encode`/`hex_decode` (a per-index map between two arrays),
-  `string_split`/`string_join` (`Vec<String>` elements are pointers), `String::contains` (the
-  false direction is a for-all/exists alternation the single binder cannot state),
+  `string_split`/`string_join` (`Vec<String>` elements are pointers),
   `String::from_cstr` (memory behind a C string) and the arena variants (no arena identity). A
   nondeterministic or opaque result is not an option for these: it would let a counterexample
   depend on a value the runtime computes, which `--replay-cex` reports as a `VerifierBug`. The

@@ -113,12 +113,11 @@ fn check_op_table() -> i64 {
     if vc_vec_op_kind(String::from("__vow_string_starts_with")) != VC_STR_STARTS_WITH() { return 13; }
     if vc_vec_op_kind(String::from("__vow_string_ends_with")) != VC_STR_ENDS_WITH() { return 14; }
     if vc_vec_op_kind(String::from("__vow_string_from_raw_parts_copy")) != VC_STR_FROM_RAW_PARTS() { return 19; }
-    if vc_vec_op_kind(String::from("__vow_string_contains")) != VC_STR_NONE() { return 15; }
+    if vc_vec_op_kind(String::from("__vow_string_contains")) != VC_STR_CONTAINS() { return 15; }
     if vc_vec_op_kind(String::from("__vow_string")) != VC_STR_NONE() { return 16; }
     if vc_vec_op_kind(String::from("__vow_string_")) != VC_STR_NONE() { return 17; }
     if vc_vec_op_kind(String::from("__vow_vec_clear")) != VC_STR_NONE() { return 18; }
     let rest: Vec<String> = Vec::new();
-    rest.push(String::from("__vow_string_contains"));
     rest.push(String::from("__vow_string_from_cstr"));
     rest.push(String::from("__vow_string_parse_u64_opt"));
     rest.push(String::from("__vow_string_new_in_arena"));
@@ -648,14 +647,14 @@ fn check_gate_types() -> i64 {
     let f3: IrFunction = one_block(ptr_params(2), ITY_I64(), notbool);
     if vc_skip_reason(f3).len() == 0 { return 172; }
 
-    // `contains` stays an unmodelled builtin, with the symbol as its detail.
+    // `split` stays an unmodelled builtin, with the symbol as its detail.
     let sub: Vec<IrInst> = Vec::new();
     sub.push(mk_inst_arg(0, ITY_PTR(), 0));
     sub.push(mk_inst_arg(1, ITY_PTR(), 1));
-    sub.push(call(2, ITY_BOOL(), args2(0, 1), String::from("__vow_string_contains")));
+    sub.push(call(2, ITY_BOOL(), args2(0, 1), String::from("__vow_string_split")));
     sub.push(mk_inst_return(3, 2));
     let f4: IrFunction = one_block(ptr_params(2), ITY_BOOL(), sub);
-    if vc_skip_reason(f4) != String::from("unmodeled-builtin: __vow_string_contains") { return 173; }
+    if vc_skip_reason(f4) != String::from("unmodeled-builtin: __vow_string_split") { return 173; }
     0
 }
 
