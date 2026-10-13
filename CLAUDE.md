@@ -133,6 +133,8 @@ scripts/bootstrap.sh --skip-cargo         # skip cargo build if already built
 
 This builds `./target/release/vow` (stage 0), then uses it to compile and verify the self-hosted compiler, producing `build/vowc`. The Rust compiler (`./target/release/vow`) is only needed for this bootstrap step.
 
+`scripts/bootstrap.sh --native-verify` adds a native pass: the Stage 1 and Stage 2 `vowc` each verify all of `compiler/*.vow` with `--backend native` and must agree. Every function native still skips is listed, with its tracking issue, in `scripts/native_compiler_skips.toml` (a new skip, or a stale entry, fails). `scripts/verify_compiler.py` is the same check plus a native-vs-ESBMC comparison; see `docs/verifier-eval.md`.
+
 ### "Green locally" checklist claims must be pinned to the PR's final head SHA
 
 `.github/workflows/bootstrap.yml` only runs on push to `main` and nightly — it never runs on pull
