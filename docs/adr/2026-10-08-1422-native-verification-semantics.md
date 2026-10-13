@@ -443,9 +443,10 @@ of this change and stay `Skipped`.
   each Vec the loop writes at the top of the header proper, which gives it an
   arbitrary array and an arbitrary length below the capacity mask, as a header Phi
   gets an arbitrary value (see the addendum below). A function is still not cut
-  when a mutated receiver is a String or is defined inside a loop that mutates it; bounded unwinding decides such a function alone, and
-  `vc_step_applicable` (k-induction) still refuses a Vec-written loop. A loop that
-  only reads a Vec is cut with no marker.
+  when a mutated receiver is a String or is defined inside a loop that mutates it;
+  bounded unwinding decides such a function alone, and `vc_step_applicable`
+  (k-induction) still refuses a Vec-written loop. A loop that only reads a Vec is
+  cut with no marker.
 - **Aliasing.** Two `Vec` parameters are distinct objects, as they are for
   ESBMC and for every `vc_agg` parameter object.
 - **Op table.** The Vec symbols are listed by hand in `vc_vec_op_kind`, like
@@ -687,9 +688,9 @@ havocked too, so a fact about contents holds only if the invariant states it
 (`tests/verify-native/unknown/vec_loop_contents_not_in_invariant.vow`).
 
 Refused, so the whole function stays with bounded unwinding: a String receiver and
-a receiver defined in a loop that mutates it (an object
-born in the loop it is havocked by has no state the model could name). The k-induction
-step case (`vc_step_applicable`) is unchanged and still refuses a Vec-written loop.
+a receiver defined in a loop that mutates it (an object born in the loop it is
+havocked by has no state the model could name). The k-induction step case
+(`vc_step_applicable`) is unchanged and still refuses a Vec-written loop.
 
 ## Addendum (#1646): `parse_f64_bits` and `format_f64_bits`
 

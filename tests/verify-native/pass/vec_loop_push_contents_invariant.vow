@@ -1,7 +1,7 @@
 // TEST: category invariant
-// The loop writes contents as well as length; the invariant keeps the length
+// The loop pushes contents as well as length; the invariant keeps the length
 // fact ahead of the guarded read so the read is in bounds.
-module VecLoopSetContentsInvariant
+module VecLoopPushContentsInvariant
 
 fn fill() -> Vec<i64> vow {
   ensures: result.len() == 100 && result[0] == 7
