@@ -1,0 +1,23 @@
+module StringOpaqueParseFormat
+
+fn parsed_u8_is_in_range(text: String) -> i64 vow {
+  ensures: result >= 0 && result <= 255
+} {
+  match parse_u8(text) {
+    Option::Some(value) => value as i64,
+    Option::None => 0,
+  }
+}
+
+fn formatted_copy_len(n: i64) -> bool vow {
+  ensures: result
+} {
+  let s: String = int_to_string(n);
+  let c: String = String::from(s);
+  c.len() == s.len()
+}
+
+fn main() -> i32 [io] {
+  print_i64(parsed_u8_is_in_range(String::from("7")));
+  0
+}

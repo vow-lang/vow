@@ -1,6 +1,7 @@
 // TEST: category callee-blame
 // TEST: counterexample-fn "first_byte_is_a"
 // TEST: counterexample-blame Callee
+// TEST: replay-skipped String parameter, not rebuilt by the replay harness
 // TEST: counterexample-vow-id 1
 // The result's bytes are read (`byte_at`), so the model keeps the byte-copy
 // loop: the refutation depends on the substring carrying the source's bytes.

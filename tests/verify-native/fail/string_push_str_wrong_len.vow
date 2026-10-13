@@ -1,0 +1,18 @@
+// TEST: replay-skipped String parameters are not rebuilt by the replay harness
+// TEST: counterexample-fn "append"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+module StringPushStrWrongLen
+
+fn append(a: String, b: String) -> String vow {
+  ensures: result.len() == a.len() + b.len() + 1
+} {
+  let r: String = String::from(a);
+  r.push_str(b);
+  r
+}
+
+fn main() -> i32 [io] {
+  print_u64(append(String::from("a"), String::from("b")).len());
+  0
+}

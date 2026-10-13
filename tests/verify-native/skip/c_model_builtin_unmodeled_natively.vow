@@ -2,11 +2,11 @@
 // TEST: skip-reason unmodeled-builtin
 module CModelBuiltinUnmodeledNatively
 
-// `string_trim`, `int_to_string` and `parse_i64` are modelled by the ESBMC C
-// model (`c_model` in docs/spec/operations.json) but not by the native
-// verifier (`verifier_model: unmodeled`), so the native gate still reports them
-// as `unmodeled-builtin`, never as the generic `unsupported-opcode` a `known`
-// entry would give.
+// `string_trim` and `string_to_upper` are modelled by the ESBMC C model
+// (`c_model` in docs/spec/operations.json) but not by the native verifier
+// (`verifier_model: unmodeled`, and no entry in the `String` table of `vc_ops`),
+// so the native gate still reports them as `unmodeled-builtin`, never as the
+// generic `unsupported-opcode` a `known` entry would give.
 fn trimmed(s: String) -> i64 vow {
   ensures: result == 1
 } {
@@ -14,21 +14,14 @@ fn trimmed(s: String) -> i64 vow {
   1
 }
 
-fn formatted(x: i64) -> i64 vow {
+fn upper(s: String) -> i64 vow {
   ensures: result == 1
 } {
-  let t: String = int_to_string(x);
-  1
-}
-
-fn parsed(s: String) -> i64 vow {
-  ensures: result == 1
-} {
-  let p: Option<i64> = parse_i64(s);
+  let t: String = string_to_upper(s);
   1
 }
 
 fn main() -> i32 [io] {
-  print_i64(trimmed(String::from(" a ")) + formatted(3) + parsed(String::from("7")));
+  print_i64(trimmed(String::from(" a ")) + upper(String::from("a")));
   0
 }

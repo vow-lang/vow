@@ -1,0 +1,30 @@
+module StringFillLoop
+
+fn eight_bytes() -> String vow {
+  ensures: result.len() == 8
+} {
+  let s: String = String::new();
+  let mut i: u64 = 0;
+  while i < 8 {
+    s.push_byte(97);
+    i = i + 1;
+  }
+  s
+}
+
+fn literal_in_loop() -> u64 vow {
+  ensures: result == 6
+} {
+  let s: String = String::new();
+  let mut i: u64 = 0;
+  while i < 3 {
+    s.push_str("ab");
+    i = i + 1;
+  }
+  s.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(eight_bytes().len());
+  0
+}

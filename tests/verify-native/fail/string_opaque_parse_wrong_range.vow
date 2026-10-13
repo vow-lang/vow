@@ -1,0 +1,20 @@
+// TEST: replay-skipped String parameters are not rebuilt by the replay harness
+// TEST: counterexample-fn "parsed_u8_small"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// A parse is opaque: its payload is any `u8`, unrelated to the text.
+module StringOpaqueParseWrongRange
+
+fn parsed_u8_small(text: String) -> i64 vow {
+  ensures: result <= 100
+} {
+  match parse_u8(text) {
+    Option::Some(value) => value as i64,
+    Option::None => 0,
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(parsed_u8_small(String::from("7")));
+  0
+}

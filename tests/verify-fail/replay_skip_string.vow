@@ -3,6 +3,7 @@
 // TEST: counterexample-blame Callee
 // TEST: counterexample-vow-id 0
 // TEST: replay skipped
+// TEST: replay-skipped String parameter, not rebuilt by the replay harness
 //
 // Counterexample-replay skip fixture (#335). `want_big` takes a `String`, which
 // is outside the v1 reconstruction scope (scalars + bounded Vec), so harness

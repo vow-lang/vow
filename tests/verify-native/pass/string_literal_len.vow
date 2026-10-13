@@ -1,0 +1,27 @@
+module StringLiteralLen
+
+fn hello_len() -> u64 vow {
+  ensures: result == 5
+} {
+  let s: String = String::from("hello");
+  s.len()
+}
+
+fn empty_len() -> u64 vow {
+  ensures: result == 0
+} {
+  let s: String = String::new();
+  s.len()
+}
+
+fn clone_len(a: String) -> u64 vow {
+  ensures: result == a.len()
+} {
+  let c: String = String::from(a);
+  c.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(hello_len() + empty_len());
+  0
+}

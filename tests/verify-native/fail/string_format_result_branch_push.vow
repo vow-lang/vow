@@ -1,0 +1,22 @@
+// TEST: counterexample-fn "grow"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// An opaque format result is an object whose only state is its unconstrained
+// base. The base must reach the join: a push on one arm may not be assumed on both.
+module StringFormatResultBranchPush
+
+fn grow(n: i64, c: i64) -> bool vow {
+  ensures: result
+} {
+  let s: String = int_to_string(n);
+  let before: u64 = s.len();
+  if c > 0 {
+    s.push_byte(65);
+  }
+  s.len() == before + 1
+}
+
+fn main() -> i32 [io] {
+  print_i64(1);
+  0
+}

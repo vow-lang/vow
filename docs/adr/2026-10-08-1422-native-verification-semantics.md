@@ -570,3 +570,112 @@ model-parsing modules around it.
   nonlinear float property can end `unknown` or `timeout`, never `proven`. The
   float fixtures are part of the performance corpus (`scripts/verify_perf.py`
   collects every `tests/verify-native` directory).
+
+## Addendum (#1426): `String` as an array plus a symbolic length, exact `string_eq`
+
+Rule 3 is implemented for `String` in `compiler/vc_str.vow` and the executor, on
+the machinery of the #1423 addendum: a runtime String has the `VowVec` layout of
+a `Vec<u8>`, so a String is a `vc_agg` object with the same flow-sensitive
+`(arr, len)` state (`vc_vec`), the same length invariant (`len < 2^63 - 1`, one
+fact about the runtime, no `string_max`), and every Vec consumer (gate shape
+rule, `QF_ABV` switch, induction cut, unroller, frame channel) covers strings
+through the one `vc_vec_op_kind` table. The symbols are listed by hand there,
+like the Vec ones; the catalogue entries for the modelled parse, format and
+`substr` builtins are marked `verifier_model: known`.
+
+- **Bytes.** A byte lives zero-extended in a 64-bit slot and is masked with
+  `0xFF` on every read (`byte_at`, `eq`, `matches_literal_at`, the range
+  relation), so a parameter's unconstrained array can never yield a "byte" above
+  255. No new array sort.
+- **Literals.** The executor has no module string pool. `vc_str_fill_literals`
+  (run on the inlined function in `vc_verify_function_mode`, on a copy) puts the
+  pool bytes in the `ds` field of each `ConstStr` and sets `dv2` to 1; a
+  `ConstStr` without that mark is an unknown string, never an empty one. The gate
+  accepts a `ConstStr` only as operand 0 of `__vow_string_literal` or operand 2 of
+  `matches_literal_at` (anything else is `unsupported-opcode`), and
+  `vc_frame_of` reads a frame marker from `ds` only for the opcodes that carry one,
+  so a literal spelling `__vc_frame:3` is not a frame.
+- **`string_eq` is exact.** `eq(a, b)` is `len a == len b` and equal bytes below
+  the length. Equal states (same array and length terms: `s.eq(s)`, a clone) are
+  `true`; operands of constant length up to 32 (literals and what they were
+  copied into) expand into byte comparisons; every other pair is one bounded
+  quantified relation `VC_OP_RANGE_EQ(x, y, n)` (`forall i!. i! <u n => x[i!] & 0xFF
+  == y[i!] & 0xFF`). `push_str` of a symbolic source and `substring`/`substr` of
+  a symbolic range define their result with the same relation on a fresh array;
+  a short constant-length source or range is stored byte by byte.
+  The relation is a three-operand opaque application of the term arena, whose
+  operands are arrays or `VC_OP_VIEW(array, offset)` windows, so the arena keeps
+  its four-field node and every term walker (hashing, slicing, the simplifier)
+  treats it as an ordinary application; a unit test pins that two relations
+  differing only in an offset are distinct and that no builder rewrites through
+  one. The bound variable is named `i!`, a name no declared symbol can have. A
+  query that holds a relation uses the SMT logic `ALL`; every other query keeps
+  `QF_BV`/`QF_ABV` byte for byte. Spike (Bitwuzla 0.9.1, the pinned solver): the
+  relation as an assumption, as a branch condition, in `eq => byte equal at a
+  symbolic index`, and for `push_str` all answer correctly in milliseconds, a
+  `produce-models` run returns the scalar model, and a quantified query is accepted
+  inside a pushed scope of an incremental session. The Z3 cross-check
+  (`scripts/z3_crosscheck.py`) counts a Z3 `unknown` on such a query as
+  inconclusive, never as a disagreement.
+- **Operations.** `String::from` (`clone`) and `pin_to_root` copy the state;
+  `String::new` is length 0 (`String::new` with data is `unsupported-opcode`);
+  `len`; `push_byte` (low eight bits); `clear`; `push_str`; `eq`;
+  `byte_at`; `substring` and `substr` with the runtime's unsigned clamping;
+  `matches_literal_at` against a literal (`n <= len` and `pos <= len - n`, so the
+  end cannot wrap, then the bytes).
+  `push_byte`/`push_str` assume the new length stays below the invariant, as Vec
+  `push` does. `byte_at` at or past the length is a hard claim `idx <u len`
+  (`index out of bounds`, vow id `4294967293`, blame `None`, like a Vec index and
+  stricter than the runtime, whose `-1` result is not a value a contract can use,
+  as `grammar.md` says).
+- **Opaque helpers, documented limits.** `parse_i8` .. `parse_u32`, `parse_i64`,
+  `parse_u64` return an `Option` whose tag and payload are unconstrained (the
+  payload at the type's width); `int_to_string`/`uint_to_string` return a String of
+  unconstrained content and length (below the invariant). Each call is
+  independent: `parse(s) == parse(s)` is not provable, `parse(format(n)) ==
+  Some(n)` is not provable, and no property relates the result to the operand's
+  bytes. `tests/verify-native/fail/string_format_len_unconstrained.vow` and
+  `string_opaque_parse_wrong_range.vow` pin the refutations.
+- **Skipped, with a reason in the table.** `vc_str_unmodeled_reason` gives every
+  other `__vow_string_*` symbol of the runtime a reason (`split`, `join`, case
+  and `trim` and `replace` transforms, `contains`, `starts_with`, `ends_with`,
+  `from_raw_parts_copy`, `from_cstr`, the 128-bit parse and format, printing, the
+  `_in_arena` and `_in_candidate_arena` variants); the skip detail appends it
+  (`unmodeled-builtin: __vow_string_trim (content transform)`), the code is
+  unchanged. A unit test lists the runtime's string symbols and fails when one is
+  neither modelled nor given a reason. A String stored in a struct field or
+  `Option`, passed to another function or merged by a Phi that supplies different
+  strings stays `unsupported-opcode`, as for a Vec.
+- **Induction.** A loop whose body writes a string (`push_byte`, `push_str`,
+  `clear`) is not cut for invariant induction, for the reason given for Vec; the
+  predicate is one function (`vc_vec_kind_writes`) that every writer must be in
+  the same commit as its executor transfer.
+- **Allocation without a creation state.** A format result and an unreadable
+  literal are objects whose only state is their unconstrained base; the base is
+  written as the state of the creating block (`vc_vec_slot_fresh`), because a
+  join skips an allocation's edge that carries no state
+  (`tests/verify-native/fail/string_format_result_branch_push.vow`).
+- **Counterexamples.** A String parameter's length and contents are not listed
+  (ESBMC does not either); replay of such a counterexample is `skipped`.
+
+*Verdict impact on the corpus* (`scripts/verify_diff.py`, native vs ESBMC; 158
+fixtures; before: 93 match, 63 weaker; after: 107 match, 48 weaker, 1
+soundness). The 14 rows that moved to `match`, all previously file-level
+`Skipped`: `verify/string_clear_resets_len`, `string_eq_idempotent`,
+`string_literal_byte_at`, `string_matches_literal_at`, `string_offsets_u64`,
+`string_push_str_literal`, `string_substring_length`, `parse_narrow_int_bounds`,
+`parse_u8_clamped` and `verify-fail/replay_skip_string`, `string_byte_at_unguarded_u64`,
+`string_empty`, `string_substring_bytes_observed`, `string_substring_length_wrong`.
+The rows that did not move:
+
+| fixture | ESBMC | native | class | why |
+| --- | --- | --- | --- | --- |
+| `verify-fail/string_push_str_overflow` | refuted | proven | `soundness` | ESBMC fails it only through `STRING_MODEL_CAP` (256): `over(a, b)` appends two parameters of any length, and its `ensures` is the true length equation. The native result holds for every length; the corpus labels the fixture failing because of the cap. As for the Vec capacity fixtures (#1423), the label and the contract are not edited to hide the divergence. |
+| `verify/string_param_verify` | proven | skipped | `weaker` | one of its three functions reads a `HashMap`'s length; the `String` and `Vec` functions verify natively |
+| `verify-fail/raw_parts_copy_string_*` (3) | refuted | skipped | `weaker` | `from_raw_parts_copy` is `unmodeled-builtin` with a reason: modelling it would make the two cap fixtures (`*_beyond_model_cap`, `*_beyond_u64_i64_max`) class `soundness` the same way, and whether a capacity trap on a raw copy is an obligation or an assumption (the Vec `push` precedent) is a decision for its own change |
+
+Follow-ups, not done here: `contains`, `starts_with`, `ends_with` (cheap on the
+same range relation), `from_raw_parts_copy` and the capacity-trap decision, a
+String across a call boundary, a String in a struct field or merged by a Phi,
+the `_in_arena` variants, and a quantifier-free encoding of `eq` should a solver
+ever time out on the relation.

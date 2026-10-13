@@ -1,0 +1,16 @@
+// TEST: counterexample-fn "hello_len"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+module StringLiteralLenWrong
+
+fn hello_len() -> u64 vow {
+  ensures: result == 6
+} {
+  let s: String = String::from("hello");
+  s.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(hello_len());
+  0
+}

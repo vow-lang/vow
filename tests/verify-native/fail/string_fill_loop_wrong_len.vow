@@ -1,0 +1,21 @@
+// TEST: counterexample-fn "eight_bytes"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+module StringFillLoopWrongLen
+
+fn eight_bytes() -> String vow {
+  ensures: result.len() == 9
+} {
+  let s: String = String::new();
+  let mut i: u64 = 0;
+  while i < 8 {
+    s.push_byte(97);
+    i = i + 1;
+  }
+  s
+}
+
+fn main() -> i32 [io] {
+  print_u64(eight_bytes().len());
+  0
+}

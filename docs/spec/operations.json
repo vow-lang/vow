@@ -553,7 +553,7 @@
       "doc_signature": "fn(s: String) -> Option<i64>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base_and_arena"
     },
     {
@@ -564,7 +564,7 @@
       "doc_signature": "fn(s: String) -> Option<i8>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base"
     },
     {
@@ -575,7 +575,7 @@
       "doc_signature": "fn(s: String) -> Option<i16>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base"
     },
     {
@@ -586,7 +586,7 @@
       "doc_signature": "fn(s: String) -> Option<i32>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base"
     },
     {
@@ -608,7 +608,7 @@
       "doc_signature": "fn(s: String) -> Option<u8>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base"
     },
     {
@@ -619,7 +619,7 @@
       "doc_signature": "fn(s: String) -> Option<u16>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base"
     },
     {
@@ -630,7 +630,7 @@
       "doc_signature": "fn(s: String) -> Option<u32>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base"
     },
     {
@@ -673,7 +673,7 @@
       "doc_signature": "fn(v: i64) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base_and_arena"
     },
     {
@@ -684,7 +684,7 @@
       "doc_signature": "fn(v: u64) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base_and_arena"
     },
     {
@@ -717,7 +717,7 @@
       "doc_signature": "fn(s: String, start: u64, len: u64) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base_and_arena"
     },
     {

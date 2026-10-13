@@ -2,13 +2,13 @@
 // TEST: skip-reason unmodeled-builtin
 module UnmodeledBuiltinSkipped
 
-fn size(s: String) -> u64 vow {
+fn shout(s: String) -> u64 vow {
   ensures: result == result
 } {
-  s.len()
+  string_to_upper(s).len()
 }
 
 fn main() -> i32 [io] {
-  print_u64(size(String::from("a")));
+  print_u64(shout(String::from("a")));
   0
 }

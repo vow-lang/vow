@@ -1,0 +1,26 @@
+module StringMatchesLiteralAt
+
+fn match_fits(s: String, pos: u64) -> i64 vow {
+  ensures: result == 0 || s.len() >= 3
+} {
+  string_matches_literal_at(s, pos, "abc")
+}
+
+fn match_means_bytes(s: String) -> i64 vow {
+  requires: s.len() >= 3
+  ensures: result == 0 || s.byte_at(0) == 97
+} {
+  string_matches_literal_at(s, 0, "abc")
+}
+
+fn literal_matches() -> i64 vow {
+  ensures: result == 1
+} {
+  let s: String = String::from("xabcx");
+  string_matches_literal_at(s, 1, "abc")
+}
+
+fn main() -> i32 [io] {
+  print_i64(literal_matches());
+  0
+}

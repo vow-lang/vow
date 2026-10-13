@@ -1,0 +1,18 @@
+// TEST: replay-skipped the parameter is a String, which the replay harness does not rebuild
+// TEST: counterexample-fn "digits"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// A format is opaque: nothing relates the length of `int_to_string(n)` to anything
+// else, so the property below is refuted rather than proven.
+module StringFormatLenUnconstrained
+
+fn digits(s: String, n: i64) -> u64 vow {
+  ensures: result == s.len()
+} {
+  int_to_string(n).len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(digits(String::from("7"), 7));
+  0
+}

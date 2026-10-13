@@ -469,14 +469,14 @@ fn vc_walk_str(w: VcWalk, bi: u64, inst: IrInst, pc: i64, kind: i64) -> bool {
         } else if w.cstr_ok[src] == 1 {
             vc_str_literal(vv, ar, hdr, obj, b, w.cstr[src]);
         } else {
-            vc_vec_slot(vv, w.ag, ar, hdr, cs.assumed, obj);
+            vc_vec_slot_fresh(vv, w.ag, ar, hdr, cs.assumed, obj, b);
         }
         return true;
     }
     if kind == VC_STR_FORMAT() {
         let obj: i64 = vc_agg_alloc(w.ag, w.fl.block_pc[bi]);
         w.obj_of[inst.id as u64] = obj;
-        vc_vec_slot(vv, w.ag, ar, hdr, cs.assumed, obj);
+        vc_vec_slot_fresh(vv, w.ag, ar, hdr, cs.assumed, obj, b);
         return true;
     }
     if kind == VC_STR_PARSE() {

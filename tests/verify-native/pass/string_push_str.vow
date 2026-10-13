@@ -1,0 +1,48 @@
+module StringPushStr
+
+fn append(a: String, b: String) -> String vow {
+  ensures: result.len() == a.len() + b.len()
+} {
+  let r: String = String::from(a);
+  r.push_str(b);
+  r
+}
+
+fn source_starts_after_dest(a: String, b: String) -> i64 vow {
+  requires: b.len() > 0
+  ensures: result == b.byte_at(0)
+} {
+  let r: String = String::from(a);
+  r.push_str(b);
+  r.byte_at(a.len())
+}
+
+fn dest_prefix_kept(a: String, b: String, i: u64) -> i64 vow {
+  requires: i < a.len()
+  ensures: result == a.byte_at(i)
+} {
+  let r: String = String::from(a);
+  r.push_str(b);
+  r.byte_at(i)
+}
+
+fn literal_suffix(a: String) -> i64 vow {
+  ensures: result == 121
+} {
+  let r: String = String::from(a);
+  r.push_str("xy");
+  r.byte_at(a.len() + 1)
+}
+
+fn doubled(a: String) -> u64 vow {
+  ensures: result == a.len() + a.len()
+} {
+  let r: String = String::from(a);
+  r.push_str(a);
+  r.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(append(String::from("a"), String::from("b")).len());
+  0
+}

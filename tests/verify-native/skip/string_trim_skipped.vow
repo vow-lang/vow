@@ -1,0 +1,16 @@
+// TEST: category unverifiable
+// TEST: skip-reason unmodeled-builtin
+// `trim` is a content transform the verifier does not model; the skip detail names
+// the runtime symbol and the reason from the table in `compiler/vc_ops.vow`.
+module StringTrimSkipped
+
+fn trimmed_is_not_longer(s: String) -> bool vow {
+  ensures: result
+} {
+  string_trim(s).len() <= s.len()
+}
+
+fn main() -> i32 [io] {
+  print_i64(1);
+  0
+}

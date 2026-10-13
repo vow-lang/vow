@@ -1,0 +1,16 @@
+// TEST: counterexample-fn "literal_matches"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+module StringMatchesLiteralAtWrong
+
+fn literal_matches() -> i64 vow {
+  ensures: result == 1
+} {
+  let s: String = String::from("xabcx");
+  string_matches_literal_at(s, 2, "abc")
+}
+
+fn main() -> i32 [io] {
+  print_i64(literal_matches());
+  0
+}

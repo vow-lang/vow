@@ -1,0 +1,32 @@
+module StringSubstringLen
+
+fn shorter(s: String, a: u64, b: u64) -> u64 vow {
+  ensures: result <= s.len()
+} {
+  s.substring(a, b).len()
+}
+
+fn exact(s: String) -> u64 vow {
+  requires: s.len() >= 5
+  ensures: result == 3
+} {
+  s.substring(1, 4).len()
+}
+
+fn first_byte(s: String) -> i64 vow {
+  requires: s.len() >= 2
+  ensures: result == s.byte_at(1)
+} {
+  s.substring(1, 2).byte_at(0)
+}
+
+fn clamped_len(s: String, start: u64, n: u64) -> u64 vow {
+  ensures: result <= n
+} {
+  string_substr(s, start, n).len()
+}
+
+fn main() -> i32 [io] {
+  print_i64(1);
+  0
+}

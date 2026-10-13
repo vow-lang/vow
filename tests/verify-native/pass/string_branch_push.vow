@@ -1,0 +1,26 @@
+module StringBranchPush
+
+fn maybe_push(s: String, c: i64) -> u64 vow {
+  ensures: result == s.len() + 1 || result == s.len()
+} {
+  let r: String = String::from(s);
+  if c > 0 {
+    r.push_byte(65);
+  }
+  r.len()
+}
+
+fn pushed_iff(s: String, c: i64) -> bool vow {
+  ensures: result == (c > 0)
+} {
+  let r: String = String::from(s);
+  if c > 0 {
+    r.push_byte(65);
+  }
+  r.len() != s.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(maybe_push(String::from("a"), 1));
+  0
+}

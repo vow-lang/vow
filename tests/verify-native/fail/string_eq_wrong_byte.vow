@@ -1,0 +1,16 @@
+// TEST: replay-skipped String parameters are not rebuilt by the replay harness
+// TEST: counterexample-fn "eq_but_differs"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+module StringEqWrongByte
+
+fn eq_but_differs(a: String, b: String) -> bool vow {
+  ensures: !(result && a.len() > 0) || a.byte_at(0) != b.byte_at(0)
+} {
+  a.eq(b)
+}
+
+fn main() -> i32 [io] {
+  print_i64(1);
+  0
+}

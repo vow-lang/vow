@@ -1,0 +1,18 @@
+// TEST: replay-skipped String parameters are not rebuilt by the replay harness
+// TEST: counterexample-fn "same_len_is_eq"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// Equal lengths do not make two strings equal: an abstraction of `eq` that only
+// compared lengths would prove this.
+module StringEqLenOnly
+
+fn same_len_is_eq(a: String, b: String) -> bool vow {
+  ensures: result == (a.len() == b.len())
+} {
+  a.eq(b)
+}
+
+fn main() -> i32 [io] {
+  print_i64(1);
+  0
+}

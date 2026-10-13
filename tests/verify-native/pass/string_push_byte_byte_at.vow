@@ -1,0 +1,38 @@
+module StringPushByteByteAt
+
+fn one_byte() -> i64 vow {
+  ensures: result == 65
+} {
+  let s: String = String::new();
+  s.push_byte(65);
+  s.byte_at(0)
+}
+
+fn two_bytes() -> u64 vow {
+  ensures: result == 2
+} {
+  let s: String = String::new();
+  s.push_byte(65);
+  s.push_byte(66);
+  s.len()
+}
+
+fn byte_range(s: String, i: u64) -> i64 vow {
+  requires: i < s.len()
+  ensures: result >= 0 && result <= 255
+} {
+  s.byte_at(i)
+}
+
+fn clear_resets(s: String) -> u64 vow {
+  ensures: result == 0
+} {
+  let c: String = String::from(s);
+  c.clear();
+  c.len()
+}
+
+fn main() -> i32 [io] {
+  print_i64(one_byte());
+  0
+}

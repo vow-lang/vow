@@ -1,0 +1,14 @@
+// TEST: category unverifiable
+// TEST: skip-reason unmodeled-builtin
+module StringSplitSkipped
+
+fn parts(s: String) -> u64 vow {
+  ensures: result == result
+} {
+  string_split(s, ",").len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(parts(String::from("a,b")));
+  0
+}

@@ -1,0 +1,17 @@
+// TEST: replay-skipped the abort is a bounds check, which the replay harness does not reproduce
+// TEST: counterexample-fn "at"
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-blame None
+// TEST: counterexample-violation "index out of bounds"
+module StringByteAtUnguarded
+
+fn at(s: String, i: u64) -> i64 vow {
+  ensures: result >= -1
+} {
+  s.byte_at(i)
+}
+
+fn main() -> i32 [io] {
+  print_i64(at(String::from("a"), 0));
+  0
+}

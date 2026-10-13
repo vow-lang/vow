@@ -1,5 +1,5 @@
 // TEST: category unverifiable
-// TEST: skip-reason unmodeled-builtin
+// TEST: skip-reason unsupported-opcode
 module OptionStringPayload
 
 fn name_len(o: Option<String>) -> i64 [panic] vow {

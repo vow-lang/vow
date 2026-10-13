@@ -124,6 +124,16 @@ fn vc_vec_slot(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i
     s
 }
 
+// `vc_vec_slot` for an allocation whose first state is its unconstrained base (a
+// format result, a literal the executor cannot read): the base is also written as
+// the state of the creating block `bi`, because a join skips an allocation's edge
+// that carries no state and would lose the object's length on the other arm.
+fn vc_vec_slot_fresh(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, obj: i64, bi: i64) -> i64 {
+    let s: i64 = vc_vec_slot(vv, ag, ar, hdr, assumed, obj);
+    vc_vec_write(vv, ar, hdr, s, bi, vv.base_arr[s as u64], vv.base_len[s as u64]);
+    s
+}
+
 // A `Vec::new()` result: length 0, contents unconstrained (readable only behind
 // the bounds claim, which fails for any index at length 0).
 fn vc_vec_create(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, bi: i64) {

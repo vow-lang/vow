@@ -1,0 +1,16 @@
+// TEST: replay-skipped String parameters are not rebuilt by the replay harness
+// TEST: counterexample-fn "exact"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+module StringSubstringWrongLen
+
+fn exact(s: String) -> u64 vow {
+  ensures: s.len() < 5 || result == 4
+} {
+  s.substring(1, 4).len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(exact(String::from("hello")));
+  0
+}
