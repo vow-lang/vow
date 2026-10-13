@@ -982,6 +982,12 @@ def _doc_return(op: dict) -> str:
     return DOC_SIGNATURE_RE.match(op["doc_signature"]).group("ret").strip()
 
 
+def _doc_params(op: dict) -> list[str]:
+    """The parameter types as the docs spell them (`String`, `Vec<String>`)."""
+    params = DOC_SIGNATURE_RE.match(op["doc_signature"]).group("params")
+    return [p.partition(": ")[2].strip() for p in _split_top_level_commas(params) if p]
+
+
 def _quoted_list(items: list[str]) -> str:
     return ", ".join(f'"{item}"' for item in items)
 
@@ -993,6 +999,7 @@ def gen_rust_facts_block(ops: list[dict], excluded: list[dict]) -> str:
     rows = [
         f'    CatalogueFact {{ name: "{op["name"]}", effects: "{op["effects"]}", '
         f'params: &[{_quoted_list(op["params"])}], ret: "{op["return"]}", '
+        f"doc_params: &[{_quoted_list(_doc_params(op))}], "
         f'doc_ret: "{_doc_return(op)}" }},'
         for op in ops
     ]
@@ -1027,13 +1034,16 @@ def gen_rust_facts_block(ops: list[dict], excluded: list[dict]) -> str:
 
 def gen_vow_facts_block(ops: list[dict], excluded: list[dict]) -> str:
     """`op_facts_all` and `op_facts_excluded` for compiler/tests/catalogue_facts.vow.
-    Parameter tokens and exclusion lists are comma-joined strings, since Vow has
-    no slice literals; the readers split them back."""
+    Parameter tokens and exclusion lists are comma-joined strings (doc parameter
+    types `|`-joined), since Vow has no slice literals; the readers split them
+    back."""
     facts = "\n".join(
         f'    v.push(op_fact(String::from("{op["name"]}"), '
         f'String::from("{op["effects"]}"), '
         f'String::from("{",".join(op["params"])}"), '
-        f'String::from("{op["return"]}"), String::from("{_doc_return(op)}")));'
+        f'String::from("{op["return"]}"), '
+        f'String::from("{"|".join(_doc_params(op))}"), '
+        f'String::from("{_doc_return(op)}")));'
         for op in ops
     )
     exclusions = []

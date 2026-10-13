@@ -2772,7 +2772,7 @@ class OperationFactTablesTest(unittest.TestCase):
         block = go.gen_rust_facts_block(PRINT_OPS, EXCLUDED)
         self.assertIn(
             'CatalogueFact { name: "print_str", effects: "[io]", params: &["ptr"], '
-            'ret: "unit", doc_ret: "()" },',
+            'ret: "unit", doc_params: &["String"], doc_ret: "()" },',
             block,
         )
         self.assertIn('ExcludedFact::Names(&["debug_str"]),', block)
@@ -2794,7 +2794,8 @@ class OperationFactTablesTest(unittest.TestCase):
         block = go.gen_vow_facts_block(PRINT_OPS, EXCLUDED)
         self.assertIn(
             'v.push(op_fact(String::from("print_str"), String::from("[io]"), '
-            'String::from("ptr"), String::from("unit"), String::from("()")));',
+            'String::from("ptr"), String::from("unit"), String::from("String"), '
+            'String::from("()")));',
             block,
         )
         self.assertIn(
@@ -2822,6 +2823,23 @@ class OperationFactTablesTest(unittest.TestCase):
         rust = go.gen_rust_facts_block([two, none], [])
         self.assertIn('params: &["ptr", "i64"]', rust)
         self.assertIn("params: &[]", rust)
+
+    def test_doc_params_are_the_signature_parameter_types(self):
+        join = dict(
+            PRINT_OPS[0],
+            name="join",
+            params=["ptr", "ptr"],
+            doc_signature="fn(parts: Vec<String>, sep: String) -> String",
+        )
+        self.assertEqual(go._doc_params(join), ["Vec<String>", "String"])
+        self.assertEqual(go._doc_params(dict(join, doc_signature="fn() -> i64")), [])
+        self.assertIn(
+            'doc_params: &["Vec<String>", "String"]',
+            go.gen_rust_facts_block([join], []),
+        )
+        self.assertIn(
+            'String::from("Vec<String>|String")', go.gen_vow_facts_block([join], [])
+        )
 
     def test_doc_return_is_the_signature_return_type(self):
         listing = dict(

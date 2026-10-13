@@ -58,6 +58,20 @@ fn param_tokens(e: CheckEnv, fidx: i64) -> String {
     out
 }
 
+fn param_doc_types(e: CheckEnv, fidx: i64) -> String {
+    let ts: TyStore = e.ts;
+    let lid: i64 = e.fn_param_lids[fidx as u64];
+    let n: i64 = e.fn_param_count[fidx as u64];
+    let out: String = String::from("");
+    let mut i: i64 = 0;
+    while i < n {
+        if i > 0 { out.push_str(String::from("|")); }
+        out.push_str(ty_full_display_name(ts, ts_arg_get(ts, lid, i)));
+        i = i + 1;
+    }
+    out
+}
+
 fn fact_arity(f: OpFact) -> i64 {
     let params: String = f.params;
     if params.len() == 0u64 { return 0; }
@@ -90,6 +104,10 @@ fn fact_problems(e: CheckEnv, f: OpFact, out: Vec<String>) {
             let want_params: String = f.params;
             if param_tokens(e, fidx) != want_params {
                 problem(out, name, String::from("parameter tokens differ from the catalogue"));
+            }
+            let want_doc_params: String = f.doc_params;
+            if param_doc_types(e, fidx) != want_doc_params {
+                problem(out, name, String::from("parameter type spelling differs from the catalogue"));
             }
         }
         let ret_tid: i64 = e.fn_ret_tids[fidx as u64];
@@ -249,6 +267,17 @@ fn check_a_drifted_signature_names_the_op() -> i32 {
     e.fn_ret_tids[idx as u64] = CTY_U64();
     let problems: Vec<String> = all_problems(e, op_facts_all(), op_facts_excluded());
     if !problems_mention(problems, String::from("'fs_status': return token")) { return 41; }
+    let e3: CheckEnv = fresh_env();
+    let idx3: i64 = env_lookup_fn(e3, String::from("string_join"));
+    if idx3 < 0 { return 43; }
+    let ts3: TyStore = e3.ts;
+    let str_tid: i64 = ts_arg_get(ts3, e3.fn_param_lids[idx3 as u64], 1);
+    let both_str: Vec<i64> = Vec::new();
+    both_str.push(str_tid);
+    both_str.push(str_tid);
+    e3.fn_param_lids[idx3 as u64] = ts_add_args(ts3, both_str);
+    let problems3: Vec<String> = all_problems(e3, op_facts_all(), op_facts_excluded());
+    if !problems_mention(problems3, String::from("'string_join': parameter type spelling")) { return 44; }
     let e2: CheckEnv = fresh_env();
     let idx2: i64 = env_lookup_fn(e2, String::from("fs_status"));
     e2.fn_param_count[idx2 as u64] = 2;
@@ -268,7 +297,7 @@ fn check_a_dropped_row_names_the_op() -> i32 {
 fn check_an_unregistered_catalogue_row_names_the_op() -> i32 {
     let e: CheckEnv = fresh_env();
     let facts: Vec<OpFact> = op_facts_all();
-    facts.push(op_fact(String::from("brand_new_builtin"), String::from("[]"), String::from(""), String::from("i64"), String::from("i64")));
+    facts.push(op_fact(String::from("brand_new_builtin"), String::from("[]"), String::from(""), String::from("i64"), String::from(""), String::from("i64")));
     let problems: Vec<String> = all_problems(e, facts, op_facts_excluded());
     if problems.len() != 1u64 { return 60; }
     if !problems_mention(problems, String::from("'brand_new_builtin': catalogued op is not registered")) { return 61; }
