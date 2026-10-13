@@ -304,7 +304,7 @@ fn vc_vec_shape_detail(f: IrFunction, n_ids: u64) -> String {
                 }
                 // The operands of a creating call are integers (`new`) or the
                 // static bytes of a literal, which is not an object.
-                if k != VC_VEC_NEW() && k != VC_STR_NEW() && k != VC_STR_LITERAL() && inst.args.len() > 0 {
+                if k != VC_VEC_NEW() && !vc_str_kind_no_object_operand(k) && inst.args.len() > 0 {
                     is_vec[inst.args[0] as u64] = 1;
                     if vc_str_kind_two_strings(k) && inst.args.len() > 1 { is_vec[inst.args[1] as u64] = 1; }
                 }

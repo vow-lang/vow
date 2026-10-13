@@ -428,7 +428,7 @@ fn vc_walk_str(w: VcWalk, bi: u64, inst: IrInst, pc: i64, kind: i64, s: i64) {
         vc_guard(cs, VC_CLAIM_VEC_BOUNDS(), VC_LABEL_STRING_BOUNDS(), pc, vc_vec_in_bounds(ar, idx, len), inst);
         vc_define(w, inst, vc_str_byte(ar, arr, idx));
     } else if kind == VC_STR_PUSH_BYTE() {
-        let elem: i64 = vc_vec_elem64(ar, w.tys[inst.args[1] as u64], w.var_of[inst.args[1] as u64]);
+        let elem: i64 = vc_str_pushed_byte(ar, w.tys[inst.args[1] as u64], w.var_of[inst.args[1] as u64]);
         vc_assume(cs, pc, vc_vec_push_guard(ar, len));
         vc_vec_push(vv, ar, hdr, s, b, elem);
     } else if kind == VC_STR_CLEAR() {
@@ -491,6 +491,20 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
         let obj: i64 = vc_agg_alloc(w.ag, w.fl.block_pc[bi]);
         w.obj_of[inst.id as u64] = obj;
         vc_vec_create(vv, w.ag, ar, hdr, obj, b);
+        return true;
+    }
+    if kind == VC_STR_FROM_RAW_PARTS() {
+        let obj: i64 = vc_agg_alloc(w.ag, w.fl.block_pc[bi]);
+        w.obj_of[inst.id as u64] = obj;
+        // The runtime copies nothing for a null source or a zero length; otherwise
+        // the result is `n` bytes of unknown contents, and a length at the
+        // capacity mask traps (`set_vow_vec_capacity`), which never returns.
+        let src: i64 = w.var_of[inst.args[0] as u64];
+        let n: i64 = w.var_of[inst.args[1] as u64];
+        let empty: i64 = vc_tm_or(ar, vc_tm_app2(ar, VC_OP_EQ(), src, vc_str_zero(ar)), vc_tm_app2(ar, VC_OP_EQ(), n, vc_str_zero(ar)));
+        vc_assume(cs, pc, vc_tm_or(ar, empty, vc_tm_app2(ar, VC_OP_BVULT(), n, vc_vec_len_mask(ar))));
+        let nlen: i64 = vc_tm_app3(ar, VC_OP_ITE(), empty, vc_str_zero(ar), n);
+        vc_vec_create_with(vv, ar, hdr, obj, b, vc_str_fresh_array(vv, ar, hdr, String::from("sr")), nlen);
         return true;
     }
     let s: i64 = vc_vec_slot(vv, w.ag, ar, hdr, cs.assumed, w.obj_of[inst.args[0] as u64]);

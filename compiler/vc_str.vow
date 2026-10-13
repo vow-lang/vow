@@ -90,6 +90,13 @@ fn vc_str_zero(ar: VcArena) -> i64 {
     vc_tm_bv(ar, 64, 0, 0)
 }
 
+// The slot a `push_byte` stores: a `u8` zero-extended, or an `i64` literal's low 8
+// bits, which is what the runtime keeps.
+fn vc_str_pushed_byte(ar: VcArena, ty: i64, t: i64) -> i64 {
+    if ty == ITY_I64() { return vc_tm_app2(ar, VC_OP_BVAND(), t, vc_str_byte_mask(ar)); }
+    vc_vec_elem64(ar, ty, t)
+}
+
 // `a == b` as strings: equal lengths and every byte equal.
 fn vc_str_eq(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, aa: i64, la: i64, ab: i64, lb: i64) -> i64 {
     if aa == ab && la == lb { return vc_tm_bool_const(ar, true); }

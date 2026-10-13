@@ -24,6 +24,7 @@ fn VC_STR_SUBSTRING() -> i64 { 16 }
 fn VC_STR_SUBSTR() -> i64 { 17 }
 fn VC_STR_STARTS_WITH() -> i64 { 18 }
 fn VC_STR_ENDS_WITH() -> i64 { 19 }
+fn VC_STR_FROM_RAW_PARTS() -> i64 { 20 }
 
 fn VC_STR_PREFIX() -> String { String::from("__vow_string_") }
 
@@ -45,13 +46,20 @@ fn vc_str_op_kind(sym: String) -> i64 {
     if sym == String::from("__vow_string_substr") { return VC_STR_SUBSTR(); }
     if sym == String::from("__vow_string_starts_with") { return VC_STR_STARTS_WITH(); }
     if sym == String::from("__vow_string_ends_with") { return VC_STR_ENDS_WITH(); }
+    if sym == String::from("__vow_string_from_raw_parts_copy") { return VC_STR_FROM_RAW_PARTS(); }
     VC_STR_NONE()
 }
 
 // A kind that creates a new string object (its result is the object).
 fn vc_str_kind_creates(k: i64) -> bool {
     k == VC_STR_NEW() || k == VC_STR_LITERAL() || k == VC_STR_CLONE()
-        || k == VC_STR_SUBSTRING() || k == VC_STR_SUBSTR()
+        || k == VC_STR_SUBSTRING() || k == VC_STR_SUBSTR() || k == VC_STR_FROM_RAW_PARTS()
+}
+
+// A creating kind none of whose operands is a string object: integers (`new`,
+// `from_raw_parts_copy`) or the static bytes of a literal.
+fn vc_str_kind_no_object_operand(k: i64) -> bool {
+    k == VC_STR_NEW() || k == VC_STR_LITERAL() || k == VC_STR_FROM_RAW_PARTS()
 }
 
 // A kind that changes the string its first operand names.
@@ -85,8 +93,8 @@ fn vc_str_unmodeled_reason(sym: String) -> String {
     if sym == String::from("__vow_string_pin_to_root") {
         return String::from("copies a string between arenas; the model has no arena identity");
     }
-    if sym == String::from("__vow_string_from_raw_parts_copy") || sym == String::from("__vow_string_from_cstr") {
-        return String::from("reads memory behind a raw pointer, which the model does not hold");
+    if sym == String::from("__vow_string_from_cstr") {
+        return String::from("reads memory behind a C string, whose length the model does not hold");
     }
     if sym == String::from("__vow_string_parse_u64_opt") {
         return String::from("parsing is opaque: no model of the digit grammar");
@@ -100,7 +108,7 @@ fn vc_str_unmodeled_reason(sym: String) -> String {
 // A kind of this module (`VC_VEC_LEN`, which `__vow_string_len` shares with the
 // `Vec` length, is not one).
 fn vc_str_kind_is_string_op(k: i64) -> bool {
-    k >= VC_STR_NEW() && k <= VC_STR_ENDS_WITH()
+    k >= VC_STR_NEW() && k <= VC_STR_FROM_RAW_PARTS()
 }
 
 // The `dv2` of a `ConstStr` whose bytes the verifier has read from the module's

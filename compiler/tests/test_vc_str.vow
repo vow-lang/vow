@@ -109,6 +109,7 @@ fn check_op_table() -> i64 {
     if vc_vec_op_kind(String::from("__vow_string_substr")) != VC_STR_SUBSTR() { return 12; }
     if vc_vec_op_kind(String::from("__vow_string_starts_with")) != VC_STR_STARTS_WITH() { return 13; }
     if vc_vec_op_kind(String::from("__vow_string_ends_with")) != VC_STR_ENDS_WITH() { return 14; }
+    if vc_vec_op_kind(String::from("__vow_string_from_raw_parts_copy")) != VC_STR_FROM_RAW_PARTS() { return 19; }
     if vc_vec_op_kind(String::from("__vow_string_contains")) != VC_STR_NONE() { return 15; }
     if vc_vec_op_kind(String::from("__vow_string")) != VC_STR_NONE() { return 16; }
     if vc_vec_op_kind(String::from("__vow_string_")) != VC_STR_NONE() { return 17; }
@@ -116,7 +117,6 @@ fn check_op_table() -> i64 {
     let rest: Vec<String> = Vec::new();
     rest.push(String::from("__vow_string_contains"));
     rest.push(String::from("__vow_string_pin_to_root"));
-    rest.push(String::from("__vow_string_from_raw_parts_copy"));
     rest.push(String::from("__vow_string_from_cstr"));
     rest.push(String::from("__vow_string_parse_u64_opt"));
     rest.push(String::from("__vow_string_new_in_arena"));
@@ -370,6 +370,81 @@ fn check_push_byte_and_clear() -> i64 {
     0
 }
 
+// `String::from_raw_parts_copy(p, n)`: empty for a null source or a zero length, else
+// `n` bytes of unknown contents; a length at the capacity mask traps, so a returning
+// run has `n` below it. No cap on `n`.
+fn check_from_raw_parts() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_I64(), 0));
+    insts.push(mk_inst_arg(1, ITY_U64(), 1));
+    insts.push(call(2, ITY_PTR(), args2(0, 1), String::from("__vow_string_from_raw_parts_copy")));
+    insts.push(call(3, ITY_U64(), args1(2), String::from("__vow_string_len")));
+    insts.push(mk_eq_u64(4, 3, 1));
+    insts.push(mk_ens(5, 4, 0));
+    insts.push(mk_inst_return(6, 3));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    p.push(ITY_U64());
+    let f: IrFunction = one_block(p, ITY_U64(), insts);
+    if vc_skip_reason(f).len() != 0 { return 200; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 201; }
+    if cs.assumed.len() != 1 { return 202; }
+    let fact: String = vc_term_text(cs.arena, cs.assumed[0]);
+    if !contains(fact, String::from("(bvult p1 #x7fffffffffffffff)")) { return 203; }
+    if !contains(fact, String::from("(= p0 #x0000000000000000)")) { return 204; }
+    let q: String = query(cs, 0);
+    if !contains(q, String::from("(ite ")) { return 205; }
+
+    // A constant length beyond any verifier capacity is not a failure of its own.
+    let big: Vec<IrInst> = Vec::new();
+    big.push(mk_inst_arg(0, ITY_I64(), 0));
+    big.push(mk_u64(1, -8446744073709551616));
+    big.push(call(2, ITY_PTR(), args2(0, 1), String::from("__vow_string_from_raw_parts_copy")));
+    big.push(mk_inst_const_i64(3, 1));
+    big.push(mk_inst_const_i64(4, 1));
+    big.push(mk_eq_u64(5, 3, 4));
+    big.push(mk_ens(6, 5, 0));
+    big.push(mk_inst_return(7, 3));
+    let q1: Vec<i64> = Vec::new();
+    q1.push(ITY_I64());
+    let g: IrFunction = one_block(q1, ITY_I64(), big);
+    if vc_skip_reason(g).len() != 0 { return 206; }
+    if vc_claims(g).kinds.len() != 0 { return 207; }
+
+    // The pointer must be a 64-bit integer, the length too.
+    let bad: Vec<IrInst> = Vec::new();
+    bad.push(mk_inst_arg(0, ITY_PTR(), 0));
+    bad.push(mk_inst_arg(1, ITY_U64(), 1));
+    bad.push(call(2, ITY_PTR(), args2(0, 1), String::from("__vow_string_from_raw_parts_copy")));
+    bad.push(mk_inst_return(3, 2));
+    if vc_skip_reason(one_block(ptr_u64_params(), ITY_PTR(), bad)).len() == 0 { return 208; }
+    0
+}
+
+// `push_byte(321)` on an `i64` literal stores the low 8 bits, as the runtime does.
+fn check_push_byte_literal_keeps_low_bits() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_const_i64(0, 0));
+    insts.push(mk_inst_const_i64(1, 0));
+    insts.push(call(2, ITY_PTR(), args2(0, 1), String::from("__vow_string_new")));
+    insts.push(mk_inst_const_i64(3, 321));
+    insts.push(call(4, ITY_UNIT(), args2(2, 3), String::from("__vow_string_push_byte")));
+    insts.push(mk_u64(5, 0));
+    insts.push(call(6, ITY_I64(), args2(2, 5), String::from("__vow_string_byte_at")));
+    insts.push(mk_inst_const_i64(7, 65));
+    insts.push(ir_inst_new(8, IOP_EQ(), ITY_BOOL(), args2(6, 7), IDATA_NONE(), 0, 0, String::from("")));
+    insts.push(mk_ens(9, 8, 0));
+    insts.push(mk_inst_return(10, 6));
+    let f: IrFunction = one_block(Vec::new(), ITY_I64(), insts);
+    if vc_skip_reason(f).len() != 0 { return 210; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 211; }
+    let q: String = query(cs, 0);
+    if !contains(q, String::from("#x0000000000000041")) { return 212; }
+    0
+}
+
 // string_matches_literal_at is a finite conjunction over the literal's bytes
 // behind the no-wrap length test.
 fn check_matches_literal_at() -> i64 {
@@ -545,10 +620,12 @@ fn check_shape_rejections() -> i64 {
 fn check_gate_types() -> i64 {
     let wide: Vec<IrInst> = Vec::new();
     wide.push(mk_inst_arg(0, ITY_PTR(), 0));
-    wide.push(mk_inst_const_i64(1, 7));
+    wide.push(mk_inst_arg(1, ITY_I32(), 1));
     wide.push(call(2, ITY_UNIT(), args2(0, 1), String::from("__vow_string_push_byte")));
     wide.push(mk_inst_return(3, 2));
-    let f1: IrFunction = one_block(ptr_params(1), ITY_UNIT(), wide);
+    let w1: Vec<i64> = ptr_params(1);
+    w1.push(ITY_I32());
+    let f1: IrFunction = one_block(w1, ITY_UNIT(), wide);
     if vc_skip_reason(f1).len() == 0 { return 170; }
 
     let narrow: Vec<IrInst> = Vec::new();
@@ -621,6 +698,8 @@ fn main() -> i32 {
     if r == 0 { r = check_append_defines_contents(); }
     if r == 0 { r = check_identical_appends_share_an_array(); }
     if r == 0 { r = check_push_byte_and_clear(); }
+    if r == 0 { r = check_from_raw_parts(); }
+    if r == 0 { r = check_push_byte_literal_keeps_low_bits(); }
     if r == 0 { r = check_matches_literal_at(); }
     if r == 0 { r = check_substring_length(); }
     if r == 0 { r = check_resolve_literals(); }
