@@ -1,0 +1,31 @@
+// TEST: category invariant
+// Both loops write the Vec, and the outer one runs past the unwinding bound:
+// each header havocs the Vec and carries its own length fact.
+module VecLoopNestedLenInvariant
+
+fn fill() -> Vec<i64> vow {
+  ensures: result.len() == 200
+} {
+  let v: Vec<i64> = Vec::new();
+  let mut i: u64 = 0;
+  while i < 100 vow {
+    invariant: i <= 100,
+    invariant: v.len() == i * 2
+  } {
+    let mut j: u64 = 0;
+    while j < 2 vow {
+      invariant: j <= 2,
+      invariant: v.len() == i * 2 + j
+    } {
+      v.push(0);
+      j = j + 1;
+    }
+    i = i + 1;
+  }
+  v
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill().len());
+  0
+}

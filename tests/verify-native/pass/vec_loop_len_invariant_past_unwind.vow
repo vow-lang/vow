@@ -1,0 +1,23 @@
+// TEST: category invariant
+// A Vec filled by a 100-iteration loop, past the 64-iteration unwinding bound:
+// the loop is cut for induction and `v.len() == i` is the inductive fact.
+module VecLoopLenInvariantPastUnwind
+
+fn fill() -> Vec<i64> vow {
+  ensures: result.len() == 100
+} {
+  let v: Vec<i64> = Vec::new();
+  let mut i: u64 = 0;
+  while i < 100 vow {
+    invariant: i <= 100 && v.len() == i
+  } {
+    v.push(0);
+    i = i + 1;
+  }
+  v
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill().len());
+  0
+}

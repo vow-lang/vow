@@ -68,18 +68,7 @@ BEYOND = "beyond-unwind"
 # (shape, class, regime) -> "#issue". The entry is the tracking record of a
 # disagreement a generated program exposes; it is added with the issue, never
 # without one.
-KNOWN_DISAGREEMENTS = {
-    # A Vec filled by a loop that runs past the unrolling bound is never cut for
-    # induction, so a true length contract stays `unknown` (completeness gap).
-    (shape, CLASS_CONTROL, BEYOND): "#1645"
-    for shape in (
-        "vec_len_literal",
-        "vec_len_cap",
-        "vec_last_element",
-        "vec_pop_all",
-        "vec_nested_fill",
-    )
-}
+KNOWN_DISAGREEMENTS = {}
 
 # (shape, class) -> why the replay harness cannot confirm a counterexample of
 # that shape, with its issue. Rendered as `// TEST: replay-skipped`, which the
@@ -162,7 +151,7 @@ def shape_vec_last_element(rng, honest, bound):
         "  let v: Vec<i64> = Vec::new();\n"
         "  let mut i: u64 = 0;\n"
         f"  while i < {n} vow {{\n"
-        f"    invariant: i <= {n} && v.len() == i\n"
+        f"    invariant: i <= {n} && v.len() == i && (i < {n} || v[{n - 1}] == 7)\n"
         "  } {\n"
         f"    if i + 1 == {n} {{\n"
         "      v.push(7);\n"

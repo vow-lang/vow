@@ -1,0 +1,30 @@
+// TEST: category invariant
+// A Vec drained by a loop: the invariant relates the remaining length to the
+// counter, past the unwinding bound.
+module VecLoopPopInvariant
+
+fn drain() -> u64 vow {
+  ensures: result == 0
+} {
+  let v: Vec<i64> = Vec::new();
+  let mut i: u64 = 0;
+  while i < 100 vow {
+    invariant: i <= 100 && v.len() == i
+  } {
+    v.push(1);
+    i = i + 1;
+  }
+  let mut k: u64 = 100;
+  while k > 0 vow {
+    invariant: k <= 100 && v.len() == k
+  } {
+    v.pop();
+    k = k - 1;
+  }
+  v.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(drain());
+  0
+}

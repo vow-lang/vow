@@ -1,0 +1,24 @@
+// TEST: category invariant
+// The invariant holds on entry but the body pushes twice, so it is not
+// preserved: the induction step fails even though the Vec is havocked.
+module VecLoopLenInvariantNotPreserved
+
+fn fill() -> Vec<i64> vow {
+  ensures: result.len() == 100
+} {
+  let v: Vec<i64> = Vec::new();
+  let mut i: u64 = 0;
+  while i < 100 vow {
+    invariant: i <= 100 && v.len() == i
+  } {
+    v.push(0);
+    v.push(0);
+    i = i + 1;
+  }
+  v
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill().len());
+  0
+}

@@ -28,8 +28,12 @@ use vc_inline
 // with `&&`/`||` lowers to branches, so the region may span several blocks; the
 // copy of the block holding the last `VowInv` stops right after it.
 //
+// A Vec a loop writes gets the same treatment as a header Phi: a marker at the
+// top of the header proper makes its `(array, length)` arbitrary there.
+//
 // A loop the cut cannot treat exactly (a loop without an invariant, a pointer
-// carried by a header Phi, a Vec written in a loop, an irregular header) makes
+// carried by a header Phi, a String written in a loop, a Vec born in the loop
+// that writes it, an irregular header) makes
 // the whole function `NA`: the caller keeps the bounded verdict, as it does for
 // a cut the executor cannot walk. An accepted cut is only a transformation: it
 // never produces a verdict itself.
@@ -227,29 +231,73 @@ fn vc_induct_ptr_phi(f: IrFunction, li: VcLoopInfo) -> bool {
     false
 }
 
-// True when a loop body writes a Vec (`push`, `set`, `pop`) or a String
-// (`push_str`, `push_byte`, `clear`). A Vec's state
-// is the executor's own flow-sensitive `(array, length)` pair, not a header Phi,
-// so the havoc copy of the header would keep the length and contents the loop was
-// entered with and an invariant-based proof would be about the wrong state. Such
-// a function is not cut: bounded unwinding decides it alone.
-fn vc_induct_vec_written_in_loop(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>) -> bool {
+struct VcVecHavocs {
+    ok: bool,
+    recv: Vec<Vec<i64>>,
+}
+
+fn vc_induct_has(v: Vec<i64>, x: i64) -> bool {
+    let mut i: u64 = 0;
+    while i < v.len() {
+        if v[i] == x { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// The Vecs each loop writes. A Vec's state is the executor's own flow-sensitive
+// `(array, length)` pair, not a header Phi, so the cut havocs it at the top of
+// the header proper of every loop whose body (nested loops included) mutates
+// it: `recv[j]` lists the receivers of loop `j`, in instruction order. Not `ok`
+// (the function is not cut) when a mutated receiver is a String or is defined
+// inside a loop that mutates it: the model has no state for an object that is
+// born in the loop it is havoced by.
+fn vc_induct_vec_havocs(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, n_ids: u64) -> VcVecHavocs {
+    let out: VcVecHavocs = VcVecHavocs { ok: false, recv: Vec::new() };
+    let mut j: i64 = 0;
+    while j < li.n_loops {
+        let none: Vec<i64> = Vec::new();
+        out.recv.push(none);
+        j = j + 1;
+    }
+    let defs: VcDefs = vc_def_table(f, rpo, n_ids);
     let mut b: u64 = 0;
     while b < f.blocks.len() {
         if rpo[b] >= 0 && vc_chain_len(li, b) > 0 {
             let blk: IrBlock = f.blocks[b];
             let mut i: u64 = 0;
             while i < blk.insts.len() {
-                let k: i64 = vc_inst_vec_kind(blk.insts[i]);
+                let inst: IrInst = blk.insts[i];
+                let k: i64 = vc_inst_vec_kind(inst);
                 if vc_vec_kind_mutates(k) {
-                    return true;
+                    if vc_str_kind_mutates(k) || inst.args.len() == 0 {
+                        return out;
+                    }
+                    let r: i64 = inst.args[0];
+                    if r < 0 || (r as u64) >= n_ids {
+                        return out;
+                    }
+                    let db: i64 = defs.blk[r as u64];
+                    let mut c: i64 = 0;
+                    while c < vc_chain_len(li, b) {
+                        let lj: i64 = vc_chain_at(li, b, c);
+                        if db >= 0 && vc_in_loop(li, db as u64, lj) {
+                            return out;
+                        }
+                        let list: Vec<i64> = out.recv[lj as u64];
+                        if !vc_induct_has(list, r) {
+                            list.push(r);
+                        }
+                        c = c + 1;
+                    }
                 }
                 i = i + 1;
             }
         }
         b = b + 1;
     }
-    false
+    out.ok = true;
+    out
 }
 
 // True when a loop body writes a field of an object it did not allocate in the
@@ -299,6 +347,7 @@ struct VcCut {
     next_blk: i64,
     bad: bool,
     clones: Vec<IrBlock>,
+    vec_havocs: Vec<Vec<i64>>,
 }
 
 // Number of leading instructions of block `b` that loop `j`'s copy keeps.
@@ -512,12 +561,34 @@ fn vc_induct_rebuild_inst(st: VcCut, b: u64, inst: IrInst) -> IrInst {
 fn vc_induct_rebuild_block(st: VcCut, b: u64) -> IrBlock {
     let src: IrBlock = st.f.blocks[b];
     let out: IrBlock = ir_block_new(src.id);
+    let hl: i64 = st.li.loop_of_header[b];
+    let mut at: u64 = 0;
+    while at < src.insts.len() && src.insts[at].op == IOP_PHI() {
+        at = at + 1;
+    }
     let mut i: u64 = 0;
     while i < src.insts.len() {
+        if i == at && hl >= 0 {
+            vc_induct_push_vec_havocs(st, hl, out);
+        }
         out.insts.push(vc_induct_rebuild_inst(st, b, src.insts[i]));
         i = i + 1;
     }
     out
+}
+
+// One havoc marker per Vec loop `j` writes, after the header's Phis.
+fn vc_induct_push_vec_havocs(st: VcCut, j: i64, out: IrBlock) {
+    let list: Vec<i64> = st.vec_havocs[j as u64];
+    let mut k: u64 = 0;
+    while k < list.len() {
+        let args: Vec<i64> = Vec::new();
+        args.push(list[k]);
+        let id: i64 = st.next_inst;
+        st.next_inst = st.next_inst + 1;
+        out.insts.push(ir_inst_new(id, IOP_CALL(), ITY_UNIT(), args, IDATA_CALL_EXTERN(), 0, 0, VC_INTERNAL_HAVOC_VEC()));
+        k = k + 1;
+    }
 }
 
 // Header Phi id -> its loop, -1 elsewhere.
@@ -554,11 +625,15 @@ fn vc_induct_cut(f: IrFunction) -> VcInduct {
         return vc_induct_status(f, VC_INDUCT_NA());
     }
     let n_ids: u64 = (dom_max_inst_id(f) + 1) as u64;
-    if vc_loop_shape_detail(f, succ, rpo).len() > 0 || vc_induct_ptr_phi(f, li) || vc_induct_vec_written_in_loop(f, li, rpo) || vc_induct_agg_written_in_loop(f, li, rpo, n_ids) {
+    if vc_loop_shape_detail(f, succ, rpo).len() > 0 || vc_induct_ptr_phi(f, li) || vc_induct_agg_written_in_loop(f, li, rpo, n_ids) {
         return vc_induct_status(f, VC_INDUCT_NA());
     }
     let rg: VcRegions = vc_induct_regions(f, li, succ, rpo);
     if !rg.ok {
+        return vc_induct_status(f, VC_INDUCT_NA());
+    }
+    let hv: VcVecHavocs = vc_induct_vec_havocs(f, li, rpo, n_ids);
+    if !hv.ok {
         return vc_induct_status(f, VC_INDUCT_NA());
     }
     let n_loops: u64 = li.n_loops as u64;
@@ -579,6 +654,7 @@ fn vc_induct_cut(f: IrFunction) -> VcInduct {
         next_blk: id_to_idx.len() as i64,
         bad: false,
         clones: Vec::new(),
+        vec_havocs: hv.recv,
     };
     let mut j: i64 = 0;
     while j < li.n_loops {

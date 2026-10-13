@@ -137,6 +137,34 @@ fn check_local_vec_length() -> i64 {
     0
 }
 
+// let v = Vec::new(); <havoc v>; return v[0]
+fn havoc_then_get() -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_const_i64(0, 8));
+    insts.push(mk_inst_const_i64(1, 8));
+    insts.push(mk_inst_call_extern(2, ITY_PTR(), args2(0, 1), String::from("__vow_vec_new")));
+    insts.push(mk_inst_call_extern(3, ITY_UNIT(), args1(2), VC_INTERNAL_HAVOC_VEC()));
+    insts.push(mk_inst_const_i64(4, 0));
+    insts.push(mk_inst_call_extern(5, ITY_I64(), args2(2, 4), String::from("__vow_vec_get_val")));
+    insts.push(mk_inst_return(6, 5));
+    one_block(Vec::new(), ITY_I64(), insts)
+}
+
+// A havoc marker forgets the empty length of a new Vec: the bounds claim of the
+// read at 0 is no longer a constant failure but depends on a fresh length symbol
+// that is only known to sit below the representation mask.
+fn check_havoc_forgets_length() -> i64 {
+    let f: IrFunction = havoc_then_get();
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 || cs.kinds[0] != VC_CLAIM_VEC_BOUNDS() { return 40; }
+    let q: String = render(cs, 0);
+    if !contains(q, String::from("(declare-const vh1_vlen (_ BitVec 64))")) { return 41; }
+    if !contains(q, String::from("(declare-const vh1_varr (Array (_ BitVec 64) (_ BitVec 64)))")) { return 42; }
+    if !contains(q, String::from("(bvult #x0000000000000000 vh1_vlen)")) { return 43; }
+    if !contains(q, String::from("(bvult vh1_vlen #x7fffffffffffffff)")) { return 44; }
+    0
+}
+
 // A function without a Vec keeps the plain bit-vector logic.
 fn check_no_vec_stays_bit_vector() -> i64 {
     let insts: Vec<IrInst> = Vec::new();
@@ -227,6 +255,7 @@ fn main() -> i32 {
     let mut r: i64 = check_param_length_is_unconstrained();
     if r == 0 { r = check_push_assumes_only_the_invariant(); }
     if r == 0 { r = check_local_vec_length(); }
+    if r == 0 { r = check_havoc_forgets_length(); }
     if r == 0 { r = check_no_vec_stays_bit_vector(); }
     if r == 0 { r = check_frame_travels_in_dv2(); }
     if r == 0 { r = check_shape_rejections(); }

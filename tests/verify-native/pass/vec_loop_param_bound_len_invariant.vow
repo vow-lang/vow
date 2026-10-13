@@ -1,0 +1,23 @@
+// TEST: category invariant
+// The trip count is a parameter, so unwinding alone cannot decide it: the
+// length invariant proves the result for every `n`.
+module VecLoopParamBoundLenInvariant
+
+fn fill(n: u64) -> Vec<i64> vow {
+  ensures: result.len() == n
+} {
+  let v: Vec<i64> = Vec::new();
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n && v.len() == i
+  } {
+    v.push(1);
+    i = i + 1;
+  }
+  v
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill(3).len());
+  0
+}

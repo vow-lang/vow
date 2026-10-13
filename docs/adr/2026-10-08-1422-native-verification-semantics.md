@@ -433,12 +433,14 @@ of this change and stay `Skipped`.
   values (two model objects for one runtime Vec would diverge); a Phi that
   always supplies the same value is a no-op. Only the length of a
   `Vec<Vec<_>>`/`Vec<String>` is modelled (its elements are never read).
-- **Induction.** A function whose loop body writes a Vec (`push`, `set`, `pop`)
-  is not cut for invariant-based induction (`vc_induct_vec_written_in_loop`): a
-  Vec's `(array, length)` is the executor's flow-sensitive state, not a header
-  Phi, so the havoc copy of the header would keep the state the loop was entered
-  with and prove facts about the wrong length. Bounded unwinding decides such a
-  function alone; a loop that only reads a Vec is cut as before.
+- **Induction.** A loop body that writes a Vec (`push`, `set`, `pop`) is cut for
+  invariant-based induction (#1645): the cut puts a `__vc_havoc_vec` marker for
+  each Vec the loop writes at the top of the header proper, which gives it an
+  arbitrary array and an arbitrary length below the capacity mask, as a header Phi
+  gets an arbitrary value (see the addendum below). A function is still not cut
+  when a mutated receiver is a String or is defined inside a loop that mutates it; bounded unwinding decides such a function alone, and
+  `vc_step_applicable` (k-induction) still refuses a Vec-written loop. A loop that
+  only reads a Vec is cut with no marker.
 - **Aliasing.** Two `Vec` parameters are distinct objects, as they are for
   ESBMC and for every `vc_agg` parameter object.
 - **Op table.** The Vec symbols are listed by hand in `vc_vec_op_kind`, like
@@ -633,7 +635,7 @@ machinery.
   string literal that is mutated (`clear`, a push: the runtime traps on it) is
   outside the model, and a `String` in a struct field, across a call or merged by a
   Phi is skipped like the `Vec` cases. A loop that writes a String is never cut by
-  induction (`vc_vec_kind_mutates`), as for a Vec.
+  induction (`vc_induct_vec_havocs` refuses it).
 - **Trusted base.** The binder joins the simplifier of ADR-2026-10-10-2041 in the
   trusted base. The guards: `compiler/tests/test_vc_str.vow` pins the rendered text
   of the binder and of each encoding; `tests/verify-native/pass/string_eq_exact.vow`
@@ -655,3 +657,30 @@ machinery.
   `tests/verify/string_*.vow` fixture matches ESBMC; the new `pass/` fixtures
   prove properties over strings of any length that the C model could only state up
   to its capacity.
+
+## Addendum (#1645): cutting a loop-written `Vec`
+
+The cut of ADR addendum #1422 turns each header Phi into an unconstrained constant
+because a Phi is the only loop-carried state in the IR. A `Vec`'s `(array, length)`
+is the executor's own per-block state, so the cut gets the same effect with a marker
+(`__vc_havoc_vec(v)`, `vc_is_havoc_vec`) that `vc_induct_cut` inserts after the
+Phis of each loop header proper, once per Vec the loop (or a loop nested in it)
+writes. The executor (`vc_vec_havoc`) declares a fresh array and a fresh 64-bit
+length, assumes the length is below the capacity mask, and writes both as the
+Vec's state in that block.
+
+Soundness: the header proper is entered only from the entry copy, and the back
+edges end in the back copy, so the state there is "any array and any length
+satisfying the invariant". The entry copy claims the invariant on the state the loop
+is entered with (base case), the back copy claims it on the state the body produced
+from an arbitrary invariant-satisfying state (step), and the exit side and the
+`ensures` claims are checked from that same arbitrary state. Induction only ever
+proves (`VcInduction.proves`): a `sat` answer on the cut is discarded and the
+bounded verdict stands, so a false contract never becomes `Verified`. The array is
+havocked too, so a fact about contents holds only if the invariant states it
+(`tests/verify-native/unknown/vec_loop_contents_not_in_invariant.vow`).
+
+Refused, so the whole function stays with bounded unwinding: a String receiver and
+a receiver defined in a loop that mutates it (an object
+born in the loop it is havocked by has no state the model could name). The k-induction
+step case (`vc_step_applicable`) is unchanged and still refuses a Vec-written loop.

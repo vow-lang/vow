@@ -1,0 +1,25 @@
+// TEST: category invariant
+// The postcondition about the contents is true, but the invariant only says
+// something about the length. The loop's Vec is havocked at the header, so the
+// contents the loop wrote are unknown there and the result is unknown, never
+// proven.
+module VecLoopContentsNotInInvariant
+
+fn fill() -> Vec<i64> vow {
+  ensures: result[0] == 7
+} {
+  let v: Vec<i64> = Vec::new();
+  let mut i: u64 = 0;
+  while i < 100 vow {
+    invariant: i <= 100 && v.len() == i
+  } {
+    v.push(7);
+    i = i + 1;
+  }
+  v
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill().len());
+  0
+}

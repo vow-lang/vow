@@ -407,9 +407,8 @@ model had (`VEC_MODEL_CAP` = 128, also pinned) that a port of that model would b
 to an issue (`validate_known` rejects an entry without one); the generator
 stamps matching programs with `// TEST: known-control-gap #N` or
 `// TEST: known-soundness-gap #N`, which the runner reports and does not fail.
-Today the only entries are the controls that fill a `Vec` in a loop past the
-unrolling bound (#1645): native is `unknown` there, a completeness gap and not
-a false proof. `replay-skipped` for a `Vec` parameter points at #1649 (replay of Vec, aggregate, narrow and
+There are no entries today: the controls that fill a `Vec` in a loop past the
+unrolling bound (#1645) verify through the loop cut. `replay-skipped` for a `Vec` parameter points at #1649 (replay of Vec, aggregate, narrow and
 128-bit parameters; the missing counterexample values are #1613). Only a `known-control-gap` goes stale
 (a control that now verifies fails the run); a `known-soundness-gap` that stops reproducing
 is not detected. The runner does not apply `ulimit -v`: the native verifier worker carries its
