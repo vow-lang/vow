@@ -2349,8 +2349,7 @@ class ArenaRoutingInvariantsTest(unittest.TestCase):
 
     def test_unrouted_heap_returns_are_explicit_nones(self):
         ops = {o["name"]: o for o in go.load_catalogue(REPO_ROOT)}
-        for name in ("stdin_read_line",):
-            self.assertEqual(ops[name]["arena_routing"], "none", name)
+        self.assertEqual(ops["stdin_read_line"]["arena_routing"], "none")
         for name in (
             "fs_read",
             "fs_read_line",
