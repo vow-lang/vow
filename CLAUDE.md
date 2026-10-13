@@ -270,7 +270,9 @@ per-parameter/return types matching `params`/`return` (`String`/`Vec<...>` both 
 `verifier_model` (`known`/`unmodeled`; `main()` rejects an entry without one, and an effectful entry
 marked `known`), the `arena_routing` (`none`/`heap_fresh`; `main()` rejects a heap-returning entry without
 one) and `c_model` (`unmodeled`/`base`/`base_and_arena`; `main()` rejects a pure entry without one)
-fields, when present, must be in their closed sets; an `Option<T>` return type
+fields, when present, must be in their closed sets; a pure `unmodeled` entry must carry a non-empty
+free-text `verifier_skip_reason` (which semantics the native verifier does not model; `main()` rejects
+its absence, and its presence on any other entry); an `Option<T>` return type
 needs a `T` the generator can tag; and any field name not in the recognized set (required or optional)
 is rejected outright, so a misspelled field can never silently defeat its own check. All
 violations across all entries are collected and reported together, not just the first. `main()` never

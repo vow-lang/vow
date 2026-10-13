@@ -531,3 +531,75 @@ no C-emitter or ESBMC change; it exists only in the self-hosted verifier.
   where the step has a model for every `k`. New `pass/` fixtures that only the
   step proves: `loop_kinduction_alternating_divisor`, `_callee_requires`,
   `_invariant_not_one_inductive` and `_break`.
+
+## Addendum (#1426): `String` as an array plus a symbolic length, with exact equality
+
+Rule 3 is implemented for `String` in `compiler/vc_str.vow` (terms),
+`compiler/vc_strops.vow` (the op table) and the executor's `vc_walk_str`. The
+state is the `Vec` slot of #1423 (array, length, the same representation
+invariant `len < 2^63 - 1`, which the runtime's `String` shares because it grows
+through the same `Vec::reserve` trap), so merges, clones and frames need no new
+machinery.
+
+- **Bytes.** Byte `i` is the low 8 bits of the slot. A parameter's array is
+  unconstrained, so its high bits are junk; a read masks them (`byte_at` is in
+  `0..=255`, the postcondition of `string_offsets_u64.vow`) and every equality
+  compares masked bytes, so the junk is never observable. A pushed byte is the
+  zero-extended `u8`.
+- **Operations**, listed by runtime symbol like `Vec`'s: `new` (a null pointer
+  and length 0, checked by the shape rule), `literal`, `clone`, `len`,
+  `push_byte`, `push_str`, `clear`, `byte_at`, `eq`, `substring`, `substr`,
+  `starts_with`, `ends_with` and `matches_literal_at`, with the clamping and the
+  no-wrap rule of `grammar.md`. `byte_at` at or past the length is a hard claim
+  labelled `string bounds`, as in the C model, so refuted rows compare.
+  `substr`, `starts_with` and `ends_with` are `known` in the catalogue.
+- **`string_eq` is exact (Rule 3).** The one binder the term language has is a
+  `VC_T_QEQ` node: `forall i < n. low8(a[i]) == low8(b[i + k])`. It has no
+  operator code, is never simplified, and is rendered over a reserved bound name
+  (the operands are closed terms, so it cannot be captured); the slicer walks
+  its operands like any other. It never appears in a goal. For `eq` the executor
+  introduces a fresh Bool `e` and a fresh index `k` and assumes
+  `e => (|a| = |b| and QEQ)` and `not e => (|a| != |b| or (k < |a| and a[k] != b[k]))`.
+  Together these pin `e` to the equality at both polarities, and the quantifier is
+  only in a positive assumption. When both lengths are constants up to 256 the
+  comparison is a plain conjunction instead (a literal against a literal never
+  reaches a quantifier). The constant is an encoding choice, not a bound: the
+  quantified form is exact for every length. A query with a `VC_T_QEQ` is sent in
+  `ABV`, every other query keeps its logic.
+- **Built strings.** `push_str` and `substring` produce a fresh array with a
+  defining assumption (`r[i] = s[i]` below `|s|`, `r[|s| + j] = t[j]` below
+  `|t|`, and `r[j] = s[start + j]`). The array is fresh, so the assumption is a
+  conservative extension and cannot make a query unsatisfiable. A function that
+  reads no byte of any string (no `byte_at`, `eq`, prefix, suffix or literal
+  match) gets no such assumption: the contents cannot matter, and length
+  contracts such as `ensures: result.len() <= s.len()` stay quantifier-free.
+- **Literals.** The bytes live in `IrModule.strings`, which `IrFunction` does not
+  carry, so `vc_resolve_str_literals` copies them into the `ds` of each `ConstStr`
+  and marks it resolved (`dv2`) when the verifier takes the function through
+  `vc_inline`. An unresolved literal fails the gate (`unsupported-opcode`), so
+  the executor never invents bytes. A literal's static bytes may only feed
+  `__vow_string_literal` and the literal operand of `matches_literal_at`.
+- **Fail closed.** `contains` (an existential over the match position), `trim`,
+  `to_upper`, `to_lower`, `split`, `replace`, `join`, `parse_*`, the formatters,
+  `hash_str`, `from_raw_parts_copy`, `pin_to_root` and the arena variants stay
+  `unmodeled-builtin`. Parse and format helpers are not havoced: a nondeterministic
+  result would make a counterexample that depends on it spurious. Every pure
+  catalogue entry without a model now carries `verifier_skip_reason` in
+  `docs/spec/operations.json` (the generator rejects its absence), and the
+  non-catalogue `String` symbols have theirs in `vc_str_unmodeled_reason`. A
+  string literal that is mutated (`clear`, a push: the runtime traps on it) is
+  outside the model, and a `String` in a struct field, across a call or merged by a
+  Phi is skipped like the `Vec` cases. A loop that writes a String is never cut by
+  induction (`vc_vec_kind_mutates`), as for a Vec.
+- **Trusted base.** The binder joins the simplifier of ADR-2026-10-10-2041 in the
+  trusted base. The guards: `compiler/tests/test_vc_str.vow` pins the rendered text
+  of the binder and of each encoding; `tests/verify-native/pass/string_eq_exact.vow`
+  proves the equality laws (symmetry, transitivity, length, per-byte, both
+  directions) and `fail/string_eq_*` keep the refuting direction, so a binder that
+  were too strong or too weak flips a fixture; the nightly Z3 cross-check
+  (ADR-2026-10-11-0510) decides the same queries with an independent solver.
+- **Verdict impact.** Stronger or equal to the C model, whose `string_eq` is a
+  cached nondeterministic Bool and whose strings are capped at `string_max`. Every
+  `tests/verify/string_*.vow` fixture matches ESBMC; the new `pass/` fixtures
+  prove properties over strings of any length that the C model could only state up
+  to its capacity.
