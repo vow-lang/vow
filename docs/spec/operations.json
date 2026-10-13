@@ -663,8 +663,7 @@
       "return": "u64",
       "doc_signature": "fn(s: String) -> u64",
       "effects": "[]",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "Float text conversion is not modelled; floating point is outside the native verifier.",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -675,8 +674,7 @@
       "doc_signature": "fn(bits: u64) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "Float text conversion is not modelled; floating point is outside the native verifier.",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {

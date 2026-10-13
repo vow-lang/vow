@@ -260,6 +260,12 @@ fn catalogue_verifier_known(sym: String) -> bool {
     if n == 19 {
         return sym == String::from("__vow_string_substr");
     }
+    if n == 20 {
+        return sym == String::from("__vow_parse_f64_bits");
+    }
+    if n == 21 {
+        return sym == String::from("__vow_format_f64_bits");
+    }
     if n == 22 {
         return sym == String::from("__vow_string_ends_with");
     }

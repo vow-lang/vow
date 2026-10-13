@@ -632,6 +632,39 @@ fn check_vec_ops_rejected() -> i64 {
     0
 }
 
+fn parse_hook_fn(arg_ty: i64, call_ty: i64) -> IrFunction {
+    let ps: Vec<i64> = Vec::new();
+    ps.push(arg_ty);
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, arg_ty, 0));
+    insts.push(mk_inst_call_extern(1, call_ty, args1(0), String::from("__vow_parse_f64_bits")));
+    insts.push(mk_inst_return(2, 1));
+    one_block(String::from("p"), ps, call_ty, insts)
+}
+
+fn format_hook_fn(arg_ty: i64, call_ty: i64) -> IrFunction {
+    let ps: Vec<i64> = Vec::new();
+    ps.push(arg_ty);
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, arg_ty, 0));
+    insts.push(mk_inst_call_extern(1, call_ty, args1(0), String::from("__vow_format_f64_bits")));
+    insts.push(mk_inst_call_extern(2, ITY_U64(), args1(1), String::from("__vow_vec_len")));
+    insts.push(mk_inst_return(3, 2));
+    one_block(String::from("f"), ps, ITY_U64(), insts)
+}
+
+// `parse_f64_bits(String) -> u64` and `format_f64_bits(u64) -> String` are modelled;
+// every other operand or result type is not.
+fn check_float_bits_hooks() -> i64 {
+    if vc_skip_reason(parse_hook_fn(ITY_PTR(), ITY_U64())).len() != 0 { return 20; }
+    if vc_skip_reason(format_hook_fn(ITY_U64(), ITY_PTR())).len() != 0 { return 21; }
+    if vc_reason_code(vc_skip_reason(parse_hook_fn(ITY_U64(), ITY_U64()))) != VC_SKIP_UNSUPPORTED_OPCODE() { return 22; }
+    if vc_reason_code(vc_skip_reason(parse_hook_fn(ITY_PTR(), ITY_I64()))) != VC_SKIP_UNSUPPORTED_OPCODE() { return 23; }
+    if vc_reason_code(vc_skip_reason(format_hook_fn(ITY_PTR(), ITY_PTR()))) != VC_SKIP_UNSUPPORTED_OPCODE() { return 24; }
+    if vc_reason_code(vc_skip_reason(format_hook_fn(ITY_I64(), ITY_PTR()))) != VC_SKIP_UNSUPPORTED_OPCODE() { return 25; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_accepted();
     if r == 0 { r = check_vec_ops_accepted(); }
@@ -659,5 +692,6 @@ fn main() -> i32 {
     if r == 0 { r = check_reason_codes(); }
     if r == 0 { r = check_emitted_codes_are_closed(); }
     if r == 0 { r = check_reserved_symbol(); }
+    if r == 0 { r = check_float_bits_hooks(); }
     i64_to_i32_wrap(r)
 }

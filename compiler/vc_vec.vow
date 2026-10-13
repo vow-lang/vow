@@ -53,6 +53,16 @@ struct VcVec {
     lit_text: Vec<String>,
     memo_key: Vec<i64>,
     memo_arr: Vec<i64>,
+    // Float-text hooks (`vc_hooks`): the earlier `parse_f64_bits` calls (operand
+    // `(array, length)` terms and result) and `format_f64_bits` calls (operand bits
+    // and result `(array, length)`), and every constant a hook declared.
+    pk_arr: Vec<i64>,
+    pk_len: Vec<i64>,
+    pk_res: Vec<i64>,
+    fk_bits: Vec<i64>,
+    fk_arr: Vec<i64>,
+    fk_len: Vec<i64>,
+    hk_vars: Vec<i64>,
 }
 
 fn vc_vec_new_state(fl: VcFlow, n_blocks: u64) -> VcVec {
@@ -71,6 +81,13 @@ fn vc_vec_new_state(fl: VcFlow, n_blocks: u64) -> VcVec {
         lit_text: Vec::new(),
         memo_key: Vec::new(),
         memo_arr: Vec::new(),
+        pk_arr: Vec::new(),
+        pk_len: Vec::new(),
+        pk_res: Vec::new(),
+        fk_bits: Vec::new(),
+        fk_arr: Vec::new(),
+        fk_len: Vec::new(),
+        hk_vars: Vec::new(),
     }
 }
 

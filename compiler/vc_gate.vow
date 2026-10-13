@@ -229,6 +229,9 @@ fn vc_vec_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
     if kind == VC_STR_FROM_RAW_PARTS() {
         return n == 2 && inst.ty == ITY_PTR() && vc_vec_index_ok(t0) && vc_vec_index_ok(t1);
     }
+    if kind == VC_STR_FORMAT_F64() {
+        return n == 1 && inst.ty == ITY_PTR() && t0 == ITY_U64();
+    }
     if t0 != ITY_PTR() { return false; }
     if vc_str_kind_is_string_op(kind) { return vc_str_call_ok(inst, tys, kind); }
     if kind == VC_VEC_PUSH() { return n == 2 && inst.ty == ITY_UNIT() && vc_vec_elem_ok(t1); }
@@ -250,6 +253,7 @@ fn vc_str_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
     let t1: i64 = vc_arg_ty(tys, inst, 1);
     let t2: i64 = vc_arg_ty(tys, inst, 2);
     if kind == VC_STR_LITERAL() || kind == VC_STR_CLONE() { return n == 1 && inst.ty == ITY_PTR(); }
+    if kind == VC_STR_PARSE_F64() { return n == 1 && inst.ty == ITY_U64(); }
     if kind == VC_STR_CLEAR() { return n == 1 && inst.ty == ITY_UNIT(); }
     if kind == VC_STR_PUSH_STR() { return n == 2 && inst.ty == ITY_UNIT() && t1 == ITY_PTR(); }
     if kind == VC_STR_PUSH_BYTE() { return n == 2 && inst.ty == ITY_UNIT() && (t1 == ITY_U8() || t1 == ITY_I64()); }
