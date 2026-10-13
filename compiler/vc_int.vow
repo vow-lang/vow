@@ -33,6 +33,10 @@ fn vc_ty_is_float(ty: i64) -> bool {
     ty == ITY_F32() || ty == ITY_F64()
 }
 
+fn vc_ty_is_num(ty: i64) -> bool {
+    vc_ty_is_int(ty) || vc_ty_is_float(ty)
+}
+
 // SMT sort code of an IR type the native verifier models; -1 otherwise.
 fn vc_ty_sort(ty: i64) -> i64 {
     if ty == ITY_BOOL() { return VC_SORT_BOOL(); }

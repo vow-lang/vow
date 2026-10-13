@@ -129,7 +129,7 @@ fn vc_operand_ok(inst: IrInst, tys: Vec<i64>, lits: Vec<i64>, k: u64, want: i64)
 // whose arms each feed a Unit Phi; the executor models no value for it. A
 // pointer is an aggregate object.
 fn vc_is_merge_ty(ty: i64) -> bool {
-    vc_ty_is_int(ty) || vc_ty_is_float(ty) || ty == ITY_BOOL() || ty == ITY_UNIT() || ty == ITY_PTR()
+    vc_ty_is_num(ty) || ty == ITY_BOOL() || ty == ITY_UNIT() || ty == ITY_PTR()
 }
 
 // A struct field or enum payload slot holds Bool or an integer up to 64 bits
@@ -257,7 +257,7 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
     if op == IOP_PHI() { return n == 0 && vc_is_merge_ty(inst.ty); }
     if op == IOP_UPSILON() { return n == 1 && inst.dk == IDATA_PHI_TARGET() && vc_is_merge_ty(t0); }
     if op == IOP_GET_ARG() {
-        return (vc_ty_is_int(inst.ty) || vc_ty_is_float(inst.ty) || inst.ty == ITY_PTR()) && n == 0 && inst.dv >= 0
+        return (vc_ty_is_num(inst.ty) || inst.ty == ITY_PTR()) && n == 0 && inst.dv >= 0
             && inst.dv < f.params.len() as i64 && f.params[inst.dv as u64] == inst.ty;
     }
     if op == IOP_REGION_ALLOC() {
@@ -279,7 +279,7 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
         if kk != VC_KNOWN_NONE() { return vc_known_call_ok(inst, tys, kk); }
         return calls && vc_call_scalar(inst, tys);
     }
-    if vc_is_float_op(op) { return vc_float_inst_ok(inst, t0, t1); }
+    if vc_op_modeled_float(op) { return vc_float_inst_ok(inst, t0, t1); }
     if vc_is_arith_op(op) {
         return vc_ty_is_int(inst.ty) && n == 2 && vc_operand_ok(inst, tys, lits, 0, inst.ty)
             && vc_operand_ok(inst, tys, lits, 1, inst.ty);
@@ -308,7 +308,7 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
     if op == IOP_RETURN() {
         if f.return_ty == ITY_UNIT() { return n == 0 || (n == 1 && t0 == ITY_UNIT()); }
         return n == 1 && t0 == f.return_ty
-            && (vc_ty_is_int(f.return_ty) || vc_ty_is_float(f.return_ty) || f.return_ty == ITY_BOOL() || f.return_ty == ITY_PTR());
+            && (vc_ty_is_num(f.return_ty) || f.return_ty == ITY_BOOL() || f.return_ty == ITY_PTR());
     }
     false
 }

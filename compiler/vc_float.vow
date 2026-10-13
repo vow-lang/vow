@@ -29,13 +29,6 @@ fn vc_float_op_ty(op: i64) -> i64 {
     -1
 }
 
-// Modelled float opcodes: constants, add/sub/mul/div and the six comparisons.
-// Remainder (kind 4) is classified separately.
-fn vc_is_float_op(op: i64) -> bool {
-    let k: i64 = vc_float_kind(op);
-    (k >= 0 && k != 4) || op == IOP_CONST_F32() || op == IOP_CONST_F64()
-}
-
 fn vc_float_is_cmp(k: i64) -> bool {
     k >= 5
 }
