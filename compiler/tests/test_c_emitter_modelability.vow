@@ -31,7 +31,41 @@ fn main() -> i32 {
     if collection_issue(String::from("__vow_vec_push_val"), 2, ITY_PTR(), ITY_I64(), ITY_I64()) != MCI_OK() { return 8; }
     if collection_issue(String::from("__vow_map_insert"), 3, ITY_PTR(), ITY_I64(), ITY_I64()) != MCI_OK() { return 9; }
     if collection_issue(String::from("__vow_btreemap_insert"), 3, ITY_PTR(), ITY_I64(), ITY_BOOL()) != MCI_OK() { return 10; }
+    if call_result_issue(true) != MCI_STRUCTURED_RESULT() { return 11; }
+    if call_result_issue(false) != MCI_OK() { return 12; }
     0
+}
+
+// Caller `c0 = const; c1 = callee() -> Ptr; c2 = use(c1, c1)` where the use is
+// `__vow_string_eq` (c1 becomes a String) or an i64 add; returns the issue of c1.
+fn call_result_issue(use_as_string: bool) -> i64 {
+    let cinsts: Vec<IrInst> = Vec::new();
+    cinsts.push(mk_inst_const_i64(0, 0));
+    cinsts.push(mk_inst_return(1, 0));
+    let cblocks: Vec<IrBlock> = Vec::new();
+    cblocks.push(mk_block(0, cinsts));
+    let callee: IrFunction = mk_function(1, String::from("callee"), Vec::new(), ITY_PTR(), cblocks);
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_const_i64(0, 0));
+    insts.push(mk_inst_call_target(1, ITY_PTR(), Vec::new(), 1));
+    let use_args: Vec<i64> = Vec::new();
+    use_args.push(1);
+    use_args.push(1);
+    if use_as_string {
+        insts.push(mk_inst_call_extern(2, ITY_BOOL(), use_args, String::from("__vow_string_eq")));
+    } else {
+        insts.push(mk_inst(2, IOP_WADD(), ITY_I64(), use_args));
+    }
+    insts.push(mk_inst_return(3, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let f: IrFunction = mk_function(0, String::from("caller"), Vec::new(), ITY_I64(), blocks);
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(f);
+    funcs.push(callee);
+    let m: IrModule = mk_module(funcs);
+    let facts: ModelFacts = model_facts(f);
+    modelability_issue(insts[1], facts, m, Vec::new(), Vec::new(), Vec::new())
 }
 
 // One GetArg per operand (tys[i] = type of arg i) followed by a call to `name`;
