@@ -1,5 +1,5 @@
 // TEST: counterexample-fn "bucket"
-// TEST: counterexample-vow-id 0
+// TEST: counterexample-vow-id 1
 // TEST: counterexample-blame Callee
 // `hash_u64` is modelled exactly, so a wrong claim about its result is refuted by
 // a key the runtime really maps to a non-zero bucket (the replay runs the real
