@@ -138,13 +138,15 @@ fn vc_op_symbol(op: i64) -> String {
 }
 
 // Float operators. The rounding mode is part of the symbol: IEEE round to
-// nearest, ties to even is the only mode the language has (`fp.add RNE a b`).
+// nearest, ties to even is the only mode the language has (`fp.add RNE a b`);
+// `fp.neg` flips the sign and rounds nothing.
 // `to_fp` reads a bit-vector as an IEEE-754 interchange pattern.
 fn vc_fp_op_symbol(op: i64) -> String {
     if op == VC_OP_FPADD() { return String::from("fp.add RNE"); }
     if op == VC_OP_FPSUB() { return String::from("fp.sub RNE"); }
     if op == VC_OP_FPMUL() { return String::from("fp.mul RNE"); }
     if op == VC_OP_FPDIV() { return String::from("fp.div RNE"); }
+    if op == VC_OP_FPNEG() { return String::from("fp.neg"); }
     if op == VC_OP_FPEQ() { return String::from("fp.eq"); }
     if op == VC_OP_FPLT() { return String::from("fp.lt"); }
     if op == VC_OP_FPLE() { return String::from("fp.leq"); }

@@ -1,15 +1,35 @@
-// TEST: category unverifiable
-// TEST: skip-reason unsupported-opcode
-// Unary minus on a float lowers to an integer subtraction from zero, which no
-// backend can compile for a float operand, so the verifier has nothing to model.
-module FloatNegationSkipped
+// TEST: category float
+module FloatNegation
 
 fn negate(x: f64) -> f64 vow {
-  ensures: result == result
+  requires: x > 0.0,
+  ensures: result < 0.0
 } {
   -x
 }
 
+fn negate_twice(x: f64) -> f64 vow {
+  requires: x == x,
+  ensures: result == x
+} {
+  -(-x)
+}
+
+fn negate32(x: f32) -> f32 vow {
+  requires: x > x - x,
+  ensures: result < x - x
+} {
+  -x
+}
+
+fn negate_twice32(x: f32) -> f32 vow {
+  requires: x == x,
+  ensures: result == x
+} {
+  -(-x)
+}
+
 fn main() -> i32 [io] {
+  print_i64(0);
   0
 }
