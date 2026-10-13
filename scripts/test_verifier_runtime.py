@@ -437,5 +437,162 @@ class RunDebugBinaryEnvAndCwdTest(unittest.TestCase):
         self.assertNotEqual(verifier_runtime.REPO_ROOT, run.call_args.kwargs["cwd"])
 
 
+GEN_CONTROL = (
+    "// TEST: gen-class control vec_len_cap beyond-unwind\n// TEST: expect-verified\n"
+)
+GEN_BUG = "// TEST: gen-class exceeds-bound vec_len_cap within-unwind\n"
+
+
+def _soundness(verdict, detail="x"):
+    return {"direction": "soundness", "verdict": verdict, "detail": detail}
+
+
+class GeneratedExpectationTest(unittest.TestCase):
+    def test_a_verified_clean_control_is_left_alone(self):
+        check = _soundness("ok")
+
+        self.assertEqual(
+            check, verifier_runtime.apply_generated_expectations(check, GEN_CONTROL)
+        )
+
+    def test_a_control_that_is_not_verified_is_lost(self):
+        for verdict in ("not-applicable", "skipped"):
+            with self.subTest(verdict=verdict):
+                out = verifier_runtime.apply_generated_expectations(
+                    _soundness(verdict, "status VerifyFailed"), GEN_CONTROL
+                )
+
+                self.assertEqual("CONTROL-LOST", out["verdict"])
+
+    def test_a_lost_control_with_a_tracked_issue_is_reported_not_failed(self):
+        out = verifier_runtime.apply_generated_expectations(
+            _soundness("not-applicable"),
+            GEN_CONTROL + "// TEST: known-control-gap #1645\n",
+        )
+
+        self.assertEqual("known-control-gap", out["verdict"])
+        self.assertIn("#1645", out["detail"])
+        self.assertNotIn(out["verdict"], verifier_runtime.FAILING_GENERATED)
+
+    def test_a_tracked_gap_that_now_verifies_is_stale(self):
+        out = verifier_runtime.apply_generated_expectations(
+            _soundness("ok"), GEN_CONTROL + "// TEST: known-control-gap #1645\n"
+        )
+
+        self.assertEqual("STALE-KNOWN-GAP", out["verdict"])
+        self.assertIn(out["verdict"], verifier_runtime.FAILING_GENERATED)
+
+    def test_a_control_gap_directive_needs_an_issue_number(self):
+        self.assertIsNone(
+            verifier_runtime.DIRECTIVE_KNOWN_CONTROL_GAP.search(
+                "// TEST: known-control-gap\n"
+            )
+        )
+
+    def test_a_false_proof_stays_a_soundness_finding(self):
+        for text in (GEN_CONTROL, GEN_BUG):
+            with self.subTest(text=text):
+                out = verifier_runtime.apply_generated_expectations(
+                    _soundness("SOUNDNESS"), text
+                )
+
+                self.assertEqual("SOUNDNESS", out["verdict"])
+
+    def test_an_exceeds_bound_program_that_is_not_proven_is_unchanged(self):
+        check = _soundness("not-applicable")
+
+        self.assertEqual(
+            check, verifier_runtime.apply_generated_expectations(check, GEN_BUG)
+        )
+
+    def test_a_hand_written_fixture_is_never_touched(self):
+        check = _soundness("not-applicable")
+
+        self.assertEqual(
+            check, verifier_runtime.apply_generated_expectations(check, "module M\n")
+        )
+
+    def test_precision_checks_pass_through(self):
+        check = {"direction": "precision", "verdict": "not-applicable", "detail": ""}
+
+        self.assertEqual(
+            check, verifier_runtime.apply_generated_expectations(check, GEN_CONTROL)
+        )
+
+
+class WitnessTest(unittest.TestCase):
+    VIOLATION = {"error": "VowViolation", "vow_id": 3, "blame": "Callee"}
+
+    def witness(self, gen_class, violation, err=None):
+        with patch("verifier_runtime.debug_run", return_value=(violation, err)):
+            return verifier_runtime.check_witness(
+                Path("g.vow"), "vowc", Path("."), 5, gen_class
+            )
+
+    def test_an_exceeds_bound_program_must_violate(self):
+        self.assertEqual("ok", self.witness("exceeds-bound", self.VIOLATION)["verdict"])
+        self.assertEqual(
+            "WITNESS-BROKEN", self.witness("exceeds-bound", None)["verdict"]
+        )
+
+    def test_a_control_must_run_clean(self):
+        self.assertEqual("ok", self.witness("control", None)["verdict"])
+        self.assertEqual(
+            "WITNESS-BROKEN", self.witness("control", self.VIOLATION)["verdict"]
+        )
+
+    def test_a_binary_that_never_answered_is_a_broken_witness(self):
+        out = self.witness("control", None, err="debug binary timed out after 5s")
+
+        self.assertEqual("WITNESS-BROKEN", out["verdict"])
+
+    def test_the_witness_is_independent_of_the_verifier(self):
+        with patch("verifier_runtime.debug_run", return_value=(None, None)) as run:
+            verifier_runtime.check_witness(
+                Path("g.vow"), "vowc", Path("."), 5, "control"
+            )
+
+        run.assert_called_once()
+
+
+class GeneratedOutcomesTest(unittest.TestCase):
+    def test_counts_by_class_regime_and_soundness_verdict(self):
+        records = [
+            {
+                "checks": [_soundness("ok")],
+                "generated": {
+                    "class": "control",
+                    "shape": "s",
+                    "regime": "within-unwind",
+                },
+            },
+            {
+                "checks": [_soundness("ok")],
+                "generated": {
+                    "class": "control",
+                    "shape": "t",
+                    "regime": "within-unwind",
+                },
+            },
+            {
+                "checks": [_soundness("not-applicable")],
+                "generated": {
+                    "class": "exceeds-bound",
+                    "shape": "s",
+                    "regime": "beyond-unwind",
+                },
+            },
+            {"checks": [_soundness("ok")]},
+        ]
+
+        self.assertEqual(
+            {
+                "control within-unwind: ok": 2,
+                "exceeds-bound beyond-unwind: not-applicable": 1,
+            },
+            verifier_runtime.generated_outcomes(records),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
