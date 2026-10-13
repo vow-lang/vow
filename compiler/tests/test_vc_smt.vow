@@ -91,6 +91,15 @@ fn check_every_operator_has_a_symbol() -> i64 {
     ops.push(VC_OP_BVUSUBO());
     ops.push(VC_OP_BVSMULO());
     ops.push(VC_OP_BVUMULO());
+    ops.push(VC_OP_FP_ADD());
+    ops.push(VC_OP_FP_SUB());
+    ops.push(VC_OP_FP_MUL());
+    ops.push(VC_OP_FP_DIV());
+    ops.push(VC_OP_FP_EQ());
+    ops.push(VC_OP_FP_LT());
+    ops.push(VC_OP_FP_LE());
+    ops.push(VC_OP_FP_GT());
+    ops.push(VC_OP_FP_GE());
     let syms: Vec<String> = Vec::new();
     syms.push(String::from("bvsub"));
     syms.push(String::from("bvmul"));
@@ -119,6 +128,15 @@ fn check_every_operator_has_a_symbol() -> i64 {
     syms.push(String::from("bvusubo"));
     syms.push(String::from("bvsmulo"));
     syms.push(String::from("bvumulo"));
+    syms.push(String::from("fp.add RNE"));
+    syms.push(String::from("fp.sub RNE"));
+    syms.push(String::from("fp.mul RNE"));
+    syms.push(String::from("fp.div RNE"));
+    syms.push(String::from("fp.eq"));
+    syms.push(String::from("fp.lt"));
+    syms.push(String::from("fp.leq"));
+    syms.push(String::from("fp.gt"));
+    syms.push(String::from("fp.geq"));
     let mut i: u64 = 0;
     while i < ops.len() {
         let s: SmtScript = vc_script_new();
@@ -194,6 +212,25 @@ fn check_widths_and_extensions() -> i64 {
     0
 }
 
+fn check_float_vocabulary() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let s: SmtScript = vc_script_new();
+    vc_script_set_logic(s, String::from("QF_BVFP"));
+    vc_script_declare_const(s, String::from("x"), VC_SORT_F64());
+    vc_script_declare_const(s, String::from("y"), VC_SORT_F32());
+    let one: i64 = vc_tm_app1(ar, VC_OP_TO_FP64(), vc_tm_bv(ar, 64, 4607182418800017408, 0));
+    let half: i64 = vc_tm_app1(ar, VC_OP_TO_FP32(), vc_tm_bv(ar, 32, 1056964608, 0));
+    vc_script_define_fun(s, String::from("v0"), VC_SORT_F64(), one);
+    vc_script_define_fun(s, String::from("v1"), VC_SORT_F32(), half);
+    let want: String = String::from("(set-logic QF_BVFP)\n");
+    want.push_str(String::from("(declare-const x (_ FloatingPoint 11 53))\n"));
+    want.push_str(String::from("(declare-const y (_ FloatingPoint 8 24))\n"));
+    want.push_str(String::from("(define-fun v0 () (_ FloatingPoint 11 53) ((_ to_fp 11 53) #x3ff0000000000000))\n"));
+    want.push_str(String::from("(define-fun v1 () (_ FloatingPoint 8 24) ((_ to_fp 8 24) #x3f000000))\n"));
+    if vc_smt_render(ar, s) != want { return 1; }
+    0
+}
+
 fn check_array_vocabulary() -> i64 {
     let ar: VcArena = vc_arena_new();
     let s: SmtScript = vc_script_new();
@@ -246,6 +283,7 @@ fn main() -> i32 {
     if r == 0 { r = check_constants(); }
     if r == 0 { r = check_widths_and_extensions(); }
     if r == 0 { r = check_every_operator_has_a_symbol(); }
+    if r == 0 { r = check_float_vocabulary(); }
     if r == 0 { r = check_array_vocabulary(); }
     if r == 0 { r = check_prefix_is_independent(); }
     if r == 0 { r = check_get_value_without_names_is_omitted(); }

@@ -134,6 +134,17 @@ fn vc_op_symbol(op: i64) -> String {
     if op == VC_OP_ITE() { return String::from("ite"); }
     if op == VC_OP_SELECT() { return String::from("select"); }
     if op == VC_OP_STORE() { return String::from("store"); }
+    if op == VC_OP_FP_ADD() { return String::from("fp.add RNE"); }
+    if op == VC_OP_FP_SUB() { return String::from("fp.sub RNE"); }
+    if op == VC_OP_FP_MUL() { return String::from("fp.mul RNE"); }
+    if op == VC_OP_FP_DIV() { return String::from("fp.div RNE"); }
+    if op == VC_OP_FP_EQ() { return String::from("fp.eq"); }
+    if op == VC_OP_FP_LT() { return String::from("fp.lt"); }
+    if op == VC_OP_FP_LE() { return String::from("fp.leq"); }
+    if op == VC_OP_FP_GT() { return String::from("fp.gt"); }
+    if op == VC_OP_FP_GE() { return String::from("fp.geq"); }
+    if op == VC_OP_TO_FP32() { return String::from("(_ to_fp 8 24)"); }
+    if op == VC_OP_TO_FP64() { return String::from("(_ to_fp 11 53)"); }
     String::from("vc-unmapped-operator")
 }
 
@@ -143,6 +154,12 @@ fn vc_sort_text(sort: i64) -> String {
     }
     if sort == VC_SORT_ARRAY64() {
         return String::from("(Array (_ BitVec 64) (_ BitVec 64))");
+    }
+    if sort == VC_SORT_F32() {
+        return String::from("(_ FloatingPoint 8 24)");
+    }
+    if sort == VC_SORT_F64() {
+        return String::from("(_ FloatingPoint 11 53)");
     }
     let out: String = String::from("(_ BitVec ");
     out.push_str(i64_to_string(sort));

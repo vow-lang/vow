@@ -9,7 +9,9 @@ use ir_dominance
 // symbols.
 //
 // A sort code is the bit-vector width (8, 16, 32, 64, 128), or 0 for Bool, or
-// `VC_SORT_ARRAY64` for an array from 64-bit indices to 64-bit elements.
+// `VC_SORT_ARRAY64` for an array from 64-bit indices to 64-bit elements, or
+// `VC_SORT_F32`/`VC_SORT_F64` for an IEEE-754 binary32/binary64 value (2000 plus
+// the raw bit width, so the code never collides with a bit-vector width).
 // A bit-vector constant holds its width in `a` and its low and high 64-bit
 // limbs in `aux` and `b`. Up to 64 bits the constant is canonical: `aux` is
 // masked to the width and `b` is 0, so equal constants are one id. At 128 bits
@@ -18,6 +20,8 @@ use ir_dominance
 
 fn VC_SORT_BOOL() -> i64 { 0 }
 fn VC_SORT_ARRAY64() -> i64 { 1000 }
+fn VC_SORT_F32() -> i64 { 2032 }
+fn VC_SORT_F64() -> i64 { 2064 }
 
 fn VC_T_VAR() -> i64 { 0 }
 fn VC_T_BV() -> i64 { 1 }
@@ -64,6 +68,23 @@ fn VC_OP_BVSMULO() -> i64 { 31 }
 fn VC_OP_BVUMULO() -> i64 { 32 }
 fn VC_OP_SELECT() -> i64 { 33 }
 fn VC_OP_STORE() -> i64 { 34 }
+
+// Floating-point operators. The rounding mode is part of the printed symbol (the
+// verifier models round-to-nearest-even only), so the arena needs no rounding
+// leaf. They are in none of the simplifier's rewrite or fold lists: NaN breaks
+// every identity of the integer comparisons (`x < x`, `not (x < y)` as
+// `x >= y`), and the arena keeps no sort to tell a float `=` from a bit-vector one.
+fn VC_OP_FP_ADD() -> i64 { 35 }
+fn VC_OP_FP_SUB() -> i64 { 36 }
+fn VC_OP_FP_MUL() -> i64 { 37 }
+fn VC_OP_FP_DIV() -> i64 { 38 }
+fn VC_OP_FP_EQ() -> i64 { 39 }
+fn VC_OP_FP_LT() -> i64 { 40 }
+fn VC_OP_FP_LE() -> i64 { 41 }
+fn VC_OP_FP_GT() -> i64 { 42 }
+fn VC_OP_FP_GE() -> i64 { 43 }
+fn VC_OP_TO_FP32() -> i64 { 44 }
+fn VC_OP_TO_FP64() -> i64 { 45 }
 
 // `hashes` caches each term's node hash; `slots` is an open-addressing table
 // (power-of-two length, linear probing, -1 empty) over the interned term ids, so

@@ -696,8 +696,53 @@ fn check_differential() -> i64 {
     0
 }
 
+fn float_ops() -> Vec<i64> {
+    let ops: Vec<i64> = Vec::new();
+    ops.push(VC_OP_FP_ADD());
+    ops.push(VC_OP_FP_SUB());
+    ops.push(VC_OP_FP_MUL());
+    ops.push(VC_OP_FP_DIV());
+    ops.push(VC_OP_FP_EQ());
+    ops.push(VC_OP_FP_LT());
+    ops.push(VC_OP_FP_LE());
+    ops.push(VC_OP_FP_GT());
+    ops.push(VC_OP_FP_GE());
+    ops
+}
+
+// NaN makes `x == x` false and `x < x` false and `not (x < y)` differ from
+// `x >= y`: no floating-point operator may be folded, identity-simplified or
+// flipped by the negation rule, even on equal or constant operands.
+fn check_float_ops_are_opaque() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let x: i64 = vc_tm_var(ar, String::from("x"));
+    let y: i64 = vc_tm_var(ar, String::from("y"));
+    let zero: i64 = vc_tm_app1(ar, VC_OP_TO_FP64(), vc_tm_bv(ar, 64, 0, 0));
+    let ops: Vec<i64> = float_ops();
+    let mut i: u64 = 0;
+    while i < ops.len() {
+        let op: i64 = ops[i];
+        let t: i64 = vc_tm_app2(ar, op, x, y);
+        if ar.kinds[t as u64] != VC_T_APP() || ar.aux[t as u64] != op { return 1 + i as i64; }
+        if vc_tm_app2(ar, op, x, y) != t { return 20 + i as i64; }
+        let same: i64 = vc_tm_app2(ar, op, x, x);
+        if ar.kinds[same as u64] != VC_T_APP() || ar.aux[same as u64] != op { return 40 + i as i64; }
+        let consts: i64 = vc_tm_app2(ar, op, zero, zero);
+        if ar.kinds[consts as u64] != VC_T_APP() || ar.aux[consts as u64] != op { return 60 + i as i64; }
+        let neg: i64 = vc_tm_app1(ar, VC_OP_NOT(), t);
+        if ar.kinds[neg as u64] != VC_T_APP() || ar.aux[neg as u64] != VC_OP_NOT() || ar.a[neg as u64] != t { return 80 + i as i64; }
+        i = i + 1;
+    }
+    let c: i64 = vc_tm_app1(ar, VC_OP_TO_FP64(), vc_tm_bv(ar, 64, 4607182418800017408, 0));
+    if ar.kinds[c as u64] != VC_T_APP() || ar.aux[c as u64] != VC_OP_TO_FP64() { return 100; }
+    if vc_tm_app1(ar, VC_OP_TO_FP64(), vc_tm_bv(ar, 64, 4607182418800017408, 0)) != c { return 101; }
+    if vc_tm_app1(ar, VC_OP_TO_FP32(), vc_tm_bv(ar, 32, 1065353216, 0)) == c { return 102; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_interning();
+    if r == 0 { r = check_float_ops_are_opaque(); }
     if r == 0 { r = check_growth(); }
     if r == 0 { r = check_collisions(); }
     if r == 0 { r = check_deterministic(); }
