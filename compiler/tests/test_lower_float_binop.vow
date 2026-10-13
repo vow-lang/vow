@@ -140,5 +140,29 @@ fn main() -> i32 {
         60,
     );
     if cmp_data_result != 0 { return i64_to_i32_wrap(cmp_data_result); }
+    let neg64: i64 = check_lowered_float_inst(
+        String::from("module FloatNeg64\nfn neg(a: f64) -> f64 { -a }"),
+        String::from("float_neg64.vow"),
+        IOP_NEG_F64(),
+        ITY_F64(),
+        70,
+    );
+    if neg64 != 0 { return i64_to_i32_wrap(neg64); }
+    let neg32: i64 = check_lowered_float_inst(
+        String::from("module FloatNeg32\nfn neg(a: f32) -> f32 { -a }"),
+        String::from("float_neg32.vow"),
+        IOP_NEG_F32(),
+        ITY_F32(),
+        80,
+    );
+    if neg32 != 0 { return i64_to_i32_wrap(neg32); }
+    let neg_lit: i64 = check_lowered_float_inst(
+        String::from("module FloatNegLit\nfn lit() -> f64 { -1.5 }"),
+        String::from("float_neg_lit.vow"),
+        IOP_NEG_F64(),
+        ITY_F64(),
+        90,
+    );
+    if neg_lit != 0 { return i64_to_i32_wrap(neg_lit); }
     0
 }

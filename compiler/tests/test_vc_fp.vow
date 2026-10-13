@@ -82,10 +82,11 @@ fn check_terms_and_symbols() -> i64 {
     vc_script_assert(s, vc_tm_app2(ar, VC_OP_FPLE(), a, b));
     vc_script_assert(s, vc_tm_app2(ar, VC_OP_FPGT(), a, b));
     vc_script_assert(s, vc_tm_app2(ar, VC_OP_FPGE(), a, b));
+    vc_script_assert(s, vc_tm_app1(ar, VC_OP_FPNEG(), a));
     let want: String = String::from("(assert (fp.add RNE a b))\n(assert (fp.sub RNE a b))\n");
     want.push_str(String::from("(assert (fp.mul RNE a b))\n(assert (fp.div RNE a b))\n"));
     want.push_str(String::from("(assert (fp.eq a b))\n(assert (fp.lt a b))\n(assert (fp.leq a b))\n"));
-    want.push_str(String::from("(assert (fp.gt a b))\n(assert (fp.geq a b))\n"));
+    want.push_str(String::from("(assert (fp.gt a b))\n(assert (fp.geq a b))\n(assert (fp.neg a))\n"));
     if vc_smt_render(ar, s) != want { return 1; }
     if vc_sort_text(VC_SORT_F32()) != String::from("(_ FloatingPoint 8 24)") { return 2; }
     if vc_sort_text(VC_SORT_F64()) != String::from("(_ FloatingPoint 11 53)") { return 3; }
@@ -131,6 +132,9 @@ fn check_op_tables() -> i64 {
     if vc_fp_op_ty(IOP_REM_F32()) >= 0 || vc_fp_op_ty(IOP_REM_F64()) >= 0 { return 33; }
     if vc_fp_op_ty(IOP_WADD()) >= 0 { return 34; }
     if vc_fp_arith_smt(IOP_DIV_F64()) != VC_OP_FPDIV() { return 35; }
+    if vc_fp_op_ty(IOP_NEG_F32()) != ITY_F32() || vc_fp_op_ty(IOP_NEG_F64()) != ITY_F64() { return 41; }
+    if !vc_fp_is_neg(IOP_NEG_F64()) || vc_fp_is_neg(IOP_SUB_F64()) { return 42; }
+    if vc_fp_arith_smt(IOP_NEG_F64()) >= 0 || vc_fp_cmp_smt(IOP_NEG_F32()) >= 0 { return 43; }
     if vc_fp_arith_smt(IOP_EQ_F64()) >= 0 { return 36; }
     if vc_fp_cmp_smt(IOP_NE_F32()) != VC_OP_FPEQ() { return 37; }
     if !vc_fp_is_ne(IOP_NE_F64()) || vc_fp_is_ne(IOP_EQ_F64()) { return 38; }
@@ -184,6 +188,37 @@ fn check_gate() -> i64 {
     rem.push(mk_inst(1, IOP_REM_F32(), ITY_F32(), args2(0, 0)));
     rem.push(mk_inst_return(2, 1));
     if !vc_skip_reason(one_block(String::from("r"), Vec::new(), ITY_F32(), rem)).contains(String::from("float-rem-unsupported: ")) { return 66; }
+    0
+}
+
+// negate(x) ensures result == x for the negation of a negation, over `ty`.
+fn negate_twice(ty: i64, neg: i64, eq: i64) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ty, 0));
+    i.push(mk_inst(1, neg, ty, args1(0)));
+    i.push(mk_inst(2, neg, ty, args1(1)));
+    i.push(mk_inst(3, eq, ITY_BOOL(), args2(2, 0)));
+    i.push(mk_vow(4, IOP_VOW_ENS(), 3, 0));
+    i.push(mk_inst_return(5, 2));
+    let p: Vec<i64> = Vec::new();
+    p.push(ty);
+    one_block(String::from("negate_twice"), p, ty, i)
+}
+
+fn check_negation() -> i64 {
+    if vc_skip_reason(negate_twice(ITY_F64(), IOP_NEG_F64(), IOP_EQ_F64())).len() != 0 { return 120; }
+    if vc_skip_reason(negate_twice(ITY_F32(), IOP_NEG_F32(), IOP_EQ_F32())).len() != 0 { return 121; }
+    // an `f32` negate on an `f64` operand
+    if !vc_skip_reason(negate_twice(ITY_F64(), IOP_NEG_F32(), IOP_EQ_F64())).contains(String::from("unsupported-opcode: ")) { return 122; }
+    // a negate with two operands is not a float operation
+    let two: Vec<IrInst> = Vec::new();
+    two.push(mk_const_f64(0, 0));
+    two.push(mk_inst(1, IOP_NEG_F64(), ITY_F64(), args2(0, 0)));
+    two.push(mk_inst_return(2, 1));
+    if vc_skip_reason(one_block(String::from("two"), Vec::new(), ITY_F64(), two)).len() == 0 { return 123; }
+    let q: String = query(vc_claims(negate_twice(ITY_F64(), IOP_NEG_F64(), IOP_EQ_F64())), 0);
+    if !q.contains(String::from("(define-fun v1 () (_ FloatingPoint 11 53) (fp.neg p0))\n")) { return 124; }
+    if !q.contains(String::from("(define-fun v2 () (_ FloatingPoint 11 53) (fp.neg v1))\n")) { return 125; }
     0
 }
 
@@ -289,6 +324,7 @@ fn main() -> i32 {
     if r == 0 { r = check_op_tables(); }
     if r == 0 { r = check_not_equal_is_negated_fp_eq(); }
     if r == 0 { r = check_gate(); }
+    if r == 0 { r = check_negation(); }
     if r == 0 { r = check_query_shape(); }
     if r == 0 { r = check_logic_selection(); }
     if r == 0 { r = check_parse_models(); }

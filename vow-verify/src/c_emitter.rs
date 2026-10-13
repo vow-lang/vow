@@ -940,6 +940,8 @@ fn modelability_issue<'a>(
         | Opcode::MulF64
         | Opcode::DivF32
         | Opcode::DivF64
+        | Opcode::NegF32
+        | Opcode::NegF64
         | Opcode::EqF32
         | Opcode::EqF64
         | Opcode::NeF32
@@ -1317,6 +1319,11 @@ fn emit_inst(
         Opcode::DivF32 | Opcode::DivF64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = v{} / v{};\n", id, a, b));
+        }
+
+        Opcode::NegF32 | Opcode::NegF64 => {
+            let a = inst.args[0].0;
+            out.push_str(&format!("  v{} = -v{};\n", id, a));
         }
 
         // Integer comparisons
@@ -5645,10 +5652,14 @@ mod tests {
                 inst(9, Opcode::DivF32, Ty::F32, vec![0, 1], InstData::None),
                 inst(10, Opcode::RemF32, Ty::F32, vec![0, 1], InstData::None),
                 inst(11, Opcode::RemF64, Ty::F64, vec![0, 1], InstData::None),
-                inst(12, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                inst(12, Opcode::NegF64, Ty::F64, vec![0], InstData::None),
+                inst(13, Opcode::NegF32, Ty::F32, vec![1], InstData::None),
+                inst(14, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(c.contains("v12 = -v0;"), "fneg64: {c}");
+        assert!(c.contains("v13 = -v1;"), "fneg32: {c}");
         assert!(c.contains("v0 + v1"), "fadd: {c}");
         assert!(c.contains("v0 - v1"), "fsub: {c}");
         assert!(c.contains("v0 * v1"), "fmul: {c}");

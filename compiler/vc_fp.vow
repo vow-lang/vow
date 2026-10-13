@@ -10,8 +10,9 @@ use vc_term
 // `NaN == NaN` and every ordering with a NaN operand are false and `-0.0 == 0.0`
 // is true, and `!=` is the negation of `fp.eq`: true when an operand is a NaN.
 // SMT-LIB has one NaN per format, so the verifier has a single canonical NaN and
-// a NaN payload or sign is not distinguishable. Float `%` is not in the table:
-// the gate skips it as `float-rem-unsupported`.
+// a NaN payload or sign is not distinguishable: `fp.neg` of a NaN is that NaN,
+// while the sign flip of `-x` stays visible on `0.0` and the infinities. Float
+// `%` is not in the table: the gate skips it as `float-rem-unsupported`.
 
 fn vc_ty_is_float(ty: i64) -> bool {
     ty == ITY_F32() || ty == ITY_F64()
@@ -29,12 +30,12 @@ fn vc_fp_sort(ty: i64) -> i64 {
 fn vc_fp_op_ty(op: i64) -> i64 {
     if op == IOP_ADD_F32() || op == IOP_SUB_F32() || op == IOP_MUL_F32() || op == IOP_DIV_F32()
         || op == IOP_EQ_F32() || op == IOP_NE_F32() || op == IOP_LT_F32() || op == IOP_LE_F32()
-        || op == IOP_GT_F32() || op == IOP_GE_F32() || op == IOP_CONST_F32() {
+        || op == IOP_GT_F32() || op == IOP_GE_F32() || op == IOP_CONST_F32() || op == IOP_NEG_F32() {
         return ITY_F32();
     }
     if op == IOP_ADD_F64() || op == IOP_SUB_F64() || op == IOP_MUL_F64() || op == IOP_DIV_F64()
         || op == IOP_EQ_F64() || op == IOP_NE_F64() || op == IOP_LT_F64() || op == IOP_LE_F64()
-        || op == IOP_GT_F64() || op == IOP_GE_F64() || op == IOP_CONST_F64() {
+        || op == IOP_GT_F64() || op == IOP_GE_F64() || op == IOP_CONST_F64() || op == IOP_NEG_F64() {
         return ITY_F64();
     }
     -1
@@ -42,6 +43,10 @@ fn vc_fp_op_ty(op: i64) -> i64 {
 
 fn vc_fp_is_op(op: i64) -> bool {
     vc_fp_op_ty(op) >= 0
+}
+
+fn vc_fp_is_neg(op: i64) -> bool {
+    op == IOP_NEG_F32() || op == IOP_NEG_F64()
 }
 
 fn vc_fp_is_const(op: i64) -> bool {
@@ -98,15 +103,19 @@ fn vc_fp_cmp(ar: VcArena, op: i64, a: i64, b: i64) -> i64 {
 
 // Whether a float instruction has the operand and result types the executor
 // models: every operand and the result of arithmetic share the opcode's float
-// type, a comparison reads two of them and yields Bool, a constant takes no
-// operand and carries the type's own data kind. `t0`/`t1` are the types of the
-// first two operands (-1 when absent).
+// type, a negation reads one operand of it and yields it, a comparison reads
+// two of them and yields Bool, a constant takes no operand and carries the
+// type's own data kind. `t0`/`t1` are the types of the first two operands (-1
+// when absent).
 fn vc_fp_inst_ok(inst: IrInst, t0: i64, t1: i64) -> bool {
     let ft: i64 = vc_fp_op_ty(inst.op);
     let n: u64 = inst.args.len();
     if vc_fp_is_const(inst.op) {
         let dk: i64 = { if ft == ITY_F32() { IDATA_CONST_F32() } else { IDATA_CONST_F64() } };
         return inst.ty == ft && n == 0 && inst.dk == dk;
+    }
+    if vc_fp_is_neg(inst.op) {
+        return n == 1 && inst.ty == ft && t0 == ft;
     }
     if vc_fp_is_arith(inst.op) {
         return n == 2 && inst.ty == ft && t0 == ft && t1 == ft;

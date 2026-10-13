@@ -2048,6 +2048,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 UnOp::Not => ctx.emit(Opcode::Not, Ty::Bool, vec![val], InstData::None, span),
                 UnOp::Neg => {
                     let operand_ty = ctx.inst_ty(val);
+                    let float_neg = match operand_ty {
+                        Ty::F32 => Some(Opcode::NegF32),
+                        Ty::F64 => Some(Opcode::NegF64),
+                        _ => None,
+                    };
+                    if let Some(opcode) = float_neg {
+                        return ctx.emit(opcode, operand_ty, vec![val], InstData::None, span);
+                    }
                     let result_ty = if matches!(
                         operand_ty,
                         Ty::I8
@@ -7240,6 +7248,35 @@ fn unsigned_max() -> u128 {
                     && inst.ty == Ty::U128
                     && inst.data == InstData::ConstU128(u128::MAX))
         );
+    }
+
+    #[test]
+    fn float_negation_lowers_to_float_negate_opcode() {
+        let module = lower_source_to_module(
+            "module Neg\nfn n64(x: f64) -> f64 { -x }\nfn n32(x: f32) -> f32 { -x }\nfn lit() -> f64 { -1.5 }\nfn main() -> i32 [io] { 0 }\n",
+            "neg.vow",
+        );
+        for (idx, opcode, ty) in [
+            (0, Opcode::NegF64, Ty::F64),
+            (1, Opcode::NegF32, Ty::F32),
+            (2, Opcode::NegF64, Ty::F64),
+        ] {
+            let insts: Vec<_> = module.functions[idx]
+                .blocks
+                .iter()
+                .flat_map(|block| &block.insts)
+                .collect();
+            let neg = insts
+                .iter()
+                .find(|inst| inst.opcode == opcode)
+                .expect("float negate opcode");
+            assert_eq!(neg.ty, ty);
+            assert_eq!(neg.args.len(), 1);
+            assert!(
+                insts.iter().all(|inst| inst.opcode != Opcode::WrappingSub),
+                "float negation must not lower through integer subtraction"
+            );
+        }
     }
 
     #[test]

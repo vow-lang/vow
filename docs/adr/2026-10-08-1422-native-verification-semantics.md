@@ -565,8 +565,10 @@ model-parsing modules around it.
   here: modelling `parse_f64_bits` as an unconstrained `u64` per call would refute
   `parse(s) == parse(s)` with a counterexample no run reproduces, so they waited for
   the `String` model of #1426. They are modelled by the addendum #1646.
-- **Still skipped.** Float `%` (`float-rem-unsupported`), unary minus on a float
-  (the lowerer emits an integer subtraction that no backend compiles, #1647) and a
+- **Negation.** Unary `-` on a float lowers to `NegF32`/`NegF64` (#1647) and is
+  `fp.neg`: an exact sign flip, so the single-NaN limit above is its only
+  imprecision (`fp.neg` of the NaN is the NaN).
+- **Still skipped.** Float `%` (`float-rem-unsupported`) and a
   `Vec` of floats (`unsupported-opcode`; a `Vec` element is a 64-bit vector and
   SMT-LIB cannot convert a float to one bit-exactly).
 - **Cost.** Bit-blasting `fp.mul` and `fp.div` at 53 bits is expensive, so a hard

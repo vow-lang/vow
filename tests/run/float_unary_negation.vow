@@ -1,0 +1,49 @@
+// TEST: stdout "neg: 1\nlit: 1\ntwice: 1\nzero: 11\nloop: 1\nfield: 1\n"
+// Regression fixture for #1647: unary minus on f32/f64 lowered to an integer
+// subtraction from zero, which Cranelift rejects on a float operand. Float
+// values have no printer, so each result is observed through a comparison and
+// the sign of zero through the sign of 1.0 / -0.0. No float literal or cast
+// yields an f32, so `negate32` is compiled but never called.
+module FloatUnaryNegation
+
+struct Cell { v: f64 }
+
+fn bit(c: bool) -> i64 {
+    if c { 1 } else { 0 }
+}
+
+fn negate(x: f64) -> f64 { -x }
+fn negate32(x: f32) -> f32 { -x }
+fn negative_literal() -> f64 { -1.5 }
+
+fn negate_field(c: Cell) -> f64 { -c.v }
+
+fn negate_in_loop(x: f64) -> f64 {
+    let mut acc: f64 = x;
+    let mut i: i64 = 0;
+    while i < 3 {
+        acc = -acc;
+        i = i + 1;
+    }
+    acc
+}
+
+fn show(label: String, v: i64) [io] {
+    print_str(label);
+    print_i64(v);
+    print_str("\n");
+}
+
+fn main() -> i32 [io] {
+    show("neg: ", bit(negate(2.5) < 0.0));
+    show("lit: ", bit(negative_literal() == 0.0 - 1.5));
+    show("twice: ", bit(negate(negate(2.5)) == 2.5));
+    print_str("zero: ");
+    print_i64(bit(1.0 / negate(0.0) < 0.0));
+    print_i64(bit(1.0 / negate(negate(0.0)) > 0.0));
+    print_str("\n");
+    show("loop: ", bit(negate_in_loop(2.5) == negate(2.5)));
+    let c: Cell = Cell { v: 4.0 };
+    show("field: ", bit(negate_field(c) == 0.0 - 4.0));
+    0
+}

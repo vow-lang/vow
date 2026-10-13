@@ -348,6 +348,7 @@ fn vc_exec_value(w: VcWalk, inst: IrInst, pc: i64) -> i64 {
     if op == IOP_GET_ARG() { return vc_tm_var(ar, vc_param_name(inst.dv)); }
     if op == IOP_NOT() { return vc_tm_app1(ar, VC_OP_NOT(), w.var_of[inst.args[0] as u64]); }
     if op == IOP_INT_CAST() { return vc_cast(ar, inst.dv, inst.ty, w.var_of[inst.args[0] as u64]); }
+    if vc_fp_is_neg(op) { return vc_tm_app1(ar, VC_OP_FPNEG(), w.var_of[inst.args[0] as u64]); }
     let lhs: i64 = w.var_of[inst.args[0] as u64];
     let rhs: i64 = w.var_of[inst.args[1] as u64];
     if op == IOP_SHL() || op == IOP_SHR() {

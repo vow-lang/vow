@@ -800,6 +800,8 @@ const IOP_CONST_U8: i64 = 138;
 const IOP_INT_CAST: i64 = 139;
 const IOP_CONST_I128: i64 = 140;
 const IOP_CONST_U128: i64 = 141;
+const IOP_NEG_F32: i64 = 142;
+const IOP_NEG_F64: i64 = 143;
 
 // InstData kind constants (match compiler/ir.vow IDATA_*)
 #[allow(dead_code)]
@@ -2196,6 +2198,10 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                 }
                 IOP_DIV_F32 | IOP_DIV_F64 => {
                     let val = builder.ins().fdiv(arg!(0), arg!(1));
+                    set_val!(iid, val);
+                }
+                IOP_NEG_F32 | IOP_NEG_F64 => {
+                    let val = builder.ins().fneg(arg!(0));
                     set_val!(iid, val);
                 }
                 IOP_REM_F32 | IOP_REM_F64 => {
@@ -6584,6 +6590,31 @@ mod tests {
             add_test_block(ctx);
             add_test_inst(ctx, 0, const_op, value_ty, data_kind, 7, 0, &[]);
             add_test_inst(ctx, 1, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[0]);
+            unsafe {
+                assert_eq!(__vow_clif_fn_end(ctx), 0, "{name}");
+                __vow_clif_destroy(ctx);
+            }
+        }
+    }
+
+    /// `-x` on a float lowers to `NegF32`/`NegF64`, which the shim answers
+    /// with Cranelift's `fneg` rather than refusing the opcode (#1647).
+    #[test]
+    fn float_negation_compiles() {
+        for (name, op, ty, const_op, const_data) in [
+            ("f32", IOP_NEG_F32, ITY_F32, IOP_CONST_F32, IDATA_CONST_F32),
+            ("f64", IOP_NEG_F64, ITY_F64, IOP_CONST_F64, IDATA_CONST_F64),
+        ] {
+            let ctx = __vow_clif_create(0, 0);
+            assert_ne!(ctx, 0);
+            declare_test_function(ctx, 0, name, ITY_UNIT, false);
+            unsafe {
+                assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_UNIT, 0), 0);
+            }
+            add_test_block(ctx);
+            add_test_inst(ctx, 0, const_op, ty, const_data, 0, 1, &[]);
+            add_test_inst(ctx, 1, op, ty, IDATA_NONE, 0, 0, &[0]);
+            add_test_inst(ctx, 2, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
             unsafe {
                 assert_eq!(__vow_clif_fn_end(ctx), 0, "{name}");
                 __vow_clif_destroy(ctx);

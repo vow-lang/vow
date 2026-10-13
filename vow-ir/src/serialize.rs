@@ -29,7 +29,7 @@ pub const MODULE_MAGIC: [u8; 4] = *b"VMOD";
 /// Skips 2 because `tests/multi/vmod_decode_bad_version/main.vow` pins
 /// the literal byte `2` as its "bad version" probe — leaving it untouched
 /// keeps that fixture meaningful without a parallel source edit.
-pub const MODULE_VERSION: u32 = 5;
+pub const MODULE_VERSION: u32 = 6;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum DecodeError {
@@ -351,6 +351,7 @@ opcode_map! {
     139 => IntCast,
     140 => ConstI128,
     141 => ConstU128,
+    142 => NegF32, 143 => NegF64,
 }
 
 fn write_integer_type(out: &mut Vec<u8>, ty: IntegerType) {
@@ -1024,10 +1025,10 @@ mod tests {
     #[test]
     fn magic_and_version_are_stable() {
         assert_eq!(&MODULE_MAGIC, b"VMOD");
-        assert_eq!(MODULE_VERSION, 5);
+        assert_eq!(MODULE_VERSION, 6);
         let bytes = encode_module(&empty_module());
         assert_eq!(&bytes[..4], b"VMOD");
-        assert_eq!(&bytes[4..8], &5u32.to_le_bytes());
+        assert_eq!(&bytes[4..8], &6u32.to_le_bytes());
     }
 
     #[test]
@@ -1068,6 +1069,14 @@ mod tests {
     fn complexity_descriptor_opcode_round_trips() {
         let disc = opcode_disc(Opcode::ComplexityDescriptor);
         assert_eq!(disc_opcode(disc).unwrap(), Opcode::ComplexityDescriptor);
+    }
+
+    #[test]
+    fn float_negate_opcodes_round_trip_at_their_pinned_ids() {
+        assert_eq!(opcode_disc(Opcode::NegF32), 142);
+        assert_eq!(opcode_disc(Opcode::NegF64), 143);
+        assert_eq!(disc_opcode(142).unwrap(), Opcode::NegF32);
+        assert_eq!(disc_opcode(143).unwrap(), Opcode::NegF64);
     }
 
     #[test]

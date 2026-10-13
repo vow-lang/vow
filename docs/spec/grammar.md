@@ -530,7 +530,7 @@ declare reference-typed parameters.
 
 | Operator | Meaning    |
 |----------|------------|
-| `-`      | Negation (not allowed on unsigned types) |
+| `-`      | Negation (not allowed on unsigned types); on `f32`/`f64` an IEEE sign flip, so `-0.0` is negative zero |
 | `!`      | Logical NOT|
 | `?`      | Unwrap (propagate error), postfix |
 

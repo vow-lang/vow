@@ -1461,6 +1461,25 @@ fn check_float_phi_temporary_keeps_its_type(ty: i64, c_ty: String, base: i64) ->
     0
 }
 
+fn check_float_negation_emits_unary_minus(ty: i64, op: i64, base: i64) -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ty, 0));
+    let neg_args: Vec<i64> = Vec::new();
+    neg_args.push(0);
+    insts.push(mk_inst(1, op, ty, neg_args));
+    insts.push(mk_inst_return(2, 1));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ty);
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(mk_function(base, String::from("negate"), params, ty, blocks));
+    let c: String = emit_c_module(mk_module(funcs), 16, 16, 16, 16);
+    if !c.contains(String::from("  v1 = -v0;\n")) { return base; }
+    if c.contains(String::from("not modelled")) { return base + 1; }
+    0
+}
+
 fn substring_function(id: i64, read_bytes: bool) -> IrFunction {
     let insts: Vec<IrInst> = Vec::new();
     insts.push(mk_inst_arg(0, ITY_PTR(), 0));
@@ -1799,5 +1818,9 @@ fn main() -> i32 {
     if r55 != 0 { return i64_to_i32_wrap(r55); }
     let r56: i64 = check_catalogue_c_model_keeps_the_pre_migration_known_set();
     if r56 != 0 { return i64_to_i32_wrap(r56); }
+    let r57: i64 = check_float_negation_emits_unary_minus(ITY_F64(), IOP_NEG_F64(), 760);
+    if r57 != 0 { return i64_to_i32_wrap(r57); }
+    let r58: i64 = check_float_negation_emits_unary_minus(ITY_F32(), IOP_NEG_F32(), 770);
+    if r58 != 0 { return i64_to_i32_wrap(r58); }
     0
 }

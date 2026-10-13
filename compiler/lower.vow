@@ -3273,6 +3273,12 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             return lctx_emit(ctx, IOP_NOT(), ITY_BOOL(), un_args, IDATA_NONE(), 0, 0, String::from(""), origin);
         }
         let operand_ty: i64 = lctx_inst_ty(ctx, operand_id);
+        if operand_ty == ITY_F32() {
+            return lctx_emit(ctx, IOP_NEG_F32(), ITY_F32(), un_args, IDATA_NONE(), 0, 0, String::from(""), origin);
+        }
+        if operand_ty == ITY_F64() {
+            return lctx_emit(ctx, IOP_NEG_F64(), ITY_F64(), un_args, IDATA_NONE(), 0, 0, String::from(""), origin);
+        }
         let result_ty: i64 = if operand_ty == ITY_I8() || operand_ty == ITY_U8() ||
                                operand_ty == ITY_I16() || operand_ty == ITY_U16() ||
                                operand_ty == ITY_I32() || operand_ty == ITY_U32() ||
