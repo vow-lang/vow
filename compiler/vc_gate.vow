@@ -226,8 +226,7 @@ fn vc_str_call_ok(inst: IrInst, tys: Vec<i64>, lits: Vec<i64>, kind: i64) -> boo
     if kind == VC_STR_NEW() { return n == 2 && inst.ty == ITY_PTR() && vc_ty_is_int(t0) && vc_ty_is_int(t1); }
     if kind == VC_STR_FORMAT() { return n == 1 && inst.ty == ITY_PTR() && vc_ty_is_int(t0) && vc_ty_bits(t0) == 64; }
     if t0 != ITY_PTR() { return false; }
-    if kind == VC_STR_CLONE() { return n == 1 && inst.ty == ITY_PTR(); }
-    if kind == VC_STR_PARSE() { return n == 1 && inst.ty == ITY_PTR(); }
+    if kind == VC_STR_CLONE() || kind == VC_STR_PARSE() { return n == 1 && inst.ty == ITY_PTR(); }
     if kind == VC_STR_CLEAR() { return n == 1 && inst.ty == ITY_UNIT(); }
     if kind == VC_STR_PUSH_BYTE() { return n == 2 && inst.ty == ITY_UNIT() && vc_ty_is_int(t1) && vc_ty_bits(t1) <= 64; }
     if kind == VC_STR_BYTE_AT() { return n == 2 && inst.ty == ITY_I64() && vc_vec_index_ok(t1); }
@@ -246,10 +245,10 @@ fn vc_str_call_ok(inst: IrInst, tys: Vec<i64>, lits: Vec<i64>, kind: i64) -> boo
 // Operand and result types of a `Vec` or `String` call. `get` yields the raw
 // 8-byte slot as `i64`; the lowerer narrows it with its own cast.
 fn vc_vec_call_ok(inst: IrInst, tys: Vec<i64>, lits: Vec<i64>, kind: i64) -> bool {
+    if kind >= VC_STR_BASE() { return vc_str_call_ok(inst, tys, lits, kind); }
     let n: u64 = inst.args.len();
     let t0: i64 = vc_arg_ty(tys, inst, 0);
     let t1: i64 = vc_arg_ty(tys, inst, 1);
-    if kind >= VC_STR_BASE() { return vc_str_call_ok(inst, tys, lits, kind); }
     if kind == VC_VEC_NEW() {
         return n == 2 && inst.ty == ITY_PTR() && vc_ty_is_int(t0) && vc_ty_is_int(t1);
     }

@@ -513,7 +513,7 @@ fn check_substring_and_pattern_terms() -> i64 {
     let len: i64 = vc_tm_var(ar, String::from("len"));
     let start: i64 = vc_tm_var(ar, String::from("st"));
     let end: i64 = vc_tm_var(ar, String::from("en"));
-    let cs: i64 = vc_str_clamped_start(ar, len, start);
+    let cs: i64 = vc_str_umin(ar, start, len);
     if vc_term_text(ar, cs) != String::from("(ite (bvule st len) st len)") { return 180; }
     let sub: i64 = vc_str_substring_len(ar, len, cs, end);
     if !contains(vc_term_text(ar, sub), String::from("(bvsub ")) { return 181; }

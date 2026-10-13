@@ -167,6 +167,14 @@ fn vc_assume(cs: VcClaims, pc: i64, t: i64) {
     cs.assumed.push(fact);
 }
 
+fn vc_assume_all(cs: VcClaims, pc: i64, facts: Vec<i64>) {
+    let mut i: u64 = 0;
+    while i < facts.len() {
+        vc_assume(cs, pc, facts[i]);
+        i = i + 1;
+    }
+}
+
 // A claim that `goal` holds on the paths reaching `inst`, then the assumption
 // that it does.
 fn vc_guard(cs: VcClaims, kind: i64, label: String, pc: i64, goal: i64, inst: IrInst) {
@@ -487,16 +495,12 @@ fn vc_walk_str(w: VcWalk, bi: u64, inst: IrInst, pc: i64, kind: i64) -> bool {
     let arr: i64 = vc_vec_cur_arr(vv, s, b);
     let len: i64 = vc_vec_cur_len(vv, s, b);
     if kind == VC_STR_SUBSTRING() || kind == VC_STR_SUBSTR() {
-        let start: i64 = vc_str_clamped_start(ar, len, w.var_of[inst.args[1] as u64]);
-        let mut n: i64 = vc_str_substring_len(ar, len, start, w.var_of[inst.args[2] as u64]);
-        if kind == VC_STR_SUBSTR() { n = vc_str_substr_len(ar, len, start, w.var_of[inst.args[2] as u64]); }
+        let start: i64 = vc_str_umin(ar, w.var_of[inst.args[1] as u64], len);
+        let bound: i64 = w.var_of[inst.args[2] as u64];
+        let n: i64 = if kind == VC_STR_SUBSTR() { vc_str_substr_len(ar, len, start, bound) } else { vc_str_substring_len(ar, len, start, bound) };
         let facts: Vec<i64> = Vec::new();
         let out_arr: i64 = vc_str_slice(vv, ar, hdr, facts, arr, start, n);
-        let mut fi: u64 = 0;
-        while fi < facts.len() {
-            vc_assume(cs, pc, facts[fi]);
-            fi = fi + 1;
-        }
+        vc_assume_all(cs, pc, facts);
         let obj: i64 = vc_agg_alloc(w.ag, w.fl.block_pc[bi]);
         w.obj_of[inst.id as u64] = obj;
         let t: i64 = vc_vec_push_slot(vv, obj, VC_OBJ_ALLOC());
@@ -519,7 +523,7 @@ fn vc_walk_str(w: VcWalk, bi: u64, inst: IrInst, pc: i64, kind: i64) -> bool {
         let lit: u64 = inst.args[2] as u64;
         if w.cstr_ok[lit] == 1 {
             let hit: i64 = vc_str_matches(ar, arr, len, w.var_of[inst.args[1] as u64], w.cstr[lit]);
-            vc_define(w, inst, vc_tm_app3(ar, VC_OP_ITE(), hit, vc_tm_bv(ar, 64, 1, 0), vc_tm_bv(ar, 64, 0, 0)));
+            vc_define(w, inst, vc_vec_elem64(ar, ITY_BOOL(), hit));
         } else {
             vc_define(w, inst, vc_agg_junk(w.ag, ar, hdr, 64));
         }
@@ -534,11 +538,7 @@ fn vc_walk_str(w: VcWalk, bi: u64, inst: IrInst, pc: i64, kind: i64) -> bool {
             let next_arr: i64 = vc_str_append(vv, ar, hdr, facts, arr, len, t_arr, t_len);
             let next_len: i64 = vc_tm_app2(ar, VC_OP_BVADD(), len, t_len);
             vc_assume(cs, pc, vc_vec_push_guard(ar, next_len));
-            let mut fi: u64 = 0;
-            while fi < facts.len() {
-                vc_assume(cs, pc, facts[fi]);
-                fi = fi + 1;
-            }
+            vc_assume_all(cs, pc, facts);
             vc_vec_write(vv, ar, hdr, s, b, next_arr, next_len);
         }
     }

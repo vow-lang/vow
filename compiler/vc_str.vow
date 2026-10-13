@@ -105,13 +105,17 @@ fn vc_str_matches(ar: VcArena, s_arr: i64, s_len: i64, pos: i64, lit: String) ->
     acc
 }
 
+fn vc_str_fresh_array(vv: VcVec, ar: VcArena, hdr: SmtScript, prefix: String) -> i64 {
+    let name: String = vc_vec_fresh_name(vv, prefix);
+    name.push_str(String::from("_varr"));
+    vc_agg_declare(ar, hdr, name, VC_SORT_ARRAY64())
+}
+
 // Array of a literal's bytes: a fresh array with the bytes stored at 0 .. n. The
 // chain is named every few stores so no term nests deeply however long the
 // literal is.
 fn vc_str_literal_array(vv: VcVec, ar: VcArena, hdr: SmtScript, bytes: String) -> i64 {
-    let name: String = vc_vec_fresh_name(vv, String::from("vl"));
-    name.push_str(String::from("_varr"));
-    let mut arr: i64 = vc_agg_declare(ar, hdr, name, VC_SORT_ARRAY64());
+    let mut arr: i64 = vc_str_fresh_array(vv, ar, hdr, String::from("vl"));
     let n: i64 = bytes.len() as i64;
     let mut k: i64 = 0;
     while k < n {
@@ -157,9 +161,7 @@ fn vc_str_append(vv: VcVec, ar: VcArena, hdr: SmtScript, facts: Vec<i64>, d_arr:
         }
         return arr;
     }
-    let name: String = vc_vec_fresh_name(vv, String::from("vr"));
-    name.push_str(String::from("_varr"));
-    let r: i64 = vc_agg_declare(ar, hdr, name, VC_SORT_ARRAY64());
+    let r: i64 = vc_str_fresh_array(vv, ar, hdr, String::from("vr"));
     facts.push(vc_str_range_eq(ar, r, d_arr, d_len));
     facts.push(vc_str_range_eq(ar, vc_str_view(ar, r, d_len), s_arr, s_len));
     r
@@ -171,11 +173,6 @@ fn vc_str_umin(ar: VcArena, a: i64, b: i64) -> i64 {
 
 fn vc_str_umax(ar: VcArena, a: i64, b: i64) -> i64 {
     vc_tm_app3(ar, VC_OP_ITE(), vc_tm_app2(ar, VC_OP_BVULE(), a, b), b, a)
-}
-
-// Where a substring starts: `start` clamped to the length, as the runtime does.
-fn vc_str_clamped_start(ar: VcArena, slen: i64, start: i64) -> i64 {
-    vc_str_umin(ar, start, slen)
 }
 
 // Length of `substring(start, end)`: `end` clamped into `[start, len]`, minus the
@@ -194,9 +191,7 @@ fn vc_str_substr_len(ar: VcArena, slen: i64, cs: i64, len: i64) -> i64 {
 // is stored byte by byte on a fresh array; any other is related to `s` by a range
 // relation, appended to `facts` for the caller to assume on the current path.
 fn vc_str_slice(vv: VcVec, ar: VcArena, hdr: SmtScript, facts: Vec<i64>, s_arr: i64, cs: i64, len: i64) -> i64 {
-    let name: String = vc_vec_fresh_name(vv, String::from("vs"));
-    name.push_str(String::from("_varr"));
-    let r: i64 = vc_agg_declare(ar, hdr, name, VC_SORT_ARRAY64());
+    let r: i64 = vc_str_fresh_array(vv, ar, hdr, String::from("vs"));
     let n: i64 = vc_str_const_len(ar, len);
     if n >= 0 && n <= VC_STR_EXPAND_LIMIT() {
         let mut arr: i64 = r;
