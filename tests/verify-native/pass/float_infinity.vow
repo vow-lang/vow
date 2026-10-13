@@ -1,0 +1,45 @@
+// TEST: category float
+// Float division by zero is not an abort: it is an infinity or a NaN, and the
+// verifier proves what follows from that.
+module FloatInfinity
+
+fn divide_by_zero_is_infinity(x: f64) -> bool vow {
+  requires: x > 1.0,
+  requires: x - x == x - x,
+  ensures: result
+} {
+  x / 0.0 > x
+}
+
+fn zero_over_zero_is_nan(x: f64) -> bool vow {
+  requires: x == 0.0,
+  ensures: result
+} {
+  let n: f64 = x / x;
+  n != n
+}
+
+fn infinity_absorbs_addition(x: f64, y: f64) -> bool vow {
+  requires: x > 1.0,
+  requires: x - x == x - x,
+  requires: y - y == y - y,
+  ensures: result
+} {
+  let inf: f64 = x / 0.0;
+  inf + y == inf
+}
+
+fn infinity_minus_itself_is_nan(x: f64) -> bool vow {
+  requires: x > 1.0,
+  requires: x - x == x - x,
+  ensures: result
+} {
+  let inf: f64 = x / 0.0;
+  let d: f64 = inf - inf;
+  d != d
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

@@ -41,6 +41,10 @@ fn check_known_classes() -> i64 {
     if vc_op_model(IOP_CALL()) != VC_OPM_CALL() { return 602; }
     if vc_op_model(IOP_FIELD_SET()) != VC_OPM_MODELED() { return 603; }
     if vc_op_model(IOP_FIELD_GET()) != VC_OPM_MODELED() { return 611; }
+    if vc_op_model(IOP_ADD_F32()) != VC_OPM_MODELED() { return 612; }
+    if vc_op_model(IOP_GE_F64()) != VC_OPM_MODELED() { return 613; }
+    if vc_op_model(IOP_CONST_F64()) != VC_OPM_MODELED() { return 614; }
+    if vc_op_model(IOP_CONST_STR()) != VC_OPM_UNSUPPORTED() { return 615; }
     if vc_op_model(IOP_REM_F32()) != VC_OPM_FLOAT_REM() { return 604; }
     if vc_op_model(IOP_REM_F64()) != VC_OPM_FLOAT_REM() { return 605; }
     if vc_op_model(9999) != VC_OPM_UNCLASSIFIED() { return 606; }

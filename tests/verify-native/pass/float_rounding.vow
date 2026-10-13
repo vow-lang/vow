@@ -1,0 +1,39 @@
+// TEST: category float
+// Arithmetic rounds to nearest, ties to even: 2^53 + 1 is a tie and goes down
+// to 2^53, 2^53 + 3 is a tie and goes up to 2^53 + 4, and a product past the
+// largest finite value is an infinity.
+module FloatRounding
+
+fn tiny_is_absorbed(x: f64) -> f64 vow {
+  requires: x == 1.0,
+  ensures: result == 1.0
+} {
+  x + 0.00000000000000001
+}
+
+fn tie_rounds_down_to_even(x: f64) -> bool vow {
+  requires: x == 9007199254740992.0,
+  ensures: result
+} {
+  x + 1.0 == x
+}
+
+fn tie_rounds_up_to_even(x: f64) -> bool vow {
+  requires: x == 9007199254740992.0,
+  ensures: result
+} {
+  x + 3.0 == x + 4.0
+}
+
+fn product_overflows_to_infinity(x: f64) -> bool vow {
+  requires: x == 100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.0,
+  ensures: result
+} {
+  let p: f64 = x * x;
+  p > x
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

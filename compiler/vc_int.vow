@@ -2,6 +2,7 @@ module VcInt
 
 use ir
 use vc_term
+use vc_fp
 
 // Integer semantics for the native verifier: widths and signedness of the IR
 // integer types, and the term builders for wrapping and checked arithmetic,
@@ -33,7 +34,7 @@ fn vc_ty_bits(ty: i64) -> i64 {
 fn vc_ty_sort(ty: i64) -> i64 {
     if ty == ITY_BOOL() { return VC_SORT_BOOL(); }
     if vc_ty_is_int(ty) { return vc_ty_bits(ty); }
-    -1
+    vc_fp_sort(ty)
 }
 
 // Constant of integer type `ty` from its limbs. `CONST_I32`/`CONST_U8` carry

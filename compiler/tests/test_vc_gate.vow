@@ -237,7 +237,7 @@ fn check_op_details() -> i64 {
     let pf: Vec<i64> = Vec::new();
     pf.push(ITY_F64());
     let rf: String = vc_skip_reason(one_block(String::from("f"), pf, ITY_F64(), f));
-    if rf != String::from("unsupported-opcode: GetArg[f64]") { return 30; }
+    if rf.len() != 0 { return 30; }
 
     let mixed: Vec<IrInst> = Vec::new();
     mixed.push(mk_inst_arg(0, ITY_I64(), 0));

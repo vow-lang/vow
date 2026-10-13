@@ -1,0 +1,17 @@
+// TEST: category float
+// TEST: counterexample-fn "reassociate"
+// TEST: counterexample-vow-id 3
+// TEST: counterexample-blame Callee
+// TEST: replay-skipped float parameters are not rebuilt by the replay harness
+// Rounding after each addition makes `+` non-associative even on finite
+// operands, which an exact-real model would have proven.
+module FloatAdditionNotAssociative
+
+fn reassociate(a: f64, b: f64, c: f64) -> f64 vow {
+  requires: a - a == a - a,
+  requires: b - b == b - b,
+  requires: c - c == c - c,
+  ensures: result == a + (b + c)
+} {
+  (a + b) + c
+}

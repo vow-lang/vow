@@ -2,6 +2,7 @@ module VcOps
 
 use ir
 use ir_dominance
+use vc_fp
 
 // The native verifier's op-model table: the one place that says which IR
 // opcodes and runtime builtins the verifier models, and the closed set of
@@ -51,7 +52,7 @@ fn VC_OPM_CALL() -> i64 { 2 }
 fn VC_OPM_FLOAT_REM() -> i64 { 4 }
 
 fn vc_op_modeled(op: i64) -> bool {
-    vc_op_modeled_int(op) || vc_op_modeled_core(op)
+    vc_op_modeled_int(op) || vc_op_modeled_core(op) || vc_fp_is_op(op)
 }
 
 fn vc_op_modeled_int(op: i64) -> bool {
@@ -75,13 +76,7 @@ fn vc_op_modeled_core(op: i64) -> bool {
 }
 
 fn vc_op_unsupported(op: i64) -> bool {
-    op == IOP_CONST_F32() || op == IOP_CONST_F64() || op == IOP_CONST_STR()
-        || op == IOP_ADD_F32() || op == IOP_SUB_F32() || op == IOP_MUL_F32() || op == IOP_DIV_F32()
-        || op == IOP_EQ_F32() || op == IOP_NE_F32() || op == IOP_LT_F32() || op == IOP_LE_F32()
-        || op == IOP_GT_F32() || op == IOP_GE_F32()
-        || op == IOP_ADD_F64() || op == IOP_SUB_F64() || op == IOP_MUL_F64() || op == IOP_DIV_F64()
-        || op == IOP_EQ_F64() || op == IOP_NE_F64() || op == IOP_LT_F64() || op == IOP_LE_F64()
-        || op == IOP_GT_F64() || op == IOP_GE_F64()
+    op == IOP_CONST_STR()
         || op == IOP_LOAD() || op == IOP_STORE()
         || op == IOP_DEBUG_CALL()
         || op == IOP_COMPLEXITY_DESCRIPTOR()

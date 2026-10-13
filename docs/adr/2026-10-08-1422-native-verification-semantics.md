@@ -531,3 +531,42 @@ no C-emitter or ESBMC change; it exists only in the self-hosted verifier.
   where the step has a model for every `k`. New `pass/` fixtures that only the
   step proves: `loop_kinduction_alternating_divisor`, `_callee_requires`,
   `_invariant_not_one_inductive` and `_break`.
+
+## Addendum (#1415): `f32` and `f64`
+
+Rule 5 is implemented in `compiler/vc_fp.vow` and the term, writer, executor and
+model-parsing modules around it.
+
+- **Terms.** A float value is a term of the `FloatingPoint` sort, a constant is
+  the `to_fp` of its bit pattern, and `+ - * /` are `fp.add RNE` and its siblings.
+  A comparison is `fp.eq`/`fp.lt`/`fp.leq`/`fp.gt`/`fp.geq`; `!=` is the negation
+  of `fp.eq`, true for a NaN operand. The simplifier never folds a float
+  operation or decides a float predicate on equal operands (`x == x` is false for
+  a NaN), so every float fact is the solver's. A function that uses a float is
+  asked in `QF_BVFP`, or `QF_ABVFP` with a `Vec`.
+- **No aborts.** Float division by zero is an infinity or a NaN, so no float
+  operation adds a claim. A float parameter is unconstrained: it may be a NaN or
+  an infinity, and a contract that needs a finite value states it.
+- **Aggregates.** A float struct field or enum payload is a slot term of its own
+  sort. The slot model keys a slot by index and sort, so a float written to a slot
+  is read back exactly, and the same slot read at another sort is unconstrained
+  rather than reinterpreted; this is what keeps the model from claiming a bit
+  pattern conversion the solver cannot express. The native and ESBMC verdicts agree
+  on the float fixtures of `tests/verify` and `tests/verify-fail`.
+- **Counterexamples.** A model float arrives as `(fp #b.. #b.. #b..)` and is
+  carried as its bit pattern. It is shown as the shortest decimal that reads back
+  as the same `f64` (an `f32` is widened exactly; `NaN`, `inf`, `-inf`), so a NaN's
+  payload is not shown. `--replay-cex` reports a float parameter as `skipped`.
+- **Hooks.** `parse_f64_bits` and `format_f64_bits` stay `unmodeled-builtin`: the
+  executor encodes no builtin call yet and their other side is a `String`, which
+  needs the model of #1426 (follow-up #1646). Modelling `parse_f64_bits` as an
+  unconstrained `u64` per call would refute `parse(s) == parse(s)` with a
+  counterexample no run reproduces, which is why it waits for the `String` model.
+- **Still skipped.** Float `%` (`float-rem-unsupported`), unary minus on a float
+  (the lowerer emits an integer subtraction that no backend compiles, #1647) and a
+  `Vec` of floats (`unsupported-opcode`; a `Vec` element is a 64-bit vector and
+  SMT-LIB cannot convert a float to one bit-exactly).
+- **Cost.** Bit-blasting `fp.mul` and `fp.div` at 53 bits is expensive, so a hard
+  nonlinear float property can end `unknown` or `timeout`, never `proven`. The
+  float fixtures are part of the performance corpus (`scripts/verify_perf.py`
+  collects every `tests/verify-native` directory).

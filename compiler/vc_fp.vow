@@ -1,0 +1,140 @@
+module VcFp
+
+use ir
+use vc_term
+
+// IEEE-754 floats for the native verifier (ADR-2026-10-08-1422, rule 5). An
+// `f32` or `f64` value is a term of the SMT `FloatingPoint` sort (`Float32`,
+// `Float64`); arithmetic rounds to nearest, ties to even, the only mode the
+// language has. A comparison is the IEEE predicate (`fp.eq`, `fp.lt`, ...), so
+// `NaN == NaN` and every ordering with a NaN operand are false and `-0.0 == 0.0`
+// is true, and `!=` is the negation of `fp.eq`: true when an operand is a NaN.
+// SMT-LIB has one NaN per format, so the verifier has a single canonical NaN and
+// a NaN payload or sign is not distinguishable. Float `%` is not in the table:
+// the gate skips it as `float-rem-unsupported`.
+
+fn vc_ty_is_float(ty: i64) -> bool {
+    ty == ITY_F32() || ty == ITY_F64()
+}
+
+// SMT sort code of a float type; -1 for any other type.
+fn vc_fp_sort(ty: i64) -> i64 {
+    if ty == ITY_F32() { return VC_SORT_F32(); }
+    if ty == ITY_F64() { return VC_SORT_F64(); }
+    -1
+}
+
+// The float type an opcode operates on; -1 for an opcode that is not a modelled
+// float operation (float `%` included).
+fn vc_fp_op_ty(op: i64) -> i64 {
+    if op == IOP_ADD_F32() || op == IOP_SUB_F32() || op == IOP_MUL_F32() || op == IOP_DIV_F32()
+        || op == IOP_EQ_F32() || op == IOP_NE_F32() || op == IOP_LT_F32() || op == IOP_LE_F32()
+        || op == IOP_GT_F32() || op == IOP_GE_F32() || op == IOP_CONST_F32() {
+        return ITY_F32();
+    }
+    if op == IOP_ADD_F64() || op == IOP_SUB_F64() || op == IOP_MUL_F64() || op == IOP_DIV_F64()
+        || op == IOP_EQ_F64() || op == IOP_NE_F64() || op == IOP_LT_F64() || op == IOP_LE_F64()
+        || op == IOP_GT_F64() || op == IOP_GE_F64() || op == IOP_CONST_F64() {
+        return ITY_F64();
+    }
+    -1
+}
+
+fn vc_fp_is_op(op: i64) -> bool {
+    vc_fp_op_ty(op) >= 0
+}
+
+fn vc_fp_is_const(op: i64) -> bool {
+    op == IOP_CONST_F32() || op == IOP_CONST_F64()
+}
+
+// The SMT operator of an arithmetic opcode, or -1.
+fn vc_fp_arith_smt(op: i64) -> i64 {
+    if op == IOP_ADD_F32() || op == IOP_ADD_F64() { return VC_OP_FPADD(); }
+    if op == IOP_SUB_F32() || op == IOP_SUB_F64() { return VC_OP_FPSUB(); }
+    if op == IOP_MUL_F32() || op == IOP_MUL_F64() { return VC_OP_FPMUL(); }
+    if op == IOP_DIV_F32() || op == IOP_DIV_F64() { return VC_OP_FPDIV(); }
+    -1
+}
+
+fn vc_fp_is_arith(op: i64) -> bool {
+    vc_fp_arith_smt(op) >= 0
+}
+
+fn vc_fp_is_ne(op: i64) -> bool {
+    op == IOP_NE_F32() || op == IOP_NE_F64()
+}
+
+// The SMT predicate of a comparison opcode (`!=` is `fp.eq` negated by the
+// caller), or -1.
+fn vc_fp_cmp_smt(op: i64) -> i64 {
+    if op == IOP_EQ_F32() || op == IOP_EQ_F64() || vc_fp_is_ne(op) { return VC_OP_FPEQ(); }
+    if op == IOP_LT_F32() || op == IOP_LT_F64() { return VC_OP_FPLT(); }
+    if op == IOP_LE_F32() || op == IOP_LE_F64() { return VC_OP_FPLE(); }
+    if op == IOP_GT_F32() || op == IOP_GT_F64() { return VC_OP_FPGT(); }
+    if op == IOP_GE_F32() || op == IOP_GE_F64() { return VC_OP_FPGE(); }
+    -1
+}
+
+fn vc_fp_is_cmp(op: i64) -> bool {
+    vc_fp_cmp_smt(op) >= 0
+}
+
+// The constant of float type `ty` with IEEE bit pattern `bits` (the low 32 bits
+// for an `f32`). Every NaN pattern is the one SMT NaN.
+fn vc_fp_const(ar: VcArena, ty: i64, bits: i64) -> i64 {
+    if ty == ITY_F32() {
+        return vc_tm_app1(ar, VC_OP_TOFP32(), vc_tm_bv(ar, 32, bits, 0));
+    }
+    vc_tm_app1(ar, VC_OP_TOFP64(), vc_tm_bv(ar, 64, bits, 0))
+}
+
+// Value of a float comparison instruction.
+fn vc_fp_cmp(ar: VcArena, op: i64, a: i64, b: i64) -> i64 {
+    let t: i64 = vc_tm_app2(ar, vc_fp_cmp_smt(op), a, b);
+    if vc_fp_is_ne(op) { return vc_tm_app1(ar, VC_OP_NOT(), t); }
+    t
+}
+
+// Whether a float instruction has the operand and result types the executor
+// models: every operand and the result of arithmetic share the opcode's float
+// type, a comparison reads two of them and yields Bool, a constant takes no
+// operand and carries the type's own data kind. `t0`/`t1` are the types of the
+// first two operands (-1 when absent).
+fn vc_fp_inst_ok(inst: IrInst, t0: i64, t1: i64) -> bool {
+    let ft: i64 = vc_fp_op_ty(inst.op);
+    let n: u64 = inst.args.len();
+    if vc_fp_is_const(inst.op) {
+        let dk: i64 = { if ft == ITY_F32() { IDATA_CONST_F32() } else { IDATA_CONST_F64() } };
+        return inst.ty == ft && n == 0 && inst.dk == dk;
+    }
+    if vc_fp_is_arith(inst.op) {
+        return n == 2 && inst.ty == ft && t0 == ft && t1 == ft;
+    }
+    vc_fp_is_cmp(inst.op) && n == 2 && inst.ty == ITY_BOOL() && t0 == ft && t1 == ft
+}
+
+// The `f64` bit pattern of the `f32` with pattern `b` (low 32 bits): widening is
+// exact, so a counterexample value of either type is shown as one `f64`.
+fn vc_fp_widen_f32(b: i64) -> i64 {
+    let sign: i64 = (b >> 31) & 1;
+    let exp: i64 = (b >> 23) & 255;
+    let mant: i64 = b & 8388607;
+    let mut e64: i64 = 0;
+    let mut m64: i64 = 0;
+    if exp == 255 {
+        e64 = 2047;
+        m64 = mant << 29;
+    } else if exp != 0 {
+        e64 = exp - 127 + 1023;
+        m64 = mant << 29;
+    } else if mant != 0 {
+        let mut h: i64 = 22;
+        while (mant >> h) & 1 == 0 {
+            h = h - 1;
+        }
+        e64 = h - 149 + 1023;
+        m64 = (mant << (52 - h)) & 4503599627370495;
+    }
+    (sign << 63) | (e64 << 52) | m64
+}
