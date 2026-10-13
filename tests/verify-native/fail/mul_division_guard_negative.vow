@@ -1,0 +1,18 @@
+// TEST: counterexample-fn "rect_area"
+// TEST: counterexample-vow-id 2
+// TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures result >= 0"
+module MulDivisionGuardNegative
+
+fn rect_area(w: i64, h: i64) -> i64 vow {
+  requires: h >= 0,
+  requires: h == 0 || w <= 9223372036854775807 / h,
+  ensures: result >= 0
+} {
+  w * h
+}
+
+fn main() -> i32 [io] {
+  print_i64(rect_area(3, 4));
+  0
+}
