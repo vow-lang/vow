@@ -241,7 +241,7 @@ arena inference read) is derived from the entry's documented return type, not st
 `arena_routing: heap_fresh` only records (and the generator validates) that the symbol has an
 `_in_arena` variant in `arena_routes`. Every op returning a `String`, `Vec` or `Option` must declare
 `arena_routing` (`heap_fresh` exactly when its symbol is a route; otherwise `none` plus a free-text
-`arena_routing_reason` saying why the heap result has no arena variant; the ADR above lists today's two),
+`arena_routing_reason` saying why the heap result has no arena variant; the ADR above lists today's one, `stdin_read_line`),
 and `--check` fails on any disagreement. `i64_to_string`,
 `string_matches_literal_at` (its literal operand lowers specially) and the narrowing intrinsics stay
 hand-written.

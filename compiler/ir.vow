@@ -442,6 +442,9 @@ fn fresh_arena_base_extern(sym: String) -> bool {
         if c0 == 106 {
             return sym == String::from("__vow_string_join");
         }
+        if c0 == 109 {
+            return sym == String::from("__vow_proc_sample");
+        }
         if c0 == 111 {
             return sym == String::from("__vow_path_lookup");
         }

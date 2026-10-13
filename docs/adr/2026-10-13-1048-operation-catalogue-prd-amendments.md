@@ -243,11 +243,11 @@ compiler, and when an `excluded` entry matches no table entry:
   fields, gates and marker pairs, and points back here for the departures from
   the PRD.
 - A heap-returning operation with no `_in_arena` variant must say why in
-  `arena_routing_reason` (`arena_routing: none`); today that is
-  `stdin_read_line`, which returns a reused per-thread scratch buffer, and
-  `proc_sample`, which allocates in the root arena and retains each result
-  until exit. The latter is a leak, tracked in #1639: the catalogue records
-  the fact, and fixing it will turn that entry into `heap_fresh`.
+  `arena_routing_reason` (`arena_routing: none`); today that is only
+  `stdin_read_line`, which returns a reused per-thread scratch buffer.
+  `proc_sample` used to be the second such entry (it allocated each result in
+  the root arena and retained it until exit, #1639); it now has a
+  `__vow_proc_sample_in_arena` variant and is `heap_fresh`.
 - When epic #1398 P6 deletes `c_emitter.{rs,vow}`, `c_model` and its two
   generated targets are deleted with them; `verifier_model` stays.
 - Extending the catalogue to a family (for example the narrowing conversions)

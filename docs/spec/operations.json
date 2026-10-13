@@ -512,8 +512,7 @@
       "return": "ptr",
       "doc_signature": "fn() -> String",
       "effects": "[io]",
-      "arena_routing": "none",
-      "arena_routing_reason": "Allocates in the root arena and has no _in_arena variant, so each call retains its result until exit; tracked in issue 1639.",
+      "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled"
     },
     {
@@ -928,7 +927,8 @@
     "__vow_string_to_upper",
     "__vow_string_to_lower",
     "__vow_string_replace",
-    "__vow_string_join"
+    "__vow_string_join",
+    "__vow_proc_sample"
   ],
   "excluded": [
     {
