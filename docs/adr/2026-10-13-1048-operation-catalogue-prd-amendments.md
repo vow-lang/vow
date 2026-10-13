@@ -194,7 +194,7 @@ builtin enters the catalogue by an entry in `operations`, leaves the exclusion
 list by deleting its line, and is never in both.
 
 **Enforced by:** the coverage gate and its generator unit tests (work item
-`ops-catalogue-coverage-and-type-env-tie`, *pending*). The requirement on that
+`ops-catalogue-coverage-and-type-env-tie`, landed in `operations.json`'s `excluded` section). The requirement on that
 slice: the gate must fail when a name in either compiler's type-checker table
 is neither an `operations` entry nor an `excluded` entry, when a name is in
 both, when an `excluded` entry has no reason, and when an `operations` entry's
