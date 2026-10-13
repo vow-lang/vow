@@ -778,10 +778,29 @@ def _pure_c_model(op):
     return {}
 
 
-# The native verifier models none of these builtins yet. The two pure hash
-# builtins still say whether the ESBMC C model knows them.
+# The native verifier models the String slice builtins by runtime symbol
+# (`vc_str`, #1426) and none of the others yet. The two pure hash builtins still
+# say whether the ESBMC C model knows them.
+VERIFIER_KNOWN_NAMES = {"string_substr", "string_starts_with", "string_ends_with"}
+
+
+def _reasoned(op):
+    """`op` with the `verifier_skip_reason` a pure unmodeled op must carry."""
+    if op["effects"] == "[]" and op.get("verifier_model") == "unmodeled":
+        return dict(op, verifier_skip_reason="not modelled by the test fixture")
+    return op
+
+
+def _without_skip_reason(ops):
+    return [{k: v for k, v in op.items() if k != "verifier_skip_reason"} for op in ops]
+
+
 KNOWN_OPS = [
-    dict(op, verifier_model="unmodeled", **_pure_c_model(op))
+    dict(
+        op,
+        verifier_model="known" if op["name"] in VERIFIER_KNOWN_NAMES else "unmodeled",
+        **_pure_c_model(op),
+    )
     for op in (
         PRINT_OPS
         + FS_STDIN_ARGS_STDERR_OPS
@@ -801,7 +820,7 @@ class LoadCatalogueTest(unittest.TestCase):
 
     def test_real_catalogue_loads_and_matches_known_ops(self):
         ops = go.load_catalogue(REPO_ROOT)
-        self.assertEqual(ops, KNOWN_OPS)
+        self.assertEqual(_without_skip_reason(ops), KNOWN_OPS)
 
     def test_missing_required_field_raises(self):
         with tempfile.TemporaryDirectory() as d:
@@ -2061,6 +2080,61 @@ class VerifierModelDriftTest(unittest.TestCase):
     def test_real_catalogue_has_a_decision_for_every_builtin(self):
         self.assertEqual(go.check_verifier_models(go.load_catalogue(REPO_ROOT)), [])
 
+    def test_pure_unmodeled_entry_needs_a_skip_reason(self):
+        problems = go.check_verifier_models(
+            [dict(HASH_OPS[0], verifier_model="unmodeled")]
+        )
+        self.assertEqual(len(problems), 1)
+        self.assertIn("'hash_u64'", problems[0])
+        self.assertIn("verifier_skip_reason", problems[0])
+
+    def test_pure_unmodeled_entry_with_a_reason_is_clean(self):
+        ops = [
+            dict(
+                HASH_OPS[0],
+                verifier_model="unmodeled",
+                verifier_skip_reason="a fold over every byte",
+            )
+        ]
+        self.assertEqual(go.check_verifier_models(ops), [])
+
+    def test_effectful_unmodeled_entry_needs_no_reason(self):
+        ops = [dict(PRINT_OPS[0], verifier_model="unmodeled")]
+        self.assertEqual(go.check_verifier_models(ops), [])
+
+    def test_blank_or_non_string_reason_is_rejected(self):
+        for bad in ("", "   ", 7):
+            with self.subTest(reason=bad):
+                problems = go.check_verifier_models(
+                    [
+                        dict(
+                            HASH_OPS[0],
+                            verifier_model="unmodeled",
+                            verifier_skip_reason=bad,
+                        )
+                    ]
+                )
+                self.assertEqual(len(problems), 1)
+                self.assertIn("empty or non-string", problems[0])
+
+    def test_reason_on_a_modelled_or_effectful_entry_is_rejected(self):
+        for op in (
+            dict(HASH_OPS[0], verifier_model="known"),
+            dict(PRINT_OPS[0], verifier_model="unmodeled"),
+        ):
+            with self.subTest(op=op["name"]):
+                problems = go.check_verifier_models(
+                    [dict(op, verifier_skip_reason="because")]
+                )
+                self.assertEqual(len(problems), 1)
+                self.assertIn("not a pure 'unmodeled' op", problems[0])
+
+    def test_real_catalogue_explains_every_pure_unmodeled_builtin(self):
+        for op in go.load_catalogue(REPO_ROOT):
+            if op["effects"] == "[]" and op["verifier_model"] == "unmodeled":
+                with self.subTest(op=op["name"]):
+                    self.assertTrue(op["verifier_skip_reason"].strip())
+
     def test_effectful_builtin_cannot_be_known_to_the_native_verifier(self):
         problems = go.check_verifier_models(
             [dict(PRINT_OPS[2], verifier_model="known")]
@@ -2137,7 +2211,7 @@ class VerifierModelDriftTest(unittest.TestCase):
             "verifier_model": "known",
             "c_model": "unmodeled",
         }
-        ops = [dict(op, verifier_model="unmodeled") for op in KNOWN_OPS]
+        ops = [_reasoned(dict(op, verifier_model="unmodeled")) for op in KNOWN_OPS]
         ops.append(pure)
         self.assertEqual(go.check_verifier_models(ops), [])
         with tempfile.TemporaryDirectory() as d:
@@ -2445,9 +2519,10 @@ class QueryUtilityCatalogueTest(unittest.TestCase):
         for name in ("i64_to_string", "string_matches_literal_at", "parse_u64"):
             self.assertNotIn(name, self.ops)
 
-    def test_native_verifier_models_none_of_them(self):
+    def test_native_verifier_models_only_the_string_slice(self):
         for row in _QUERY_UTILITY_ROWS:
-            self.assertEqual(self.ops[row[0]]["verifier_model"], "unmodeled", row[0])
+            want = "known" if row[0] in VERIFIER_KNOWN_NAMES else "unmodeled"
+            self.assertEqual(self.ops[row[0]]["verifier_model"], want, row[0])
         block = go.gen_vow_vc_ops_block(self.catalogue, [])
         self.assertIn("return false;", block)
 

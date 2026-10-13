@@ -10,6 +10,8 @@ use vc_gate
 use vc_flow
 use vc_agg
 use vc_vec
+use vc_strops
+use vc_str
 use ir_dominance
 
 // Symbolic execution of an acyclic integer/Bool function (one that
@@ -78,6 +80,7 @@ fn VC_LABEL_SHIFT_COUNT() -> String { String::from("integer shift count") }
 fn VC_LABEL_UNWRAP_NONE() -> String { String::from("unwrap-none") }
 fn VC_LABEL_UNWIND() -> String { String::from("unwinding assertion") }
 fn VC_LABEL_VEC_BOUNDS() -> String { String::from("vec bounds") }
+fn VC_LABEL_STRING_BOUNDS() -> String { String::from("string bounds") }
 
 // One shared command list (`header`) and one append-only assumption list serve
 // every claim: claim `k` is the first `header_lens[k]` header commands, the
@@ -405,25 +408,117 @@ fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
     false
 }
 
-// A `Vec` call (`vc_vec`). `get` and `len` define a value, the rest change the
-// object's state in this block; an index out of bounds is a hard claim, assumed
-// afterwards like the other aborts.
-fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
-    let kind: i64 = vc_inst_vec_kind(inst);
-    if kind == VC_VEC_NONE() { return false; }
+// A fresh aggregate object for the result of `inst`, allocated at the block's path condition.
+fn vc_walk_new_obj(w: VcWalk, bi: u64, inst: IrInst) -> i64 {
+    let obj: i64 = vc_agg_alloc(w.ag, w.fl.block_pc[bi]);
+    w.obj_of[inst.id as u64] = obj;
+    obj
+}
+
+// The result term of a `String` predicate: the 64-bit `1`/`0` of an `i64` result,
+// the Bool itself for a `Bool` one.
+fn vc_str_flag(ar: VcArena, inst: IrInst, t: i64) -> i64 {
+    if inst.ty == ITY_BOOL() { return t; }
+    vc_tm_app3(ar, VC_OP_ITE(), t, vc_tm_bv(ar, 64, 1, 0), vc_tm_bv(ar, 64, 0, 0))
+}
+
+// A `String` call (`vc_str`) on the string of slot `s`. A new string (a clone, a
+// substring) is a new object with its own state; a mutation replaces the state of
+// the receiver in this block. A byte read at or past the length is a hard claim,
+// like a `Vec` index, assumed afterwards.
+fn vc_walk_str(w: VcWalk, bi: u64, inst: IrInst, pc: i64, kind: i64, s: i64) {
     let cs: VcClaims = w.cs;
     let ar: VcArena = cs.arena;
     let hdr: SmtScript = cs.header;
     let vv: VcVec = w.vv;
     let b: i64 = bi as i64;
-    if kind == VC_VEC_NEW() {
-        let obj: i64 = vc_agg_alloc(w.ag, w.fl.block_pc[bi]);
-        w.obj_of[inst.id as u64] = obj;
+    let arr: i64 = vc_vec_cur_arr(vv, s, b);
+    let len: i64 = vc_vec_cur_len(vv, s, b);
+    if kind == VC_STR_BYTE_AT() {
+        let idx: i64 = w.var_of[inst.args[1] as u64];
+        vc_guard(cs, VC_CLAIM_VEC_BOUNDS(), VC_LABEL_STRING_BOUNDS(), pc, vc_vec_in_bounds(ar, idx, len), inst);
+        vc_define(w, inst, vc_str_byte(ar, arr, idx));
+    } else if kind == VC_STR_PUSH_BYTE() {
+        let elem: i64 = vc_str_pushed_byte(ar, w.tys[inst.args[1] as u64], w.var_of[inst.args[1] as u64]);
+        vc_assume(cs, pc, vc_vec_push_guard(ar, len));
+        vc_vec_push(vv, ar, hdr, s, b, elem);
+    } else if kind == VC_STR_CLEAR() {
+        vc_vec_write(vv, ar, hdr, s, b, arr, vc_str_zero(ar));
+    } else if kind == VC_STR_PUSH_STR() {
+        let t: i64 = vc_vec_slot(vv, w.ag, ar, hdr, cs.assumed, w.obj_of[inst.args[1] as u64]);
+        let ta: i64 = vc_vec_cur_arr(vv, t, b);
+        let tl: i64 = vc_vec_cur_len(vv, t, b);
+        let total: i64 = vc_tm_app2(ar, VC_OP_BVADD(), len, tl);
+        vc_assume(cs, pc, vc_tm_app2(ar, VC_OP_BVULT(), total, vc_vec_len_mask(ar)));
+        vc_vec_write(vv, ar, hdr, s, b, vc_str_append(vv, ar, hdr, cs.assumed, arr, len, ta, tl), total);
+    } else if kind == VC_STR_EQ() || kind == VC_STR_STARTS_WITH() || kind == VC_STR_ENDS_WITH() {
+        let t: i64 = vc_vec_slot(vv, w.ag, ar, hdr, cs.assumed, w.obj_of[inst.args[1] as u64]);
+        let ta: i64 = vc_vec_cur_arr(vv, t, b);
+        let tl: i64 = vc_vec_cur_len(vv, t, b);
+        let mut r: i64 = 0;
+        if kind == VC_STR_STARTS_WITH() { r = vc_str_starts_with(vv, ar, hdr, cs.assumed, arr, len, ta, tl); }
+        else if kind == VC_STR_ENDS_WITH() { r = vc_str_ends_with(vv, ar, hdr, cs.assumed, arr, len, ta, tl); }
+        else { r = vc_str_eq(vv, ar, hdr, cs.assumed, arr, len, ta, tl); }
+        vc_define(w, inst, vc_str_flag(ar, inst, r));
+    } else if kind == VC_STR_MATCHES_LITERAL_AT() {
+        let lit: i64 = vc_vec_slot(vv, w.ag, ar, hdr, cs.assumed, w.obj_of[inst.args[2] as u64]);
+        let m: i64 = vc_str_matches_literal(vv, ar, hdr, cs.assumed, arr, len, w.var_of[inst.args[1] as u64], vv.lit_text[lit as u64], vc_vec_cur_arr(vv, lit, b));
+        vc_define(w, inst, vc_str_flag(ar, inst, m));
+    } else {
+        let obj: i64 = vc_walk_new_obj(w, bi, inst);
+        let mut narr: i64 = arr;
+        let mut nlen: i64 = len;
+        if kind == VC_STR_SUBSTRING() || kind == VC_STR_SUBSTR() {
+            let range: Vec<i64> = Vec::new();
+            let x: i64 = w.var_of[inst.args[1] as u64];
+            let y: i64 = w.var_of[inst.args[2] as u64];
+            if kind == VC_STR_SUBSTRING() { vc_str_substring_range(ar, len, x, y, range); }
+            else { vc_str_substr_range(ar, len, x, y, range); }
+            nlen = range[1];
+            narr = vc_str_slice(vv, ar, hdr, cs.assumed, arr, range[0], range[1]);
+        }
+        vc_vec_create_with(vv, ar, hdr, obj, b, narr, nlen);
+    }
+}
+
+// A `Vec` call (`vc_vec`). `get` and `len` define a value, the rest change the
+// object's state in this block; an index out of bounds is a hard claim, assumed
+// afterwards like the other aborts.
+fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
+    let kind: i64 = vc_inst_vec_kind(inst);
+    let cs: VcClaims = w.cs;
+    let ar: VcArena = cs.arena;
+    let hdr: SmtScript = cs.header;
+    let vv: VcVec = w.vv;
+    let b: i64 = bi as i64;
+    if inst.op == IOP_CONST_STR() {
+        let obj: i64 = vc_walk_new_obj(w, bi, inst);
+        vc_str_literal(vv, ar, hdr, cs.assumed, obj, b, inst.ds);
+        return true;
+    }
+    if kind == VC_VEC_NONE() { return false; }
+    if kind == VC_VEC_NEW() || kind == VC_STR_NEW() {
+        let obj: i64 = vc_walk_new_obj(w, bi, inst);
         vc_vec_create(vv, w.ag, ar, hdr, obj, b);
         return true;
     }
+    if kind == VC_STR_FROM_RAW_PARTS() {
+        let obj: i64 = vc_walk_new_obj(w, bi, inst);
+        // The runtime copies nothing for a null source or a zero length; otherwise
+        // the result is `n` bytes of unknown contents, and a length at the
+        // capacity mask traps (`set_vow_vec_capacity`), which never returns.
+        let src: i64 = w.var_of[inst.args[0] as u64];
+        let n: i64 = w.var_of[inst.args[1] as u64];
+        let empty: i64 = vc_tm_or(ar, vc_tm_app2(ar, VC_OP_EQ(), src, vc_str_zero(ar)), vc_tm_app2(ar, VC_OP_EQ(), n, vc_str_zero(ar)));
+        vc_assume(cs, pc, vc_tm_or(ar, empty, vc_tm_app2(ar, VC_OP_BVULT(), n, vc_vec_len_mask(ar))));
+        let nlen: i64 = vc_tm_app3(ar, VC_OP_ITE(), empty, vc_str_zero(ar), n);
+        vc_vec_create_with(vv, ar, hdr, obj, b, vc_str_fresh_array(vv, ar, hdr, String::from("sr")), nlen);
+        return true;
+    }
     let s: i64 = vc_vec_slot(vv, w.ag, ar, hdr, cs.assumed, w.obj_of[inst.args[0] as u64]);
-    if kind == VC_VEC_LEN() {
+    if vc_str_kind_is_string_op(kind) {
+        vc_walk_str(w, bi, inst, pc, kind, s);
+    } else if kind == VC_VEC_LEN() {
         vc_define(w, inst, vc_vec_cur_len(vv, s, b));
     } else if kind == VC_VEC_POP() {
         vc_vec_pop(vv, ar, hdr, s, b);
@@ -530,7 +625,9 @@ fn vc_function_has_float(f: IrFunction, tys: Vec<i64>) -> bool {
 
 // The SMT-LIB logic of a query: bit-vectors, plus arrays when a `Vec` is
 // modelled, plus floating point when a float is.
-fn vc_logic_name(has_array: bool, has_float: bool) -> String {
+fn vc_logic_name(has_array: bool, has_float: bool, quantified: bool) -> String {
+    if quantified && has_float { return String::from("ABVFP"); }
+    if quantified { return String::from("ABV"); }
     if has_array && has_float { return String::from("QF_ABVFP"); }
     if has_array { return String::from("QF_ABV"); }
     if has_float { return String::from("QF_BVFP"); }
@@ -612,6 +709,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         lits: vc_literal_table(f, tys),
         dvs: dom_fill(tys.len(), 0),
     };
+    w.vv.content = vc_str_reads_bytes(f);
     let id_to_idx: Vec<i64> = dom_block_id_table(f);
     let succ: Vec<i64> = dom_successors(f, id_to_idx);
     let order: Vec<i64> = dom_rpo_order(dom_rpo_numbers(nb, succ));
@@ -639,6 +737,6 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         oi = oi + 1;
     }
     vc_claims_harvest_fields(cs, w.ag);
-    vc_script_replace_logic(hdr, vc_logic_name(vc_vec_count(w.vv) > 0, vc_function_has_float(f, tys)));
+    vc_script_replace_logic(hdr, vc_logic_name(vc_vec_count(w.vv) > 0, vc_function_has_float(f, tys), w.vv.quantified));
     cs
 }

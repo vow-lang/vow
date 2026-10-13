@@ -221,11 +221,49 @@ fn vc_ext_prefix(kind: i64, amount: i64) -> String {
     out
 }
 
+// The name a `VC_T_QEQ` binds. No executor symbol uses it and the operands of a
+// `VC_T_QEQ` are closed terms, so it is never captured.
+fn vc_qeq_var() -> String { String::from("vq_i") }
+
+fn vc_qeq_byte(arr: String, idx: String) -> String {
+    let out: String = String::from("(bvand (select ");
+    out.push_str(arr);
+    out.push_str(String::from(" "));
+    out.push_str(idx);
+    out.push_str(String::from(") #x00000000000000ff)"));
+    out
+}
+
+// `(forall ((vq_i (_ BitVec 64))) (=> (bvult vq_i n) (= low8(a[vq_i]) low8(b[vq_i + k]))))`.
+fn vc_qeq_text(ar: VcArena, t: i64) -> String {
+    let i: String = vc_qeq_var();
+    let shifted: String = String::from("(bvadd ");
+    shifted.push_str(i);
+    shifted.push_str(String::from(" "));
+    shifted.push_str(vc_term_text(ar, ar.c[t as u64]));
+    shifted.push_str(String::from(")"));
+    let out: String = String::from("(forall ((");
+    out.push_str(i);
+    out.push_str(String::from(" (_ BitVec 64))) (=> (bvult "));
+    out.push_str(i);
+    out.push_str(String::from(" "));
+    out.push_str(vc_term_text(ar, ar.aux[t as u64]));
+    out.push_str(String::from(") (= "));
+    out.push_str(vc_qeq_byte(vc_term_text(ar, ar.a[t as u64]), i));
+    out.push_str(String::from(" "));
+    out.push_str(vc_qeq_byte(vc_term_text(ar, ar.b[t as u64]), shifted));
+    out.push_str(String::from(")))"));
+    out
+}
+
 fn vc_term_text(ar: VcArena, t: i64) -> String {
     let kind: i64 = ar.kinds[t as u64];
     let aux: i64 = ar.aux[t as u64];
     if kind == VC_T_VAR() {
         return String::from(ar.strs[aux as u64]);
+    }
+    if kind == VC_T_QEQ() {
+        return vc_qeq_text(ar, t);
     }
     if kind == VC_T_BV() {
         return vc_bv_literal(ar.a[t as u64], aux, ar.b[t as u64]);

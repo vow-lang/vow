@@ -1,0 +1,53 @@
+module StringFromRawParts
+
+// `String::from_raw_parts_copy(p, n)` copies nothing for a null source or a zero
+// length and otherwise yields `n` bytes of unknown contents. There is no cap on
+// `n`: a length at the runtime's capacity limit traps, so a returning run is
+// below it.
+fn null_source_is_empty(n: u64) -> bool vow {
+  ensures: result == true
+} {
+  String::from_raw_parts_copy(0, n).len() == 0
+}
+
+fn zero_length_is_empty(p: i64) -> bool vow {
+  ensures: result == true
+} {
+  String::from_raw_parts_copy(p, 0).len() == 0
+}
+
+fn copies_the_length(p: i64, n: u64) -> bool vow {
+  requires: p != 0
+  ensures: result == true
+} {
+  String::from_raw_parts_copy(p, n).len() == n
+}
+
+fn contents_are_bytes(p: i64) -> i64 vow {
+  requires: p != 0
+  ensures: result >= 0
+  ensures: result <= 255
+} {
+  String::from_raw_parts_copy(p, 1).byte_at(0)
+}
+
+// 10^19 is past the capacity limit: the call returns only for a null source,
+// whose result is empty whatever the length.
+fn huge_length_returns_only_when_empty(p: i64) -> bool vow {
+  ensures: result == true
+} {
+  let s: String = String::from_raw_parts_copy(p, 10000000000000000000);
+  s.len() == 0 || s.len() == 10000000000000000000
+}
+
+fn push_byte_literal_keeps_low_bits() -> bool vow {
+  ensures: result == true
+} {
+  let s: String = String::new();
+  s.push_byte(65);
+  s.byte_at(0) == 65
+}
+
+fn main() -> i32 {
+  0
+}

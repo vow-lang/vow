@@ -85,6 +85,75 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(vd.MORE_PRECISE, refuted({K}, {K, OTHER}))
 
 
+class CapacityArtifactTest(unittest.TestCase):
+    """ESBMC refuting only through its own model capacity (#1426)."""
+
+    def cls(self, truth, esbmc, native, reason, only):
+        return vd.classify(
+            truth,
+            esbmc,
+            native,
+            frozenset(),
+            frozenset(),
+            None,
+            reason,
+            only,
+        )
+
+    def test_documented_capacity_refutation_is_an_explained_extra_proof(self):
+        cls, detail = self.cls(
+            "VerifyFailed", vd.REFUTED, vd.PROVEN, "push_str cap", True
+        )
+        self.assertEqual(vd.MORE_PRECISE, cls)
+        self.assertIn("model capacity", detail)
+        self.assertIn("push_str cap", detail)
+
+    def test_without_the_directive_the_row_stays_a_soundness_finding(self):
+        self.assertEqual(
+            vd.SOUNDNESS, self.cls("VerifyFailed", vd.REFUTED, vd.PROVEN, None, True)[0]
+        )
+
+    def test_a_directive_does_not_excuse_a_refutation_that_is_not_a_capacity_one(self):
+        self.assertEqual(
+            vd.SOUNDNESS,
+            self.cls("VerifyFailed", vd.REFUTED, vd.PROVEN, "why", False)[0],
+        )
+
+    def test_the_directive_excuses_only_a_native_proof(self):
+        self.assertEqual(
+            vd.WEAKER, self.cls("VerifyFailed", vd.REFUTED, vd.SKIPPED, "why", True)[0]
+        )
+        self.assertEqual(
+            vd.MATCH, self.cls("VerifyFailed", vd.REFUTED, vd.REFUTED, "why", True)[0]
+        )
+
+    def test_capacity_only_needs_every_counterexample_to_be_a_capacity_assertion(self):
+        cap = {"violation": "string exceeded the verifier's internal capacity limit"}
+        other = {"violation": "index out of bounds"}
+        self.assertTrue(vd.capacity_only({"counterexamples": [cap]}))
+        self.assertTrue(vd.capacity_only({"counterexamples": [cap, cap]}))
+        self.assertFalse(vd.capacity_only({"counterexamples": [cap, other]}))
+        self.assertFalse(vd.capacity_only({"counterexamples": []}))
+        self.assertFalse(vd.capacity_only(None))
+
+    def test_directive_parsing(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            path = d + "/f.vow"
+            with open(path, "w") as fh:
+                fh.write(
+                    '// TEST: category x\n// TEST: esbmc-capacity-artifact "a cap"\n'
+                )
+            self.assertEqual("a cap", vd.capacity_artifact(path))
+            with open(path, "w") as fh:
+                fh.write("// TEST: category x\n")
+            self.assertIsNone(vd.capacity_artifact(path))
+            with open(path, "w") as fh:
+                fh.write("// TEST: esbmc-capacity-artifact\n")
+            self.assertIsNone(vd.capacity_artifact(path))
+
+
 class VerdictTest(unittest.TestCase):
     def test_status_mapping(self):
         self.assertEqual(vd.PROVEN, vd.verdict_of({"status": "Verified"}))

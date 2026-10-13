@@ -216,11 +216,13 @@ fn check_logic_selection() -> i64 {
     p.push(ITY_F64());
     let cs: VcClaims = vc_claims(one_block(String::from("unused"), p, ITY_I64(), i));
     let s: SmtScript = vc_script_new();
-    vc_script_set_logic(s, vc_logic_name(false, true));
+    vc_script_set_logic(s, vc_logic_name(false, true, false));
     if vc_smt_render(cs.arena, cs.header) != String::from("(set-logic QF_BVFP)\n(set-option :produce-models true)\n(declare-const p0 (_ BitVec 64))\n(declare-const p1 (_ FloatingPoint 11 53))\n") { return 80; }
-    if vc_logic_name(false, false) != String::from("QF_BV") { return 81; }
-    if vc_logic_name(true, false) != String::from("QF_ABV") { return 82; }
-    if vc_logic_name(true, true) != String::from("QF_ABVFP") { return 83; }
+    if vc_logic_name(false, false, false) != String::from("QF_BV") { return 81; }
+    if vc_logic_name(true, false, false) != String::from("QF_ABV") { return 82; }
+    if vc_logic_name(true, true, false) != String::from("QF_ABVFP") { return 83; }
+    if vc_logic_name(true, false, true) != String::from("ABV") { return 84; }
+    if vc_logic_name(true, true, true) != String::from("ABVFP") { return 85; }
     0
 }
 

@@ -1,3 +1,4 @@
+// TEST: esbmc-capacity-artifact "ESBMC fails the string capacity assertion; the postcondition is the true length equation, which holds on every returning run"
 // TEST: category overflow
 // TEST: counterexample-vow-id 4294967293
 // TEST: counterexample-fn "over"

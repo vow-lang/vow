@@ -168,8 +168,17 @@ OPTIONAL_FIELD_VALUES = {
 # variant, and `check_arena_routing` requires it exactly on those ops.
 ARENA_REASON_FIELD = "arena_routing_reason"
 
+# "verifier_skip_reason" is free text too: it says which semantics keep a pure
+# op out of the native verifier's model, so a caller's `Skipped` reason is
+# explained in the table and not only in code. `check_verifier_models` requires
+# it exactly on a pure `unmodeled` op (an effectful one is skipped by its
+# effects, a `known` one has a model).
+VERIFIER_REASON_FIELD = "verifier_skip_reason"
+
 ALLOWED_FIELDS = (
-    set(REQUIRED_FIELDS) | set(OPTIONAL_FIELD_VALUES) | {ARENA_REASON_FIELD}
+    set(REQUIRED_FIELDS)
+    | set(OPTIONAL_FIELD_VALUES)
+    | {ARENA_REASON_FIELD, VERIFIER_REASON_FIELD}
 )
 
 
@@ -824,6 +833,24 @@ def check_verifier_models(ops: list[dict]) -> list[str]:
                 f"docs/spec/operations.json: '{name}' has effects {op['effects']} "
                 f"but verifier_model '{model}'; the native verifier only models "
                 "pure builtins"
+            )
+        reason = op.get(VERIFIER_REASON_FIELD)
+        where = f"docs/spec/operations.json: '{name}'"
+        pure_unmodeled = op["effects"] == "[]" and model == "unmodeled"
+        if reason is not None and (not isinstance(reason, str) or not reason.strip()):
+            problems.append(
+                f"{where} has an empty or non-string {VERIFIER_REASON_FIELD}"
+            )
+        elif pure_unmodeled and reason is None:
+            problems.append(
+                f"{where} is a pure op with verifier_model 'unmodeled' but has no "
+                f"{VERIFIER_REASON_FIELD} (say which semantics the native "
+                "verifier does not model)"
+            )
+        elif reason is not None and not pure_unmodeled:
+            problems.append(
+                f"{where} has a {VERIFIER_REASON_FIELD} but is not a pure "
+                "'unmodeled' op"
             )
     return problems
 

@@ -2,13 +2,15 @@
 // TEST: skip-reason unmodeled-builtin
 module UnmodeledBuiltinSkipped
 
-fn size(s: String) -> u64 vow {
+// Substring search needs an existential over the match position, which the
+// String model does not encode (`vc_str_unmodeled_reason`).
+fn found(s: String, t: String) -> bool vow {
   ensures: result == result
 } {
-  s.len()
+  s.contains(t)
 }
 
 fn main() -> i32 [io] {
-  print_u64(size(String::from("a")));
+  if found(String::from("a"), String::from("a")) { print_u64(1); }
   0
 }
