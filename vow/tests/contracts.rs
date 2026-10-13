@@ -63,7 +63,7 @@ fn contracts_no_contracts() {
 fn contracts_divide_requires() {
     let json = run_contracts("divide.vow");
     let contracts = json["contracts"].as_array().unwrap();
-    assert_eq!(contracts.len(), 1);
+    assert_eq!(contracts.len(), 2);
     let c = &contracts[0];
     assert_eq!(c["function"], "divide");
     assert_eq!(c["kind"], "requires");
@@ -72,8 +72,13 @@ fn contracts_divide_requires() {
     assert_eq!(c["quality"], "substantive");
     assert!(c["description"].as_str().unwrap().contains("y != 0"));
     assert!(c["source"]["file"].as_str().unwrap().contains("divide.vow"));
-    assert_eq!(json["summary"]["total"], 1);
-    assert_eq!(json["summary"]["not_verified"], 1);
+    let guard = &contracts[1];
+    assert_eq!(guard["function"], "divide");
+    assert_eq!(guard["kind"], "requires");
+    assert_eq!(guard["blame"], "Caller");
+    assert!(guard["description"].as_str().unwrap().contains("y != -1"));
+    assert_eq!(json["summary"]["total"], 2);
+    assert_eq!(json["summary"]["not_verified"], 2);
 }
 
 #[test]
@@ -220,11 +225,13 @@ fn contracts_verify_missing_esbmc_keeps_contracts_schema() {
         panic!("invalid JSON from contracts --verify without ESBMC: {e}\nstdout: {stdout}")
     });
     let contracts = json["contracts"].as_array().unwrap();
-    assert_eq!(contracts.len(), 1);
-    assert_eq!(contracts[0]["status"], "error");
+    assert_eq!(contracts.len(), 2);
+    for c in contracts {
+        assert_eq!(c["status"], "error");
+    }
     assert!(json["summary"].is_object());
-    assert_eq!(json["summary"]["total"], 1);
-    assert_eq!(json["summary"]["error"], 1);
+    assert_eq!(json["summary"]["total"], 2);
+    assert_eq!(json["summary"]["error"], 2);
     assert_eq!(json["summary"]["not_verified"], 0);
 }
 
@@ -257,17 +264,21 @@ fn contracts_ensures() {
 fn contracts_where_clause() {
     let json = run_contracts("where_divide.vow");
     let contracts = json["contracts"].as_array().unwrap();
-    assert_eq!(contracts.len(), 2);
+    assert_eq!(contracts.len(), 3);
     for c in contracts {
         assert_eq!(c["kind"], "requires");
         assert_eq!(c["blame"], "Caller");
-        assert!(
+    }
+    let where_clauses = contracts
+        .iter()
+        .filter(|c| {
             c["description"]
                 .as_str()
                 .unwrap()
                 .contains("where on parameter")
-        );
-    }
+        })
+        .count();
+    assert_eq!(where_clauses, 2);
 }
 
 #[test]
