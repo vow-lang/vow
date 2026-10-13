@@ -181,8 +181,11 @@ unanalysed (the `VerificationSkipped` *warnings*, not the notes about uncontract
 callers) did not do the same work: native skipping a function ESBMC analyses is
 `weaker`, native analysing a function ESBMC skips is `more_precise`, so such a row
 is never `match` and never enters the performance ratios
-(`verify-skip/wide_enum_payload_skipped`: ESBMC skips four functions, native
-proves three of them).
+(`verify-skip/wide_enum_payload_skipped`: ESBMC skips four functions, native proves
+three of them). The last direction needs a native verdict that cannot have stopped
+early (`proven` or `skipped`): native `verify` reports up to the first function that
+is not proven, so after a refutation the absence of a skip warning does not show
+that a later function was analysed.
 
 Native `verify_status` of `panicked`, `error` or `crashed` is `weaker` even when
 ESBMC is also inconclusive. File-level status is per module: native reports

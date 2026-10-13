@@ -232,7 +232,7 @@ class FootprintTest(unittest.TestCase):
     def test_weaker_wins_when_both_sides_differ(self):
         self.assertEqual(vd.WEAKER, self.cls({"a"}, {"b"})[0])
 
-    def test_footprint_applies_to_agreeing_refutations_too(self):
+    def test_native_that_stopped_at_a_refutation_did_not_analyse_later_functions(self):
         keys = frozenset({("f", "Callee", 1)})
         cls, _ = vd.classify(
             "VerifyFailed",
@@ -242,7 +242,28 @@ class FootprintTest(unittest.TestCase):
             keys,
             esbmc_skipped=frozenset({"g"}),
         )
-        self.assertEqual(vd.MORE_PRECISE, cls)
+        self.assertEqual(vd.MATCH, cls)
+
+    def test_native_skipping_a_function_is_weaker_even_after_a_refutation(self):
+        keys = frozenset({("f", "Callee", 1)})
+        cls, _ = vd.classify(
+            "VerifyFailed",
+            vd.REFUTED,
+            vd.REFUTED,
+            keys,
+            keys,
+            native_skipped=frozenset({"g"}),
+        )
+        self.assertEqual(vd.WEAKER, cls)
+
+    def test_inconclusive_native_did_not_analyse_later_functions_either(self):
+        cls, _ = vd.classify(
+            "Skipped",
+            vd.INCONCLUSIVE,
+            vd.INCONCLUSIVE,
+            esbmc_skipped=frozenset({"g"}),
+        )
+        self.assertEqual(vd.MATCH, cls)
 
     def test_skipped_functions_reads_warnings_only(self):
         result = {

@@ -221,12 +221,20 @@ def classify(
         model_artifacts or {},
     )
     if cls == MATCH:
-        return compare_footprint(esbmc_skipped, native_skipped, detail)
+        return compare_footprint(esbmc_skipped, native_skipped, detail, native)
     return cls, detail
 
 
-def compare_footprint(esbmc_skipped, native_skipped, detail):
-    """(class, detail) of two backends that agree on the verdict of a fixture."""
+def compare_footprint(esbmc_skipped, native_skipped, detail, native):
+    """(class, detail) of two backends that agree on the verdict of a fixture.
+
+    A skip warning is positive evidence that a backend declined a function, but
+    the absence of one is not evidence that it analysed it: the native `verify`
+    reports up to the first function that is not proven, so after a refutation
+    or an inconclusive result the later functions were never reached. Native
+    analysing what ESBMC skips therefore needs a native verdict that cannot have
+    stopped early (`proven`, or `skipped`, which does not stop the run).
+    """
     native_only = sorted(native_skipped - esbmc_skipped)
     if native_only:
         return (
@@ -234,7 +242,7 @@ def compare_footprint(esbmc_skipped, native_skipped, detail):
             f"native skips {native_only} that ESBMC analyses",
         )
     esbmc_only = sorted(esbmc_skipped - native_skipped)
-    if esbmc_only:
+    if esbmc_only and native in (PROVEN, SKIPPED):
         return (
             MORE_PRECISE,
             f"native analyses {esbmc_only} that ESBMC skips",
