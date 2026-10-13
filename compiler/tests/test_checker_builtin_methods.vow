@@ -1,0 +1,152 @@
+module TestCheckerBuiltinMethods
+
+use types
+use checker
+
+fn applied(ts: TyStore, name: String, enum_base: bool, args: Vec<i64>) -> i64 {
+    let base: i64 = if enum_base { ts_make_enum(ts, name) } else { ts_make_struct(ts, name) };
+    ts_make_applied(ts, base, args)
+}
+
+fn args1(t: i64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    out.push(t);
+    out
+}
+
+fn expect(ts: TyStore, recv: i64, method: String, args: Vec<i64>, result: i64) -> bool {
+    let typing: BuiltinMethodTyping = resolve_builtin_method(ts, recv, method);
+    let expected: Vec<i64> = typing.expected_args;
+    if expected.len() != args.len() { return false; }
+    let mut i: u64 = 0;
+    while i < args.len() {
+        if expected[i] != args[i] { return false; }
+        i = i + 1;
+    }
+    typing.result_tid == result
+}
+
+fn check_string(ts: TyStore) -> i64 {
+    if !expect(ts, CTY_STR(), String::from("len"), Vec::new(), CTY_U64()) { return 1; }
+    if !expect(ts, CTY_STR(), String::from("push_str"), args1(CTY_STR()), CTY_UNIT()) { return 2; }
+    if !expect(ts, CTY_STR(), String::from("eq"), args1(CTY_STR()), CTY_BOOL()) { return 3; }
+    if !expect(ts, CTY_STR(), String::from("contains"), args1(CTY_STR()), CTY_BOOL()) { return 4; }
+    if !expect(ts, CTY_STR(), String::from("byte_at"), args1(CTY_U64()), CTY_I64()) { return 5; }
+    if !expect(ts, CTY_STR(), String::from("push_byte"), args1(CTY_U8()), CTY_UNIT()) { return 6; }
+    let offsets: Vec<i64> = args1(CTY_U64());
+    offsets.push(CTY_U64());
+    if !expect(ts, CTY_STR(), String::from("substring"), offsets, CTY_STR()) { return 7; }
+    if !expect(ts, CTY_STR(), String::from("clear"), Vec::new(), CTY_UNIT()) { return 8; }
+    let pi: BuiltinMethodTyping = resolve_builtin_method(ts, CTY_STR(), String::from("parse_i64"));
+    let pu: BuiltinMethodTyping = resolve_builtin_method(ts, CTY_STR(), String::from("parse_u64"));
+    let ai: i64 = ty_applied_args(ts, pi.result_tid, CTY_ENUM(), String::from("Option"));
+    let au: i64 = ty_applied_args(ts, pu.result_tid, CTY_ENUM(), String::from("Option"));
+    if ai < 0 || ts_arg_get(ts, ai, 0) != CTY_I64() { return 9; }
+    if au < 0 || ts_arg_get(ts, au, 0) != CTY_U64() { return 10; }
+    0
+}
+
+fn check_collections(ts: TyStore) -> i64 {
+    let v: i64 = applied(ts, String::from("Vec"), false, args1(CTY_U128()));
+    if !expect(ts, v, String::from("push"), args1(CTY_U128()), CTY_UNIT()) { return 11; }
+    if !expect(ts, v, String::from("truncate"), args1(CTY_U64()), CTY_UNIT()) { return 12; }
+    if !expect(ts, v, String::from("get"), Vec::new(), -1) { return 13; }
+    if !expect(ts, v, String::from("len"), Vec::new(), CTY_U64()) { return 32; }
+    if !expect(ts, v, String::from("pop"), Vec::new(), CTY_UNIT()) { return 33; }
+    if !expect(ts, v, String::from("clear"), Vec::new(), CTY_UNIT()) { return 34; }
+    let unknown: BuiltinMethodTyping = resolve_builtin_method(ts, v, String::from("get"));
+    let names: Vec<String> = builtin_method_candidates(unknown);
+    if unknown.receiver_name != String::from("Vec") || names.len() != 5 { return 14; }
+    if names[0] != String::from("len") || names[1] != String::from("push") || names[2] != String::from("pop") || names[3] != String::from("clear") || names[4] != String::from("truncate") { return 15; }
+    let args: Vec<i64> = args1(CTY_U64());
+    args.push(CTY_BOOL());
+    let h: i64 = applied(ts, String::from("HashMap"), false, args);
+    let b: i64 = applied(ts, String::from("BTreeMap"), false, args);
+    if !expect(ts, h, String::from("insert"), args, CTY_UNIT()) { return 16; }
+    if !expect(ts, h, String::from("contains_key"), args1(CTY_U64()), CTY_BOOL()) { return 17; }
+    if !expect(ts, h, String::from("remove"), args1(CTY_U64()), CTY_UNIT()) { return 18; }
+    if !expect(ts, b, String::from("contains"), args1(CTY_U64()), CTY_BOOL()) { return 19; }
+    if !expect(ts, h, String::from("len"), Vec::new(), CTY_U64()) { return 35; }
+    if !expect(ts, b, String::from("len"), Vec::new(), CTY_U64()) { return 36; }
+    let hg: BuiltinMethodTyping = resolve_builtin_method(ts, h, String::from("get"));
+    let bg: BuiltinMethodTyping = resolve_builtin_method(ts, b, String::from("get"));
+    let bi: BuiltinMethodTyping = resolve_builtin_method(ts, b, String::from("insert"));
+    let ah: i64 = ty_applied_args(ts, hg.result_tid, CTY_ENUM(), String::from("Option"));
+    let ab: i64 = ty_applied_args(ts, bg.result_tid, CTY_ENUM(), String::from("Option"));
+    let abi: i64 = ty_applied_args(ts, bi.result_tid, CTY_ENUM(), String::from("Option"));
+    if ah < 0 || ab < 0 || abi < 0 { return 20; }
+    if ts_arg_get(ts, ah, 0) != CTY_BOOL() || ts_arg_get(ts, ab, 0) != CTY_BOOL() || ts_arg_get(ts, abi, 0) != CTY_BOOL() { return 21; }
+    let he: Vec<i64> = hg.expected_args;
+    let be: Vec<i64> = bg.expected_args;
+    let bie: Vec<i64> = bi.expected_args;
+    if he.len() != 1 || he[0] != CTY_U64() || be.len() != 1 || be[0] != CTY_U64() { return 37; }
+    if bie.len() != 2 || bie[0] != CTY_U64() || bie[1] != CTY_BOOL() { return 38; }
+    // Preserve the self-hosted compiler's rejected-alias argument policy.
+    if !expect(ts, h, String::from("contains"), Vec::new(), -1) { return 22; }
+    if !expect(ts, b, String::from("contains_key"), Vec::new(), -1) { return 23; }
+    if !expect(ts, b, String::from("remove"), Vec::new(), -1) { return 24; }
+    0
+}
+
+fn expect_names(ts: TyStore, recv: i64, expected: String) -> bool {
+    let typing: BuiltinMethodTyping = resolve_builtin_method(ts, recv, String::from("nope"));
+    let names: Vec<String> = builtin_method_candidates(typing);
+    let joined: String = String::from("");
+    let mut i: u64 = 0;
+    while i < names.len() {
+        if i > 0 { joined.push_str(String::from(",")); }
+        joined.push_str(names[i]);
+        i = i + 1;
+    }
+    typing.result_tid == -1 && joined == expected
+}
+
+fn check_candidates(ts: TyStore) -> i64 {
+    if !expect_names(ts, CTY_STR(), String::from("len,push_str,eq,contains,byte_at,push_byte,substring,parse_i64,parse_u64,clear")) { return 40; }
+    let args: Vec<i64> = args1(CTY_I64());
+    args.push(CTY_BOOL());
+    let h: i64 = applied(ts, String::from("HashMap"), false, args);
+    let b: i64 = applied(ts, String::from("BTreeMap"), false, args);
+    let o: i64 = applied(ts, String::from("Option"), true, args1(CTY_BOOL()));
+    let r: i64 = applied(ts, String::from("Result"), true, args);
+    if !expect_names(ts, h, String::from("len,insert,get,contains_key,remove")) { return 41; }
+    if !expect_names(ts, b, String::from("len,insert,get,contains")) { return 42; }
+    if !expect_names(ts, o, String::from("unwrap")) { return 43; }
+    if !expect_names(ts, r, String::from("unwrap")) { return 44; }
+    if !expect(ts, o, String::from("unwrap"), Vec::new(), CTY_BOOL()) { return 45; }
+    if !expect(ts, r, String::from("unwrap"), Vec::new(), CTY_I64()) { return 46; }
+    0
+}
+
+fn check_fallbacks(ts: TyStore) -> i64 {
+    let empty_v: i64 = applied(ts, String::from("Vec"), false, Vec::new());
+    if !expect(ts, empty_v, String::from("push"), args1(CTY_UNKNOWN()), CTY_UNIT()) { return 25; }
+    let empty_o: i64 = applied(ts, String::from("Option"), true, Vec::new());
+    let empty_r: i64 = applied(ts, String::from("Result"), true, Vec::new());
+    if !expect(ts, empty_o, String::from("unwrap"), Vec::new(), CTY_UNIT()) { return 26; }
+    if !expect(ts, empty_r, String::from("unwrap"), Vec::new(), CTY_UNIT()) { return 27; }
+    let inner: i64 = applied(ts, String::from("Vec"), false, args1(CTY_I128()));
+    let outer: i64 = applied(ts, String::from("Option"), true, args1(inner));
+    if !expect(ts, outer, String::from("unwrap"), Vec::new(), inner) { return 28; }
+    let empty_h: i64 = applied(ts, String::from("HashMap"), false, Vec::new());
+    let hg: BuiltinMethodTyping = resolve_builtin_method(ts, empty_h, String::from("get"));
+    let ah: i64 = ty_applied_args(ts, hg.result_tid, CTY_ENUM(), String::from("Option"));
+    if ah < 0 || ts_arg_get(ts, ah, 0) != CTY_I64() { return 29; }
+    let unknown: BuiltinMethodTyping = resolve_builtin_method(ts, CTY_I64(), String::from("len"));
+    if unknown.result_tid != -1 || unknown.receiver_name.len() != 0 || builtin_method_candidates(unknown).len() != 0 { return 30; }
+    // Vow currently recognises either nominal kind by the receiver name.
+    let enum_v: i64 = applied(ts, String::from("Vec"), true, args1(CTY_I64()));
+    if !expect(ts, enum_v, String::from("push"), args1(CTY_I64()), CTY_UNIT()) { return 31; }
+    0
+}
+
+fn main() -> i32 {
+    let ts: TyStore = ty_store_new();
+    let s: i64 = check_string(ts);
+    if s != 0 { return i64_to_i32_wrap(s); }
+    let c: i64 = check_collections(ts);
+    if c != 0 { return i64_to_i32_wrap(c); }
+    let n: i64 = check_candidates(ts);
+    if n != 0 { return i64_to_i32_wrap(n); }
+    i64_to_i32_wrap(check_fallbacks(ts))
+}
