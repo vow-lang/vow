@@ -310,8 +310,11 @@ Two CI-only checks hold `vowc verify --backend native` to a second opinion
 (epic #1398, issue #1431). Both run from
 [`native-oracle.yml`](../.github/workflows/native-oracle.yml) on every push to
 `main` and nightly, sharded four ways, over `tests/verify`, `tests/verify-fail`,
-`tests/verify-native/{pass,fail,unknown}`, `examples/` and a `gen_corpus.py`
-corpus (seed `1431` on pushes, the UTC date on the nightly, echoed in the log).
+`tests/verify-native/{pass,fail,unknown}`, `examples/` and two `gen_corpus.py`
+corpora (see [Generated verifier corpus](#generated-verifier-corpus)). The seeds
+are pinned on pushes (`1431` equivalence axis, `1473` verifier axis), the UTC
+date on the nightly and an explicit input on a manual run; they are echoed in
+the log.
 The decision record is
 [ADR-2026-10-11-0510](adr/2026-10-11-0510-native-z3-cross-check.md).
 
@@ -352,6 +355,55 @@ the repro:
 ```bash
 bitwuzla --bv-output-format 2 z3-crosscheck.out/queries/<fixture>.<n>.smt2
 z3 -smt2 z3-crosscheck.out/queries/<fixture>.<n>.smt2
+```
+
+### Generated verifier corpus
+
+`gen_corpus.py --axis verifier --seed N --count M` (module
+[`scripts/gen_verifier_corpus.py`](../scripts/gen_verifier_corpus.py), issue
+#1473) writes contracted programs over a `Vec` or a counted loop, and a `main`
+that calls each generated function with concrete inputs that satisfy its
+`requires`. The #905 equivalence axis never calls what it generates, so it only
+adds query volume; this axis gives the runtime a say. Every program carries
+`// TEST: gen-class <class> <shape> <regime>`:
+
+| Class | Contract | Expectation |
+|-------|----------|-------------|
+| `exceeds-bound` | false, but only once the collection grows or the loop runs past a boundary (7, 8, 16, 17, 31..33, 63..65, 100, 128, 129, 256) | `main` drives past the boundary, so the debug binary reports a `VowViolation`; `Verified` is a `SOUNDNESS` finding, `Violated`/`unknown` are fine |
+| `control` | the same shape, true | `// TEST: expect-verified`: it must be `Verified` and run clean |
+
+The regime (`within-unwind`, `beyond-unwind`) says which side of the native
+verifier's internal 64-iteration unrolling bound the longest loop sits on: past
+it a loop is decided only by an invariant. Shapes cover literal-count fills,
+nested fills, straight-line push chains (no loop at all), pops, element
+read-back through `result[i]`, in-place overwrite, a scalar accumulator, and a
+`Vec` *parameter* longer than the bound the contract names.
+
+`verifier_runtime.py` adds three verdicts for generated programs, all exit 1:
+
+| Verdict | Meaning |
+|---------|---------|
+| `WITNESS-BROKEN` | the debug binary does not match the class (an `exceeds-bound` program that never violates, a `control` that does). Checked against the runtime, whatever the verifier said, so a green sweep cannot be a vacuous one |
+| `CONTROL-LOST` | a `control` that is not `Verified` |
+| `STALE-KNOWN-GAP` | a `known-control-gap` that now verifies; drop its entry |
+
+**Known disagreements are tracked by issue number, never skipped.**
+`KNOWN_DISAGREEMENTS` in `gen_verifier_corpus.py` maps `(shape, class, regime)`
+to an issue (`validate_known` rejects an entry without one); the generator
+stamps matching programs with `// TEST: known-control-gap #N` or
+`// TEST: known-soundness-gap #N`, which the runner reports and does not fail.
+Today the only entries are the controls that fill a `Vec` in a loop past the
+unrolling bound (#1645): native is `unknown` there, a completeness gap and not
+a false proof. `replay-skipped` for a `Vec` parameter points at #1613. A real
+soundness disagreement is a native verifier bug: file an issue with the saved
+reproducer, label it `verifier`, and track it here; do not weaken the program.
+
+Reproduce a run from its echoed seed:
+
+```bash
+python3 scripts/gen_corpus.py --axis verifier --seed 1473 --count 300 --output-dir /tmp/gv
+python3 scripts/verifier_runtime.py --backend native --extra-root /tmp/gv
+python3 scripts/z3_crosscheck.py --extra-root /tmp/gv
 ```
 
 ```bash

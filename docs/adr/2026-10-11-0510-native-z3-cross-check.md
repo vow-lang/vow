@@ -77,9 +77,10 @@ implementation of QF_BV/QF_ABV, which is what a cross-check needs.
 
 - A false proof or a spurious counterexample on the corpus fails CI with the
   offending query attached as an artifact.
-- The generated corpus supplies query volume but little soundness depth: its
-  `main` never calls the generated functions. The runtime soundness direction
-  gets real depth from #1473's corpus, which drops in as one more
+- The `gen_corpus.py` equivalence axis supplies query volume but little
+  soundness depth: its `main` never calls the generated functions. The runtime
+  soundness direction gets its depth from the verifier axis of #1473
+  (`gen_corpus.py --axis verifier`, see the Addendum), swept as one more
   `--extra-root`.
 - Verdict equivalence of incremental sessions is not independently checked.
   Following the session stdin into Z3 is the natural next step.
@@ -87,3 +88,29 @@ implementation of QF_BV/QF_ABV, which is what a cross-check needs.
   leaves unspecified (for example `fp.to_ubv` out of range, once the FP encoder
   lands). Such a disagreement is a signal to guard the operation in the encoder,
   not to teach the harness about it.
+
+## Addendum (2026-10-13, #1473): the generated verifier corpus
+
+`gen_corpus.py --axis verifier` generates the corpus the differential needs. Its
+design choices:
+
+- **Two classes, with the control as a gate.** `exceeds-bound` programs have a
+  contract that is false only past a boundary a bounded checker might assume;
+  `control` programs are the same shapes with the true contract and must stay
+  `Verified`. Without the control, a verifier that answers `unknown` to
+  everything satisfies the first class trivially.
+- **The witness is checked against the runtime, not the verifier.**
+  `check_witness` runs every generated program in debug mode whatever the
+  verifier said, and `WITNESS-BROKEN` fails when the runtime does not match the
+  class. A generator regression that stops reaching the false contract then
+  fails loudly instead of reading as "no false proofs".
+- **Inputs satisfy the `requires`.** `main` is not verified (`VerificationSkipped`),
+  so an input that broke a `requires` would fire the disclaimed-obligation path
+  of decision 6 and measure nothing.
+- **Known disagreements are keyed by shape, class and regime and carry an issue
+  number.** A tracked gap that stops reproducing fails the run
+  (`STALE-KNOWN-GAP`), so the ledger cannot rot. The regime depends on the native
+  unrolling bound, mirrored in the generator and pinned against
+  `compiler/vc_native.vow` by `test_gen_verifier_corpus.py`.
+- **Seeds.** Pinned on pushes to `main` (verifier axis `1473`), the UTC date on
+  the nightly, an input on a manual run; always echoed.
