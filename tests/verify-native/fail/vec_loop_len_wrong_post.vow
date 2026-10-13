@@ -3,7 +3,7 @@
 // TEST: counterexample-blame Callee
 // The loop pushes `n` elements, so the false postcondition `result == 0` is
 // reachable for n = 1. The user invariant does not mention the Vec, and the
-// loop's Vec state is not a header Phi: induction must not treat the length as
+// loop's Vec is havocked at the header: induction must not treat the length as
 // the one the loop was entered with and prove the postcondition.
 module VecLoopLenWrongPost
 

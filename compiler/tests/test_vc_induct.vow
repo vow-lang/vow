@@ -321,21 +321,86 @@ fn check_ptr_phi() -> i64 {
     0
 }
 
-// A Vec written in the loop body is not a header Phi, so the havoc copy would
-// keep the state the loop was entered with: the function is not cut.
-fn check_vec_written_in_loop() -> i64 {
+fn one(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+// `count_up` with `pre` ahead of the preheader's code and `body` ahead of the
+// loop body's.
+fn count_up_with(pre: Vec<IrInst>, body: Vec<IrInst>) -> IrFunction {
     let f: IrFunction = count_up();
-    if vc_induct_cut(f).status != VC_INDUCT_OK() { return 1; }
-    let body: IrBlock = f.blocks[2];
-    let w: Vec<IrInst> = Vec::new();
-    w.push(mk_inst_call_extern(50, ITY_UNIT(), pair(0, 9), String::from("__vow_vec_push_val")));
+    let e: IrBlock = f.blocks[0];
     let mut i: u64 = 0;
-    while i < body.insts.len() {
-        w.push(body.insts[i]);
+    while i < e.insts.len() {
+        pre.push(e.insts[i]);
         i = i + 1;
     }
-    f.blocks[2] = mk_block(2, w);
-    if vc_induct_cut(f).status != VC_INDUCT_NA() { return 2; }
+    f.blocks[0] = mk_block(0, pre);
+    let lb: IrBlock = f.blocks[2];
+    let mut j: u64 = 0;
+    while j < lb.insts.len() {
+        body.push(lb.insts[j]);
+        j = j + 1;
+    }
+    f.blocks[2] = mk_block(2, body);
+    f
+}
+
+fn vec_new_inst(id: i64) -> IrInst {
+    mk_inst_call_extern(id, ITY_PTR(), Vec::new(), String::from("__vow_vec_new"))
+}
+
+// A Vec allocated before the loop and written in its body is not a header Phi:
+// the header proper havocs its `(array, length)` with one marker, after the Phis
+// and nowhere else.
+fn check_vec_written_in_loop() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(vec_new_inst(40));
+    let body: Vec<IrInst> = Vec::new();
+    body.push(mk_inst_call_extern(50, ITY_UNIT(), pair(40, 0), String::from("__vow_vec_push_val")));
+    let f: IrFunction = count_up_with(pre, body);
+    let c: VcInduct = vc_induct_cut(f);
+    if c.status != VC_INDUCT_OK() { return 1; }
+    let g: IrFunction = c.f;
+    if count_marker(g, VC_INTERNAL_HAVOC_VEC()) != 1 { return 2; }
+    let h: IrBlock = block_by_id(g, 1);
+    let m: IrInst = h.insts[1];
+    if !vc_is_havoc_vec(m) || m.args.len() != 1 || m.args[0] != 40 || m.ty != ITY_UNIT() { return 3; }
+    if !vc_is_havoc(h.insts[0]) || vc_is_havoc_vec(h.insts[0]) { return 4; }
+    if m.id < 22 || vc_is_havoc_vec(h.insts[2]) { return 5; }
+    if !well_formed(g) { return 6; }
+    let again: VcInduct = vc_induct_cut(f);
+    if print_function(again.f) != print_function(g) { return 7; }
+    0
+}
+
+// A Vec only read in the loop keeps its state: no marker.
+fn check_vec_read_in_loop() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(vec_new_inst(40));
+    let body: Vec<IrInst> = Vec::new();
+    body.push(mk_inst_call_extern(50, ITY_I64(), one(40), String::from("__vow_vec_len")));
+    let c: VcInduct = vc_induct_cut(count_up_with(pre, body));
+    if c.status != VC_INDUCT_OK() { return 1; }
+    if count_marker(c.f, VC_INTERNAL_HAVOC_VEC()) != 0 { return 2; }
+    0
+}
+
+// A Vec born in the loop that writes it, a String written in a loop and a
+// receiver the model cannot name leave the function uncut.
+fn check_vec_havoc_refused() -> i64 {
+    let born: Vec<IrInst> = Vec::new();
+    born.push(vec_new_inst(41));
+    born.push(mk_inst_call_extern(42, ITY_UNIT(), pair(41, 0), String::from("__vow_vec_push_val")));
+    if vc_induct_cut(count_up_with(Vec::new(), born)).status != VC_INDUCT_NA() { return 1; }
+
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(mk_inst_call_extern(40, ITY_PTR(), Vec::new(), String::from("__vow_string_new")));
+    let body: Vec<IrInst> = Vec::new();
+    body.push(mk_inst_call_extern(50, ITY_UNIT(), pair(40, 40), String::from("__vow_string_push_str")));
+    if vc_induct_cut(count_up_with(pre, body)).status != VC_INDUCT_NA() { return 2; }
     0
 }
 
@@ -389,6 +454,8 @@ fn main() -> i32 {
     if r == 0 { r = check_not_applicable() + 300; if r == 300 { r = 0; } }
     if r == 0 { r = check_ptr_phi() + 400; if r == 400 { r = 0; } }
     if r == 0 { r = check_vec_written_in_loop() + 500; if r == 500 { r = 0; } }
+    if r == 0 { r = check_vec_read_in_loop() + 550; if r == 550 { r = 0; } }
+    if r == 0 { r = check_vec_havoc_refused() + 570; if r == 570 { r = 0; } }
     if r == 0 { r = check_agg_written_in_loop() + 600; if r == 600 { r = 0; } }
     i64_to_i32_wrap(r)
 }

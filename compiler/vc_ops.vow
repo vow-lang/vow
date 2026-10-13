@@ -167,6 +167,15 @@ fn vc_is_havoc(inst: IrInst) -> bool {
     inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == VC_INTERNAL_HAVOC()
 }
 
+// A loop cut (`vc_induct`) puts one at the top of a loop header proper for each
+// `Vec` the loop writes: its operand's `(array, length)` becomes an arbitrary
+// pair for the rest of the header, the way a header Phi's value does.
+fn VC_INTERNAL_HAVOC_VEC() -> String { String::from("__vc_havoc_vec") }
+
+fn vc_is_havoc_vec(inst: IrInst) -> bool {
+    inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == VC_INTERNAL_HAVOC_VEC()
+}
+
 fn VC_INTERNAL_CUT_END() -> String { String::from("__vc_cut_end") }
 
 fn vc_is_cut_end(inst: IrInst) -> bool {

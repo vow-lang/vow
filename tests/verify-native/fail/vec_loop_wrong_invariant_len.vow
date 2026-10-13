@@ -1,0 +1,23 @@
+// TEST: category invariant
+// The invariant claims a length one too large: it is false on entry, so the
+// loop's base case fails whatever the trip count.
+module VecLoopWrongInvariantLen
+
+fn fill() -> Vec<i64> vow {
+  ensures: result.len() == 100
+} {
+  let v: Vec<i64> = Vec::new();
+  let mut i: u64 = 0;
+  while i < 100 vow {
+    invariant: i <= 100 && v.len() == i + 1
+  } {
+    v.push(0);
+    i = i + 1;
+  }
+  v
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill().len());
+  0
+}

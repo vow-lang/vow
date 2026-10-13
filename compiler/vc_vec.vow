@@ -153,6 +153,22 @@ fn vc_vec_create(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, bi
     vv.len[p] = vc_tm_bv(ar, 64, 0, 0);
 }
 
+// Forgets the state of `obj` in block `bi`: an arbitrary array and an arbitrary
+// length below the capacity mask. The loop cut puts this at the top of a header
+// proper for a Vec the loop writes.
+fn vc_vec_havoc(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, obj: i64, bi: i64) {
+    let s: i64 = vc_vec_slot(vv, ag, ar, hdr, assumed, obj);
+    let prefix: String = vc_vec_fresh_name(vv, String::from("vh"));
+    let a_name: String = String::from(prefix);
+    a_name.push_str(String::from("_varr"));
+    let l_name: String = String::from(prefix);
+    l_name.push_str(String::from("_vlen"));
+    let arr: i64 = vc_agg_declare(ar, hdr, a_name, VC_SORT_ARRAY64());
+    let len: i64 = vc_agg_declare(ar, hdr, l_name, 64);
+    assumed.push(vc_tm_app2(ar, VC_OP_BVULT(), len, vc_vec_len_mask(ar)));
+    vc_vec_write(vv, ar, hdr, s, bi, arr, len);
+}
+
 // A new object holding the given `(array, length)`: a string clone, a
 // substring, a literal.
 fn vc_vec_create_with(vv: VcVec, ar: VcArena, hdr: SmtScript, obj: i64, bi: i64, arr: i64, len: i64) -> i64 {
