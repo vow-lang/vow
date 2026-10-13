@@ -103,6 +103,8 @@ jobs:
         run: python3 scripts/test_install_z3_action.py
       - name: Z3 cross-check unit tests
         run: python3 scripts/test_z3_crosscheck.py
+      - name: Generated verifier-corpus unit tests
+        run: python3 scripts/test_gen_verifier_corpus.py
       - name: Docs site link-rewrite unit tests
         run: python3 scripts/test_build_docs_site.py
       - name: Help-coverage staleness-gate unit tests
