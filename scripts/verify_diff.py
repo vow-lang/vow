@@ -92,8 +92,32 @@ WATCHDOG_SLACK = 30
 
 CONTRACTS_RUNS_PER_FUNCTION = 3
 
+# `// TEST: esbmc-capacity-artifact "<why>"` marks a fixture ESBMC refutes only
+# through its own model capacity (a `string`/`vec` capacity assertion): the
+# property holds for every length the runtime accepts, and the native verifier
+# proves it. Without the directive such a row is a soundness finding.
+CAPACITY_ARTIFACT = re.compile(
+    r'^//\s*TEST:\s*esbmc-capacity-artifact\s+"([^"]+)"\s*$', re.MULTILINE
+)
+
 FN_DECL = re.compile(r"^\s*(?:pub\s+)?fn\s", re.MULTILINE)
 MAIN_DECL = re.compile(r"^\s*fn\s+main\s*\(", re.MULTILINE)
+
+
+def capacity_artifact(path):
+    """The reason of the fixture's `esbmc-capacity-artifact` directive, or None."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            m = CAPACITY_ARTIFACT.search(fh.read())
+    except OSError:
+        return None
+    return m.group(1) if m else None
+
+
+def capacity_only(result):
+    """True when every ESBMC counterexample is its own model-capacity assertion."""
+    cexes = (result or {}).get("counterexamples") or []
+    return bool(cexes) and all("capacity" in (c.get("violation") or "") for c in cexes)
 
 
 def verdict_of(result):
@@ -141,15 +165,33 @@ def classify(
     esbmc_keys=frozenset(),
     native_keys=frozenset(),
     native_status=None,
+    capacity_reason=None,
+    esbmc_capacity_only=False,
 ):
     """Classify one fixture from the two verdicts and the corpus ground truth.
 
     `truth` is the corpus-expected status (Verified / VerifyFailed / Skipped);
-    a known soundness gap counts as VerifyFailed.
+    a known soundness gap counts as VerifyFailed. `capacity_reason` is the text
+    of the fixture's `esbmc-capacity-artifact` directive and
+    `esbmc_capacity_only` says every ESBMC counterexample is its own capacity
+    assertion: together they turn "native proves what ESBMC refutes" into an
+    explained extra proof instead of a soundness finding.
     """
     if ERROR in (esbmc, native):
         who = [n for n, v in (("esbmc", esbmc), ("native", native)) if v == ERROR]
         return HARNESS, f"no usable verify result from {', '.join(who)}"
+
+    if (
+        native == PROVEN
+        and esbmc == REFUTED
+        and capacity_reason
+        and esbmc_capacity_only
+    ):
+        return (
+            MORE_PRECISE,
+            f"ESBMC refutes only through its model capacity ({capacity_reason}); "
+            "native proves the property for every length",
+        )
 
     if native == PROVEN and esbmc != PROVEN and truth == "VerifyFailed":
         return (
@@ -474,6 +516,7 @@ def diff_fixture(vowc, timeout, sub, exp, command="verify"):
             "verdict": verdict_of(result),
             "keys": cex_keys(cexes),
             "verify_status": result.get("verify_status"),
+            "capacity_only": capacity_only(result),
         }
         row[backend] = {
             "verdict": results[backend]["verdict"],
@@ -490,6 +533,8 @@ def diff_fixture(vowc, timeout, sub, exp, command="verify"):
         esbmc["keys"],
         native["keys"],
         native["verify_status"],
+        capacity_artifact(exp.path),
+        esbmc["capacity_only"],
     )
     return row
 
