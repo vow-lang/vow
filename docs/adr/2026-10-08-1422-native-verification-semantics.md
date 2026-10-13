@@ -551,8 +551,8 @@ model-parsing modules around it.
   sort. The slot model keys a slot by index and sort, so a float written to a slot
   is read back exactly, and the same slot read at another sort is unconstrained
   rather than reinterpreted; this is what keeps the model from claiming a bit
-  pattern conversion the solver cannot express. The ESBMC model's bit-pattern
-  slots agree on every fixture of the corpus.
+  pattern conversion the solver cannot express. The native and ESBMC verdicts agree
+  on the float fixtures of `tests/verify` and `tests/verify-fail`.
 - **Counterexamples.** A model float arrives as `(fp #b.. #b.. #b..)` and is
   carried as its bit pattern. It is shown as the shortest decimal that reads back
   as the same `f64` (an `f32` is widened exactly; `NaN`, `inf`, `-inf`), so a NaN's
