@@ -1,0 +1,245 @@
+module VcQueue
+
+use verifier
+use vc_worker
+
+// The task queue a pool of native verify workers shares through one directory.
+// The parent owns it; every worker session only ever claims, runs and answers
+// tasks. All coordination is a rename, which is atomic and has exactly one
+// winner when two workers race for the same source:
+//
+//   <root>/tasks             the task table (`vc_q_tasks_encode`), written once
+//   <root>/q/<k>             task k is unclaimed
+//   <root>/s<w>/claim.<k>    session w owns task k (the claim IS the ownership
+//                            record, so a worker that dies right after claiming
+//                            still leaves its task attributable to it)
+//   <root>/res/<k>           task k's answer (the `vc_worker` wire format),
+//                            written under a temporary name and renamed in
+//   <root>/s<w>/scratch.<k>  solver files of task k, removed once it is done
+//
+// A claim file is the parent's to remove: it stays after the task is answered
+// until the parent has taken the answer, so a task that starts and finishes
+// between two looks of the parent is still attributed. A claim without an answer
+// is a task that did not finish, and an answer is complete or absent.
+
+fn vc_q_join(a: String, b: String) -> String {
+    let out: String = String::from("");
+    out.push_str(a);
+    out.push_str(String::from("/"));
+    out.push_str(b);
+    out
+}
+
+fn vc_q_name(prefix: String, n: i64) -> String {
+    let out: String = String::from("");
+    out.push_str(prefix);
+    out.push_str(i64_to_string(n));
+    out
+}
+
+fn vc_q_tasks_path(root: String) -> String { vc_q_join(root, String::from("tasks")) }
+
+fn vc_q_pending_path(root: String, k: i64) -> String {
+    vc_q_join(vc_q_join(root, String::from("q")), i64_to_string(k))
+}
+
+fn vc_q_result_path(root: String, k: i64) -> String {
+    vc_q_join(vc_q_join(root, String::from("res")), i64_to_string(k))
+}
+
+fn vc_q_session_dir(root: String, w: i64) -> String {
+    vc_q_join(root, vc_q_name(String::from("s"), w))
+}
+
+fn vc_q_claim_path(root: String, w: i64, k: i64) -> String {
+    vc_q_join(vc_q_session_dir(root, w), vc_q_name(String::from("claim."), k))
+}
+
+fn vc_q_scratch_path(root: String, w: i64, k: i64) -> String {
+    vc_q_join(vc_q_session_dir(root, w), vc_q_name(String::from("scratch."), k))
+}
+
+// ---------------------------------------------------------------------------
+// Task table
+// ---------------------------------------------------------------------------
+
+// Task k asks a worker to decide function `idx[k]` (named `names[k]`, checked
+// against the worker's own lowering) as a `VC_TASK_KIND_*` task.
+struct VcQTasks {
+    idx: Vec<i64>,
+    names: Vec<String>,
+    kinds: Vec<i64>,
+}
+
+fn vc_q_tag() -> String { String::from("VOWTASKS1\n") }
+
+fn vc_q_tasks_encode(t: VcQTasks) -> String {
+    let out: String = vc_q_tag();
+    vc_wire_int(out, t.idx.len() as i64);
+    let mut i: u64 = 0;
+    while i < t.idx.len() {
+        vc_wire_int(out, t.idx[i]);
+        vc_wire_str(out, t.names[i]);
+        vc_wire_int(out, t.kinds[i]);
+        i = i + 1;
+    }
+    out
+}
+
+// `Some` only for a complete table: a truncated or foreign file is never a
+// plan a worker should act on.
+fn vc_q_tasks_decode(text: String) -> Option<VcQTasks> {
+    let tag: String = vc_q_tag();
+    if text.len() < tag.len() || text.substring(0, tag.len()) != tag { return Option::None; }
+    let cur: Vec<i64> = Vec::new();
+    cur.push(tag.len() as i64);
+    cur.push(0);
+    let n: i64 = vc_wire_read_int(text, cur);
+    let t: VcQTasks = VcQTasks { idx: Vec::new(), names: Vec::new(), kinds: Vec::new() };
+    let mut i: i64 = 0;
+    while i < n && cur[1] == 0 {
+        t.idx.push(vc_wire_read_int(text, cur));
+        t.names.push(vc_wire_read_str(text, cur));
+        t.kinds.push(vc_wire_read_int(text, cur));
+        i = i + 1;
+    }
+    if cur[1] != 0 || cur[0] != text.len() as i64 { return Option::None; }
+    Option::Some(t)
+}
+
+// ---------------------------------------------------------------------------
+// Parent side
+// ---------------------------------------------------------------------------
+
+// Lays out the queue under `root` with every task unclaimed. False when any
+// part cannot be written.
+fn vc_q_init(root: String, t: VcQTasks) -> bool [io, read, write] {
+    if fs_mkdir(vc_q_join(root, String::from("q"))) != 0 { return false; }
+    if fs_mkdir(vc_q_join(root, String::from("res"))) != 0 { return false; }
+    if fs_write(vc_q_tasks_path(root), vc_q_tasks_encode(t)) != 0 { return false; }
+    let mut k: u64 = 0;
+    while k < t.idx.len() {
+        if fs_write(vc_q_pending_path(root, k as i64), String::from("")) != 0 { return false; }
+        k = k + 1;
+    }
+    true
+}
+
+fn vc_q_is_unclaimed(root: String, k: i64) -> bool [read] {
+    fs_exists(vc_q_pending_path(root, k)) == 1
+}
+
+// Takes task k off the queue so no worker starts it (a halted run).
+fn vc_q_withdraw(root: String, k: i64) [io, read] {
+    fs_remove(vc_q_pending_path(root, k));
+}
+
+// Puts task k back on the queue.
+fn vc_q_requeue(root: String, k: i64) -> bool [io, read, write] {
+    fs_remove(vc_q_result_path(root, k));
+    fs_write(vc_q_pending_path(root, k), String::from("")) == 0
+}
+
+fn vc_q_has_result(root: String, k: i64) -> bool [read] {
+    fs_exists(vc_q_result_path(root, k)) == 1
+}
+
+fn vc_q_read_result(root: String, k: i64) -> String [read] {
+    fs_read(vc_q_result_path(root, k))
+}
+
+// The task a `claim.<k>` entry names, or -1 for any other entry.
+fn vc_q_claim_entry_task(name: String) -> i64 {
+    let prefix: String = String::from("claim.");
+    if name.len() <= prefix.len() || name.substring(0, prefix.len()) != prefix { return -1; }
+    match parse_i64(name.substring(prefix.len(), name.len())) {
+        Option::Some(k) => { if k >= 0 { k } else { -1 } },
+        Option::None => { -1 },
+    }
+}
+
+// The tasks session `w` has claimed and the parent has not yet taken over.
+fn vc_q_claims(root: String, w: i64) -> Vec<i64> [read] {
+    let entries: Vec<String> = fs_listdir(vc_q_session_dir(root, w));
+    let out: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < entries.len() {
+        let k: i64 = vc_q_claim_entry_task(entries[i]);
+        if k >= 0 { out.push(k); }
+        i = i + 1;
+    }
+    vc_q_sort(out);
+    out
+}
+
+fn vc_q_sort(v: Vec<i64>) {
+    let mut i: u64 = 1;
+    while i < v.len() {
+        let x: i64 = v[i];
+        let mut j: u64 = i;
+        while j > 0 && v[j - 1] > x {
+            v[j] = v[j - 1];
+            j = j - 1;
+        }
+        v[j] = x;
+        i = i + 1;
+    }
+}
+
+// The parent has taken over task k from session `w`: its claim goes.
+fn vc_q_ack(root: String, w: i64, k: i64) [io, read] {
+    fs_remove(vc_q_claim_path(root, w, k));
+}
+
+// ---------------------------------------------------------------------------
+// Worker side
+// ---------------------------------------------------------------------------
+
+// Claims task k for session `w`. Exactly one racing worker succeeds.
+fn vc_q_claim(root: String, w: i64, k: i64) -> bool [io, read] {
+    fs_rename(vc_q_pending_path(root, k), vc_q_claim_path(root, w, k)) == 0
+}
+
+// Publishes task k's answer whole.
+fn vc_q_publish(root: String, k: i64, text: String) -> bool [io, read, write] {
+    let tmp: String = vc_q_result_path(root, k);
+    tmp.push_str(String::from(".tmp"));
+    if fs_write(tmp, text) != 0 {
+        fs_remove(tmp);
+        return false;
+    }
+    if fs_rename(tmp, vc_q_result_path(root, k)) != 0 {
+        fs_remove(tmp);
+        return false;
+    }
+    true
+}
+
+// ---------------------------------------------------------------------------
+// Stderr framing
+// ---------------------------------------------------------------------------
+
+// Marks the start of a task in a session's stderr, so a death is classified by
+// what the task on hand printed and not by what earlier ones did.
+fn vc_task_marker(k: i64) -> String {
+    let m: String = String::from("vow-worker: task ");
+    m.push_str(i64_to_string(k));
+    m
+}
+
+// The text after the last task marker of `err`, or all of it when there is none.
+fn vc_task_stderr(err: String) -> String {
+    let tag: String = String::from("vow-worker: task ");
+    let mut at: i64 = -1;
+    let mut pos: i64 = 0;
+    while pos <= err.len() as i64 {
+        let found: i64 = str_find_from(err, pos, tag);
+        if found < 0 { break; }
+        at = found;
+        pos = found + 1;
+    }
+    if at < 0 { return err; }
+    let nl: i64 = str_find_from(err, at, String::from("\n"));
+    if nl < 0 { return String::from(""); }
+    err.substring((nl + 1) as u64, err.len())
+}

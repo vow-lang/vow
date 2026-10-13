@@ -1,0 +1,167 @@
+module TestVcQueue
+
+use verifier
+use vc_worker
+use vc_queue
+
+fn sample_tasks() -> VcQTasks {
+    let t: VcQTasks = VcQTasks { idx: Vec::new(), names: Vec::new(), kinds: Vec::new() };
+    t.idx.push(0);
+    t.names.push(String::from("alpha"));
+    t.kinds.push(VC_TASK_KIND_VERIFY());
+    t.idx.push(7);
+    t.names.push(String::from("beta"));
+    t.kinds.push(VC_TASK_KIND_VACUITY());
+    t.idx.push(7);
+    t.names.push(String::from("beta"));
+    t.kinds.push(VC_TASK_KIND_TRIVIAL());
+    t
+}
+
+fn is_none(text: String) -> bool {
+    match vc_q_tasks_decode(text) {
+        Option::Some(t) => { false },
+        Option::None => { true },
+    }
+}
+
+fn check_tasks_round_trip() -> i64 {
+    match vc_q_tasks_decode(vc_q_tasks_encode(sample_tasks())) {
+        Option::Some(t) => {
+            if t.idx.len() != 3 { return 1; }
+            if t.idx[1] != 7 || t.names[1] != String::from("beta") { return 2; }
+            if t.kinds[0] != VC_TASK_KIND_VERIFY() || t.kinds[2] != VC_TASK_KIND_TRIVIAL() { return 3; }
+            0
+        },
+        Option::None => { 4 },
+    }
+}
+
+fn check_empty_table_round_trips() -> i64 {
+    let none: VcQTasks = VcQTasks { idx: Vec::new(), names: Vec::new(), kinds: Vec::new() };
+    if is_none(vc_q_tasks_encode(none)) { return 1; }
+    0
+}
+
+// A table that is cut short, padded, or not a table at all is never a plan.
+fn check_damaged_table_never_decodes() -> i64 {
+    let full: String = vc_q_tasks_encode(sample_tasks());
+    if is_none(full) { return 1; }
+    let mut cut: u64 = 0;
+    while cut < full.len() {
+        if !is_none(full.substring(0, cut)) { return 2; }
+        cut = cut + 1;
+    }
+    let padded: String = String::from("");
+    padded.push_str(full);
+    padded.push_str(String::from("1\n"));
+    if !is_none(padded) { return 3; }
+    if !is_none(String::from("VOWRES3\n0\n")) { return 4; }
+    if !is_none(String::from("")) { return 5; }
+    0
+}
+
+fn check_claim_entry_names() -> i64 {
+    if vc_q_claim_entry_task(String::from("claim.0")) != 0 { return 1; }
+    if vc_q_claim_entry_task(String::from("claim.12")) != 12 { return 2; }
+    if vc_q_claim_entry_task(String::from("claim.")) != -1 { return 3; }
+    if vc_q_claim_entry_task(String::from("claim.x")) != -1 { return 4; }
+    if vc_q_claim_entry_task(String::from("claim.-3")) != -1 { return 5; }
+    if vc_q_claim_entry_task(String::from("scratch.3")) != -1 { return 6; }
+    if vc_q_claim_entry_task(String::from("")) != -1 { return 7; }
+    0
+}
+
+fn check_paths() -> i64 {
+    if vc_q_pending_path(String::from("/r"), 4) != String::from("/r/q/4") { return 1; }
+    if vc_q_result_path(String::from("/r"), 4) != String::from("/r/res/4") { return 2; }
+    if vc_q_claim_path(String::from("/r"), 2, 9) != String::from("/r/s2/claim.9") { return 3; }
+    if vc_q_scratch_path(String::from("/r"), 2, 9) != String::from("/r/s2/scratch.9") { return 4; }
+    if vc_q_tasks_path(String::from("/r")) != String::from("/r/tasks") { return 5; }
+    0
+}
+
+// What the worker prints at a claim and what the parent reads back: only the
+// text after the last marker is the current task's.
+fn check_stderr_framing() -> i64 {
+    let err: String = String::from("");
+    err.push_str(String::from("early noise\n"));
+    err.push_str(vc_task_marker(0));
+    err.push_str(String::from("\nmemory allocation of 9 bytes failed\n"));
+    err.push_str(vc_task_marker(1));
+    err.push_str(String::from("\nsecond task output\n"));
+    if vc_task_stderr(err) != String::from("second task output\n") { return 1; }
+    if vc_task_stderr(String::from("no marker here\n")) != String::from("no marker here\n") { return 2; }
+    if vc_task_stderr(vc_task_marker(3)) != String::from("") { return 3; }
+    let framed: String = String::from("");
+    framed.push_str(vc_task_marker(2));
+    framed.push_str(String::from("\n"));
+    if vc_task_stderr(framed) != String::from("") { return 4; }
+    0
+}
+
+// The queue on disk: a claim has one winner, an answer appears whole, a
+// requeued task is claimable again.
+fn check_queue_on_disk() -> i64 [io, read, write] {
+    let root: String = mktemp_dir(String::from("vow-queue-test"));
+    if root.len() == 0 { return 1; }
+    let t: VcQTasks = sample_tasks();
+    if !vc_q_init(root, t) { return 2; }
+    match vc_q_tasks_decode(fs_read(vc_q_tasks_path(root))) {
+        Option::Some(back) => { if back.idx.len() != 3 { return 3; } },
+        Option::None => { return 4; },
+    }
+    if fs_mkdir(vc_q_session_dir(root, 0)) != 0 || fs_mkdir(vc_q_session_dir(root, 1)) != 0 { return 5; }
+    if !vc_q_is_unclaimed(root, 1) { return 6; }
+    if vc_q_claims(root, 0).len() != 0 { return 7; }
+    if !vc_q_claim(root, 0, 1) { return 8; }
+    if vc_q_claim(root, 1, 1) { return 9; }
+    if vc_q_claim(root, 0, 1) { return 10; }
+    if vc_q_is_unclaimed(root, 1) { return 11; }
+    if vc_q_claims(root, 0).len() != 1 || vc_q_claims(root, 0)[0] != 1 { return 12; }
+    if vc_q_claims(root, 1).len() != 0 { return 13; }
+    if vc_q_has_result(root, 1) { return 14; }
+    if !vc_q_publish(root, 1, String::from("answer\n")) { return 15; }
+    if !vc_q_has_result(root, 1) || vc_q_read_result(root, 1) != String::from("answer\n") { return 16; }
+    let tmp: String = vc_q_result_path(root, 1);
+    tmp.push_str(String::from(".tmp"));
+    if fs_exists(tmp) == 1 { return 17; }
+    vc_q_ack(root, 0, 1);
+    if vc_q_claims(root, 0).len() != 0 { return 18; }
+    vc_q_withdraw(root, 2);
+    if vc_q_is_unclaimed(root, 2) { return 19; }
+    if vc_q_claim(root, 1, 2) { return 20; }
+    if !vc_q_requeue(root, 1) { return 21; }
+    if !vc_q_is_unclaimed(root, 1) || vc_q_has_result(root, 1) { return 22; }
+    if !vc_q_claim(root, 1, 1) { return 23; }
+    fs_remove_dir_all(root);
+    if fs_exists(root) == 1 { return 24; }
+    0
+}
+
+// A session's claims come back in task order, whatever order the directory
+// lists them in, and entries that are not claims are not listed.
+fn check_claims_are_sorted() -> i64 [io, read, write] {
+    let root: String = mktemp_dir(String::from("vow-queue-test"));
+    if root.len() == 0 { return 1; }
+    if !vc_q_init(root, sample_tasks()) { return 2; }
+    if fs_mkdir(vc_q_session_dir(root, 3)) != 0 { return 3; }
+    if !vc_q_claim(root, 3, 2) || !vc_q_claim(root, 3, 0) || !vc_q_claim(root, 3, 1) { return 4; }
+    if fs_mkdir(vc_q_scratch_path(root, 3, 1)) != 0 { return 5; }
+    let c: Vec<i64> = vc_q_claims(root, 3);
+    if c.len() != 3 || c[0] != 0 || c[1] != 1 || c[2] != 2 { return 6; }
+    fs_remove_dir_all(root);
+    0
+}
+
+fn main() -> i32 [io, read, write] {
+    let mut r: i64 = check_tasks_round_trip();
+    if r == 0 { r = check_empty_table_round_trips(); }
+    if r == 0 { r = check_damaged_table_never_decodes(); }
+    if r == 0 { r = check_claim_entry_names(); }
+    if r == 0 { r = check_paths(); }
+    if r == 0 { r = check_stderr_framing(); }
+    if r == 0 { r = check_queue_on_disk(); }
+    if r == 0 { r = check_claims_are_sorted(); }
+    i64_to_i32_wrap(r)
+}
