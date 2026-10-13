@@ -1,0 +1,29 @@
+// TEST: category model-drift
+// The lowering unit tests pin the NegF32/NegF64 opcodes; these contracts prove
+// the C model keeps the IEEE sign flip (`-x`) that codegen emits as `fneg`.
+module FloatNegationVerified
+
+fn negate(x: f64) -> f64 vow {
+    requires: x > 0.0,
+    ensures: result < 0.0
+} {
+    -x
+}
+
+fn negate_twice(x: f64) -> f64 vow {
+    requires: x == x,
+    ensures: result == x
+} {
+    -(-x)
+}
+
+fn negate32(x: f32) -> f32 vow {
+    requires: x > x - x,
+    ensures: result < x - x
+} {
+    -x
+}
+
+fn main() -> i32 [io] {
+    0
+}

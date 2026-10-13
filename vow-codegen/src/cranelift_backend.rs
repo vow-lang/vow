@@ -1134,6 +1134,10 @@ fn lower_inst(
             let val = builder.ins().fdiv(arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
+        Opcode::NegF32 | Opcode::NegF64 => {
+            let val = builder.ins().fneg(arg!(0));
+            ctx.value_map.insert(inst.id, val);
+        }
         Opcode::RemF32 | Opcode::RemF64 => {
             return Err(CodegenError::UnsupportedOpcode(
                 "float remainder not yet supported".to_string(),
@@ -5111,6 +5115,40 @@ mod tests {
         let result =
             CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(matches!(result, Err(CodegenError::UnsupportedOpcode(_))));
+    }
+
+    #[test]
+    fn compile_float_negation() {
+        let neg_fn = |id: u32, name: &str, ty: Ty, op: Opcode| Function {
+            id: FuncId(id),
+            name: name.to_string(),
+            params: vec![ty],
+            param_names: vec![],
+            return_ty: ty,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, ty, vec![], InstData::ArgIndex(0)),
+                    inst(1, op, ty, vec![0], InstData::None),
+                    inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let module = make_module(
+            "test",
+            vec![
+                neg_fn(0, "neg64", Ty::F64, Opcode::NegF64),
+                neg_fn(1, "neg32", Ty::F32, Opcode::NegF32),
+            ],
+        );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
     }
 
     #[test]

@@ -142,6 +142,8 @@ pub enum Opcode {
     LeF64,
     GtF64,
     GeF64,
+    NegF32,
+    NegF64,
 
     Not,
     And,

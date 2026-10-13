@@ -529,6 +529,7 @@ fn modelability_issue(inst: IrInst, facts: ModelFacts, m: IrModule, const_fn_ind
        || op == IOP_LE_F32() || op == IOP_LE_F64()
        || op == IOP_GT_F32() || op == IOP_GT_F64()
        || op == IOP_GE_F32() || op == IOP_GE_F64()
+       || op == IOP_NEG_F32() || op == IOP_NEG_F64()
        || op == IOP_NOT() || op == IOP_AND() || op == IOP_OR()
        || op == IOP_CONST_U64() || op == IOP_CONST_I128() || op == IOP_CONST_U128()
        || op == IOP_VOW_REQ() || op == IOP_VOW_ENS() || op == IOP_VOW_INV()
@@ -1839,6 +1840,11 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>, 
         return;
     }
 
+    if op == IOP_NEG_F32() || op == IOP_NEG_F64() {
+        out.push_str(str4(String::from("  v"), i64_to_string(id), String::from(" = -v"),
+            cemit_str2(i64_to_string(iargs[0]), String::from(";\n"))));
+        return;
+    }
     if op == IOP_NOT() {
         out.push_str(str4(String::from("  v"), i64_to_string(id), String::from(" = !v"),
             cemit_str2(i64_to_string(iargs[0]), String::from(";\n"))));
