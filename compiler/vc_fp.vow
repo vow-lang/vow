@@ -103,9 +103,10 @@ fn vc_fp_cmp(ar: VcArena, op: i64, a: i64, b: i64) -> i64 {
 
 // Whether a float instruction has the operand and result types the executor
 // models: every operand and the result of arithmetic share the opcode's float
-// type, a negation reads one operand of it and yields it, a comparison reads two of them and yields Bool, a constant takes no
-// operand and carries the type's own data kind. `t0`/`t1` are the types of the
-// first two operands (-1 when absent).
+// type, a negation reads one operand of it and yields it, a comparison reads
+// two of them and yields Bool, a constant takes no operand and carries the
+// type's own data kind. `t0`/`t1` are the types of the first two operands (-1
+// when absent).
 fn vc_fp_inst_ok(inst: IrInst, t0: i64, t1: i64) -> bool {
     let ft: i64 = vc_fp_op_ty(inst.op);
     let n: u64 = inst.args.len();

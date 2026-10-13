@@ -2048,12 +2048,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 UnOp::Not => ctx.emit(Opcode::Not, Ty::Bool, vec![val], InstData::None, span),
                 UnOp::Neg => {
                     let operand_ty = ctx.inst_ty(val);
-                    if let Ty::F32 | Ty::F64 = operand_ty {
-                        let opcode = if operand_ty == Ty::F32 {
-                            Opcode::NegF32
-                        } else {
-                            Opcode::NegF64
-                        };
+                    let float_neg = match operand_ty {
+                        Ty::F32 => Some(Opcode::NegF32),
+                        Ty::F64 => Some(Opcode::NegF64),
+                        _ => None,
+                    };
+                    if let Some(opcode) = float_neg {
                         return ctx.emit(opcode, operand_ty, vec![val], InstData::None, span);
                     }
                     let result_ty = if matches!(
