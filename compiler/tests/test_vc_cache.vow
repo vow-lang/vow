@@ -47,6 +47,28 @@ fn check_round_trip() -> i64 {
     0
 }
 
+// A floating-point query and a model of raw IEEE bits (a NaN, -0) round-trip like
+// any other: the key is the query text and a value is a limb pair.
+fn check_float_round_trip() -> i64 {
+    let q: String = String::from("(set-logic QF_BVFP)\n(declare-const x (_ FloatingPoint 11 53))\n(assert (not (fp.eq x x)))\n(check-sat)\n(get-value (x))\n");
+    let values: Vec<i64> = Vec::new();
+    let highs: Vec<i64> = Vec::new();
+    values.push(9221120237041090560);
+    highs.push(0);
+    values.push(-9223372036854775807 - 1);
+    highs.push(0);
+    let a: VcSolverAnswer = vc_answer(VC_ANS_SAT(), values, highs, String::from("raw"));
+    match vc_cache_decode(encode_answer(a, q), q, 2) {
+        Option::Some(d) => {
+            if d.verdict != VC_ANS_SAT() || d.values.len() != 2 { return 1; }
+            if d.values[0] != 9221120237041090560 || d.values[1] != -9223372036854775807 - 1 { return 2; }
+        },
+        Option::None => { return 3; },
+    }
+    if vc_cache_key(String::from("s"), q) == vc_cache_key(String::from("s"), query()) { return 4; }
+    0
+}
+
 fn check_query_with_newlines_and_marker() -> i64 {
     let q: String = String::from("a\nEND\n\n\nEND\n");
     match vc_cache_decode(encode_answer(unsat_answer(), q), q, 0) {
@@ -283,6 +305,7 @@ fn check_peek_and_put() -> i64 [io, read, write] {
 
 fn main() -> i32 [io, read, write] {
     let mut r: i64 = check_round_trip();
+    if r == 0 { r = check_float_round_trip(); }
     if r == 0 { r = check_query_with_newlines_and_marker(); }
     if r == 0 { r = check_decode_rejects_damage(); }
     if r == 0 { r = check_key(); }
