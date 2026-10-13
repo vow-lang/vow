@@ -64,9 +64,10 @@ without `--verify` is a usage error on `contracts` and `test`, so a report of
   reports `vacuous` for a satisfiable `requires: a > 0 && a < 100`. The native
   probe follows the semantic definition and disagrees; the ESBMC behaviour is a
   false positive and is documented as a verdict divergence in `docs/spec/cli.md`.
-- Each task re-lowers the program: up to three lowerings per contracted
-  function. A worker that runs several tasks is a follow-up if the #1420
-  performance gate flags it.
+- Each task re-lowered the program: up to three lowerings per contracted
+  function. The #1420 performance gate flagged it (#1683), and a worker now
+  decides many tasks after one lowering
+  ([ADR-2026-10-13-2212](2026-10-13-2212-native-verify-worker-sessions.md)).
 - Trusted base unchanged: the rewrites only construct IR the existing gate
   accepts; a wrong rewrite can only mislabel a contract as weak or not weak,
   never make `verify` accept a failing function.

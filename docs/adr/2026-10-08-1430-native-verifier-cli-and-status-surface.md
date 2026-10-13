@@ -276,6 +276,14 @@ memory message, and a SIGKILL that was not the parent's. Any other abnormal
 death is `panicked`. Known limitation: because workers lead their own group, a
 terminal Ctrl-C no longer reaches them; they stop at their own budget.
 
+**Addendum (issue #1683, worker sessions).** A `verify-worker` no longer decides
+one function: it lowers the program once and decides the functions it takes from
+a shared queue. The isolation above holds per function: `--timeout` kills the
+group of the worker on the overrunning function, an out-of-memory worker is
+`unknown` for the function it was on, and the functions it had not reached go to
+another worker. See
+[ADR-2026-10-13-2212](2026-10-13-2212-native-verify-worker-sessions.md).
+
 ## Why this meets the language-design criteria
 
 - **Does not make verification harder.** Each removed knob shrinks the matrix
