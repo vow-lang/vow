@@ -195,7 +195,8 @@ stdin/args/stderr, process, hash, environment and query/utility builtins; epic #
 top-level `arena_routes` list. It is deliberately narrower than
 `vow-types/src/env.rs::builtin_free_fn_signatures()` — that table (and its self-hosted counterpart in
 `compiler/env.vow`) remains the single source for signature/effects and is never read or replaced by
-this catalogue; the entry's `doc_signature`/`effects` are checked copies, not a second source.
+this catalogue; the entry's `doc_signature`/`effects` are copies checked against `grammar.md` and the
+help text, not a second source (a check against the type-checker tables themselves is pending).
 
 Where the shipped catalogue departs from the epic's PRD (docs checked rather than generated, lookup
 functions rather than typed Rust records, the `c_model`/`verifier_model` split, the exclusion list),
@@ -246,9 +247,11 @@ list; `c_model` (ESBMC C model, parity until epic #1398 P6) and `verifier_model`
 exempt from parity) are separate per-entry categories, and only pure entries may be known to either.
 Builtins the catalogue deliberately does not describe (the narrowing-conversion families,
 `__vow_clif_*`, `pin_to_root`, `string_matches_literal_at`, the `debug_*` builtins, the `i64_to_string`
-alias and the internal runtime ops) are listed with a reason in the ADR above. They move into an
-`excluded` section of `operations.json`, enforced by a coverage gate ("every type-checker builtin is
-catalogued or excluded"), in a pending slice of #375; until it lands, `--check` does not verify them.
+alias and the internal runtime ops) are listed with a reason in the ADR above; the narrowing families
+include the 128-bit `i128_to_u128_*`/`u128_to_i128_*` sign changes. Those that appear in the
+type-checker tables move into an `excluded` section of `operations.json`, enforced by a coverage gate
+("every type-checker builtin is catalogued or excluded"), in a pending slice of #375; until it lands,
+`--check` does not verify them.
 
 `load_catalogue` hand-validates every entry beyond the four fields' presence and type: `effects` must
 match `^\[(token(, token)*)?\]$` against the closed vocabulary `{read, write, io, panic, unsafe}`, with
