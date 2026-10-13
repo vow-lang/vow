@@ -765,3 +765,7 @@ their parity are unchanged.
   the texts of two different operands is the quantified equality of #1426 (`unknown` or
   `timeout` when the solver cannot close it, never a proof). This is exact, not a cap: no
   operand is excluded.
+- **`pin_to_root`** on a `String` is a clone: the runtime always copies into root storage and
+  never returns its argument (`__vow_string_pin_to_root`), so the model gives it the kind of
+  `String::from` (`VC_STR_CLONE`): the same `(array, length)` in a fresh object. The arena
+  placement it exists for has no value-level effect.

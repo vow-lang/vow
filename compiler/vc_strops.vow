@@ -46,6 +46,7 @@ fn vc_str_op_kind(sym: String) -> i64 {
     if sym == String::from("__vow_string_new") { return VC_STR_NEW(); }
     if sym == String::from("__vow_string_literal") { return VC_STR_LITERAL(); }
     if sym == String::from("__vow_string_clone") { return VC_STR_CLONE(); }
+    if sym == String::from("__vow_string_pin_to_root") { return VC_STR_CLONE(); }
     if sym == String::from("__vow_string_push_str") { return VC_STR_PUSH_STR(); }
     if sym == String::from("__vow_string_push_byte") { return VC_STR_PUSH_BYTE(); }
     if sym == String::from("__vow_string_clear") { return VC_STR_CLEAR(); }
@@ -122,9 +123,6 @@ fn vc_str_unmodeled_reason(sym: String) -> String {
     if vc_str_op_kind(sym) != VC_STR_NONE() { return String::from(""); }
     if sym == String::from("__vow_string_contains") {
         return String::from("substring search needs an existential over the match position");
-    }
-    if sym == String::from("__vow_string_pin_to_root") {
-        return String::from("copies a string between arenas; the model has no arena identity");
     }
     if sym == String::from("__vow_string_from_cstr") {
         return String::from("reads memory behind a C string, whose length the model does not hold");

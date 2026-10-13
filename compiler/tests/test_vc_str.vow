@@ -100,6 +100,8 @@ fn check_op_table() -> i64 {
     if vc_vec_op_kind(String::from("__vow_string_new")) != VC_STR_NEW() { return 2; }
     if vc_vec_op_kind(String::from("__vow_string_literal")) != VC_STR_LITERAL() { return 3; }
     if vc_vec_op_kind(String::from("__vow_string_clone")) != VC_STR_CLONE() { return 4; }
+    if vc_vec_op_kind(String::from("__vow_string_pin_to_root")) != VC_STR_CLONE() { return 43; }
+    if vc_str_unmodeled_reason(String::from("__vow_string_pin_to_root")).len() != 0 { return 44; }
     if vc_vec_op_kind(String::from("__vow_string_push_str")) != VC_STR_PUSH_STR() { return 5; }
     if vc_vec_op_kind(String::from("__vow_string_push_byte")) != VC_STR_PUSH_BYTE() { return 6; }
     if vc_vec_op_kind(String::from("__vow_string_clear")) != VC_STR_CLEAR() { return 7; }
@@ -117,7 +119,6 @@ fn check_op_table() -> i64 {
     if vc_vec_op_kind(String::from("__vow_vec_clear")) != VC_STR_NONE() { return 18; }
     let rest: Vec<String> = Vec::new();
     rest.push(String::from("__vow_string_contains"));
-    rest.push(String::from("__vow_string_pin_to_root"));
     rest.push(String::from("__vow_string_from_cstr"));
     rest.push(String::from("__vow_string_parse_u64_opt"));
     rest.push(String::from("__vow_string_new_in_arena"));
