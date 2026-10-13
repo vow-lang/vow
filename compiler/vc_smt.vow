@@ -221,9 +221,53 @@ fn vc_ext_prefix(kind: i64, amount: i64) -> String {
     out
 }
 
+// The bound index of a `RANGE_EQ`. No declared symbol, `define-fun` name or
+// parameter of the checker contains `!`, so it never captures one.
+fn vc_range_index() -> String { String::from("i!") }
+
+// `(bvand (select <x>[i!] ) #x..ff)` for a range operand: an array, or a view
+// `(array, offset)` read at `offset + i!`. Reads are masked because an array slot
+// is a 64-bit word that holds one byte.
+fn vc_range_byte_text(ar: VcArena, x: i64) -> String {
+    let out: String = String::from("(bvand (select ");
+    if ar.kinds[x as u64] == VC_T_APP() && ar.aux[x as u64] == VC_OP_VIEW() {
+        out.push_str(vc_term_text(ar, ar.a[x as u64]));
+        out.push_str(String::from(" (bvadd "));
+        out.push_str(vc_term_text(ar, ar.b[x as u64]));
+        out.push_str(String::from(" "));
+        out.push_str(vc_range_index());
+        out.push_str(String::from("))"));
+    } else {
+        out.push_str(vc_term_text(ar, x));
+        out.push_str(String::from(" "));
+        out.push_str(vc_range_index());
+        out.push_str(String::from(")"));
+    }
+    out.push_str(String::from(" #x00000000000000ff)"));
+    out
+}
+
+fn vc_range_eq_text(ar: VcArena, t: i64) -> String {
+    let out: String = String::from("(forall ((");
+    out.push_str(vc_range_index());
+    out.push_str(String::from(" (_ BitVec 64))) (=> (bvult "));
+    out.push_str(vc_range_index());
+    out.push_str(String::from(" "));
+    out.push_str(vc_term_text(ar, ar.c[t as u64]));
+    out.push_str(String::from(") (= "));
+    out.push_str(vc_range_byte_text(ar, ar.a[t as u64]));
+    out.push_str(String::from(" "));
+    out.push_str(vc_range_byte_text(ar, ar.b[t as u64]));
+    out.push_str(String::from(")))"));
+    out
+}
+
 fn vc_term_text(ar: VcArena, t: i64) -> String {
     let kind: i64 = ar.kinds[t as u64];
     let aux: i64 = ar.aux[t as u64];
+    if kind == VC_T_APP() && aux == VC_OP_RANGE_EQ() {
+        return vc_range_eq_text(ar, t);
+    }
     if kind == VC_T_VAR() {
         return String::from(ar.strs[aux as u64]);
     }

@@ -508,10 +508,10 @@ fn check_reason_codes() -> i64 {
     if !rf.contains(String::from("float-rem-unsupported: ")) { return 80; }
 
     let pure_ext: Vec<IrInst> = Vec::new();
-    pure_ext.push(mk_inst_call_extern(0, ITY_I64(), Vec::new(), String::from("__vow_string_len")));
+    pure_ext.push(mk_inst_call_extern(0, ITY_I64(), Vec::new(), String::from("__vow_math_unknown")));
     pure_ext.push(mk_inst_return(1, 0));
     let rb: String = vc_skip_reason(one_block(String::from("b"), Vec::new(), ITY_I64(), pure_ext));
-    if rb != String::from("unmodeled-builtin: __vow_string_len") { return 81; }
+    if rb != String::from("unmodeled-builtin: __vow_math_unknown") { return 81; }
 
     let cat: Vec<IrInst> = Vec::new();
     cat.push(mk_inst_call_extern(0, ITY_I64(), Vec::new(), String::from("__vow_fs_exists")));

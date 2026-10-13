@@ -73,11 +73,11 @@ fn vc_op_modeled_core(op: i64) -> bool {
         || op == IOP_CONST_UNIT() || op == IOP_BRANCH() || op == IOP_JUMP() || op == IOP_UNREACHABLE()
         || op == IOP_PHI() || op == IOP_UPSILON()
         || op == IOP_REGION_ALLOC() || op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE()
+        || op == IOP_CONST_STR()
 }
 
 fn vc_op_unsupported(op: i64) -> bool {
-    op == IOP_CONST_STR()
-        || op == IOP_LOAD() || op == IOP_STORE()
+    op == IOP_LOAD() || op == IOP_STORE()
         || op == IOP_DEBUG_CALL()
         || op == IOP_COMPLEXITY_DESCRIPTOR()
         || op == IOP_LINEAR_CONSUME() || op == IOP_LINEAR_BORROW()
@@ -104,12 +104,14 @@ fn vc_is_unwrap_abort(inst: IrInst) -> bool {
     inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == VC_INTERNAL_UNWRAP_PANIC()
 }
 
-// `Vec` operations the symbolic executor models as an array plus a symbolic
-// length (`vc_vec`). They are listed here by runtime symbol, like the unwrap
-// abort, and not in the builtin catalogue: the catalogue is keyed by Vow builtin
-// name and its entries need a grammar row. A symbol not listed (`clear`,
-// `truncate`, `reserve`, `from_raw_parts_copy`, the wide-slot variants, ...) is an
-// unmodelled builtin.
+// `Vec` and `String` operations the symbolic executor models as an array plus a
+// symbolic length (`vc_vec`, `vc_str`). They are listed here by runtime symbol,
+// like the unwrap abort, and not in the builtin catalogue: the catalogue is keyed
+// by Vow builtin name and its entries need a grammar row. A symbol not listed
+// (`truncate`, `reserve`, `from_raw_parts_copy`, the wide-slot variants, `trim`,
+// `split`, ...) is an unmodelled builtin. A `String` shares the `VowVec` layout of
+// a `Vec<u8>`, so its length is `VC_VEC_LEN` and the other string kinds start at
+// `VC_STR_BASE`.
 fn VC_VEC_NONE() -> i64 { 0 }
 fn VC_VEC_NEW() -> i64 { 1 }
 fn VC_VEC_PUSH() -> i64 { 2 }
@@ -117,6 +119,114 @@ fn VC_VEC_GET() -> i64 { 3 }
 fn VC_VEC_SET() -> i64 { 4 }
 fn VC_VEC_LEN() -> i64 { 5 }
 fn VC_VEC_POP() -> i64 { 6 }
+
+fn VC_STR_BASE() -> i64 { 16 }
+fn VC_STR_LITERAL() -> i64 { 16 }
+fn VC_STR_CLONE() -> i64 { 17 }
+fn VC_STR_NEW() -> i64 { 18 }
+fn VC_STR_PUSH_BYTE() -> i64 { 19 }
+fn VC_STR_BYTE_AT() -> i64 { 20 }
+fn VC_STR_CLEAR() -> i64 { 21 }
+fn VC_STR_PUSH_STR() -> i64 { 22 }
+fn VC_STR_EQ() -> i64 { 23 }
+fn VC_STR_MATCHES() -> i64 { 24 }
+fn VC_STR_SUBSTRING() -> i64 { 25 }
+fn VC_STR_SUBSTR() -> i64 { 26 }
+fn VC_STR_PARSE() -> i64 { 27 }
+fn VC_STR_FORMAT() -> i64 { 28 }
+
+// The integer parsers and formatters the executor models as opaque: a parse
+// returns an `Option` whose tag and payload are unconstrained, a format returns a
+// String of unconstrained content and length. Each call is independent of every
+// other and of its operand's bytes. The 128-bit variants are not modelled.
+fn vc_str_opaque_kind(sym: String) -> i64 {
+    if sym == String::from("__vow_string_from_i64") || sym == String::from("__vow_string_from_u64") {
+        return VC_STR_FORMAT();
+    }
+    if string_starts_with(sym, String::from("__vow_string_parse_")) != 1 { return VC_VEC_NONE(); }
+    if sym == String::from("__vow_string_parse_i8_opt") || sym == String::from("__vow_string_parse_i16_opt")
+        || sym == String::from("__vow_string_parse_i32_opt") || sym == String::from("__vow_string_parse_i64_opt")
+        || sym == String::from("__vow_string_parse_u8_opt") || sym == String::from("__vow_string_parse_u16_opt")
+        || sym == String::from("__vow_string_parse_u32_opt") || sym == String::from("__vow_string_parse_u64_opt") {
+        return VC_STR_PARSE();
+    }
+    VC_VEC_NONE()
+}
+
+fn vc_str_op_kind(sym: String) -> i64 {
+    if string_starts_with(sym, String::from("__vow_string_")) != 1 { return VC_VEC_NONE(); }
+    let opaque: i64 = vc_str_opaque_kind(sym);
+    if opaque != VC_VEC_NONE() { return opaque; }
+    if sym == String::from("__vow_string_len") { return VC_VEC_LEN(); }
+    if sym == String::from("__vow_string_literal") { return VC_STR_LITERAL(); }
+    if sym == String::from("__vow_string_clone") || sym == String::from("__vow_string_pin_to_root") {
+        return VC_STR_CLONE();
+    }
+    if sym == String::from("__vow_string_new") { return VC_STR_NEW(); }
+    if sym == String::from("__vow_string_push_byte") { return VC_STR_PUSH_BYTE(); }
+    if sym == String::from("__vow_string_byte_at") { return VC_STR_BYTE_AT(); }
+    if sym == String::from("__vow_string_clear") { return VC_STR_CLEAR(); }
+    if sym == String::from("__vow_string_push_str") { return VC_STR_PUSH_STR(); }
+    if sym == String::from("__vow_string_eq") { return VC_STR_EQ(); }
+    if sym == String::from("__vow_string_matches_literal_at") { return VC_STR_MATCHES(); }
+    if sym == String::from("__vow_string_substring") { return VC_STR_SUBSTRING(); }
+    if sym == String::from("__vow_string_substr") { return VC_STR_SUBSTR(); }
+    VC_VEC_NONE()
+}
+
+// The reason a `__vow_string_*` helper is not modelled, "" for a modelled one and
+// for any symbol that is not a string helper. The table is closed over the
+// runtime's string symbols: `test_vc_ops` lists them all and fails when one is
+// neither modelled (`vc_str_op_kind`) nor given a reason here.
+fn vc_str_unmodeled_reason(sym: String) -> String {
+    if string_starts_with(sym, String::from("__vow_string_")) != 1 { return String::from(""); }
+    if vc_str_op_kind(sym) != VC_VEC_NONE() { return String::from(""); }
+    if string_ends_with(sym, String::from("_in_arena")) == 1 || string_ends_with(sym, String::from("_in_candidate_arena")) == 1 {
+        return String::from("arena-routed variant of a string helper");
+    }
+    if sym == String::from("__vow_string_from_raw_parts_copy") { return String::from("raw memory copy, capacity trap not modelled"); }
+    if sym == String::from("__vow_string_from_cstr") { return String::from("C string read"); }
+    if sym == String::from("__vow_string_from_i128") || sym == String::from("__vow_string_from_u128")
+        || sym == String::from("__vow_string_parse_i128_opt") || sym == String::from("__vow_string_parse_u128_opt") {
+        return String::from("128-bit number parse or format");
+    }
+    if sym == String::from("__vow_string_contains") || sym == String::from("__vow_string_starts_with")
+        || sym == String::from("__vow_string_ends_with") {
+        return String::from("substring search");
+    }
+    if sym == String::from("__vow_string_trim") || sym == String::from("__vow_string_to_upper")
+        || sym == String::from("__vow_string_to_lower") || sym == String::from("__vow_string_replace") {
+        return String::from("content transform");
+    }
+    if sym == String::from("__vow_string_split") || sym == String::from("__vow_string_join") {
+        return String::from("Vec<String> operation");
+    }
+    if sym == String::from("__vow_string_print") { return String::from("I/O"); }
+    String::from("unlisted string helper")
+}
+
+// The kinds that change the contents or length of an existing object: a loop
+// that runs one cannot be cut for induction with stale entry state.
+fn vc_vec_kind_writes(kind: i64) -> bool {
+    kind == VC_VEC_PUSH() || kind == VC_VEC_SET() || kind == VC_VEC_POP()
+        || kind == VC_STR_PUSH_BYTE() || kind == VC_STR_CLEAR() || kind == VC_STR_PUSH_STR()
+}
+
+// The kinds whose result is a new container object.
+fn vc_vec_kind_creates(kind: i64) -> bool {
+    kind == VC_VEC_NEW() || kind == VC_STR_LITERAL() || kind == VC_STR_CLONE() || kind == VC_STR_NEW()
+        || kind == VC_STR_SUBSTRING() || kind == VC_STR_SUBSTR() || kind == VC_STR_FORMAT()
+}
+
+// Operand 0 / operand 1 is a container the operation reads or changes (a
+// literal's operand 0 is the constant, a `new`'s are the empty data).
+fn vc_vec_kind_arg0_container(kind: i64) -> bool {
+    kind != VC_VEC_NEW() && kind != VC_STR_LITERAL() && kind != VC_STR_NEW() && kind != VC_STR_FORMAT()
+}
+
+fn vc_vec_kind_arg1_container(kind: i64) -> bool {
+    kind == VC_STR_PUSH_STR() || kind == VC_STR_EQ()
+}
 
 // Dispatched on the symbol's length, so a call to anything else costs one
 // comparison instead of one per operation.
@@ -132,7 +242,7 @@ fn vc_vec_op_kind(sym: String) -> i64 {
     } else if n == 18 {
         if sym == String::from("__vow_vec_push_val") { return VC_VEC_PUSH(); }
     }
-    VC_VEC_NONE()
+    vc_str_op_kind(sym)
 }
 
 // The `Vec` operation an instruction is, or `VC_VEC_NONE`.
@@ -199,12 +309,15 @@ fn vc_frame_mark(k: i64) -> String {
 fn vc_frame_in_dv2(inst: IrInst) -> bool {
     if vc_is_unwrap_abort(inst) { return true; }
     let k: i64 = vc_inst_vec_kind(inst);
-    k == VC_VEC_GET() || k == VC_VEC_SET()
+    k == VC_VEC_GET() || k == VC_VEC_SET() || k == VC_STR_BYTE_AT()
 }
 
 // The frame an instruction was spliced from; -1 for the target's own.
 fn vc_frame_of(inst: IrInst) -> i64 {
     if vc_frame_in_dv2(inst) { return inst.dv2 - 1; }
+    // Only the opcodes `vc_map_inst` marks carry a frame in `ds`: a `ConstStr`'s
+    // `ds` is the literal's own bytes, which may spell the prefix.
+    if !vc_op_frame_marked(inst.op) { return -1; }
     let pre: String = VC_FRAME_PREFIX();
     if inst.ds.len() <= pre.len() || string_starts_with(inst.ds, pre) != 1 {
         return -1;

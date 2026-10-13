@@ -9,6 +9,7 @@ use vc_session
 use vc_ops
 use vc_gate
 use vc_inline
+use vc_str
 use vc_cfg
 use vc_loops
 use vc_exec
@@ -489,7 +490,7 @@ fn vc_verify_function_mode(f: IrFunction, m: IrModule, timeout_ms: i64, scratch:
     if inl.status != VC_INLINE_OK() {
         return vc_bare_outcome(vc_plain_result(VERIFY_ERROR(), String::from("internal error: call inlining failed")));
     }
-    let closed: IrFunction = vc_close_loops(inl.f);
+    let closed: IrFunction = vc_close_loops(vc_str_fill_literals(inl.f, m));
     let started: i64 = time_micros();
     let slicing: bool = vc_slicing_enabled();
     let acc: VcClauseAcc = vc_clause_acc_new();

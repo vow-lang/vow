@@ -80,6 +80,12 @@ fn VC_OP_FPGT() -> i64 { 42 }
 fn VC_OP_FPGE() -> i64 { 43 }
 fn VC_OP_TOFP32() -> i64 { 44 }
 fn VC_OP_TOFP64() -> i64 { 45 }
+// A string content relation, printed only by `vc_smt`: `RANGE_EQ(x, y, n)` is
+// "x and y hold equal bytes at positions 0 .. n" where each operand is an array or
+// a `VIEW(array, offset)` of it. Neither is simplified, folded or sorted: the arena
+// treats both as opaque applications.
+fn VC_OP_RANGE_EQ() -> i64 { 46 }
+fn VC_OP_VIEW() -> i64 { 47 }
 
 // `hashes` caches each term's node hash; `slots` is an open-addressing table
 // (power-of-two length, linear probing, -1 empty) over the interned term ids, so

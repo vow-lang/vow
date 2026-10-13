@@ -302,8 +302,7 @@ fn vc_step_applicable(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>) -> bool {
                 if inst.op == IOP_FIELD_SET() || (inst.op == IOP_PHI() && inst.ty == ITY_PTR()) {
                     return false;
                 }
-                let vk: i64 = vc_inst_vec_kind(inst);
-                if vk == VC_VEC_PUSH() || vk == VC_VEC_SET() || vk == VC_VEC_POP() {
+                if vc_vec_kind_writes(vc_inst_vec_kind(inst)) {
                     return false;
                 }
                 i = i + 1;

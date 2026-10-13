@@ -10,6 +10,7 @@ use vc_gate
 use vc_flow
 use vc_agg
 use vc_vec
+use vc_str
 use ir_dominance
 
 // Symbolic execution of an acyclic integer/Bool function (one that
@@ -31,7 +32,8 @@ use ir_dominance
 //   hard  the abort of `.unwrap()` on `None`/`Err`: the lowerer branches on the
 //         discriminant and calls the abort on the empty variant, so that call is
 //         a claim that its path is infeasible.
-//   hard  a `Vec` index at or past the length (`vc_vec`), on `get` and `set`.
+//   hard  a `Vec` index at or past the length (`vc_vec`), on `get` and `set`, and a
+//         `String` `byte_at` at or past the length (`vc_str`).
 //   soft  checked `+! -! *! /! %!`: the language aborts on overflow, so the
 //         contract is judged on returning runs only. A counterexample to a soft
 //         claim is not a failure; it means the abort is reachable and the
@@ -272,6 +274,8 @@ struct VcWalk {
     tys: Vec<i64>,
     lits: Vec<i64>,
     dvs: Vec<i64>,
+    cstr: Vec<String>,
+    cstr_ok: Vec<i64>,
 }
 
 // Binds the value of `inst` to `t`: a leaf is used as it is, a composite gets
@@ -414,6 +418,7 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
     let cs: VcClaims = w.cs;
     let ar: VcArena = cs.arena;
     let hdr: SmtScript = cs.header;
+    if kind >= VC_STR_BASE() { return vc_walk_str(w, bi, inst, pc, kind); }
     let vv: VcVec = w.vv;
     let b: i64 = bi as i64;
     if kind == VC_VEC_NEW() {
@@ -439,6 +444,102 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
         } else {
             let elem: i64 = vc_vec_elem64(ar, w.tys[inst.args[2] as u64], w.var_of[inst.args[2] as u64]);
             vc_vec_set(vv, ar, hdr, s, b, idx, elem);
+        }
+    }
+    true
+}
+
+// A `String` call (`vc_str`). A constructor makes a new object; the others read
+// or change the state of one in this block. A literal whose bytes the executor was
+// not given (`vc_str_fill_literals` did not run) is an unknown string, never an
+// empty one. `byte_at` past the length is a hard claim like a `Vec` index: the
+// runtime's `-1` result is not a value the verifier lets a contract rely on.
+fn vc_walk_str(w: VcWalk, bi: u64, inst: IrInst, pc: i64, kind: i64) -> bool {
+    let cs: VcClaims = w.cs;
+    let ar: VcArena = cs.arena;
+    let hdr: SmtScript = cs.header;
+    let vv: VcVec = w.vv;
+    let b: i64 = bi as i64;
+    if kind == VC_STR_LITERAL() || kind == VC_STR_NEW() {
+        let obj: i64 = vc_agg_alloc(w.ag, w.fl.block_pc[bi]);
+        w.obj_of[inst.id as u64] = obj;
+        let src: u64 = inst.args[0] as u64;
+        if kind == VC_STR_NEW() {
+            vc_vec_create(vv, w.ag, ar, hdr, obj, b);
+        } else if w.cstr_ok[src] == 1 {
+            vc_str_literal(vv, ar, hdr, obj, b, w.cstr[src]);
+        } else {
+            vc_vec_slot(vv, w.ag, ar, hdr, cs.assumed, obj);
+        }
+        return true;
+    }
+    if kind == VC_STR_FORMAT() {
+        let obj: i64 = vc_agg_alloc(w.ag, w.fl.block_pc[bi]);
+        w.obj_of[inst.id as u64] = obj;
+        vc_vec_slot(vv, w.ag, ar, hdr, cs.assumed, obj);
+        return true;
+    }
+    if kind == VC_STR_PARSE() {
+        w.obj_of[inst.id as u64] = vc_agg_alloc(w.ag, w.fl.block_pc[bi]);
+        return true;
+    }
+    let s: i64 = vc_vec_slot(vv, w.ag, ar, hdr, cs.assumed, w.obj_of[inst.args[0] as u64]);
+    let arr: i64 = vc_vec_cur_arr(vv, s, b);
+    let len: i64 = vc_vec_cur_len(vv, s, b);
+    if kind == VC_STR_SUBSTRING() || kind == VC_STR_SUBSTR() {
+        let start: i64 = vc_str_clamped_start(ar, len, w.var_of[inst.args[1] as u64]);
+        let mut n: i64 = vc_str_substring_len(ar, len, start, w.var_of[inst.args[2] as u64]);
+        if kind == VC_STR_SUBSTR() { n = vc_str_substr_len(ar, len, start, w.var_of[inst.args[2] as u64]); }
+        let facts: Vec<i64> = Vec::new();
+        let out_arr: i64 = vc_str_slice(vv, ar, hdr, facts, arr, start, n);
+        let mut fi: u64 = 0;
+        while fi < facts.len() {
+            vc_assume(cs, pc, facts[fi]);
+            fi = fi + 1;
+        }
+        let obj: i64 = vc_agg_alloc(w.ag, w.fl.block_pc[bi]);
+        w.obj_of[inst.id as u64] = obj;
+        let t: i64 = vc_vec_push_slot(vv, obj, VC_OBJ_ALLOC());
+        vc_vec_write(vv, ar, hdr, t, b, out_arr, n);
+    } else if kind == VC_STR_CLONE() {
+        let obj: i64 = vc_agg_alloc(w.ag, w.fl.block_pc[bi]);
+        w.obj_of[inst.id as u64] = obj;
+        vc_str_copy(vv, ar, hdr, s, obj, b);
+    } else if kind == VC_STR_CLEAR() {
+        vc_vec_write(vv, ar, hdr, s, b, arr, vc_tm_bv(ar, 64, 0, 0));
+    } else if kind == VC_STR_PUSH_BYTE() {
+        let byte: i64 = vc_str_byte_slot(ar, w.tys[inst.args[1] as u64], w.var_of[inst.args[1] as u64]);
+        vc_assume(cs, pc, vc_vec_push_guard(ar, len));
+        vc_vec_push(vv, ar, hdr, s, b, byte);
+    } else if kind == VC_STR_BYTE_AT() {
+        let idx: i64 = w.var_of[inst.args[1] as u64];
+        vc_guard(cs, VC_CLAIM_VEC_BOUNDS(), VC_LABEL_VEC_BOUNDS(), pc, vc_vec_in_bounds(ar, idx, len), inst);
+        vc_define(w, inst, vc_str_byte(ar, arr, idx));
+    } else if kind == VC_STR_MATCHES() {
+        let lit: u64 = inst.args[2] as u64;
+        if w.cstr_ok[lit] == 1 {
+            let hit: i64 = vc_str_matches(ar, arr, len, w.var_of[inst.args[1] as u64], w.cstr[lit]);
+            vc_define(w, inst, vc_tm_app3(ar, VC_OP_ITE(), hit, vc_tm_bv(ar, 64, 1, 0), vc_tm_bv(ar, 64, 0, 0)));
+        } else {
+            vc_define(w, inst, vc_agg_junk(w.ag, ar, hdr, 64));
+        }
+    } else {
+        let t: i64 = vc_vec_slot(vv, w.ag, ar, hdr, cs.assumed, w.obj_of[inst.args[1] as u64]);
+        let t_arr: i64 = vc_vec_cur_arr(vv, t, b);
+        let t_len: i64 = vc_vec_cur_len(vv, t, b);
+        if kind == VC_STR_EQ() {
+            vc_define(w, inst, vc_str_eq(ar, arr, len, t_arr, t_len));
+        } else {
+            let facts: Vec<i64> = Vec::new();
+            let next_arr: i64 = vc_str_append(vv, ar, hdr, facts, arr, len, t_arr, t_len);
+            let next_len: i64 = vc_tm_app2(ar, VC_OP_BVADD(), len, t_len);
+            vc_assume(cs, pc, vc_vec_push_guard(ar, next_len));
+            let mut fi: u64 = 0;
+            while fi < facts.len() {
+                vc_assume(cs, pc, facts[fi]);
+                fi = fi + 1;
+            }
+            vc_vec_write(vv, ar, hdr, s, b, next_arr, next_len);
         }
     }
     true
@@ -483,6 +584,11 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
     }
     // Region markers only scope an allocation's lifetime; they change no value.
     if op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE() {
+        return;
+    }
+    if op == IOP_CONST_STR() {
+        w.cstr[inst.id as u64] = inst.ds;
+        w.cstr_ok[inst.id as u64] = { if inst.dv2 == VC_STR_FILLED() { 1 } else { 0 } };
         return;
     }
     if vc_walk_agg(w, bi, inst) || vc_walk_vec(w, bi, inst, pc) {
@@ -611,6 +717,8 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         tys: tys,
         lits: vc_literal_table(f, tys),
         dvs: dom_fill(tys.len(), 0),
+        cstr: vc_str_empty_table(tys.len()),
+        cstr_ok: dom_fill(tys.len(), 0),
     };
     let id_to_idx: Vec<i64> = dom_block_id_table(f);
     let succ: Vec<i64> = dom_successors(f, id_to_idx);
@@ -639,6 +747,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         oi = oi + 1;
     }
     vc_claims_harvest_fields(cs, w.ag);
-    vc_script_replace_logic(hdr, vc_logic_name(vc_vec_count(w.vv) > 0, vc_function_has_float(f, tys)));
+    let logic: String = if vc_str_has_range_eq(ar) { String::from("ALL") } else { vc_logic_name(vc_vec_count(w.vv) > 0, vc_function_has_float(f, tys)) };
+    vc_script_replace_logic(hdr, logic);
     cs
 }

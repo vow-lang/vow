@@ -1,0 +1,324 @@
+module VcStr
+
+use ir
+use ir_dominance
+use vc_ops
+use vc_term
+use vc_smt
+use vc_flow
+use vc_agg
+use vc_vec
+use vc_loops
+
+// `String` in the native verifier: the same array plus symbolic length as a
+// `Vec` (`vc_vec`), because a runtime String has the `VowVec` layout of a
+// `Vec<u8>`. A byte lives zero-extended in a 64-bit slot and every read masks it
+// with 0xFF, so a parameter's unconstrained array can never produce a byte above
+// 255. This module builds the string-only terms; the executor (`vc_exec`) walks
+// the instructions and keeps the per-block state in `vc_vec`.
+//
+// `string_eq` is exact. For operands of constant length it expands into byte
+// comparisons, for symbolic lengths into one quantified relation
+// `VC_OP_RANGE_EQ(x, y, n)`: equal lengths and equal bytes at every position below
+// the length. `push_str` of a symbolic source is defined by two such relations on a
+// fresh array. A query with no such term stays quantifier-free; the executor
+// switches the logic to ALL only when the arena holds one (`vc_str_has_range_eq`).
+
+// Constant operands the executor can expand byte by byte; longer ones use the
+// quantified relation, which is exact for any length.
+fn VC_STR_EXPAND_LIMIT() -> i64 { 32 }
+
+fn vc_str_byte(ar: VcArena, arr: i64, idx: i64) -> i64 {
+    vc_tm_app2(ar, VC_OP_BVAND(), vc_tm_app2(ar, VC_OP_SELECT(), arr, idx), vc_tm_bv(ar, 64, 255, 0))
+}
+
+fn vc_str_const_len(ar: VcArena, len: i64) -> i64 {
+    if vc_is_bv(ar, len) && ar.aux[len as u64] >= 0 { return ar.aux[len as u64]; }
+    -1
+}
+
+fn vc_str_bv(ar: VcArena, v: i64) -> i64 {
+    vc_tm_bv(ar, 64, v, 0)
+}
+
+// `arr` read from `off` on, so a range relation can compare shifted windows.
+fn vc_str_view(ar: VcArena, arr: i64, off: i64) -> i64 {
+    if vc_bv_is_zero(ar, off) { return arr; }
+    vc_arena_intern(ar, VC_T_APP(), arr, off, -1, VC_OP_VIEW())
+}
+
+// Bytes 0 .. n of `x` and `y` agree. Equal operands and an empty range are true
+// without a quantifier.
+fn vc_str_range_eq(ar: VcArena, x: i64, y: i64, n: i64) -> i64 {
+    if x == y || vc_bv_is_zero(ar, n) { return vc_tm_bool_const(ar, true); }
+    vc_arena_intern(ar, VC_T_APP(), x, y, n, VC_OP_RANGE_EQ())
+}
+
+// True when some term of the arena is a range relation: the one case in which a
+// query needs a quantifier.
+fn vc_str_has_range_eq(ar: VcArena) -> bool {
+    let mut i: u64 = 0;
+    while i < ar.kinds.len() {
+        if ar.kinds[i] == VC_T_APP() && ar.aux[i] == VC_OP_RANGE_EQ() { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// `a == b` as strings given as (array, length) pairs.
+fn vc_str_eq(ar: VcArena, a_arr: i64, a_len: i64, b_arr: i64, b_len: i64) -> i64 {
+    if a_arr == b_arr && a_len == b_len { return vc_tm_bool_const(ar, true); }
+    let same_len: i64 = vc_tm_app2(ar, VC_OP_EQ(), a_len, b_len);
+    if vc_tm_is_false(ar, same_len) { return same_len; }
+    let mut n: i64 = vc_str_const_len(ar, a_len);
+    if n < 0 { n = vc_str_const_len(ar, b_len); }
+    if n == 0 { return same_len; }
+    if n > 0 && n <= VC_STR_EXPAND_LIMIT() {
+        let mut acc: i64 = same_len;
+        let mut k: i64 = 0;
+        while k < n {
+            let idx: i64 = vc_str_bv(ar, k);
+            let same: i64 = vc_tm_app2(ar, VC_OP_EQ(), vc_str_byte(ar, a_arr, idx), vc_str_byte(ar, b_arr, idx));
+            acc = vc_tm_and(ar, acc, same);
+            k = k + 1;
+        }
+        return acc;
+    }
+    vc_tm_and(ar, same_len, vc_str_range_eq(ar, a_arr, b_arr, a_len))
+}
+
+// `matches_literal_at(s, pos, lit)`: the literal fits at `pos` without wrapping
+// (`pos + n <= len`, written so it cannot overflow) and every byte agrees.
+fn vc_str_matches(ar: VcArena, s_arr: i64, s_len: i64, pos: i64, lit: String) -> i64 {
+    let n: i64 = lit.len() as i64;
+    let size: i64 = vc_str_bv(ar, n);
+    let fits: i64 = vc_tm_app2(ar, VC_OP_BVULE(), size, s_len);
+    let room: i64 = vc_tm_app2(ar, VC_OP_BVULE(), pos, vc_tm_app2(ar, VC_OP_BVSUB(), s_len, size));
+    let mut acc: i64 = vc_tm_and(ar, fits, room);
+    let mut k: i64 = 0;
+    while k < n {
+        let at: i64 = vc_tm_app2(ar, VC_OP_BVADD(), pos, vc_str_bv(ar, k));
+        let want: i64 = vc_str_bv(ar, lit.byte_at(k as u64));
+        acc = vc_tm_and(ar, acc, vc_tm_app2(ar, VC_OP_EQ(), vc_str_byte(ar, s_arr, at), want));
+        k = k + 1;
+    }
+    acc
+}
+
+// Array of a literal's bytes: a fresh array with the bytes stored at 0 .. n. The
+// chain is named every few stores so no term nests deeply however long the
+// literal is.
+fn vc_str_literal_array(vv: VcVec, ar: VcArena, hdr: SmtScript, bytes: String) -> i64 {
+    let name: String = vc_vec_fresh_name(vv, String::from("vl"));
+    name.push_str(String::from("_varr"));
+    let mut arr: i64 = vc_agg_declare(ar, hdr, name, VC_SORT_ARRAY64());
+    let n: i64 = bytes.len() as i64;
+    let mut k: i64 = 0;
+    while k < n {
+        arr = vc_tm_app3(ar, VC_OP_STORE(), arr, vc_str_bv(ar, k), vc_str_bv(ar, bytes.byte_at(k as u64)));
+        if (k + 1) % 32 == 0 { arr = vc_flow_name(vv.fl, ar, hdr, VC_SORT_ARRAY64(), arr); }
+        k = k + 1;
+    }
+    arr
+}
+
+// The state of a string literal object: its bytes and a constant length.
+fn vc_str_literal(vv: VcVec, ar: VcArena, hdr: SmtScript, obj: i64, bi: i64, bytes: String) {
+    let s: i64 = vc_vec_push_slot(vv, obj, VC_OBJ_ALLOC());
+    let arr: i64 = vc_str_literal_array(vv, ar, hdr, bytes);
+    vc_vec_write(vv, ar, hdr, s, bi, arr, vc_str_bv(ar, bytes.len() as i64));
+}
+
+// A clone, `pin_to_root` or any other copy: the new object starts with the
+// source's state (an array is a value, so there is nothing to copy).
+fn vc_str_copy(vv: VcVec, ar: VcArena, hdr: SmtScript, src: i64, obj: i64, bi: i64) {
+    let s: i64 = vc_vec_push_slot(vv, obj, VC_OBJ_ALLOC());
+    vc_vec_write(vv, ar, hdr, s, bi, vc_vec_cur_arr(vv, src, bi), vc_vec_cur_len(vv, src, bi));
+}
+
+// A byte as the slot value `push_byte` stores: the low eight bits.
+fn vc_str_byte_slot(ar: VcArena, ty: i64, t: i64) -> i64 {
+    vc_tm_app2(ar, VC_OP_BVAND(), vc_vec_elem64(ar, ty, t), vc_tm_bv(ar, 64, 255, 0))
+}
+
+// The array of `d` after `push_str(d, s)`. A source of short constant length is
+// stored byte by byte. Any other source gets a fresh array related to the two
+// operands by range relations, which are appended to `facts` for the caller to
+// assume on the current path.
+fn vc_str_append(vv: VcVec, ar: VcArena, hdr: SmtScript, facts: Vec<i64>, d_arr: i64, d_len: i64, s_arr: i64, s_len: i64) -> i64 {
+    let n: i64 = vc_str_const_len(ar, s_len);
+    if n >= 0 && n <= VC_STR_EXPAND_LIMIT() {
+        let mut arr: i64 = d_arr;
+        let mut k: i64 = 0;
+        while k < n {
+            let at: i64 = vc_tm_app2(ar, VC_OP_BVADD(), d_len, vc_str_bv(ar, k));
+            arr = vc_tm_app3(ar, VC_OP_STORE(), arr, at, vc_str_byte(ar, s_arr, vc_str_bv(ar, k)));
+            k = k + 1;
+        }
+        return arr;
+    }
+    let name: String = vc_vec_fresh_name(vv, String::from("vr"));
+    name.push_str(String::from("_varr"));
+    let r: i64 = vc_agg_declare(ar, hdr, name, VC_SORT_ARRAY64());
+    facts.push(vc_str_range_eq(ar, r, d_arr, d_len));
+    facts.push(vc_str_range_eq(ar, vc_str_view(ar, r, d_len), s_arr, s_len));
+    r
+}
+
+fn vc_str_umin(ar: VcArena, a: i64, b: i64) -> i64 {
+    vc_tm_app3(ar, VC_OP_ITE(), vc_tm_app2(ar, VC_OP_BVULE(), a, b), a, b)
+}
+
+fn vc_str_umax(ar: VcArena, a: i64, b: i64) -> i64 {
+    vc_tm_app3(ar, VC_OP_ITE(), vc_tm_app2(ar, VC_OP_BVULE(), a, b), b, a)
+}
+
+// Where a substring starts: `start` clamped to the length, as the runtime does.
+fn vc_str_clamped_start(ar: VcArena, slen: i64, start: i64) -> i64 {
+    vc_str_umin(ar, start, slen)
+}
+
+// Length of `substring(start, end)`: `end` clamped into `[start, len]`, minus the
+// clamped start.
+fn vc_str_substring_len(ar: VcArena, slen: i64, cs: i64, end: i64) -> i64 {
+    let ce: i64 = vc_str_umin(ar, vc_str_umax(ar, end, cs), slen);
+    vc_tm_app2(ar, VC_OP_BVSUB(), ce, cs)
+}
+
+// Length of `substr(start, len)`: `len` clamped to what is left after the start.
+fn vc_str_substr_len(ar: VcArena, slen: i64, cs: i64, len: i64) -> i64 {
+    vc_str_umin(ar, len, vc_tm_app2(ar, VC_OP_BVSUB(), slen, cs))
+}
+
+// The array of a substring: bytes `cs .. cs + len` of `s`. A short constant length
+// is stored byte by byte on a fresh array; any other is related to `s` by a range
+// relation, appended to `facts` for the caller to assume on the current path.
+fn vc_str_slice(vv: VcVec, ar: VcArena, hdr: SmtScript, facts: Vec<i64>, s_arr: i64, cs: i64, len: i64) -> i64 {
+    let name: String = vc_vec_fresh_name(vv, String::from("vs"));
+    name.push_str(String::from("_varr"));
+    let r: i64 = vc_agg_declare(ar, hdr, name, VC_SORT_ARRAY64());
+    let n: i64 = vc_str_const_len(ar, len);
+    if n >= 0 && n <= VC_STR_EXPAND_LIMIT() {
+        let mut arr: i64 = r;
+        let mut k: i64 = 0;
+        while k < n {
+            let at: i64 = vc_tm_app2(ar, VC_OP_BVADD(), cs, vc_str_bv(ar, k));
+            arr = vc_tm_app3(ar, VC_OP_STORE(), arr, vc_str_bv(ar, k), vc_str_byte(ar, s_arr, at));
+            k = k + 1;
+        }
+        return arr;
+    }
+    facts.push(vc_str_range_eq(ar, r, vc_str_view(ar, s_arr, cs), len));
+    r
+}
+
+// "" when every `String` constant is used as the lowerer shapes it, else the
+// detail of an `unsupported-opcode` skip. A `ConstStr` is only ever the operand of
+// a string literal (operand 0) or of `matches_literal_at` (operand 2), and a
+// literal's and a pattern's operands are constants: the executor reads the bytes
+// off the `ConstStr`. `String::new` takes no data.
+fn vc_str_shape_detail(f: IrFunction, n_ids: u64) -> String {
+    let is_cstr: Vec<i64> = dom_fill(n_ids, 0);
+    let is_zero: Vec<i64> = dom_fill(n_ids, 0);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.id >= 0 {
+                if inst.op == IOP_CONST_STR() { is_cstr[inst.id as u64] = 1; }
+                if inst.op == IOP_CONST_I64() && inst.dv == 0 { is_zero[inst.id as u64] = 1; }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    bi = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            let k: i64 = vc_inst_vec_kind(inst);
+            let mut ai: u64 = 0;
+            while ai < inst.args.len() {
+                let allowed: bool = (k == VC_STR_LITERAL() && ai == 0) || (k == VC_STR_MATCHES() && ai == 2);
+                if is_cstr[inst.args[ai] as u64] == 1 && !allowed {
+                    return String::from("string literal constant used as a value");
+                }
+                ai = ai + 1;
+            }
+            if k == VC_STR_LITERAL() && is_cstr[inst.args[0] as u64] != 1 {
+                return String::from("string literal without a constant");
+            }
+            if k == VC_STR_MATCHES() && is_cstr[inst.args[2] as u64] != 1 {
+                return String::from("string pattern without a constant");
+            }
+            if k == VC_STR_NEW() && (is_zero[inst.args[0] as u64] != 1 || is_zero[inst.args[1] as u64] != 1) {
+                return String::from("String::new with data");
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    String::from("")
+}
+
+fn vc_str_empty_table(n: u64) -> Vec<String> {
+    let out: Vec<String> = Vec::new();
+    let mut i: u64 = 0;
+    while i < n {
+        out.push(String::from(""));
+        i = i + 1;
+    }
+    out
+}
+
+fn vc_str_has_const(f: IrFunction) -> bool {
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_CONST_STR() { return true; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    false
+}
+
+// A `ConstStr` the executor can read: its pool bytes are in `ds` and `dv2` is 1.
+// The executor cannot see the module's string pool, so this pass, run once on the
+// function that reaches it, copies the bytes in. A `ConstStr` without the mark is
+// an unknown string to the executor, never an empty one.
+fn VC_STR_FILLED() -> i64 { 1 }
+
+// `f` with every `ConstStr` carrying its pool bytes. The module's own function
+// is not touched; `f` itself comes back when it has no constant.
+fn vc_str_fill_literals(f: IrFunction, m: IrModule) -> IrFunction {
+    if !vc_str_has_const(f) { return f; }
+    let g: IrFunction = vc_function_shell(f);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let out: IrBlock = ir_block_new(blk.id);
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_CONST_STR() && inst.dk == IDATA_CONST_STR() && inst.dv >= 0 && (inst.dv as u64) < m.strings.len() {
+                let filled: IrInst = vc_clone_inst(inst, inst.id, inst.args, inst.dv, VC_STR_FILLED());
+                filled.ds = m.strings[inst.dv as u64];
+                out.insts.push(filled);
+            } else {
+                out.insts.push(inst);
+            }
+            ii = ii + 1;
+        }
+        g.blocks.push(out);
+        bi = bi + 1;
+    }
+    g
+}

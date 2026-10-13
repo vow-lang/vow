@@ -1,0 +1,478 @@
+module TestVcStr
+
+use ir
+use vc_ops
+use vc_term
+use vc_smt
+use vc_gate
+use vc_exec
+use vc_str
+use verifier
+use tests.builders
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn args2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = args1(a);
+    v.push(b);
+    v
+}
+
+fn args3(a: i64, b: i64, c: i64) -> Vec<i64> {
+    let v: Vec<i64> = args2(a, b);
+    v.push(c);
+    v
+}
+
+fn ptr_params(n: i64) -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n {
+        p.push(ITY_PTR());
+        i = i + 1;
+    }
+    p
+}
+
+fn mk_vow(id: i64, op: i64, pred: i64, vow_id: i64) -> IrInst {
+    ir_inst_new(id, op, ITY_UNIT(), args1(pred), IDATA_VOW_ID(), vow_id, 0, String::from(""))
+}
+
+fn one_block(params: Vec<i64>, ret: i64, insts: Vec<IrInst>) -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(1, String::from("f"), params, ret, blocks)
+}
+
+fn contains(hay: String, needle: String) -> bool {
+    str_find_str(hay, needle) >= 0
+}
+
+fn render(cs: VcClaims, k: u64) -> String {
+    vc_smt_render(cs.arena, vc_claim_script(cs, k))
+}
+
+// A `ConstStr` the executor can read (`filled`), or one it was not given.
+fn const_str(id: i64, pool: i64, bytes: String, filled: bool) -> IrInst {
+    let mut mark: i64 = 0;
+    if filled { mark = VC_STR_FILLED(); }
+    ir_inst_new(id, IOP_CONST_STR(), ITY_PTR(), Vec::new(), IDATA_CONST_STR(), pool, mark, bytes)
+}
+
+fn str_call(id: i64, ty: i64, args: Vec<i64>, sym: String) -> IrInst {
+    mk_inst_call_extern(id, ty, args, sym)
+}
+
+fn lit(id: i64, str_id: i64) -> IrInst {
+    str_call(id, ITY_PTR(), args1(str_id), String::from("__vow_string_literal"))
+}
+
+fn check_op_table() -> i64 {
+    if vc_vec_op_kind(String::from("__vow_string_len")) != VC_VEC_LEN() { return 1; }
+    if vc_vec_op_kind(String::from("__vow_string_literal")) != VC_STR_LITERAL() { return 2; }
+    if vc_vec_op_kind(String::from("__vow_string_clone")) != VC_STR_CLONE() { return 3; }
+    if vc_vec_op_kind(String::from("__vow_string_pin_to_root")) != VC_STR_CLONE() { return 4; }
+    if vc_vec_op_kind(String::from("__vow_string_push_str")) != VC_STR_PUSH_STR() { return 5; }
+    if vc_vec_op_kind(String::from("__vow_string_eq")) != VC_STR_EQ() { return 6; }
+    if vc_vec_op_kind(String::from("__vow_string_byte_at")) != VC_STR_BYTE_AT() { return 7; }
+    if vc_vec_op_kind(String::from("__vow_string_substring")) != VC_STR_SUBSTRING() { return 8; }
+    if vc_vec_op_kind(String::from("__vow_string_trim")) != VC_VEC_NONE() { return 9; }
+    if vc_vec_op_kind(String::from("__vow_vec_len")) != VC_VEC_LEN() { return 10; }
+    if vc_vec_op_kind(String::from("")) != VC_VEC_NONE() { return 11; }
+    if !vc_vec_kind_writes(VC_STR_PUSH_BYTE()) || !vc_vec_kind_writes(VC_STR_CLEAR()) || !vc_vec_kind_writes(VC_STR_PUSH_STR()) { return 12; }
+    if !vc_vec_kind_writes(VC_VEC_PUSH()) || !vc_vec_kind_writes(VC_VEC_SET()) || !vc_vec_kind_writes(VC_VEC_POP()) { return 13; }
+    if vc_vec_kind_writes(VC_STR_LITERAL()) || vc_vec_kind_writes(VC_STR_EQ()) || vc_vec_kind_writes(VC_STR_BYTE_AT()) { return 14; }
+    let byte_at: IrInst = str_call(0, ITY_I64(), args2(1, 2), String::from("__vow_string_byte_at"));
+    byte_at.dv2 = 4;
+    if vc_frame_of(byte_at) != 3 { return 15; }
+    0
+}
+
+// A `ConstStr` holds the literal's own bytes in `ds`, so a literal that spells the
+// frame prefix must never be read as a frame marker.
+fn check_literal_cannot_masquerade_as_frame() -> i64 {
+    let s: IrInst = const_str(0, 0, String::from("__vc_frame:3"), true);
+    if vc_frame_of(s) != -1 { return 20; }
+    0
+}
+
+// Every `__vow_string_*` symbol of the runtime is modelled or has a reason, never
+// both, and an unknown one has neither a model nor a listed reason.
+fn string_symbols() -> Vec<String> {
+    let v: Vec<String> = Vec::new();
+    v.push(String::from("__vow_string_byte_at"));
+    v.push(String::from("__vow_string_clear"));
+    v.push(String::from("__vow_string_clone"));
+    v.push(String::from("__vow_string_clone_in_arena"));
+    v.push(String::from("__vow_string_contains"));
+    v.push(String::from("__vow_string_ends_with"));
+    v.push(String::from("__vow_string_eq"));
+    v.push(String::from("__vow_string_from_cstr"));
+    v.push(String::from("__vow_string_from_i128"));
+    v.push(String::from("__vow_string_from_i64"));
+    v.push(String::from("__vow_string_from_raw_parts_copy"));
+    v.push(String::from("__vow_string_from_u128"));
+    v.push(String::from("__vow_string_from_u64"));
+    v.push(String::from("__vow_string_join"));
+    v.push(String::from("__vow_string_len"));
+    v.push(String::from("__vow_string_literal"));
+    v.push(String::from("__vow_string_matches_literal_at"));
+    v.push(String::from("__vow_string_new"));
+    v.push(String::from("__vow_string_new_in_arena"));
+    v.push(String::from("__vow_string_parse_i128_opt"));
+    v.push(String::from("__vow_string_parse_i16_opt"));
+    v.push(String::from("__vow_string_parse_i32_opt"));
+    v.push(String::from("__vow_string_parse_i64_opt"));
+    v.push(String::from("__vow_string_parse_i8_opt"));
+    v.push(String::from("__vow_string_parse_u128_opt"));
+    v.push(String::from("__vow_string_parse_u16_opt"));
+    v.push(String::from("__vow_string_parse_u32_opt"));
+    v.push(String::from("__vow_string_parse_u64_opt"));
+    v.push(String::from("__vow_string_parse_u8_opt"));
+    v.push(String::from("__vow_string_pin_to_root"));
+    v.push(String::from("__vow_string_print"));
+    v.push(String::from("__vow_string_push_byte"));
+    v.push(String::from("__vow_string_push_byte_in_arena"));
+    v.push(String::from("__vow_string_push_byte_in_candidate_arena"));
+    v.push(String::from("__vow_string_push_str"));
+    v.push(String::from("__vow_string_push_str_in_arena"));
+    v.push(String::from("__vow_string_push_str_in_candidate_arena"));
+    v.push(String::from("__vow_string_replace"));
+    v.push(String::from("__vow_string_split"));
+    v.push(String::from("__vow_string_starts_with"));
+    v.push(String::from("__vow_string_substr"));
+    v.push(String::from("__vow_string_substring"));
+    v.push(String::from("__vow_string_to_lower"));
+    v.push(String::from("__vow_string_to_upper"));
+    v.push(String::from("__vow_string_trim"));
+    v
+}
+
+fn check_every_string_helper_has_a_model_or_a_reason() -> i64 {
+    let syms: Vec<String> = string_symbols();
+    let mut i: u64 = 0;
+    while i < syms.len() {
+        let modelled: bool = vc_vec_op_kind(syms[i]) != VC_VEC_NONE();
+        let why: String = vc_str_unmodeled_reason(syms[i]);
+        if modelled && why.len() != 0 { return 30; }
+        if !modelled && why.len() == 0 { return 31; }
+        if !modelled && why == String::from("unlisted string helper") { return 32; }
+        i = i + 1;
+    }
+    if vc_str_unmodeled_reason(String::from("__vow_string_brand_new")) != String::from("unlisted string helper") { return 33; }
+    if vc_str_unmodeled_reason(String::from("__vow_vec_clear")).len() != 0 { return 34; }
+    0
+}
+
+fn check_unmodeled_reason_reaches_the_skip_detail() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(str_call(1, ITY_PTR(), args1(0), String::from("__vow_string_trim")));
+    insts.push(mk_inst_const_i64(2, 0));
+    insts.push(mk_inst_return(3, 2));
+    let got: String = vc_skip_reason(one_block(ptr_params(1), ITY_I64(), insts));
+    if got != String::from("unmodeled-builtin: __vow_string_trim (content transform)") { return 40; }
+    0
+}
+
+// fn f() -> u64 { "hello".len() }   with an `ensures` that compares it
+fn literal_len(bytes: String, want: i64, filled: bool) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(const_str(0, 0, bytes, filled));
+    insts.push(lit(1, 0));
+    insts.push(str_call(2, ITY_U64(), args1(1), String::from("__vow_string_len")));
+    insts.push(mk_inst_const_i64(3, want));
+    insts.push(mk_inst(4, IOP_EQ(), ITY_BOOL(), args2(2, 3)));
+    insts.push(mk_vow(5, IOP_VOW_ENS(), 4, 0));
+    insts.push(mk_inst_return(6, 2));
+    one_block(Vec::new(), ITY_U64(), insts)
+}
+
+// A literal's length is the constant the pool bytes give: the true equation has no
+// claim left, a false one has a claim whose negated goal is `true`.
+fn check_literal_length_is_exact() -> i64 {
+    let ok: IrFunction = literal_len(String::from("hello"), 5, true);
+    if vc_skip_reason(ok).len() != 0 { return 50; }
+    let cs: VcClaims = vc_claims(ok);
+    if cs.kinds.len() != 0 { return 51; }
+    let bad: VcClaims = vc_claims(literal_len(String::from("hello"), 6, true));
+    if bad.kinds.len() != 1 { return 52; }
+    if !vc_tm_is_true(bad.arena, bad.negated_goals[0]) { return 53; }
+    let empty: VcClaims = vc_claims(literal_len(String::from(""), 0, true));
+    if empty.kinds.len() != 0 { return 54; }
+    let hdr: SmtScript = cs.header;
+    if hdr.names[0] != String::from("QF_ABV") { return 55; }
+    0
+}
+
+// A `ConstStr` the executor was not given is an unknown string, never an empty or
+// a five-byte one: no claim about its length may be decided.
+fn check_unfilled_literal_is_unknown() -> i64 {
+    let cs: VcClaims = vc_claims(literal_len(String::from("hello"), 5, false));
+    if cs.kinds.len() != 1 { return 60; }
+    if vc_tm_is_true(cs.arena, cs.negated_goals[0]) || vc_tm_is_false(cs.arena, cs.negated_goals[0]) { return 61; }
+    if !contains(render(cs, 0), String::from("_vlen")) { return 62; }
+    0
+}
+
+fn check_fill_literals() -> i64 {
+    let f: IrFunction = literal_len(String::from(""), 0, false);
+    let pool: Vec<String> = Vec::new();
+    pool.push(String::from("xyz"));
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(f);
+    let m: IrModule = mk_module(funcs);
+    m.strings = pool;
+    let g: IrFunction = vc_str_fill_literals(f, m);
+    let blk: IrBlock = g.blocks[0];
+    let c: IrInst = blk.insts[0];
+    if c.ds != m.strings[0] || c.dv2 != VC_STR_FILLED() { return 70; }
+    let orig_blk: IrBlock = f.blocks[0];
+    let orig: IrInst = orig_blk.insts[0];
+    if orig.dv2 == VC_STR_FILLED() { return 71; }
+    let plain: IrFunction = one_block(Vec::new(), ITY_I64(), args_const_return());
+    if vc_str_has_const(plain) { return 72; }
+    if vc_str_fill_literals(plain, m).blocks.len() != 1 { return 73; }
+    0
+}
+
+fn args_const_return() -> Vec<IrInst> {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_const_i64(0, 1));
+    insts.push(mk_inst_return(1, 0));
+    insts
+}
+
+// fn f(a: String, b: String) -> bool { a.eq(b) } with `ensures: result`
+fn eq_of_params() -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_PTR(), 1));
+    insts.push(str_call(2, ITY_BOOL(), args2(0, 1), String::from("__vow_string_eq")));
+    insts.push(mk_vow(3, IOP_VOW_ENS(), 2, 0));
+    insts.push(mk_inst_return(4, 2));
+    one_block(ptr_params(2), ITY_BOOL(), insts)
+}
+
+// Exact equality of two symbolic strings is one quantified relation under the
+// length test; the logic switches to ALL, and the bound variable `i!` is a name no
+// declared symbol can have.
+fn check_symbolic_eq_is_quantified() -> i64 {
+    let f: IrFunction = eq_of_params();
+    if vc_skip_reason(f).len() != 0 { return 80; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 81; }
+    let hdr: SmtScript = cs.header;
+    if hdr.names[0] != String::from("ALL") { return 82; }
+    let q: String = render(cs, 0);
+    let want: String = String::from("(define-fun v2 () Bool (and (= p0_vlen p1_vlen) (forall ((i! (_ BitVec 64))) ");
+    want.push_str(String::from("(=> (bvult i! p0_vlen) (= (bvand (select p0_varr i!) #x00000000000000ff) "));
+    want.push_str(String::from("(bvand (select p1_varr i!) #x00000000000000ff))))))"));
+    if !contains(q, want) { return 83; }
+    0
+}
+
+// fn f(a: String) -> bool { a.eq(a) } and a clone of it: the same state on both
+// sides, so equality is decided without a quantifier.
+fn eq_of_clone() -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(str_call(1, ITY_PTR(), args1(0), String::from("__vow_string_clone")));
+    insts.push(str_call(2, ITY_BOOL(), args2(0, 1), String::from("__vow_string_eq")));
+    insts.push(mk_vow(3, IOP_VOW_ENS(), 2, 0));
+    insts.push(mk_inst_return(4, 2));
+    one_block(ptr_params(1), ITY_BOOL(), insts)
+}
+
+fn check_eq_of_identical_state_needs_no_quantifier() -> i64 {
+    let f: IrFunction = eq_of_clone();
+    if vc_skip_reason(f).len() != 0 { return 90; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 0 { return 91; }
+    let hdr: SmtScript = cs.header;
+    if hdr.names[0] != String::from("QF_ABV") { return 92; }
+    0
+}
+
+// Two literals compare byte by byte: equal text proves, a different byte or a
+// different length refutes, and none of them needs a quantifier.
+fn eq_of_literals(a: String, b: String) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(const_str(0, 0, a, true));
+    insts.push(const_str(1, 1, b, true));
+    insts.push(lit(2, 0));
+    insts.push(lit(3, 1));
+    insts.push(str_call(4, ITY_BOOL(), args2(2, 3), String::from("__vow_string_eq")));
+    insts.push(mk_vow(5, IOP_VOW_ENS(), 4, 0));
+    insts.push(mk_inst_return(6, 4));
+    one_block(Vec::new(), ITY_BOOL(), insts)
+}
+
+fn check_eq_of_literals_is_exact_without_quantifier() -> i64 {
+    let same: VcClaims = vc_claims(eq_of_literals(String::from("ab"), String::from("ab")));
+    let a: SmtScript = same.header;
+    if a.names[0] != String::from("QF_ABV") { return 100; }
+    let diff: VcClaims = vc_claims(eq_of_literals(String::from("ab"), String::from("ac")));
+    if diff.kinds.len() != 1 { return 101; }
+    if vc_tm_is_true(diff.arena, diff.negated_goals[0]) || vc_tm_is_false(diff.arena, diff.negated_goals[0]) { return 102; }
+    let len: VcClaims = vc_claims(eq_of_literals(String::from("ab"), String::from("abc")));
+    if len.kinds.len() != 1 { return 103; }
+    if !vc_tm_is_true(len.arena, len.negated_goals[0]) { return 104; }
+    let hdr: SmtScript = diff.header;
+    if hdr.names[0] != String::from("QF_ABV") { return 105; }
+    0
+}
+
+// push_str of a literal source stores its bytes (no quantifier); of a symbolic
+// source, it defines the result by two range relations on a fresh array.
+fn push_str_of(src_is_literal: bool) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    if src_is_literal {
+        insts.push(const_str(1, 0, String::from("xy"), true));
+        insts.push(lit(2, 1));
+    } else {
+        insts.push(mk_inst_arg(2, ITY_PTR(), 1));
+    }
+    insts.push(str_call(3, ITY_UNIT(), args2(0, 2), String::from("__vow_string_push_str")));
+    insts.push(str_call(4, ITY_U64(), args1(0), String::from("__vow_string_len")));
+    insts.push(mk_inst_const_i64(5, 0));
+    insts.push(mk_inst(6, IOP_GE(), ITY_BOOL(), args2(4, 5)));
+    insts.push(mk_vow(7, IOP_VOW_ENS(), 6, 0));
+    insts.push(mk_inst_return(8, 4));
+    let mut n: i64 = 1;
+    if !src_is_literal { n = 2; }
+    one_block(ptr_params(n), ITY_U64(), insts)
+}
+
+fn check_push_str_sources() -> i64 {
+    let by_lit: IrFunction = push_str_of(true);
+    if vc_skip_reason(by_lit).len() != 0 { return 110; }
+    let lc: VcClaims = vc_claims(by_lit);
+    let lh: SmtScript = lc.header;
+    if lh.names[0] != String::from("QF_ABV") { return 111; }
+    let by_sym: IrFunction = push_str_of(false);
+    if vc_skip_reason(by_sym).len() != 0 { return 112; }
+    let sc: VcClaims = vc_claims(by_sym);
+    let sh: SmtScript = sc.header;
+    if sh.names[0] != String::from("ALL") { return 113; }
+    if sc.assumed.len() < 3 { return 114; }
+    0
+}
+
+// fn f(s: String, i: u64) -> i64 { s.byte_at(i) }
+fn param_byte_at(guarded: bool) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_U64(), 1));
+    insts.push(str_call(2, ITY_I64(), args2(0, 1), String::from("__vow_string_byte_at")));
+    insts.push(mk_inst_const_i64(3, 255));
+    insts.push(mk_inst(4, IOP_LE(), ITY_BOOL(), args2(2, 3)));
+    insts.push(mk_vow(5, IOP_VOW_ENS(), 4, 0));
+    insts.push(mk_inst_return(6, 2));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    p.push(ITY_U64());
+    one_block(p, ITY_I64(), insts)
+}
+
+// `byte_at` past the length is a hard bounds claim, labelled like a `Vec` index,
+// and the byte read is masked: a parameter's slot is a 64-bit word.
+fn check_byte_at_claims_bounds_and_masks() -> i64 {
+    let f: IrFunction = param_byte_at(false);
+    if vc_skip_reason(f).len() != 0 { return 120; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() < 1 { return 121; }
+    if cs.kinds[0] != VC_CLAIM_VEC_BOUNDS() { return 122; }
+    if cs.labels[0] != VC_LABEL_VEC_BOUNDS() { return 123; }
+    let q: String = render(cs, 0);
+    if !contains(q, String::from("(bvult p1 p0_vlen)")) { return 124; }
+    let last: u64 = cs.kinds.len() - 1;
+    if !contains(render(cs, last), String::from("(bvand (select p0_varr p1) #x00000000000000ff)")) { return 125; }
+    0
+}
+
+// A `ConstStr` is only an operand of a literal or a pattern: any other use, a
+// literal over something that is not a constant, and `String::new` with data are
+// shapes the executor does not guess at.
+fn check_shape_rejections() -> i64 {
+    let stray: Vec<IrInst> = Vec::new();
+    stray.push(const_str(0, 0, String::from("a"), true));
+    stray.push(str_call(1, ITY_U64(), args1(0), String::from("__vow_string_len")));
+    stray.push(mk_inst_return(2, 1));
+    let f: IrFunction = one_block(Vec::new(), ITY_U64(), stray);
+    if vc_str_shape_detail(f, 8) != String::from("string literal constant used as a value") { return 130; }
+
+    let bare: Vec<IrInst> = Vec::new();
+    bare.push(mk_inst_arg(0, ITY_PTR(), 0));
+    bare.push(lit(1, 0));
+    bare.push(mk_inst_return(2, 1));
+    let g: IrFunction = one_block(ptr_params(1), ITY_PTR(), bare);
+    if vc_str_shape_detail(g, 8) != String::from("string literal without a constant") { return 131; }
+
+    let data: Vec<IrInst> = Vec::new();
+    data.push(mk_inst_const_i64(0, 1));
+    data.push(mk_inst_const_i64(1, 0));
+    data.push(str_call(2, ITY_PTR(), args2(0, 1), String::from("__vow_string_new")));
+    data.push(mk_inst_return(3, 2));
+    let h: IrFunction = one_block(Vec::new(), ITY_PTR(), data);
+    if vc_str_shape_detail(h, 8) != String::from("String::new with data") { return 132; }
+
+    let empty: Vec<IrInst> = Vec::new();
+    empty.push(mk_inst_const_i64(0, 0));
+    empty.push(mk_inst_const_i64(1, 0));
+    empty.push(str_call(2, ITY_PTR(), args2(0, 1), String::from("__vow_string_new")));
+    empty.push(mk_inst_return(3, 2));
+    if vc_str_shape_detail(one_block(Vec::new(), ITY_PTR(), empty), 8).len() != 0 { return 133; }
+    0
+}
+
+// The range relation is an opaque Bool application: it hashes all three operands,
+// distinguishes shifted views, and no builder rewrites through it.
+fn check_range_relation_terms() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let a: i64 = vc_tm_var(ar, String::from("a"));
+    let b: i64 = vc_tm_var(ar, String::from("b"));
+    let n: i64 = vc_tm_var(ar, String::from("n"));
+    let k: i64 = vc_tm_var(ar, String::from("k"));
+    let r1: i64 = vc_str_range_eq(ar, a, vc_str_view(ar, b, k), n);
+    let r2: i64 = vc_str_range_eq(ar, a, vc_str_view(ar, b, vc_tm_bv(ar, 64, 1, 0)), n);
+    let r3: i64 = vc_str_range_eq(ar, a, vc_str_view(ar, b, k), n);
+    if r1 == r2 { return 140; }
+    if r1 != r3 { return 141; }
+    if vc_str_range_eq(ar, a, a, n) != vc_tm_bool_const(ar, true) { return 142; }
+    if vc_str_range_eq(ar, a, b, vc_tm_bv(ar, 64, 0, 0)) != vc_tm_bool_const(ar, true) { return 143; }
+    if vc_tm_and(ar, r1, r1) != r1 { return 144; }
+    let neg: i64 = vc_tm_app1(ar, VC_OP_NOT(), r1);
+    if neg == r1 || vc_tm_negated(ar, neg) != r1 { return 145; }
+    let want: String = String::from("(forall ((i! (_ BitVec 64))) (=> (bvult i! n) (= (bvand (select a i!) #x00000000000000ff) ");
+    want.push_str(String::from("(bvand (select b (bvadd k i!)) #x00000000000000ff))))"));
+    if vc_term_text(ar, r1) != want { return 146; }
+    if !vc_str_has_range_eq(ar) { return 147; }
+    let plain: VcArena = vc_arena_new();
+    vc_tm_var(plain, String::from("x"));
+    if vc_str_has_range_eq(plain) { return 148; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_op_table();
+    if r == 0 { r = check_literal_cannot_masquerade_as_frame(); }
+    if r == 0 { r = check_every_string_helper_has_a_model_or_a_reason(); }
+    if r == 0 { r = check_unmodeled_reason_reaches_the_skip_detail(); }
+    if r == 0 { r = check_literal_length_is_exact(); }
+    if r == 0 { r = check_unfilled_literal_is_unknown(); }
+    if r == 0 { r = check_fill_literals(); }
+    if r == 0 { r = check_symbolic_eq_is_quantified(); }
+    if r == 0 { r = check_eq_of_identical_state_needs_no_quantifier(); }
+    if r == 0 { r = check_eq_of_literals_is_exact_without_quantifier(); }
+    if r == 0 { r = check_push_str_sources(); }
+    if r == 0 { r = check_byte_at_claims_bounds_and_masks(); }
+    if r == 0 { r = check_shape_rejections(); }
+    if r == 0 { r = check_range_relation_terms(); }
+    i64_to_i32_wrap(r)
+}
