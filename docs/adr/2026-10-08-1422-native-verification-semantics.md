@@ -796,7 +796,7 @@ their parity are unchanged.
   `parse_*` (a fold over the digits after a Unicode trim and an `Option` built by the call),
   `hash_str` (FNV-1a fold), `hex_encode`/`hex_decode` (a per-index map between two arrays),
   `string_split`/`string_join` (`Vec<String>` elements are pointers),
-  `String::from_cstr` (memory behind a C string) and the arena variants (no arena identity). A
+  `String::from_cstr` (memory behind a C string) and the arena variants (the verifier sees the base symbol; region routing is codegen). A
   nondeterministic or opaque result is not an option for these: it would let a counterexample
   depend on a value the runtime computes, which `--replay-cex` reports as a `VerifierBug`. The
   opaque-result route of #1646 needs the `u64`/text split of the float hooks and an ADR decision

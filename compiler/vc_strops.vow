@@ -131,7 +131,7 @@ fn vc_str_unmodeled_reason(sym: String) -> String {
         return String::from("parsing needs a fold over the digits after a Unicode trim, and an Option built by the call; see the parse_* entries of docs/spec/operations.json");
     }
     if string_ends_with(sym, String::from("_in_arena")) == 1 {
-        return String::from("arena variant: the model has no arena identity");
+        return String::from("arena variant: region routing happens at codegen and the verifier sees the base symbol; the extra arena operand has no model");
     }
     String::from("")
 }
