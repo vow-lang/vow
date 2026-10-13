@@ -159,7 +159,7 @@ opcode or builtin name); `detail` is never part of the enumerated set.
 | `unmodeled-builtin` | An extern call whose runtime symbol has no entry with `verifier_model: known` in `docs/spec/operations.json`: the entry is absent or says `unmodeled` (D10). `detail` is the builtin. | Shrinks as builtins are modelled. |
 | `unsupported-opcode` | An opcode absent from `compiler/vc_ops.vow`, a module the `vc_ops` child introduces (today `Load`, `Store`, `LinearBorrow`). `detail` is the opcode (D10). | Shrinks. |
 | `non-modelable-callee` | An inlined callee is itself `Skipped`. `detail` is `<callee> (<code>)`, the callee's own code (#1416). | Permanent. |
-| `reserved-verifier-symbol` | The function name collides with a reserved checker symbol. | Permanent; the reserved set is fixed in P1. |
+| `reserved-verifier-symbol` | The function name starts with a reserved checker prefix (`__ESBMC_`, `__VERIFIER_`). | Permanent; the reserved set is the ESBMC model's (#1409). |
 
 **Prerequisite for `unmodeled-builtin`.** Absent stays fail-closed, so the gate
 can only be enabled once the catalogue says which builtins are modelled. Today
