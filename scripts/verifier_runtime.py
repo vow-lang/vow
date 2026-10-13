@@ -191,42 +191,54 @@ def debug_run(vow_file, verifier, outdir, timeout):
     return violation, err
 
 
-def check_witness(vow_file, verifier, outdir, timeout, gen_class):
+def check_witness(runtime, gen_class):
     """A generated program's runtime must match the class it was generated as.
 
     The soundness direction is only as strong as the witness: an `exceeds-bound`
     program whose `main` never reaches the false contract, or a `control` that
-    violates one, makes a green sweep mean nothing. This runs the debug binary
-    whatever the verifier said, so the corpus is checked against the runtime
-    itself and not against the verifier it is meant to test.
+    violates one, makes a green sweep mean nothing. `runtime` is the
+    `(violation, error)` of the debug run, taken whatever the verifier said, so
+    the corpus is checked against the runtime itself and not against the
+    verifier it is meant to test.
+
+    The violation of an `exceeds-bound` program must blame the Callee: an
+    `ensures` of the generated function. A Caller violation means `main` broke
+    a `requires`, which a Verified result may disclaim (`unverified-call-site`),
+    so it would let a false proof through unmeasured.
     """
-    violation, err = debug_run(vow_file, verifier, outdir, timeout)
+    violation, err = runtime
+
+    def verdict(ok, detail):
+        return {
+            "direction": "witness",
+            "verdict": "ok" if ok else "WITNESS-BROKEN",
+            "detail": detail,
+        }
+
     if err:
-        return {"direction": "witness", "verdict": "WITNESS-BROKEN", "detail": err}
-    if gen_class == "exceeds-bound" and violation is None:
-        return {
-            "direction": "witness",
-            "verdict": "WITNESS-BROKEN",
-            "detail": "the false contract was never violated at runtime",
-        }
+        return verdict(False, err)
+    if gen_class == "exceeds-bound":
+        if violation is None:
+            return verdict(False, "the false contract was never violated at runtime")
+        if violation.get("blame") != "Callee":
+            return verdict(
+                False,
+                f"runtime violation blames {violation.get('blame')}, not an `ensures` "
+                f"of the generated function (vow_id={violation.get('vow_id')})",
+            )
     if gen_class == "control" and violation is not None:
-        return {
-            "direction": "witness",
-            "verdict": "WITNESS-BROKEN",
-            "detail": f"the honest control violated vow_id={violation.get('vow_id')}",
-        }
-    return {
-        "direction": "witness",
-        "verdict": "ok",
-        "detail": f"{gen_class} as generated",
-    }
+        return verdict(
+            False, f"the honest control violated vow_id={violation.get('vow_id')}"
+        )
+    return verdict(True, f"{gen_class} as generated")
 
 
-def check_soundness(vow_file, verifier, outdir, timeout, backend=None):
+def check_soundness(vow_file, verifier, outdir, timeout, backend=None, runtime=None):
     """Verified ⇒ no VowViolation at runtime.
 
     Only programs the verifier actually proved are subjects: a fixture it
-    already rejects cannot produce a false proof.
+    already rejects cannot produce a false proof. `runtime` is an optional
+    `(violation, error)` of an earlier debug run, reused instead of rebuilding.
     """
     verify, err = run_json(
         verifier,
@@ -242,7 +254,7 @@ def check_soundness(vow_file, verifier, outdir, timeout, backend=None):
             "detail": f"status {verify.get('status')}",
         }
 
-    violation, err = debug_run(vow_file, verifier, outdir, timeout)
+    violation, err = runtime or debug_run(vow_file, verifier, outdir, timeout)
     if err:
         # The runtime half never answered, so neither did the gate. `skipped`
         # is the file's existing "no verdict" verdict, which the pair-review
@@ -549,18 +561,19 @@ def main():
         known_gap = DIRECTIVE_KNOWN_GAP.search(text)
         replay_skipped_note = DIRECTIVE_REPLAY_SKIPPED.search(text)
 
+        gen = DIRECTIVE_GEN_CLASS.search(text)
+        runtime = debug_run(f, verifier, outdir, args.timeout) if gen else None
         checks = [
             apply_generated_expectations(
-                check_soundness(f, verifier, outdir, args.timeout, args.backend),
+                check_soundness(
+                    f, verifier, outdir, args.timeout, args.backend, runtime
+                ),
                 text,
             ),
             check_precision(f, verifier, args.timeout, args.backend),
         ]
-        gen = DIRECTIVE_GEN_CLASS.search(text)
         if gen:
-            checks.append(
-                check_witness(f, verifier, outdir, args.timeout, gen.group(1))
-            )
+            checks.append(check_witness(runtime, gen.group(1)))
         for c in checks:
             if c["verdict"] in FAILING_GENERATED:
                 generated_failures.append((rel, c))

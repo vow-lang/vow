@@ -522,12 +522,10 @@ class GeneratedExpectationTest(unittest.TestCase):
 
 class WitnessTest(unittest.TestCase):
     VIOLATION = {"error": "VowViolation", "vow_id": 3, "blame": "Callee"}
+    CALLER = {"error": "VowViolation", "vow_id": 1, "blame": "Caller"}
 
     def witness(self, gen_class, violation, err=None):
-        with patch("verifier_runtime.debug_run", return_value=(violation, err)):
-            return verifier_runtime.check_witness(
-                Path("g.vow"), "vowc", Path("."), 5, gen_class
-            )
+        return verifier_runtime.check_witness((violation, err), gen_class)
 
     def test_an_exceeds_bound_program_must_violate(self):
         self.assertEqual("ok", self.witness("exceeds-bound", self.VIOLATION)["verdict"])
@@ -535,10 +533,22 @@ class WitnessTest(unittest.TestCase):
             "WITNESS-BROKEN", self.witness("exceeds-bound", None)["verdict"]
         )
 
+    def test_the_violation_must_be_an_ensures_of_the_generated_function(self):
+        # A Caller violation is `main` breaking a `requires`: Verified may
+        # disclaim it as an unverified call site, so a false proof of the
+        # `ensures` would pass both the witness and the soundness check.
+        out = self.witness("exceeds-bound", self.CALLER)
+
+        self.assertEqual("WITNESS-BROKEN", out["verdict"])
+        self.assertIn("Caller", out["detail"])
+
     def test_a_control_must_run_clean(self):
         self.assertEqual("ok", self.witness("control", None)["verdict"])
         self.assertEqual(
             "WITNESS-BROKEN", self.witness("control", self.VIOLATION)["verdict"]
+        )
+        self.assertEqual(
+            "WITNESS-BROKEN", self.witness("control", self.CALLER)["verdict"]
         )
 
     def test_a_binary_that_never_answered_is_a_broken_witness(self):
@@ -546,13 +556,44 @@ class WitnessTest(unittest.TestCase):
 
         self.assertEqual("WITNESS-BROKEN", out["verdict"])
 
-    def test_the_witness_is_independent_of_the_verifier(self):
-        with patch("verifier_runtime.debug_run", return_value=(None, None)) as run:
-            verifier_runtime.check_witness(
-                Path("g.vow"), "vowc", Path("."), 5, "control"
-            )
 
-        run.assert_called_once()
+class SharedRuntimeTest(unittest.TestCase):
+    @patch("verifier_runtime.debug_run")
+    @patch("verifier_runtime.run_json")
+    def test_soundness_reuses_a_supplied_debug_run(self, run_json, debug_run):
+        run_json.return_value = ({"status": "Verified"}, None)
+
+        out = verifier_runtime.check_soundness(
+            Path("g.vow"), "vowc", Path("."), 5, "native", runtime=(None, None)
+        )
+
+        self.assertEqual("ok", out["verdict"])
+        debug_run.assert_not_called()
+
+    @patch("verifier_runtime.debug_run", return_value=(None, None))
+    @patch("verifier_runtime.run_json")
+    def test_soundness_runs_the_binary_itself_when_none_is_supplied(
+        self, run_json, debug_run
+    ):
+        run_json.return_value = ({"status": "Verified"}, None)
+
+        verifier_runtime.check_soundness(Path("g.vow"), "vowc", Path("."), 5, "native")
+
+        debug_run.assert_called_once()
+
+    @patch("verifier_runtime.debug_run")
+    @patch("verifier_runtime.run_json")
+    def test_a_supplied_run_that_violates_is_still_a_false_proof(
+        self, run_json, debug_run
+    ):
+        run_json.return_value = ({"status": "Verified"}, None)
+        violation = {"error": "VowViolation", "vow_id": 2, "blame": "Callee"}
+
+        out = verifier_runtime.check_soundness(
+            Path("g.vow"), "vowc", Path("."), 5, "native", runtime=(violation, None)
+        )
+
+        self.assertEqual("SOUNDNESS", out["verdict"])
 
 
 class GeneratedOutcomesTest(unittest.TestCase):

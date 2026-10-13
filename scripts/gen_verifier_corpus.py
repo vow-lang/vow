@@ -37,10 +37,20 @@ clock read): a finding nobody can reproduce is not actionable.
 
 import re
 
-# Boundaries a bounded checker is likely to hard-code: powers of two and
-# round numbers, with the neighbours on both sides because an off-by-one in
-# the unwind or in a length assumption lives exactly there.
-BOUNDARIES = (7, 8, 16, 17, 31, 32, 33, 63, 64, 65, 100, 128, 129, 256)
+# The `Vec` length the ESBMC pipeline assumed (`VEC_MODEL_CAP` in
+# vow-verify/src/c_emitter.rs; Strings were 256, maps 64). The native verifier
+# has no collection cap (ADR-2026-10-08-1422: collections are an array plus a
+# symbolic length), so this is the boundary an unsound port of the old model
+# would reintroduce. Pinned against the emitter by `test_gen_verifier_corpus.py`.
+ESBMC_VEC_CAP = 128
+
+# Boundaries a bounded checker is likely to hard-code: the ESBMC capacities and
+# the native unwind bound, powers of two and round numbers, with the neighbours
+# on both sides because an off-by-one in an unwind or a length assumption lives
+# exactly there.
+BOUNDARIES = (
+    7, 8, 16, 17, 31, 32, 33, 63, 64, 65, 100, 127, 128, 129, 255, 256, 257,
+)  # fmt: skip
 
 CLASS_BUG = "exceeds-bound"
 CLASS_CONTROL = "control"

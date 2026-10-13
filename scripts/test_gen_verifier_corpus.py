@@ -156,6 +156,36 @@ class RegimeTest(unittest.TestCase):
         self.assertEqual(gen.UNWIND_BOUND, int(pushes[-1]))
 
 
+class CollectionBoundaryTest(unittest.TestCase):
+    def test_esbmc_vec_cap_matches_the_emitter_it_mirrors(self):
+        emitter = REPO_ROOT / "vow-verify" / "src" / "c_emitter.rs"
+        if not emitter.exists():
+            self.skipTest("the C emitter is gone (epic #1398, P6)")
+        cap = re.search(r"VEC_MODEL_CAP: usize = (\d+);", emitter.read_text())
+
+        self.assertEqual(gen.ESBMC_VEC_CAP, int(cap.group(1)))
+
+    def test_boundaries_straddle_every_known_capacity(self):
+        for edge in (gen.ESBMC_VEC_CAP, gen.UNWIND_BOUND):
+            for n in (edge - 1, edge, edge + 1):
+                with self.subTest(edge=edge, n=n):
+                    self.assertIn(n, gen.BOUNDARIES)
+
+    def test_the_native_verifier_declares_no_collection_capacity(self):
+        # AC1 of #1473 asks for behaviour beyond the length the verifier
+        # *assumes*. The native model has none (a Vec is an array plus a
+        # symbolic length), so the boundaries above are the ESBMC capacities and
+        # the unwind bound; if a capacity is ever added to compiler/vc_*.vow this
+        # fails, and the generator must straddle it too.
+        capacity = re.compile(r"(vec|string|map)[_a-z]*(cap|capacity|max_len)\b", re.I)
+        for path in sorted((REPO_ROOT / "compiler").glob("vc_*.vow")):
+            for line in path.read_text().splitlines():
+                if line.lstrip().startswith("//"):
+                    continue
+                with self.subTest(path=path.name, line=line):
+                    self.assertIsNone(capacity.search(line))
+
+
 class KnownDisagreementTest(unittest.TestCase):
     def test_the_shipped_ledger_is_valid(self):
         gen.validate_known(gen.KNOWN_DISAGREEMENTS)
