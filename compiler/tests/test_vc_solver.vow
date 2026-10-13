@@ -185,8 +185,69 @@ fn check_bool_literals() -> i64 {
     0
 }
 
+fn fp_model(text: String, sort: i64) -> VcModel {
+    let ns: Vec<String> = Vec::new();
+    ns.push(String::from("p0"));
+    let out: String = String::from("sat\n((p0 ");
+    out.push_str(text);
+    out.push_str(String::from("))\n"));
+    vc_parse_model(out, ns, w1(sort))
+}
+
+fn check_float_literals() -> i64 {
+    let f64: i64 = VC_SORT_F64();
+    let f32: i64 = VC_SORT_F32();
+    let one: VcModel = fp_model(String::from("(fp #b0 #b01111111111 #b0000000000000000000000000000000000000000000000000000)"), f64);
+    if one.ok != 1 || one.values[0] != 4607182418800017408 || one.highs[0] != 0 { return 1; }
+    let neg_zero: VcModel = fp_model(String::from("(fp #b1 #b00000000000 #b0000000000000000000000000000000000000000000000000000)"), f64);
+    if neg_zero.ok != 1 || neg_zero.values[0] != -9223372036854775807 - 1 { return 2; }
+    let nan: VcModel = fp_model(String::from("(fp #b0 #b11111111111 #b1000000000000000000000000000000000000000000000000000)"), f64);
+    if nan.ok != 1 || nan.values[0] != 9221120237041090560 { return 3; }
+    let ninf: VcModel = fp_model(String::from("(fp #b1 #b11111111111 #b0000000000000000000000000000000000000000000000000000)"), f64);
+    if ninf.ok != 1 || ninf.values[0] != -4503599627370496 { return 4; }
+    let sub: VcModel = fp_model(String::from("(fp #b0 #b00000000000 #b0000000000000000000000000000000000000000000000000001)"), f64);
+    if sub.ok != 1 || sub.values[0] != 1 { return 5; }
+    let half: VcModel = fp_model(String::from("(fp #b0 #b01111110 #b00000000000000000000000)"), f32);
+    if half.ok != 1 || half.values[0] != 1056964608 { return 6; }
+    let f32nan: VcModel = fp_model(String::from("(fp #b0 #b11111111 #b10000000000000000000000)"), f32);
+    if f32nan.ok != 1 || f32nan.values[0] != 2143289344 { return 7; }
+    let f32neg: VcModel = fp_model(String::from("(fp #b1 #b00000000 #b00000000000000000000000)"), f32);
+    if f32neg.ok != 1 || f32neg.values[0] != 2147483648 { return 8; }
+    // Spaced as the solver prints a model: a literal ends at whitespace or `)`.
+    let multi: VcModel = vc_parse_model(String::from("sat\n(\n  (p0 (fp #b0 #b10000000 #b00000000000000000000000))\n)\n"), ns1(), w1(f32));
+    if multi.ok != 1 || multi.values[0] != 1073741824 { return 9; }
+    0
+}
+
+fn ns1() -> Vec<String> {
+    let ns: Vec<String> = Vec::new();
+    ns.push(String::from("p0"));
+    ns
+}
+
+// A malformed float literal is an error (fail closed), never a value.
+fn check_float_literals_fail_closed() -> i64 {
+    let f64: i64 = VC_SORT_F64();
+    let f32: i64 = VC_SORT_F32();
+    // Wrong field widths: a f32 literal for an f64 symbol and the reverse.
+    if fp_model(String::from("(fp #b0 #b01111110 #b00000000000000000000000)"), f64).ok != 0 { return 20; }
+    if fp_model(String::from("(fp #b0 #b01111111111 #b0000000000000000000000000000000000000000000000000000)"), f32).ok != 0 { return 21; }
+    // A bit-vector literal, the special-value spellings, hex digits, truncation.
+    if fp_model(String::from("#x3f800000"), f32).ok != 0 { return 22; }
+    if fp_model(String::from("(_ NaN 8 24)"), f32).ok != 0 { return 23; }
+    if fp_model(String::from("(_ +zero 11 53)"), f64).ok != 0 { return 24; }
+    if fp_model(String::from("(fp #x0 #b01111110 #b00000000000000000000000)"), f32).ok != 0 { return 25; }
+    if fp_model(String::from("(fp #b0 #b01111110"), f32).ok != 0 { return 26; }
+    if fp_model(String::from("(fp #b0 #b01111110 #b00000000000000000000000 #b0)"), f32).ok != 0 { return 27; }
+    if fp_model(String::from("(fp #b0 #b01111110 #b000000000000000000000002)"), f32).ok != 0 { return 28; }
+    if fp_model(String::from("(fpx #b0 #b01111110 #b00000000000000000000000)"), f32).ok != 0 { return 29; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_verdicts();
+    if r == 0 { r = check_float_literals(); }
+    if r == 0 { r = check_float_literals_fail_closed(); }
     if r == 0 { r = check_multiline_model(); }
     if r == 0 { r = check_single_line_model(); }
     if r == 0 { r = check_binary_and_hex(); }

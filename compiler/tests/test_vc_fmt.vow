@@ -44,8 +44,37 @@ fn check_bool() -> i64 {
     0
 }
 
+fn check_floats() -> i64 {
+    if vc_format_int(ITY_F64(), 4609434218613702656, 0) != String::from("1.5") { return 40; }
+    if vc_format_int(ITY_F64(), -9223372036854775807 - 1, 0) != String::from("-0") { return 41; }
+    if vc_format_int(ITY_F64(), 0, 0) != String::from("0") { return 42; }
+    if vc_format_int(ITY_F64(), 9218868437227405312, 0) != String::from("inf") { return 43; }
+    if vc_format_int(ITY_F64(), -4503599627370496, 0) != String::from("-inf") { return 44; }
+    if vc_format_int(ITY_F64(), 9221120237041090560, 0) != String::from("NaN") { return 45; }
+    if vc_format_int(ITY_F64(), 4591870180066957722, 0) != String::from("0.1") { return 46; }
+    0
+}
+
+// An f32 is shown as the f64 it equals, so 0.1f32 prints with its extra digits.
+fn check_f32_widening() -> i64 {
+    if vc_format_int(ITY_F32(), 1069547520, 0) != String::from("1.5") { return 50; }
+    if vc_format_int(ITY_F32(), 2147483648, 0) != String::from("-0") { return 51; }
+    if vc_format_int(ITY_F32(), 0, 0) != String::from("0") { return 52; }
+    if vc_format_int(ITY_F32(), 2139095040, 0) != String::from("inf") { return 53; }
+    if vc_format_int(ITY_F32(), 4286578688, 0) != String::from("-inf") { return 54; }
+    if vc_format_int(ITY_F32(), 2143289344, 0) != String::from("NaN") { return 55; }
+    if vc_format_int(ITY_F32(), 1036831949, 0) != String::from("0.10000000149011612") { return 56; }
+    // The smallest subnormal and the smallest normal, widened exactly.
+    if vc_f32_bits_to_f64_bits(1) != 3936146074321813504 { return 57; }
+    if vc_f32_bits_to_f64_bits(8388608) != 4039728865751334912 { return 58; }
+    if vc_f32_bits_to_f64_bits(8388607) != 4039728864677593088 { return 59; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_narrow_types();
+    if r == 0 { r = check_floats(); }
+    if r == 0 { r = check_f32_widening(); }
     if r == 0 { r = check_64_bit(); }
     if r == 0 { r = check_128_bit(); }
     if r == 0 { r = check_bool(); }

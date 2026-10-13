@@ -208,6 +208,40 @@ fn check_callee_clauses() -> i64 {
     0
 }
 
+fn check_sort_labels() -> i64 {
+    if vc_sort_label(0) != String::from("bool") { return 1; }
+    if vc_sort_label(64) != String::from("64") { return 2; }
+    if vc_sort_label(VC_SORT_F32()) != String::from("f32") { return 3; }
+    if vc_sort_label(VC_SORT_F64()) != String::from("f64") { return 4; }
+    0
+}
+
+fn check_float_values() -> i64 {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_F64());
+    p.push(ITY_F32());
+    let f: IrFunction = mk_function(1, String::from("f"), p, ITY_BOOL(), Vec::new());
+    f.param_names[0] = String::from("x");
+    f.param_names[1] = String::from("y");
+    let cs: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
+    cs.model_tys[0] = ITY_F64();
+    cs.model_tys[1] = ITY_F32();
+    cs.model_widths[0] = VC_SORT_F64();
+    cs.model_widths[1] = VC_SORT_F32();
+    let values: Vec<i64> = Vec::new();
+    values.push(9221120237041090560);
+    values.push(2147483648);
+    let highs: Vec<i64> = Vec::new();
+    highs.push(0);
+    highs.push(0);
+    let ans: VcSolverAnswer = VcSolverAnswer { verdict: VC_ANS_SAT(), values: values, highs: highs, raw: String::from("") };
+    let r: VerifyResult = vc_claim_result(f, cs, 0, ans);
+    if r.var_names[0] != String::from("x") || r.var_names[1] != String::from("y") { return 10; }
+    if r.var_values[0] != String::from("NaN") { return 11; }
+    if r.var_values[1] != String::from("-0") { return 12; }
+    0
+}
+
 fn check_aggregate_fields() -> i64 {
     let p: Vec<i64> = Vec::new();
     p.push(ITY_I64());
@@ -273,6 +307,8 @@ fn main() -> i32 {
     if r == 0 { r = check_values_follow_declared_types(); }
     if r == 0 { r = check_shift_and_arith_labels(); }
     if r == 0 { r = check_callee_clauses(); }
+    if r == 0 { r = check_sort_labels(); }
+    if r == 0 { r = check_float_values(); }
     if r == 0 { r = check_aggregate_fields(); }
     i64_to_i32_wrap(r)
 }

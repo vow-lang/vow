@@ -5,6 +5,7 @@ use vc_ops
 use verifier
 use vc_solver
 use vc_exec
+use vc_term
 use vc_int
 use vc_fmt
 
@@ -23,6 +24,15 @@ fn vc_source_param_name(f: IrFunction, k: i64) -> String {
     out
 }
 
+// The spelling of a sort in a counterexample symbol: `bool`, `f32`, `f64` or the
+// bit width.
+fn vc_sort_label(sort: i64) -> String {
+    if sort == 0 { return String::from("bool"); }
+    if sort == VC_SORT_F32() { return String::from("f32"); }
+    if sort == VC_SORT_F64() { return String::from("f64"); }
+    i64_to_string(sort)
+}
+
 // Name of model entry `j` in a counterexample: the source name of a scalar
 // parameter, `<param>.<slot>` for a field of an aggregate one (`.0` is an enum's
 // tag), with `:bool` or `:<bits>` after it when the function reads that slot at
@@ -37,11 +47,7 @@ fn vc_model_symbol_name(f: IrFunction, cs: VcClaims, j: u64) -> String {
     out.push_str(i64_to_string(cs.model_slots[j]));
     if cs.model_ambig[j] != 0 {
         out.push_str(String::from(":"));
-        if cs.model_widths[j] == 0 {
-            out.push_str(String::from("bool"));
-        } else {
-            out.push_str(i64_to_string(cs.model_widths[j]));
-        }
+        out.push_str(vc_sort_label(cs.model_widths[j]));
     }
     out
 }

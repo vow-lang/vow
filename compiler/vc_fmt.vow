@@ -24,9 +24,35 @@ fn vc_i128_decimal(hi: i64, lo: i64) -> String {
     out
 }
 
+// The binary64 bits of the binary32 value with bits `b`: every f32 is exactly an
+// f64, so the counterexample text is the shortest decimal of that f64.
+fn vc_f32_bits_to_f64_bits(b: i64) -> i64 {
+    let sign: i64 = (b >> 31) & 1;
+    let exp: i64 = (b >> 23) & 255;
+    let frac: i64 = b & 8388607;
+    let top: i64 = sign << 63;
+    if exp == 255 { return top | (2047 << 52) | (frac << 29); }
+    if exp != 0 { return top | ((exp + 896) << 52) | (frac << 29); }
+    if frac == 0 { return top; }
+    let mut p: i64 = 22;
+    while (frac >> p) & 1 == 0 { p = p - 1; }
+    top | ((p + 874) << 52) | (((frac << (52 - p)) & 4503599627370495))
+}
+
+// Decimal text of a float counterexample value, as the runtime prints an f64:
+// shortest round-trip digits, `inf`, `-inf` and `NaN`. The solver's one NaN is
+// canonical, so a NaN's payload and sign are not reported.
+fn vc_format_float(ty: i64, lo: i64) -> String {
+    let mut bits: i64 = lo;
+    if ty == ITY_F32() { bits = vc_f32_bits_to_f64_bits(lo & 4294967295); }
+    format_f64_bits(bits as u64)
+}
+
 // Decimal text of the `ty`-typed value with limbs `hi:lo`; bits above the
-// type's width are ignored. A Bool prints as `true` or `false`.
+// type's width are ignored. A Bool prints as `true` or `false`, a float as
+// `vc_format_float`.
 fn vc_format_int(ty: i64, lo: i64, hi: i64) -> String {
+    if vc_ty_is_float(ty) { return vc_format_float(ty, lo); }
     if ty == ITY_BOOL() {
         if lo != 0 { return String::from("true"); }
         return String::from("false");
