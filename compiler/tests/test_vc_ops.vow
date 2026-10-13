@@ -50,13 +50,22 @@ fn check_known_classes() -> i64 {
     0
 }
 
-// Nothing is modelled yet: catalogued (unmodeled) and symbols the catalogue lacks alike.
+// Nothing is modelled yet: catalogued (unmodeled, pure or effectful) and symbols the
+// catalogue lacks alike. An effectful builtin can never become known; the generator
+// rejects it (scripts/test_generate_operations.py).
 fn check_builtin_model() -> i64 {
     if catalogue_verifier_known(String::from("__vow_fs_exists")) { return 700; }
     if catalogue_verifier_known(String::from("__vow_string_print")) { return 701; }
     if catalogue_verifier_known(String::from("__vow_vec_len")) { return 702; }
     if catalogue_verifier_known(String::from("__vow_vec_push_val")) { return 704; }
     if catalogue_verifier_known(String::from("")) { return 703; }
+    if catalogue_verifier_known(String::from("__vow_hash_u64")) { return 705; }
+    if catalogue_verifier_known(String::from("__vow_hash_str")) { return 706; }
+    if catalogue_verifier_known(String::from("__vow_fs_read")) { return 707; }
+    if catalogue_verifier_known(String::from("__vow_process_run")) { return 708; }
+    if catalogue_verifier_known(String::from("__vow_getenv")) { return 709; }
+    if catalogue_verifier_known(String::from("__vow_mktemp_dir")) { return 720; }
+    if catalogue_verifier_known(String::from("__vow_path_lookup")) { return 721; }
     0
 }
 

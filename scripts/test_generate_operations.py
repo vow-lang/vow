@@ -2037,12 +2037,128 @@ class VerifierModelDriftTest(unittest.TestCase):
     def test_explicit_unmodeled_and_known_are_clean(self):
         ops = [
             dict(PRINT_OPS[0], verifier_model="unmodeled"),
-            dict(PRINT_OPS[1], verifier_model="known"),
+            dict(HASH_OPS[0], verifier_model="known"),
         ]
         self.assertEqual(go.check_verifier_models(ops), [])
 
     def test_real_catalogue_has_a_decision_for_every_builtin(self):
         self.assertEqual(go.check_verifier_models(go.load_catalogue(REPO_ROOT)), [])
+
+    def test_effectful_builtin_cannot_be_known_to_the_native_verifier(self):
+        problems = go.check_verifier_models(
+            [dict(PRINT_OPS[2], verifier_model="known")]
+        )
+        self.assertEqual(len(problems), 1)
+        self.assertIn("'print_u64'", problems[0])
+        self.assertIn("only models pure builtins", problems[0])
+
+    def test_only_the_effectful_known_entry_is_reported(self):
+        ops = [
+            dict(HASH_OPS[0], verifier_model="known"),
+            dict(PRINT_OPS[0], verifier_model="unmodeled"),
+            dict(PRINT_OPS[1], verifier_model="known"),
+        ]
+        problems = go.check_verifier_models(ops)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("'print_i64'", problems[0])
+
+    def test_every_effect_token_blocks_known(self):
+        for effects in (
+            "[read]",
+            "[write]",
+            "[io]",
+            "[panic]",
+            "[unsafe]",
+            "[io, read]",
+        ):
+            with self.subTest(effects=effects):
+                op = dict(HASH_OPS[0], effects=effects, verifier_model="known")
+                self.assertEqual(len(go.check_verifier_models([op])), 1)
+
+    def test_real_effectful_builtins_are_never_known(self):
+        effectful = [op for op in go.load_catalogue(REPO_ROOT) if op["effects"] != "[]"]
+        self.assertTrue(effectful)
+        for op in effectful:
+            with self.subTest(op=op["name"]):
+                self.assertNotEqual(op.get("verifier_model"), "known")
+                problems = go.check_verifier_models([dict(op, verifier_model="known")])
+                self.assertEqual(len(problems), 1)
+                self.assertIn(f"'{op['name']}'", problems[0])
+
+    def test_named_effectful_families_are_unmodeled_in_the_real_catalogue(self):
+        by_name = {op["name"]: op for op in go.load_catalogue(REPO_ROOT)}
+        for name in (
+            "print_str",
+            "print_i64",
+            "print_u64",
+            "fs_read",
+            "process_run",
+            "getenv",
+            "mktemp_dir",
+            "path_lookup",
+        ):
+            with self.subTest(op=name):
+                self.assertIn(name, by_name)
+                self.assertNotEqual(by_name[name]["effects"], "[]")
+                self.assertEqual(by_name[name]["verifier_model"], "unmodeled")
+        prefixed = [n for n in by_name if n.startswith(("fs_", "process_"))]
+        self.assertTrue(prefixed)
+        for name in prefixed:
+            with self.subTest(op=name):
+                self.assertNotEqual(by_name[name].get("verifier_model"), "known")
+
+    def test_real_pure_hash_builtins_are_unmodeled(self):
+        by_name = {op["name"]: op for op in go.load_catalogue(REPO_ROOT)}
+        for name in ("hash_u64", "hash_str"):
+            with self.subTest(op=name):
+                self.assertEqual(by_name[name]["effects"], "[]")
+                self.assertEqual(by_name[name]["verifier_model"], "unmodeled")
+
+    def test_main_rejects_an_effectful_known_op_naming_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _write_catalogue(tmp, [dict(PRINT_OPS[2], verifier_model="known")])
+            stdout, stderr = io.StringIO(), io.StringIO()
+            old_argv = sys.argv
+            sys.argv = ["generate_operations.py", "--check", "--repo-root", str(tmp)]
+            try:
+                with (
+                    self.assertRaises(SystemExit) as ctx,
+                    contextlib.redirect_stdout(stdout),
+                    contextlib.redirect_stderr(stderr),
+                ):
+                    go.main()
+            finally:
+                sys.argv = old_argv
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("'print_u64'", stderr.getvalue())
+        self.assertIn("verifier_model", stderr.getvalue())
+
+    def test_synthetic_pure_known_op_is_the_only_symbol_generated(self):
+        pure = {
+            "name": "pure_probe",
+            "runtime_symbol": "__vow_pure_probe",
+            "params": ["i64"],
+            "return": "i64",
+            "doc_signature": "fn(x: i64) -> i64",
+            "effects": "[]",
+            "verifier_model": "known",
+            "c_model": "unmodeled",
+        }
+        ops = [dict(op, verifier_model="unmodeled") for op in KNOWN_OPS]
+        ops.append(pure)
+        self.assertEqual(go.check_verifier_models(ops), [])
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _write_target_fixtures(tmp)
+            go.write_projections(ops, tmp, [])
+            spliced = (tmp / "compiler" / "vc_ops.vow").read_text()
+        block = spliced.split("fn vc_op_model() {}\n", 1)[1]
+        fn = block.split("\n", 1)[1].rsplit("\n", 1)[0]
+        self.assertTrue(_eval_vow_symbol_set(fn, "__vow_pure_probe"))
+        for op in KNOWN_OPS:
+            with self.subTest(op=op["name"]):
+                self.assertFalse(_eval_vow_symbol_set(fn, op["runtime_symbol"]))
 
 
 def _heap_op(name="heap_op", ret="String", **extra):
