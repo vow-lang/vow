@@ -85,12 +85,8 @@ KNOWN_DISAGREEMENTS = {
 # that shape, with its issue. Rendered as `// TEST: replay-skipped`, which the
 # runner already reports instead of failing.
 REPLAY_SKIPS = {
-    ("vec_param_clamp", CLASS_BUG): (
-        "Vec parameter, not reported in native counterexamples (#1613)"
-    ),
-    ("vec_param_last", CLASS_BUG): (
-        "Vec parameter, not reported in native counterexamples (#1613)"
-    ),
+    ("vec_param_clamp", CLASS_BUG): ("Vec parameter is not rebuilt by replay (#1649)"),
+    ("vec_param_last", CLASS_BUG): ("Vec parameter is not rebuilt by replay (#1649)"),
 }
 
 _ISSUE = re.compile(r"^#\d+$")
