@@ -10,6 +10,8 @@ use vc_str
 use vc_vec
 use vc_slice
 use vc_native
+use vc_cex
+use vc_solver
 use verifier
 use tests.builders
 
@@ -245,6 +247,39 @@ fn check_cone_reaches_hook() -> i64 {
     0
 }
 
+// The scalars of a counterexample are pinned by value, a bit-vector by equality; a
+// float has no pin.
+fn check_pin_model() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_U64(), 0));
+    insts.push(mk_inst_arg(1, ITY_F64(), 1));
+    insts.push(mk_inst_return(2, 0));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_U64());
+    p.push(ITY_F64());
+    let cs: VcClaims = vc_claims(one_block(p, ITY_U64(), insts));
+    if cs.model_names.len() != 2 { return 90; }
+    let vals: Vec<i64> = Vec::new();
+    vals.push(5);
+    vals.push(0);
+    let highs: Vec<i64> = Vec::new();
+    highs.push(0);
+    highs.push(0);
+    let s: SmtScript = vc_script_new();
+    vc_pin_model(cs, vc_answer(VC_ANS_SAT(), vals, highs, String::from("")), s);
+    let q: String = vc_smt_render(cs.arena, s);
+    if !contains(q, String::from("(assert (= p0 #x0000000000000005))")) { return 91; }
+    if contains(q, String::from("p1")) { return 92; }
+    0
+}
+
+// The reason an opaque result carries is the label the driver tells it apart by.
+fn check_opaque_reason_label() -> i64 {
+    if !vc_output_has_opaque_hook(vc_opaque_hook_reason()) { return 100; }
+    if vc_output_has_opaque_hook(vc_unwinding_reason(8)) { return 101; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_op_table();
     if r == 0 { r = check_parse_same_operand_is_one_term(); }
@@ -254,5 +289,7 @@ fn main() -> i32 {
     if r == 0 { r = check_format_same_bits_is_one_string(); }
     if r == 0 { r = check_format_pair_axiom(); }
     if r == 0 { r = check_cone_reaches_hook(); }
+    if r == 0 { r = check_pin_model(); }
+    if r == 0 { r = check_opaque_reason_label(); }
     i64_to_i32_wrap(r)
 }

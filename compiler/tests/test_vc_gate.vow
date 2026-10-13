@@ -661,7 +661,8 @@ fn check_float_bits_hooks() -> i64 {
     if vc_reason_code(vc_skip_reason(parse_hook_fn(ITY_U64(), ITY_U64()))) != VC_SKIP_UNSUPPORTED_OPCODE() { return 22; }
     if vc_reason_code(vc_skip_reason(parse_hook_fn(ITY_PTR(), ITY_I64()))) != VC_SKIP_UNSUPPORTED_OPCODE() { return 23; }
     if vc_reason_code(vc_skip_reason(format_hook_fn(ITY_PTR(), ITY_PTR()))) != VC_SKIP_UNSUPPORTED_OPCODE() { return 24; }
-    if vc_reason_code(vc_skip_reason(format_hook_fn(ITY_I64(), ITY_PTR()))) != VC_SKIP_UNSUPPORTED_OPCODE() { return 25; }
+    if vc_reason_code(vc_skip_reason(format_hook_fn(ITY_U32(), ITY_PTR()))) != VC_SKIP_UNSUPPORTED_OPCODE() { return 25; }
+    if vc_skip_reason(format_hook_fn(ITY_I64(), ITY_PTR())).len() != 0 { return 26; }
     0
 }
 

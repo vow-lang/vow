@@ -230,7 +230,7 @@ fn vc_vec_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
         return n == 2 && inst.ty == ITY_PTR() && vc_vec_index_ok(t0) && vc_vec_index_ok(t1);
     }
     if kind == VC_STR_FORMAT_F64() {
-        return n == 1 && inst.ty == ITY_PTR() && t0 == ITY_U64();
+        return n == 1 && inst.ty == ITY_PTR() && vc_vec_index_ok(t0);
     }
     if t0 != ITY_PTR() { return false; }
     if vc_str_kind_is_string_op(kind) { return vc_str_call_ok(inst, tys, kind); }
