@@ -13,6 +13,9 @@ use vc_inline
 use vc_native
 use vc_cex
 use vc_worker
+use vc_queue
+use vc_pool
+use vc_task
 use vc_probe
 use vc_driver
 use vc_solver
@@ -1941,50 +1944,69 @@ fn run_verify_native(argv: Vec<String>, fr: LoweredFrontend, path: String, tctx:
     verify_finish(argv, fr.merged, fns, path, replay_main_start(argv, fr, path), dctx, tctx, status_str, ces, soft_meta, !all_proven || any_skipped)
 }
 
-// `verify-worker <source> --worker-index N --worker-name F --worker-budget-ms MS
-// [--worker-clauses] [--worker-probe vacuity|trivial] [--worker-module-root DIR]
-// [--worker-cache-dir D --worker-solver-id V]`: internal. Lowers the program again
-// (against `DIR` when the parent did), verifies function N and prints the result
-// in the `vc_worker` wire format. A probe verifies the weak-contract rewrite of
-// function N instead (see `vc_probe`) and never asks for per-clause verdicts. The
-// cache flags name the parent's result cache; without both, the worker asks the
-// solver every time. Exit 3 when the program no longer matches what the parent
-// planned; the parent reports that as a crashed worker.
+// `verify-worker <source> --worker-budget-ms MS [--worker-clauses]
+// [--worker-module-root DIR] [--worker-cache-dir D --worker-solver-id V]` plus
+// either `--worker-session ROOT --worker-id W` or `--worker-index N
+// --worker-name F [--worker-probe vacuity|trivial] [--worker-scratch DIR]`:
+// internal. Lowers the program once (against `DIR` when the parent did). A
+// session works through the queue under ROOT (see `vc_queue`), deciding every task
+// it wins and answering each into the queue. The one-function form verifies
+// function N and prints the result in the `vc_worker` wire format. A probe
+// verifies the weak-contract rewrite of the function instead (see `vc_probe`) and
+// never asks for per-clause verdicts. The cache flags name the parent's result
+// cache; without both, the worker asks the solver every time. Exit 3 when the
+// program no longer matches what the parent planned; the parent reports that as a
+// crashed worker.
 fn run_verify_worker(argv: Vec<String>) -> i32 [io, read, write] {
     let path: String = frontend_path_from_argv(argv, true, String::from("verify-worker"));
-    let index: i64 = str_to_i64(get_flag_arg(argv, "--worker-index"));
     let budget_ms: i64 = str_to_i64(get_flag_arg(argv, "--worker-budget-ms"));
     let fr: LoweredFrontend = frontend_lower_path_traced(path, get_flag_arg(argv, "--worker-module-root"), trace_off());
     let checked: CheckedFrontend = fr.checked;
     let vm: IrModule = vc_erase_linear(fr.ir_mod);
-    let fns: Vec<IrFunction> = vm.functions;
-    if checked.n_errors > 0 || index < 0 || index >= fns.len() as i64 {
-        diag_eprintln_best_effort(String::from("verify-worker: program does not match the planned function table"));
-        return 3;
-    }
-    let f: IrFunction = fns[index as u64];
-    if f.name != get_flag_arg(argv, "--worker-name") {
-        diag_eprintln_best_effort(String::from("verify-worker: function name does not match the planned index"));
-        return 3;
-    }
-    let probe: String = get_flag_arg(argv, "--worker-probe");
-    let mut target: IrFunction = f;
-    if probe == "vacuity" && vc_probe_vacuity_applicable(f) {
-        target = vc_probe_vacuity(f);
-    } else if probe == "trivial" && vc_probe_trivial_applicable(f) {
-        target = vc_probe_trivial(f);
-    } else if probe.len() > 0 {
-        diag_eprintln_best_effort(String::from("verify-worker: probe does not apply to the planned function"));
-        return 3;
-    }
-    let clauses: bool = has_flag(argv, "--worker-clauses") && probe.len() == 0;
     let mut cache: VcCache = vc_cache_off();
     if has_flag(argv, "--worker-cache-dir") && has_flag(argv, "--worker-solver-id") {
         cache = VcCache { dir: get_flag_arg(argv, "--worker-cache-dir"), solver_id: get_flag_arg(argv, "--worker-solver-id") };
     }
-    print_str(vc_wire_encode(vc_verify_function_mode(target, vm, budget_ms, get_flag_arg(argv, "--worker-scratch"), cache, clauses)));
+    let clauses: bool = has_flag(argv, "--worker-clauses");
+    let session: String = get_flag_arg(argv, "--worker-session");
+    let tasks: VcQTasks = {
+        if session.len() > 0 {
+            match vc_q_tasks_decode(fs_read(vc_q_tasks_path(session))) {
+                Option::Some(t) => { t },
+                Option::None => { VcQTasks { idx: Vec::new(), names: Vec::new(), kinds: Vec::new() } },
+            }
+        } else {
+            let probe: String = get_flag_arg(argv, "--worker-probe");
+            let kind: i64 = {
+                if probe.len() == 0 { VC_TASK_KIND_VERIFY() }
+                else if probe == "vacuity" { VC_TASK_KIND_VACUITY() }
+                else if probe == "trivial" { VC_TASK_KIND_TRIVIAL() }
+                else { -1 }
+            };
+            let one: VcQTasks = VcQTasks { idx: Vec::new(), names: Vec::new(), kinds: Vec::new() };
+            one.idx.push(str_to_i64(get_flag_arg(argv, "--worker-index")));
+            one.names.push(get_flag_arg(argv, "--worker-name"));
+            one.kinds.push(kind);
+            one
+        }
+    };
+    let why: String = {
+        if checked.n_errors > 0 || tasks.idx.len() == 0 { String::from("program does not match the planned function table") }
+        else { vc_task_mismatch(vm.functions, tasks) }
+    };
+    if why.len() > 0 {
+        diag_eprintln_best_effort(str2(String::from("verify-worker: "), why));
+        return 3;
+    }
+    if session.len() > 0 {
+        return vc_task_session(vm, tasks, session, str_to_i64(get_flag_arg(argv, "--worker-id")), budget_ms, cache, clauses);
+    }
+    let fns: Vec<IrFunction> = vm.functions;
+    let f: IrFunction = fns[tasks.idx[0] as u64];
+    print_str(vc_wire_encode(vc_task_run(vm, f, tasks.kinds[0], budget_ms, get_flag_arg(argv, "--worker-scratch"), cache, clauses)));
     0
 }
+
 
 fn run_verify(argv: Vec<String>) -> i32 [io, read, write] {
     let path: String = frontend_path_from_argv(argv, true, String::from("verify"));
@@ -2419,7 +2441,7 @@ struct TestNativeVerdict {
     diag_json: String,
 }
 
-fn test_native_verify(ir_mod: IrModule, exe: String, test_path: String, module_root: String, jobs: i64, dctx: DiagCtx) -> TestNativeVerdict [io, read] {
+fn test_native_verify(ir_mod: IrModule, exe: String, test_path: String, module_root: String, jobs: i64, dctx: DiagCtx) -> TestNativeVerdict [io, read, write] {
     let drv: VcDriverRun = vc_driver_run(exe, test_path, module_root, ir_mod, false, jobs, watchdog_ms_for(String::from("")));
     let fns: Vec<IrFunction> = ir_mod.functions;
     let mut failed: bool = false;
@@ -3867,7 +3889,7 @@ fn native_failed_on_abort_only(oc: VcOutcome) -> bool {
 // overrides every clause of the function with `vacuous`, and a proven trivial
 // probe marks its `ensures` clauses. A missing solver is an `error` status on
 // every clause that needed it; the exit code follows from the statuses.
-fn contracts_native_verify(ir_mod: IrModule, exe: String, path: String, jobs: i64, budget_ms: i64, vow_ids: Vec<i64>, func_ids: Vec<i64>, kinds: Vec<String>, statuses: Vec<String>, trivial: Vec<i64>) [io, read] {
+fn contracts_native_verify(ir_mod: IrModule, exe: String, path: String, jobs: i64, budget_ms: i64, vow_ids: Vec<i64>, func_ids: Vec<i64>, kinds: Vec<String>, statuses: Vec<String>, trivial: Vec<i64>) [io, read, write] {
     let drv: VcDriverRun = vc_driver_run(exe, path, String::from(""), ir_mod, true, jobs, budget_ms);
     let fns: Vec<IrFunction> = ir_mod.functions;
     let mut fi: u64 = 0;

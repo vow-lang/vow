@@ -1,0 +1,84 @@
+module VcTask
+
+use ir
+use diag
+use verifier
+use vc_cache
+use vc_native
+use vc_probe
+use vc_worker
+use vc_queue
+
+// The worker's side of a task: decide one function (or one weak-contract probe
+// of it) and, for a session, work through the shared queue of `vc_queue`.
+//
+// A session lowers the program once. Every task then starts from the same
+// lowered module, and no task may change it: the verifier builds new functions
+// from `f` (inlining, loop closing, unrolling, the probe rewrites) and never
+// writes into the module's vectors, which `check_session_isolation` in
+// `tests/verify-native/tests.sh` pins by comparing a session's answers with
+// one-function workers'.
+
+fn vc_task_applies(f: IrFunction, kind: i64) -> bool {
+    if kind == VC_TASK_KIND_VERIFY() { return true; }
+    if kind == VC_TASK_KIND_VACUITY() { return vc_probe_vacuity_applicable(f); }
+    if kind == VC_TASK_KIND_TRIVIAL() { return vc_probe_trivial_applicable(f); }
+    false
+}
+
+// The function the engine decides for task `kind` on `f`.
+fn vc_task_target(f: IrFunction, kind: i64) -> IrFunction {
+    if kind == VC_TASK_KIND_VACUITY() { return vc_probe_vacuity(f); }
+    if kind == VC_TASK_KIND_TRIVIAL() { return vc_probe_trivial(f); }
+    f
+}
+
+// Probes never ask for per-clause verdicts; only a verify task does.
+fn vc_task_run(m: IrModule, f: IrFunction, kind: i64, budget_ms: i64, scratch: String, cache: VcCache, clauses: bool) -> VcOutcome [io, read, write] {
+    vc_verify_function_mode(vc_task_target(f, kind), m, budget_ms, scratch, cache, clauses && kind == VC_TASK_KIND_VERIFY())
+}
+
+// Why the plan cannot be run against `fns`, or "" when it can: the parent
+// planned from its own lowering, and a worker that lowered something else must
+// not answer for the planned functions.
+fn vc_task_mismatch(fns: Vec<IrFunction>, t: VcQTasks) -> String {
+    let mut k: u64 = 0;
+    while k < t.idx.len() {
+        if t.idx[k] < 0 || t.idx[k] >= fns.len() as i64 {
+            return String::from("program does not match the planned function table");
+        }
+        let f: IrFunction = fns[t.idx[k] as u64];
+        if f.name != t.names[k] {
+            return String::from("function name does not match the planned index");
+        }
+        if !vc_task_applies(f, t.kinds[k]) {
+            return String::from("probe does not apply to the planned function");
+        }
+        k = k + 1;
+    }
+    String::from("")
+}
+
+// Runs the tasks of the queue under `root` that this session wins, in order,
+// answering each into the queue (its claim stays for the parent to take over).
+// Exit 4 when an answer cannot be written, which the parent reads as a worker
+// that produced no result.
+fn vc_task_session(m: IrModule, t: VcQTasks, root: String, w: i64, budget_ms: i64, cache: VcCache, clauses: bool) -> i32 [io, read, write] {
+    let fns: Vec<IrFunction> = m.functions;
+    let mut k: u64 = 0;
+    while k < t.idx.len() {
+        let task: i64 = k as i64;
+        if vc_q_claim(root, w, task) {
+            diag_eprintln_best_effort(vc_task_marker(task));
+            let scratch: String = vc_q_scratch_path(root, w, task);
+            let owned: bool = fs_mkdir(scratch) == 0;
+            let dir: String = { if owned { scratch } else { String::from("") } };
+            let f: IrFunction = fns[t.idx[k] as u64];
+            let oc: VcOutcome = vc_task_run(m, f, t.kinds[k], budget_ms, dir, cache, clauses);
+            if owned { fs_remove_dir_all(scratch); }
+            if !vc_q_publish(root, task, vc_wire_encode(oc)) { return 4; }
+        }
+        k = k + 1;
+    }
+    0
+}
