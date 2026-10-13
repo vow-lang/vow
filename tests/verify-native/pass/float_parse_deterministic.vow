@@ -1,0 +1,11 @@
+module FloatParseDeterministic
+
+fn parse_twice(s: String) -> bool vow {
+  ensures: result
+} {
+  parse_f64_bits(s) == parse_f64_bits(s)
+}
+
+fn main() -> i32 [io] {
+  0
+}

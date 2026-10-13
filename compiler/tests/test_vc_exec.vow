@@ -1156,8 +1156,64 @@ fn check_float_remainder_has_no_claims() -> i64 {
     0
 }
 
+// fn same(s: String) ensures result: parse_f64_bits(s) == parse_f64_bits(s), over
+// two calls on one string parameter.
+fn parse_twice(same_obj: bool) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_arg(1, ITY_PTR(), 1));
+    i.push(mk_inst_call_extern(2, ITY_U64(), args1(0), String::from("__vow_parse_f64_bits")));
+    let mut second: i64 = 1;
+    if same_obj { second = 0; }
+    i.push(mk_inst_call_extern(3, ITY_U64(), args1(second), String::from("__vow_parse_f64_bits")));
+    i.push(mk_inst(4, IOP_EQ(), ITY_BOOL(), args2(2, 3)));
+    i.push(mk_vow(5, IOP_VOW_ENS(), 4, 0));
+    i.push(mk_inst_const_bool(6, 1));
+    i.push(mk_inst_return(7, 6));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    p.push(ITY_PTR());
+    one_block(String::from("parse"), p, ITY_BOOL(), i)
+}
+
+fn check_parse_f64_bits_is_per_object() -> i64 {
+    let same: IrFunction = parse_twice(true);
+    if vc_skip_reason(same).len() != 0 { return 1; }
+    let cs: VcClaims = vc_claims(same);
+    // One string, one result: the equality folds to true and no claim is left.
+    if cs.kinds.len() != 0 { return 2; }
+    let other: IrFunction = parse_twice(false);
+    if vc_skip_reason(other).len() != 0 { return 3; }
+    let cs2: VcClaims = vc_claims(other);
+    if cs2.kinds.len() != 1 { return 4; }
+    let q: String = query(cs2, 0);
+    if !q.contains(String::from("(declare-const b2 (_ BitVec 64))\n")) { return 5; }
+    if !q.contains(String::from("(declare-const b3 (_ BitVec 64))\n")) { return 6; }
+    if !q.contains(String::from("(set-logic QF_BV)\n")) { return 7; }
+    0
+}
+
+// `format_f64_bits` yields a fresh string object and drops nothing of its argument.
+fn check_format_f64_bits_is_an_object() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_U64(), 0));
+    i.push(mk_inst_call_extern(1, ITY_PTR(), args1(0), String::from("__vow_format_f64_bits")));
+    i.push(mk_inst(2, IOP_EQ(), ITY_BOOL(), args2(0, 0)));
+    i.push(mk_vow(3, IOP_VOW_ENS(), 2, 0));
+    i.push(mk_inst_return(4, 1));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_U64());
+    let f: IrFunction = one_block(String::from("fmt"), p, ITY_PTR(), i);
+    if vc_skip_reason(f).len() != 0 { return 1; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 0 { return 2; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_divide_with_requires();
+    if r == 0 { r = check_parse_f64_bits_is_per_object(); }
+    if r == 0 { r = check_format_f64_bits_is_an_object(); }
     if r == 0 { r = check_float_query(); }
     if r == 0 { r = check_no_float_keeps_bv_logic(); }
     if r == 0 { r = check_literal_only_float_logic(); }

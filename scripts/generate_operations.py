@@ -636,9 +636,9 @@ def gen_vow_vc_ops_block(ops: list[dict], routes: list[str]) -> str:
     sees extern calls, not Vow builtin names). Only `known` needs a lookup: an
     `unmodeled` entry and an absent symbol both skip the function, and
     `check_verifier_models` already forces every entry to say which it is.
-    `known` is necessary but not sufficient to verify a call: until the
-    symbolic executor encodes calls, the gate still skips a `known` builtin as
-    `unsupported-opcode`."""
+    `known` is necessary but not sufficient to verify a call: the executor
+    encodes a call by its runtime symbol (`vc_known_call_kind` in `vc_ops.vow`),
+    and the gate skips a `known` symbol without a kind as `unsupported-opcode`."""
     known = [op["runtime_symbol"] for op in ops if op.get("verifier_model") == "known"]
     return _wrap_marker_block(_vow_symbol_set_fn("catalogue_verifier_known", known))
 

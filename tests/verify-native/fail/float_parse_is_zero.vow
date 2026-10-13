@@ -1,0 +1,16 @@
+// TEST: replay-skipped String parameter
+// TEST: counterexample-fn "bits"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures result == 0"
+module FloatParseIsZero
+
+fn bits(s: String) -> u64 vow {
+  ensures: result == 0
+} {
+  parse_f64_bits(s)
+}
+
+fn main() -> i32 [io] {
+  0
+}

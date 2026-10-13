@@ -248,9 +248,38 @@ fn vc_op_gate_candidate(op: i64) -> bool {
 
 // Builtins are modelled only when `catalogue_verifier_known` lists their runtime
 // symbol; an `unmodeled` entry and a symbol the catalogue lacks are skipped alike.
+// A `known` symbol also needs a kind here, which says how the executor encodes it.
+fn VC_KNOWN_NONE() -> i64 { 0 }
+// `parse_f64_bits(s: String) -> u64`: an unconstrained 64-bit value that depends
+// only on the string object.
+fn VC_KNOWN_PARSE_F64_BITS() -> i64 { 1 }
+// `format_f64_bits(bits: u64) -> String`: a fresh opaque string object.
+fn VC_KNOWN_FORMAT_F64_BITS() -> i64 { 2 }
+
+fn vc_known_call_kind(sym: String) -> i64 {
+    if sym == String::from("__vow_parse_f64_bits") { return VC_KNOWN_PARSE_F64_BITS(); }
+    if sym == String::from("__vow_format_f64_bits") { return VC_KNOWN_FORMAT_F64_BITS(); }
+    VC_KNOWN_NONE()
+}
+
+// The modelled-builtin kind of an extern call; `VC_KNOWN_NONE` for any other
+// instruction or a builtin the catalogue does not mark `known`.
+fn vc_inst_known_kind(inst: IrInst) -> i64 {
+    if inst.op != IOP_CALL() || inst.dk != IDATA_CALL_EXTERN() || !catalogue_verifier_known(inst.ds) {
+        return VC_KNOWN_NONE();
+    }
+    vc_known_call_kind(inst.ds)
+}
 
 // GENERATE:OPERATIONS:START
 fn catalogue_verifier_known(sym: String) -> bool {
+    let n: u64 = sym.len();
+    if n == 20 {
+        return sym == String::from("__vow_parse_f64_bits");
+    }
+    if n == 21 {
+        return sym == String::from("__vow_format_f64_bits");
+    }
     return false;
 }
 // GENERATE:OPERATIONS:END

@@ -272,6 +272,8 @@ struct VcWalk {
     tys: Vec<i64>,
     lits: Vec<i64>,
     dvs: Vec<i64>,
+    parse_objs: Vec<i64>,
+    parse_bits: Vec<i64>,
 }
 
 // Binds the value of `inst` to `t`: a leaf is used as it is, a composite gets
@@ -445,6 +447,36 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
     true
 }
 
+// A modelled builtin call (`VC_KNOWN_*`). `format_f64_bits` returns a fresh string
+// object whose content nothing reads; its `u64` argument is consumed whole, so
+// no information about it is dropped. `parse_f64_bits` returns an unconstrained
+// `u64`, the same one for every call on one string object: the string side is
+// opaque, so a result is never tied to a NaN payload or any other value, and the
+// result is only used where it is valid for every value. Sharing it per object
+// is sound because no modelled operation changes a string (a mutator is an
+// unmodelled extern, which the gate rejects).
+fn vc_walk_known_call(w: VcWalk, bi: u64, inst: IrInst) {
+    if vc_inst_known_kind(inst) == VC_KNOWN_FORMAT_F64_BITS() {
+        w.obj_of[inst.id as u64] = vc_agg_alloc(w.ag, w.fl.block_pc[bi]);
+        return;
+    }
+    let obj: i64 = w.obj_of[inst.args[0] as u64];
+    let mut i: u64 = 0;
+    while obj >= 0 && i < w.parse_objs.len() {
+        if w.parse_objs[i] == obj {
+            vc_define(w, inst, w.parse_bits[i]);
+            return;
+        }
+        i = i + 1;
+    }
+    let name: String = String::from("b");
+    name.push_str(i64_to_string(inst.id));
+    let bits: i64 = vc_agg_declare(w.cs.arena, w.cs.header, name, 64);
+    w.parse_objs.push(obj);
+    w.parse_bits.push(bits);
+    vc_define(w, inst, bits);
+}
+
 // A contract clause. The target's own `requires` is an assumption and its
 // `ensures`/`invariant` a claim; a spliced callee's clauses are claims blamed on
 // the caller and the callee, assumed once asked.
@@ -500,6 +532,8 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
     } else if op == IOP_BRANCH() {
         let cond: i64 = w.var_of[inst.args[0] as u64];
         vc_flow_branch(fl, cs.arena, cs.header, bi, cond, succ[bi * 2] as u64, succ[bi * 2 + 1] as u64);
+    } else if vc_inst_known_kind(inst) != VC_KNOWN_NONE() {
+        vc_walk_known_call(w, bi, inst);
     } else if vc_is_havoc(inst) {
         let name: String = String::from("h");
         name.push_str(i64_to_string(inst.id));
@@ -587,6 +621,8 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         tys: tys,
         lits: vc_literal_table(f, tys),
         dvs: dom_fill(tys.len(), 0),
+        parse_objs: Vec::new(),
+        parse_bits: Vec::new(),
     };
     let id_to_idx: Vec<i64> = dom_block_id_table(f);
     let succ: Vec<i64> = dom_successors(f, id_to_idx);

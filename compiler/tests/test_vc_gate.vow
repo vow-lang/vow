@@ -566,6 +566,38 @@ fn check_floats() -> i64 {
     0
 }
 
+fn hook_fn(sym: String, pty: i64, rty: i64, nargs: i64) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, pty, 0));
+    let a: Vec<i64> = Vec::new();
+    if nargs > 0 { a.push(0); }
+    if nargs > 1 { a.push(0); }
+    i.push(mk_inst_call_extern(1, rty, a, sym));
+    i.push(mk_inst_return(2, 1));
+    let p: Vec<i64> = Vec::new();
+    p.push(pty);
+    one_block(String::from("hook"), p, rty, i)
+}
+
+// `parse_f64_bits` and `format_f64_bits` are modelled for the shapes the
+// builtin signatures give them; any other shape or symbol is not.
+fn check_known_float_hooks() -> i64 {
+    let parse: String = String::from("__vow_parse_f64_bits");
+    let format: String = String::from("__vow_format_f64_bits");
+    if vc_skip_reason(hook_fn(parse, ITY_PTR(), ITY_U64(), 1)).len() != 0 { return 170; }
+    if vc_skip_reason(hook_fn(format, ITY_U64(), ITY_PTR(), 1)).len() != 0 { return 171; }
+    if vc_skip_reason(hook_fn(parse, ITY_I64(), ITY_U64(), 1)).len() == 0 { return 172; }
+    if vc_skip_reason(hook_fn(parse, ITY_PTR(), ITY_I64(), 1)).len() == 0 { return 173; }
+    if vc_skip_reason(hook_fn(parse, ITY_PTR(), ITY_U64(), 2)).len() == 0 { return 174; }
+    if vc_skip_reason(hook_fn(format, ITY_I64(), ITY_PTR(), 1)).len() == 0 { return 175; }
+    if vc_skip_reason(hook_fn(format, ITY_U64(), ITY_U64(), 1)).len() == 0 { return 176; }
+    // A String mutator is an unmodelled extern: this is what makes sharing one
+    // parse result per string object sound.
+    let push: String = vc_skip_reason(hook_fn(String::from("__vow_string_push_str"), ITY_PTR(), ITY_U64(), 1));
+    if !push.contains(String::from("unmodeled-builtin")) { return 177; }
+    0
+}
+
 fn check_reason_codes() -> i64 {
     let fr: Vec<IrInst> = Vec::new();
     fr.push(mk_inst(0, IOP_CONST_F64(), ITY_F64(), Vec::new()));
@@ -715,6 +747,7 @@ fn main() -> i32 {
     if r == 0 { r = check_unreachable_terminator(); }
     if r == 0 { r = check_op_details(); }
     if r == 0 { r = check_floats(); }
+    if r == 0 { r = check_known_float_hooks(); }
     if r == 0 { r = check_bool_param(); }
     if r == 0 { r = check_get_arg_must_match_param_type(); }
     if r == 0 { r = check_every_width_accepted(); }

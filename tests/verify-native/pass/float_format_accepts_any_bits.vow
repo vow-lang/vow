@@ -1,0 +1,11 @@
+module FloatFormatAcceptsAnyBits
+
+fn show(bits: u64) -> String vow {
+  ensures: bits == bits
+} {
+  format_f64_bits(bits)
+}
+
+fn main() -> i32 [io] {
+  0
+}

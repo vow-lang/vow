@@ -229,6 +229,16 @@ fn vc_vec_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
     false
 }
 
+// Operand and result types of a call to a modelled builtin (`VC_KNOWN_*`): the
+// String operand of `parse_f64_bits` and the String result of `format_f64_bits`
+// are objects, the other side is the `u64` bit pattern.
+fn vc_known_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
+    if inst.args.len() != 1 { return false; }
+    let t0: i64 = vc_arg_ty(tys, inst, 0);
+    if kind == VC_KNOWN_PARSE_F64_BITS() { return t0 == ITY_PTR() && inst.ty == ITY_U64(); }
+    kind == VC_KNOWN_FORMAT_F64_BITS() && t0 == ITY_U64() && inst.ty == ITY_PTR()
+}
+
 // True when the instruction is one the symbolic executor models, given the
 // types of the values it reads. `calls` admits a scalar call of a user function
 // (inlined before execution); without it only the unwrap abort is a call.
@@ -265,6 +275,8 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
         if vc_is_unwrap_abort(inst) { return n == 0 && inst.ty == ITY_UNIT(); }
         let vk: i64 = vc_inst_vec_kind(inst);
         if vk != VC_VEC_NONE() { return vc_vec_call_ok(inst, tys, vk); }
+        let kk: i64 = vc_inst_known_kind(inst);
+        if kk != VC_KNOWN_NONE() { return vc_known_call_ok(inst, tys, kk); }
         return calls && vc_call_scalar(inst, tys);
     }
     if vc_is_float_op(op) { return vc_float_inst_ok(inst, t0, t1); }
