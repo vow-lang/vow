@@ -1000,6 +1000,13 @@ def result_tag_token(op: dict) -> str:
     return f"option:{elem}" if kind == "option" else kind
 
 
+def _indent_facts_block(lines: list[str]) -> str:
+    """Join a fact-table block, indenting every line but the marker line."""
+    return "\n".join(
+        line if i == 0 or not line else f"    {line}" for i, line in enumerate(lines)
+    )
+
+
 def _quoted_list(items: list[str]) -> str:
     return ", ".join(f'"{item}"' for item in items)
 
@@ -1039,9 +1046,7 @@ def gen_rust_facts_block(ops: list[dict], excluded: list[dict]) -> str:
         + exclusions
         + ["];", FACTS_MARKER_END]
     )
-    return "\n".join(
-        line if i == 0 or not line else f"    {line}" for i, line in enumerate(lines)
-    )
+    return _indent_facts_block(lines)
 
 
 def gen_rust_lowering_facts_block(ops: list[dict], excluded: list[dict]) -> str:
@@ -1062,9 +1067,7 @@ def gen_rust_lowering_facts_block(ops: list[dict], excluded: list[dict]) -> str:
         + rows
         + ["];", FACTS_MARKER_END]
     )
-    return "\n".join(
-        line if i == 0 or not line else f"    {line}" for i, line in enumerate(lines)
-    )
+    return _indent_facts_block(lines)
 
 
 def gen_vow_facts_block(ops: list[dict], excluded: list[dict]) -> str:

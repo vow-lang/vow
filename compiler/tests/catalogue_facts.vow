@@ -196,3 +196,40 @@ fn op_excluded_describe(x: OpExcluded) -> String {
     out.push_str(String::from("]"));
     out
 }
+
+fn any_fact_named(facts: Vec<OpFact>, name: String) -> bool {
+    let mut i: u64 = 0u64;
+    while i < facts.len() {
+        let f: OpFact = facts[i];
+        let fname: String = f.name;
+        if fname == name { return true; }
+        i = i + 1u64;
+    }
+    false
+}
+
+fn fact_problem(out: Vec<String>, name: String, what: String) {
+    let line: String = String::from("'");
+    line.push_str(name);
+    line.push_str(String::from("': "));
+    line.push_str(what);
+    out.push(line);
+}
+
+fn problems_mention(problems: Vec<String>, needle: String) -> bool {
+    let mut i: u64 = 0u64;
+    while i < problems.len() {
+        if facts_str_contains(problems[i], needle) { return true; }
+        i = i + 1u64;
+    }
+    false
+}
+
+fn problems_all_mention(problems: Vec<String>, needle: String) -> bool {
+    let mut i: u64 = 0u64;
+    while i < problems.len() {
+        if !facts_str_contains(problems[i], needle) { return false; }
+        i = i + 1u64;
+    }
+    true
+}

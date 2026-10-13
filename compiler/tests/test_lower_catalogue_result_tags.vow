@@ -31,23 +31,15 @@ fn tag_token_code(token: String) -> i64 {
     -9
 }
 
-fn tag_problem(out: Vec<String>, name: String, what: String) {
-    let line: String = String::from("'");
-    line.push_str(name);
-    line.push_str(String::from("': "));
-    line.push_str(what);
-    out.push(line);
-}
-
 fn fact_tag_problems(f: OpFact, out: Vec<String>) {
     let name: String = f.name;
     let want: i64 = tag_token_code(f.result_tag);
-    if want == -9 { tag_problem(out, name, String::from("unknown result tag in the fact table")); }
+    if want == -9 { fact_problem(out, name, String::from("unknown result tag in the fact table")); }
     if catalogue_builtin_result_tag(name) != want {
-        tag_problem(out, name, String::from("catalogue_builtin_result_tag differs from the catalogue result tag"));
+        fact_problem(out, name, String::from("catalogue_builtin_result_tag differs from the catalogue result tag"));
     }
     if builtin_result_tag(name) != want {
-        tag_problem(out, name, String::from("builtin_result_tag differs from the catalogue result tag"));
+        fact_problem(out, name, String::from("builtin_result_tag differs from the catalogue result tag"));
     }
 }
 
@@ -59,15 +51,6 @@ fn tag_problems(facts: Vec<OpFact>) -> Vec<String> {
         i = i + 1u64;
     }
     out
-}
-
-fn problems_mention(problems: Vec<String>, needle: String) -> bool {
-    let mut i: u64 = 0u64;
-    while i < problems.len() {
-        if facts_str_contains(problems[i], needle) { return true; }
-        i = i + 1u64;
-    }
-    false
 }
 
 fn check_every_catalogue_op_carries_its_tag() -> i32 [io] {
@@ -83,7 +66,6 @@ fn check_every_catalogue_op_carries_its_tag() -> i32 [io] {
     0
 }
 
-// The same facts with `name`'s result tag replaced.
 fn facts_with_tag(facts: Vec<OpFact>, name: String, tag: String) -> Vec<OpFact> {
     let out: Vec<OpFact> = Vec::new();
     let mut i: u64 = 0u64;

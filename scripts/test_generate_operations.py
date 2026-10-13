@@ -2753,6 +2753,8 @@ def _write_fact_fixtures(tmp: Path) -> None:
         path = tmp / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         existing = path.read_text() if path.exists() else "before\n"
+        if "OPERATION_FACTS:START" in existing:
+            continue
         path.write_text(f"{existing}{body}after\n")
 
 

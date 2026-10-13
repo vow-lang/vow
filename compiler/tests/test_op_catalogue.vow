@@ -24,30 +24,22 @@ fn ret_token_ity(token: String) -> i64 {
     -2
 }
 
-fn lowering_problem(out: Vec<String>, name: String, what: String) {
-    let line: String = String::from("'");
-    line.push_str(name);
-    line.push_str(String::from("': "));
-    line.push_str(what);
-    out.push(line);
-}
-
 fn fact_lowering_problems(f: OpFact, out: Vec<String>) {
     let name: String = f.name;
     let symbol: String = f.symbol;
     let want_ret: i64 = ret_token_ity(f.ret);
-    if want_ret == -2 { lowering_problem(out, name, String::from("unknown return token in the fact table")); }
+    if want_ret == -2 { fact_problem(out, name, String::from("unknown return token in the fact table")); }
     if catalogue_builtin_to_extern(name) != symbol {
-        lowering_problem(out, name, String::from("catalogue_builtin_to_extern differs from the catalogue runtime symbol"));
+        fact_problem(out, name, String::from("catalogue_builtin_to_extern differs from the catalogue runtime symbol"));
     }
     if builtin_to_extern(name) != symbol {
-        lowering_problem(out, name, String::from("builtin_to_extern differs from the catalogue runtime symbol"));
+        fact_problem(out, name, String::from("builtin_to_extern differs from the catalogue runtime symbol"));
     }
     if catalogue_builtin_ret_ty(name) != want_ret {
-        lowering_problem(out, name, String::from("catalogue_builtin_ret_ty differs from the catalogue return type"));
+        fact_problem(out, name, String::from("catalogue_builtin_ret_ty differs from the catalogue return type"));
     }
     if builtin_ret_ty(name) != want_ret {
-        lowering_problem(out, name, String::from("builtin_ret_ty differs from the catalogue return type"));
+        fact_problem(out, name, String::from("builtin_ret_ty differs from the catalogue return type"));
     }
 }
 
@@ -59,15 +51,6 @@ fn lowering_problems(facts: Vec<OpFact>) -> Vec<String> {
         i = i + 1u64;
     }
     out
-}
-
-fn problems_mention(problems: Vec<String>, needle: String) -> bool {
-    let mut i: u64 = 0u64;
-    while i < problems.len() {
-        if facts_str_contains(problems[i], needle) { return true; }
-        i = i + 1u64;
-    }
-    false
 }
 
 fn check_every_catalogue_op_lowers_as_catalogued() -> i32 [io] {
@@ -115,6 +98,7 @@ fn facts_with(facts: Vec<OpFact>, name: String, symbol: String, ret: String) -> 
 // op alone, so the green run above is not vacuous.
 fn check_a_drifted_symbol_names_the_op() -> i32 {
     let facts: Vec<OpFact> = op_facts_all();
+    if !any_fact_named(facts, String::from("fs_status")) { return 9; }
     let f: OpFact = fact_named(facts, String::from("fs_status"));
     let mutated: Vec<OpFact> = facts_with(facts, String::from("fs_status"), String::from("__vow_fs_status_X"), f.ret);
     let problems: Vec<String> = lowering_problems(mutated);
@@ -126,6 +110,7 @@ fn check_a_drifted_symbol_names_the_op() -> i32 {
 
 fn check_a_drifted_return_type_names_the_op() -> i32 {
     let facts: Vec<OpFact> = op_facts_all();
+    if !any_fact_named(facts, String::from("fs_status")) { return 19; }
     let f: OpFact = fact_named(facts, String::from("fs_status"));
     let mutated: Vec<OpFact> = facts_with(facts, String::from("fs_status"), f.symbol, String::from("u64"));
     let problems: Vec<String> = lowering_problems(mutated);
@@ -140,18 +125,8 @@ fn check_an_unlowered_row_names_the_op() -> i32 {
     facts.push(op_fact(String::from("brand_new_builtin"), String::from("[]"), String::from(""), String::from("i64"), String::from(""), String::from("i64"), String::from("__vow_brand_new_builtin"), String::from("none")));
     let problems: Vec<String> = lowering_problems(facts);
     if !problems_mention(problems, String::from("'brand_new_builtin': catalogue_builtin_to_extern")) { return 30; }
+    if !problems_all_mention(problems, String::from("'brand_new_builtin': ")) { return 31; }
     0
-}
-
-fn any_fact_named(facts: Vec<OpFact>, name: String) -> bool {
-    let mut i: u64 = 0u64;
-    while i < facts.len() {
-        let f: OpFact = facts[i];
-        let fname: String = f.name;
-        if fname == name { return true; }
-        i = i + 1u64;
-    }
-    false
 }
 
 // `i64_to_string` shares `int_to_string`'s runtime symbol, so the catalogue does
