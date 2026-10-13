@@ -1,0 +1,136 @@
+module TestVcQuery
+
+use ir
+use vc_term
+use vc_smt
+use vc_exec
+use tests.builders
+
+fn empty_claims() -> VcClaims {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, Vec::new()));
+    vc_claims(mk_function(1, String::from("query"), Vec::new(), ITY_UNIT(), blocks))
+}
+
+// Two recorded prefixes followed by later declarations and assumptions. Query
+// construction must use the recorded prefix, including for model requests.
+fn query_claims() -> VcClaims {
+    let cs: VcClaims = empty_claims();
+    let ar: VcArena = cs.arena;
+    let hdr: SmtScript = cs.header;
+    let a: i64 = vc_tm_var(ar, String::from("a"));
+    cs.model_hdr.push(hdr.kinds.len() as i64);
+    cs.model_names.push(String::from("a"));
+    cs.model_widths.push(VC_SORT_BOOL());
+    vc_script_declare_const(hdr, String::from("a"), VC_SORT_BOOL());
+    cs.assumed.push(a);
+    cs.header_lens.push(hdr.kinds.len() as i64);
+    cs.assumed_lens.push(cs.assumed.len() as i64);
+    cs.negated_goals.push(vc_tm_app1(ar, VC_OP_NOT(), a));
+
+    let b: i64 = vc_tm_var(ar, String::from("b"));
+    cs.model_hdr.push(hdr.kinds.len() as i64);
+    cs.model_names.push(String::from("b"));
+    cs.model_widths.push(VC_SORT_BOOL());
+    vc_script_declare_const(hdr, String::from("b"), VC_SORT_BOOL());
+    vc_script_define_fun(hdr, String::from("x"), VC_SORT_BOOL(), vc_tm_app1(ar, VC_OP_NOT(), b));
+    cs.assumed.push(b);
+    cs.header_lens.push(hdr.kinds.len() as i64);
+    cs.assumed_lens.push(cs.assumed.len() as i64);
+    cs.negated_goals.push(vc_tm_app1(ar, VC_OP_NOT(), vc_tm_var(ar, String::from("x"))));
+
+    cs.model_hdr.push(hdr.kinds.len() as i64);
+    cs.model_names.push(String::from("later"));
+    cs.model_widths.push(VC_SORT_BOOL());
+    vc_script_declare_const(hdr, String::from("later"), VC_SORT_BOOL());
+    cs.assumed.push(vc_tm_bool_const(ar, false));
+    cs
+}
+
+fn early_header() -> String {
+    String::from("(set-logic QF_BV)\n(set-option :produce-models true)\n(declare-const a Bool)\n")
+}
+
+fn late_header() -> String {
+    let out: String = early_header();
+    out.push_str(String::from("(declare-const b Bool)\n(define-fun x () Bool (not b))\n"));
+    out
+}
+
+fn check_full_and_context() -> i64 {
+    let cs: VcClaims = query_claims();
+    let early: String = early_header();
+    early.push_str(String::from("(assert a)\n"));
+    if vc_smt_render(cs.arena, vc_claim_context_script(cs, 0)) != early { return 1; }
+    early.push_str(String::from("(assert (not a))\n(check-sat)\n(get-value (a))\n"));
+    if vc_claim_query(cs, 0) != early { return 2; }
+    let late: String = late_header();
+    late.push_str(String::from("(assert a)\n(assert b)\n"));
+    if vc_smt_render(cs.arena, vc_claim_context_script(cs, 1)) != late { return 3; }
+    late.push_str(String::from("(assert (not x))\n(check-sat)\n(get-value (a b))\n"));
+    if vc_claim_query(cs, 1) != late { return 4; }
+    if vc_claim_model_count(cs, 0) != 1 || vc_claim_model_count(cs, 1) != 2 { return 5; }
+    let widths: Vec<i64> = vc_claim_model_widths(cs, 1);
+    if widths.len() != 2 || widths[0] != VC_SORT_BOOL() || widths[1] != VC_SORT_BOOL() { return 6; }
+    // Appending another command or assumption cannot change an earlier query.
+    vc_script_declare_const(cs.header, String::from("last"), 64);
+    cs.assumed.push(vc_tm_bool_const(cs.arena, true));
+    if vc_claim_query(cs, 0) != early || vc_claim_query(cs, 1) != late { return 7; }
+    0
+}
+
+fn check_header_and_delta() -> i64 {
+    let cs: VcClaims = query_claims();
+    if vc_claim_header_text(cs, 0) != early_header() { return 10; }
+    if vc_claim_header_text(cs, 1) != late_header() { return 11; }
+    let want: String = early_header();
+    want.push_str(String::from("(assert a)\n"));
+    if vc_claim_context_delta(cs, 0, 0, 0) != want { return 12; }
+    if vc_claim_context_delta(cs, 1, 3, 1) != String::from("(declare-const b Bool)\n(define-fun x () Bool (not b))\n(assert b)\n") { return 13; }
+    if vc_claim_context_delta(cs, 1, 5, 2) != String::from("") { return 14; }
+    if vc_claim_context_delta(cs, 1, 5, 1) != String::from("(assert b)\n") { return 15; }
+    if vc_claim_context_delta(cs, 0, 3, 0) != String::from("(assert a)\n") { return 16; }
+    0
+}
+
+fn check_selected_and_independent_script() -> i64 {
+    let cs: VcClaims = query_claims();
+    let commands: Vec<i64> = Vec::new();
+    commands.push(0);
+    commands.push(1);
+    commands.push(2);
+    commands.push(3);
+    commands.push(4);
+    let assumptions: Vec<i64> = Vec::new();
+    assumptions.push(1);
+    let want: String = late_header();
+    want.push_str(String::from("(assert b)\n(assert (not x))\n(check-sat)\n(get-value (a b))\n"));
+    if vc_smt_render(cs.arena, vc_claim_script_selected(cs, 1, commands, assumptions)) != want { return 20; }
+    let before: String = vc_claim_query(cs, 0);
+    let context: SmtScript = vc_claim_context_script(cs, 0);
+    vc_script_assert(context, vc_tm_bool_const(cs.arena, false));
+    vc_script_check_sat(context);
+    let hook: String = early_header();
+    hook.push_str(String::from("(assert a)\n(assert false)\n(check-sat)\n"));
+    if vc_smt_render(cs.arena, context) != hook { return 21; }
+    if vc_claim_query(cs, 0) != before { return 22; }
+    0
+}
+
+fn check_empty_model() -> i64 {
+    let cs: VcClaims = empty_claims();
+    let hdr: SmtScript = cs.header;
+    cs.header_lens.push(hdr.kinds.len() as i64);
+    cs.assumed_lens.push(0);
+    cs.negated_goals.push(vc_tm_bool_const(cs.arena, false));
+    if vc_claim_query(cs, 0) != String::from("(set-logic QF_BV)\n(set-option :produce-models true)\n(assert false)\n(check-sat)\n") { return 30; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_full_and_context();
+    if r == 0 { r = check_header_and_delta(); }
+    if r == 0 { r = check_selected_and_independent_script(); }
+    if r == 0 { r = check_empty_model(); }
+    i64_to_i32_wrap(r)
+}

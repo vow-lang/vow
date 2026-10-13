@@ -41,23 +41,6 @@ fn vc_session_sentinel(k: u64) -> String {
     out
 }
 
-// The commands claim `k` needs that a session which already sent the first
-// `sent_hdr` header commands and `sent_assumed` assumptions has not: the
-// header up to `header_lens[k]`, then the assumptions up to `assumed_lens[k]`.
-// A definition is only ever used by a later command, so each assertion sees
-// every definition it names.
-fn vc_session_delta(cs: VcClaims, sent_hdr: u64, sent_assumed: u64, k: u64) -> String {
-    let out: String = vc_smt_render_cmds(cs.arena, cs.header, sent_hdr, cs.header_lens[k] as u64);
-    let na: u64 = cs.assumed_lens[k] as u64;
-    let mut i: u64 = sent_assumed;
-    while i < na {
-        vc_smt_push_assert(out, cs.arena, cs.assumed[i]);
-        out.push_str(String::from("\n"));
-        i = i + 1;
-    }
-    out
-}
-
 // The scoped question for claim `k`.
 fn vc_session_frame(cs: VcClaims, k: u64) -> String {
     let out: String = String::from("(push 1)\n");
@@ -114,7 +97,7 @@ fn vc_session_start(ss: VcSession, bin: String, cs: VcClaims, k: u64, deadline_u
     let handle: i64 = process_start_piped(bin, vc_solver_stdin_args());
     if handle < 0 { return false; }
     ss.handle = handle;
-    let hello: String = vc_smt_render_cmds(cs.arena, cs.header, 0, cs.header_lens[k] as u64);
+    let hello: String = vc_claim_header_text(cs, k);
     hello.push_str(String::from("(push 1)\n(pop 1)\n(echo "));
     hello.push_str(vc_session_probe_sentinel());
     hello.push_str(String::from(")\n"));
@@ -138,7 +121,7 @@ fn vc_session_ask(ss: VcSession, bin: String, cs: VcClaims, k: u64, wait_ms: i64
             return VC_ANS_NONE();
         }
     }
-    let query: String = vc_session_delta(cs, ss.sent_hdr, ss.sent_assumed, k);
+    let query: String = vc_claim_context_delta(cs, k, ss.sent_hdr, ss.sent_assumed);
     query.push_str(vc_session_frame(cs, k));
     if process_write_stdin(ss.handle, query) != 0 {
         vc_session_close(ss);

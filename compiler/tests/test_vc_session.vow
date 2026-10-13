@@ -84,7 +84,7 @@ fn check_first_delta_is_the_standalone_prefix() -> i64 {
     let mut k: u64 = 0;
     while k < 2 {
         let want: String = vc_smt_render(cs.arena, vc_claim_script(cs, k));
-        let got: String = vc_session_delta(cs, 0, 0, k);
+        let got: String = vc_claim_context_delta(cs, k, 0, 0);
         got.push_str(tail_of(cs, k));
         if got != want { return 2 + k as i64; }
         k = k + 1;
@@ -97,9 +97,9 @@ fn check_first_delta_is_the_standalone_prefix() -> i64 {
 // what the first lacks.
 fn check_later_delta_is_the_remainder() -> i64 {
     let cs: VcClaims = two_claims();
-    let d0: String = vc_session_delta(cs, 0, 0, 0);
-    let d1: String = vc_session_delta(cs, cs.header_lens[0] as u64, cs.assumed_lens[0] as u64, 1);
-    let whole: String = vc_session_delta(cs, 0, 0, 1);
+    let d0: String = vc_claim_context_delta(cs, 0, 0, 0);
+    let d1: String = vc_claim_context_delta(cs, 1, cs.header_lens[0] as u64, cs.assumed_lens[0] as u64);
+    let whole: String = vc_claim_context_delta(cs, 1, 0, 0);
     if count_of(d0, String::from("\n")) + count_of(d1, String::from("\n")) != count_of(whole, String::from("\n")) { return 1; }
     if d1.len() == 0 { return 2; }
     if d1.contains(String::from("(set-logic")) { return 3; }
@@ -110,7 +110,7 @@ fn check_later_delta_is_the_remainder() -> i64 {
 
 fn check_repeated_ask_sends_no_delta() -> i64 {
     let cs: VcClaims = two_claims();
-    let d: String = vc_session_delta(cs, cs.header_lens[1] as u64, cs.assumed_lens[1] as u64, 1);
+    let d: String = vc_claim_context_delta(cs, 1, cs.header_lens[1] as u64, cs.assumed_lens[1] as u64);
     if d != String::from("") { return 1; }
     0
 }

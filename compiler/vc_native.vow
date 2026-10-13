@@ -128,7 +128,7 @@ fn vc_chain_outcome(f: IrFunction, fr: VcFrames, frame: i64, result: VerifyResul
 
 // Asks claim `k`'s full query, prefix and all, in a standalone process.
 fn vc_check_claim_full(cache: VcCache, bin: String, cs: VcClaims, k: u64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
-    let query: String = vc_smt_render(cs.arena, vc_claim_script(cs, k));
+    let query: String = vc_claim_query(cs, k);
     vc_solver_check_cached(cache, bin, query, vc_claim_model_names(cs, k), vc_claim_model_widths(cs, k), budget_ms, scratch)
 }
 
@@ -145,7 +145,7 @@ fn vc_check_claim_oneshot(cache: VcCache, bin: String, cs: VcClaims, sx: VcSlice
         let sl: VcSlice = vc_slice_claim(sx, cs, k);
         if sl.dropped_asserts || sl.dropped_defs {
             let started: i64 = time_micros();
-            let small: String = vc_smt_render(cs.arena, vc_claim_script_sliced(cs, k, sl));
+            let small: String = vc_smt_render(cs.arena, vc_claim_script_selected(cs, k, sl.cmds, sl.assumed));
             let ans: VcSolverAnswer = vc_solver_check_cached(cache, bin, small, vc_claim_model_names(cs, k), vc_claim_model_widths(cs, k), budget_ms, scratch);
             if ans.verdict == VC_ANS_UNSAT() { return ans; }
             if !sl.dropped_asserts && vc_claim_is_soft(cs, k) { return ans; }
@@ -171,7 +171,7 @@ fn vc_check_claim(cache: VcCache, bin: String, cs: VcClaims, sx: VcSlicer, ss: V
     let started: i64 = time_micros();
     let mut query: String = String::from("");
     if budget_ms > 0 && vc_cache_on(cache) {
-        query = vc_smt_render(cs.arena, vc_claim_script(cs, k));
+        query = vc_claim_query(cs, k);
         let hit: VcSolverAnswer = vc_cache_peek(cache, query, vc_claim_model_count(cs, k));
         if hit.verdict != VC_ANS_NONE() { return hit; }
     }
@@ -229,12 +229,7 @@ fn vc_pin_model(cs: VcClaims, ans: VcSolverAnswer, s: SmtScript) {
 // the claim neither proven nor refuted: `unknown`.
 fn vc_hook_recheck(cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: VcSolverAnswer, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
     let ar: VcArena = cs.arena;
-    let s: SmtScript = vc_script_prefix(cs.header, cs.header_lens[k] as u64);
-    let mut i: u64 = 0;
-    while i < cs.assumed_lens[k] as u64 {
-        vc_script_assert(s, cs.assumed[i]);
-        i = i + 1;
-    }
+    let s: SmtScript = vc_claim_context_script(cs, k);
     vc_pin_model(cs, ans, s);
     vc_script_assert(s, vc_tm_app1(ar, VC_OP_NOT(), cs.negated_goals[k]));
     vc_script_check_sat(s);
