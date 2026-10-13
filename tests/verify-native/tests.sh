@@ -212,7 +212,7 @@ module Skipped
 fn half(x: f64) -> f64 vow {
   ensures: result == result
 } {
-  x / 2.0
+  x % 2.0
 }
 
 fn main() -> i32 [io] {
