@@ -369,7 +369,7 @@ adds query volume; this axis gives the runtime a say. Every program carries
 
 | Class | Contract | Expectation |
 |-------|----------|-------------|
-| `exceeds-bound` | false, but only once the collection grows or the loop runs past a boundary (7, 8, 16, 17, 31..33, 63..65, 100, 128, 129, 256) | `main` drives past the boundary, so the debug binary reports a `VowViolation`; `Verified` is a `SOUNDNESS` finding, `Violated`/`unknown` are fine |
+| `exceeds-bound` | false, but only once the collection grows or the loop runs past a boundary (7, 8, 16, 17, 31..33, 63..65, 100, 127..129, 255..257): the ESBMC `Vec` capacity (128) and the native unwind bound (64) with their neighbours | `main` drives past the boundary, so the debug binary reports a `VowViolation`; `Verified` is a `SOUNDNESS` finding, `Violated`/`unknown` are fine |
 | `control` | the same shape, true | `// TEST: expect-verified`: it must be `Verified` and run clean |
 
 The regime (`within-unwind`, `beyond-unwind`) says which side of the native
@@ -383,9 +383,14 @@ read-back through `result[i]`, in-place overwrite, a scalar accumulator, and a
 
 | Verdict | Meaning |
 |---------|---------|
-| `WITNESS-BROKEN` | the debug binary does not match the class (an `exceeds-bound` program that never violates, a `control` that does). Checked against the runtime, whatever the verifier said, so a green sweep cannot be a vacuous one |
+| `WITNESS-BROKEN` | the debug binary does not match the class: an `exceeds-bound` program that never violates, or whose violation blames the Caller (`main` broke a `requires`, which `Verified` may disclaim) instead of an `ensures`; a `control` that violates. Checked against the runtime, whatever the verifier said, so a green sweep cannot be a vacuous one |
 | `CONTROL-LOST` | a `control` that is not `Verified` |
 | `STALE-KNOWN-GAP` | a `known-control-gap` that now verifies; drop its entry |
+
+The native verifier declares no collection capacity (a `Vec` is an array plus a symbolic
+length, ADR-2026-10-08-1422), which `test_gen_verifier_corpus.py` pins by scanning
+`compiler/vc_*.vow`; the collection boundaries are therefore the capacities the ESBMC
+model had (`VEC_MODEL_CAP` = 128, also pinned) that a port of that model would bring back.
 
 **Known disagreements are tracked by issue number, never skipped.**
 `KNOWN_DISAGREEMENTS` in `gen_verifier_corpus.py` maps `(shape, class, regime)`
@@ -394,7 +399,10 @@ stamps matching programs with `// TEST: known-control-gap #N` or
 `// TEST: known-soundness-gap #N`, which the runner reports and does not fail.
 Today the only entries are the controls that fill a `Vec` in a loop past the
 unrolling bound (#1645): native is `unknown` there, a completeness gap and not
-a false proof. `replay-skipped` for a `Vec` parameter points at #1613. A real
+a false proof. `replay-skipped` for a `Vec` parameter points at #1613. Only a `known-control-gap` goes stale
+(a control that now verifies fails the run); a `known-soundness-gap` that stops reproducing
+is not detected. The runner does not apply `ulimit -v`: the native verifier worker carries its
+own address-space cap and the generated programs are small and bounded. A real
 soundness disagreement is a native verifier bug: file an issue with the saved
 reproducer, label it `verifier`, and track it here; do not weaken the program.
 

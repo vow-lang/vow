@@ -108,8 +108,23 @@ design choices:
   so an input that broke a `requires` would fire the disclaimed-obligation path
   of decision 6 and measure nothing.
 - **Known disagreements are keyed by shape, class and regime and carry an issue
-  number.** A tracked gap that stops reproducing fails the run
-  (`STALE-KNOWN-GAP`), so the ledger cannot rot. The regime depends on the native
+  number.** A `known-control-gap` that stops reproducing fails the run
+  (`STALE-KNOWN-GAP`), so that half of the ledger cannot rot; a
+  `known-soundness-gap` that stops reproducing is not detected (no entry of that
+  kind exists).
+- **It is not the #1081 equivalence ledger.** `docs/equivalence/ledger.json` is
+  keyed by a committed `.vow` path and records compiler-pair divergences;
+  generated programs have no stable path (they are named by content hash and a
+  seed), so the verifier corpus keeps its own issue-numbered ledger keyed by
+  shape, class and regime.
+- **The witness must blame the Callee.** An `exceeds-bound` violation that
+  blames the Caller is `main` breaking a `requires`; decision 6 would classify a
+  false proof of the `ensures` as an unverified call site and nothing would be
+  measured.
+- **No collection capacity is assumed natively.** The collection boundaries are
+  the capacities of the ESBMC model (`VEC_MODEL_CAP` = 128) and the native
+  unwind bound (64), each with its neighbours. A test scans `compiler/vc_*.vow`
+  and fails if a collection capacity appears. The regime depends on the native
   unrolling bound, mirrored in the generator and pinned against
   `compiler/vc_native.vow` by `test_gen_verifier_corpus.py`.
 - **Seeds.** Pinned on pushes to `main` (verifier axis `1473`), the UTC date on
