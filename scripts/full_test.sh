@@ -1668,6 +1668,14 @@ print(sum(1 for d in ds if d.get('error_code') == sys.argv[2]))
         fail "verify-native/${native_dir}/${name}" "$(IFS='; '; echo "${native_errors[*]}")"
     fi
 done
+# Every code of the closed `Skipped` list is pinned by a skip/ fixture (or an
+# explicit exemption) and the list matches ADR-1430 section 4.
+skip_codes_log="$TMPDIR/verify-native-skip-codes.log"
+if python3 scripts/check_skip_codes.py >"$skip_codes_log" 2>&1; then
+    pass "verify-native/skip-code-coverage"
+else
+    fail "verify-native/skip-code-coverage" "$(cat "$skip_codes_log")"
+fi
 # Non-vacuity of the cache comparison above: a solver whose `--version` probe
 # yields nothing silently disables the cache, which would make cold == warm
 # trivially. With a real solver the corpus must have stored something.
