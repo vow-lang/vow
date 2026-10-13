@@ -224,8 +224,9 @@ fn vc_pin_model(cs: VcClaims, ans: VcSolverAnswer, s: SmtScript) {
 // arbitrary result, where the runtime computes one. The check pins the scalar
 // inputs of the counterexample, leaves every string and hook free, and asks
 // whether the claim can hold: `unsat` says it fails for every result of the hook
-// (and every string), so the counterexample stands. Anything else, a `sat`
-// included, leaves the claim neither proven nor refuted: `unknown`.
+// (and every string), so the counterexample stands. A timeout, memory limit or
+// solver error is passed on as such; any other answer, a `sat` included, leaves
+// the claim neither proven nor refuted: `unknown`.
 fn vc_hook_recheck(cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: VcSolverAnswer, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
     let ar: VcArena = cs.arena;
     let s: SmtScript = vc_script_prefix(cs.header, cs.header_lens[k] as u64);
@@ -239,6 +240,7 @@ fn vc_hook_recheck(cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: VcSol
     vc_script_check_sat(s);
     let again: VcSolverAnswer = vc_solver_check_cached(cache, bin, vc_smt_render(ar, s), Vec::new(), Vec::new(), budget_ms, scratch);
     if again.verdict == VC_ANS_UNSAT() { return ans; }
+    if vc_answer_halts(again.verdict) { return again; }
     vc_answer_plain(VC_ANS_UNKNOWN(), vc_opaque_hook_reason())
 }
 
