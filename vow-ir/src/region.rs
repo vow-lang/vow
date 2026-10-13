@@ -2058,6 +2058,7 @@ pub const FRESH_ARENA_VARIANTS: &[(&str, &str)] = &[
     ("__vow_string_to_lower", "__vow_string_to_lower_in_arena"),
     ("__vow_string_replace", "__vow_string_replace_in_arena"),
     ("__vow_string_join", "__vow_string_join_in_arena"),
+    ("__vow_proc_sample", "__vow_proc_sample_in_arena"),
 ];
 // GENERATE:OPERATIONS:END
 
@@ -7377,6 +7378,7 @@ mod tests {
             ("__vow_args", 0),
             ("__vow_process_get_stdout", 0),
             ("__vow_process_stderr_for", 1),
+            ("__vow_proc_sample", 0),
         ] {
             let mut insts = vec![inst(
                 0,

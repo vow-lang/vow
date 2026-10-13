@@ -35,6 +35,7 @@ fn check_fresh_table_lookup() -> i64 {
     if !fresh_arena_base_extern(String::from("__vow_process_read_line")) { return 40; }
     if fresh_arena_base_extern(String::from("__vow_process_read_status")) { return 41; }
     if fresh_arena_base_extern(String::from("__vow_process_write_stdin")) { return 42; }
+    if !fresh_arena_base_extern(String::from("__vow_proc_sample")) { return 45; }
     if !fresh_arena_base_extern(String::from("__vow_i128_to_i32_try")) { return 34; }
     if fresh_arena_base_extern(String::from("__vow_i128_to_u128_wrap")) { return 35; }
     if fresh_arena_base_extern(String::from("__vow_i64_to_u8_wrap")) { return 15; }
@@ -50,6 +51,7 @@ fn check_fresh_table_lookup() -> i64 {
     if !fresh_arena_variant_extern(String::from("__vow_i64_to_u8_try_in_arena")) { return 25; }
     if !fresh_arena_variant_extern(String::from("__vow_string_trim_in_arena")) { return 26; }
     if !fresh_arena_variant_extern(String::from("__vow_btreemap_new_in_arena")) { return 27; }
+    if !fresh_arena_variant_extern(String::from("__vow_proc_sample_in_arena")) { return 46; }
     if fresh_arena_variant_extern(String::from("__vow_btreemap_get")) { return 28; }
     if fresh_arena_variant_extern(String::from("_in_arena")) { return 29; }
     if fresh_arena_variant_extern(String::from("")) { return 30; }

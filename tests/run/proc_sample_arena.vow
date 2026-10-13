@@ -1,0 +1,30 @@
+// TEST: stdout "ok"
+module proc_sample_arena
+
+fn sample_len() -> u64 [io] {
+    let s: String = proc_sample();
+    s.len()
+}
+
+fn main() -> i32 [io] {
+    let _warmup: u64 = sample_len();
+
+    let before: u64 = memory_root_arena_bytes();
+    let mut i: i64 = 0;
+    let iterations: i64 = 3000;
+    while i < iterations {
+        let _n: u64 = sample_len();
+        i = i + 1;
+    }
+    let after: u64 = memory_root_arena_bytes();
+
+    let delta: u64 = after - before;
+    let limit: u64 = 64u64 * 1024u64;
+    if delta < limit {
+        print_str("ok");
+    } else {
+        print_str("delta=");
+        print_u64(delta);
+    }
+    0
+}

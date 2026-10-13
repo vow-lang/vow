@@ -445,12 +445,7 @@ def _query_op(name, symbol, params, ret, sig, effects, heap=False, c_model=None)
         "effects": effects,
     }
     if heap:
-        op["arena_routing"] = "none" if heap == "none" else "heap_fresh"
-    if heap == "none":
-        op["arena_routing_reason"] = (
-            "Allocates in the root arena and has no _in_arena variant, so each "
-            "call retains its result until exit; tracked in issue 1639."
-        )
+        op["arena_routing"] = "heap_fresh"
     if c_model:
         op["c_model"] = c_model
     return op
@@ -488,7 +483,7 @@ _QUERY_UTILITY_ROWS = [
         "ptr",
         "fn() -> String",
         "[io]",
-        "none",
+        True,
     ),
     (
         "gzip_write_file",
@@ -2354,9 +2349,15 @@ class ArenaRoutingInvariantsTest(unittest.TestCase):
 
     def test_unrouted_heap_returns_are_explicit_nones(self):
         ops = {o["name"]: o for o in go.load_catalogue(REPO_ROOT)}
-        for name in ("stdin_read_line", "proc_sample"):
-            self.assertEqual(ops[name]["arena_routing"], "none", name)
-        for name in ("fs_read", "fs_read_line", "fs_listdir", "args", "stdin_read"):
+        self.assertEqual(ops["stdin_read_line"]["arena_routing"], "none")
+        for name in (
+            "fs_read",
+            "fs_read_line",
+            "fs_listdir",
+            "args",
+            "stdin_read",
+            "proc_sample",
+        ):
             self.assertEqual(ops[name]["arena_routing"], "heap_fresh", name)
 
 

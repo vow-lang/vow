@@ -3560,8 +3560,7 @@ fn read_proc_table() -> Vec<ProcInfo> {
 /// separated string `"<group>|<rss_kb>|<cpu_pct>"` per line (integers), e.g.
 /// `"compiler|10240|3\nesbmc:8123|512000|198"`. Empty string on non-Linux or
 /// when nothing could be read — the Vow tracer then emits no counters.
-#[unsafe(no_mangle)]
-pub extern "C" fn __vow_proc_sample() -> *mut u8 {
+fn proc_sample_text() -> String {
     let own_pid = std::process::id() as u64;
     let procs = read_proc_table();
     let samples = collect_proc_samples(&procs, own_pid);
@@ -3575,7 +3574,19 @@ pub extern "C" fn __vow_proc_sample() -> *mut u8 {
             smp.group, smp.rss_kb as i64, smp.cpu_pct as i64
         ));
     }
-    unsafe { __vow_string_new(s.as_ptr() as *const c_char, s.len()) }
+    s
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_proc_sample_in_arena(arena: *mut VowArena) -> *mut u8 {
+    let s = proc_sample_text();
+    unsafe { alloc_bytes_string(arena, s.as_bytes()) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_proc_sample() -> *mut u8 {
+    let s = proc_sample_text();
+    unsafe { with_root_arena(|arena| alloc_bytes_string(arena, s.as_bytes())) }
 }
 
 /// Gzip-compress `data` and write it to `path` (both Vow Strings). Returns 0 on
@@ -7010,6 +7021,18 @@ mod tests {
         );
         assert_eq!(vow_text(__vow_process_get_stdout()), "last-out");
         assert_eq!(vow_text(__vow_process_get_stderr()), "last-err");
+
+        let sampled = vow_text(unsafe { __vow_proc_sample_in_arena(ap) });
+        for line in sampled.lines() {
+            let fields: Vec<&str> = line.split('|').collect();
+            assert_eq!(fields.len(), 3, "{line}");
+            assert!(fields[1].parse::<i64>().is_ok() && fields[2].parse::<i64>().is_ok());
+        }
+        assert_eq!(
+            sampled.is_empty(),
+            vow_text(__vow_proc_sample()).is_empty(),
+            "arena and root variants agree on availability"
+        );
 
         unsafe { __vow_arena_close(ap) };
     }
