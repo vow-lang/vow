@@ -691,8 +691,39 @@ fn field_access_is_wide(inst: &Inst, wide_vars: &HashSet<u32>) -> bool {
 // Modelable function detection (for cross-function spec verification)
 // ---------------------------------------------------------------------------
 
+// GENERATE:OPERATIONS:START
+fn catalogue_c_model_known(name: &str) -> bool {
+    matches!(
+        name,
+        "__vow_string_parse_i64_opt"
+            | "__vow_string_parse_i64_opt_in_arena"
+            | "__vow_string_parse_i8_opt"
+            | "__vow_string_parse_i16_opt"
+            | "__vow_string_parse_i32_opt"
+            | "__vow_string_parse_u8_opt"
+            | "__vow_string_parse_u16_opt"
+            | "__vow_string_parse_u32_opt"
+            | "__vow_string_from_i64"
+            | "__vow_string_from_i64_in_arena"
+            | "__vow_string_from_u64"
+            | "__vow_string_from_u64_in_arena"
+            | "__vow_string_substr"
+            | "__vow_string_substr_in_arena"
+            | "__vow_string_trim"
+            | "__vow_string_trim_in_arena"
+            | "__vow_string_to_upper"
+            | "__vow_string_to_upper_in_arena"
+            | "__vow_string_to_lower"
+            | "__vow_string_to_lower_in_arena"
+    )
+}
+// GENERATE:OPERATIONS:END
+
+// The builtin runtime symbols the C model recognises. The query/utility builtins it
+// models come from docs/spec/operations.json (`c_model`, via `catalogue_c_model_known`);
+// what is listed here is the rest, whose model is not catalogued.
 fn is_known_builtin(name: &str) -> bool {
-    if is_string_fresh_helper(name) || is_numeric_intrinsic(name) {
+    if catalogue_c_model_known(name) || is_numeric_intrinsic(name) {
         return true;
     }
 
@@ -732,23 +763,9 @@ fn is_known_builtin(name: &str) -> bool {
             | "__vow_string_eq"
             | "__vow_string_contains"
             | "__vow_string_matches_literal_at"
-            | "__vow_string_substr"
-            | "__vow_string_substr_in_arena"
             | "__vow_string_substring"
             | "__vow_string_substring_in_arena"
-            | "__vow_string_from_i64"
-            | "__vow_string_from_i64_in_arena"
-            | "__vow_string_from_u64"
-            | "__vow_string_from_u64_in_arena"
-            | "__vow_string_parse_i64_opt"
-            | "__vow_string_parse_i64_opt_in_arena"
             | "__vow_string_parse_u64_opt"
-            | "__vow_string_parse_i8_opt"
-            | "__vow_string_parse_u8_opt"
-            | "__vow_string_parse_i16_opt"
-            | "__vow_string_parse_u16_opt"
-            | "__vow_string_parse_u32_opt"
-            | "__vow_string_parse_i32_opt"
             | "__vow_string_print"
             | "__vow_map_new"
             | "__vow_map_new_in_arena"
@@ -3687,6 +3704,76 @@ mod tests {
             "__vow_process_read_status",
         ] {
             assert!(!is_known_builtin(sym), "{sym}");
+        }
+    }
+
+    // The C model's knowledge of the catalogued query/utility builtins lives in
+    // docs/spec/operations.json (`c_model`). This pins the resulting set to the
+    // one the hand-written lists held before the migration: the arena variant
+    // is known for exactly seven of the base symbols, not for the narrow
+    // parsers, and the wide, hex, float-bit and collection helpers are unknown.
+    #[test]
+    fn catalogue_c_model_keeps_the_pre_migration_known_set() {
+        let known = [
+            "__vow_string_substr",
+            "__vow_string_substr_in_arena",
+            "__vow_string_trim",
+            "__vow_string_trim_in_arena",
+            "__vow_string_to_upper",
+            "__vow_string_to_upper_in_arena",
+            "__vow_string_to_lower",
+            "__vow_string_to_lower_in_arena",
+            "__vow_string_from_i64",
+            "__vow_string_from_i64_in_arena",
+            "__vow_string_from_u64",
+            "__vow_string_from_u64_in_arena",
+            "__vow_string_parse_i64_opt",
+            "__vow_string_parse_i64_opt_in_arena",
+            "__vow_string_parse_i8_opt",
+            "__vow_string_parse_u8_opt",
+            "__vow_string_parse_i16_opt",
+            "__vow_string_parse_u16_opt",
+            "__vow_string_parse_u32_opt",
+            "__vow_string_parse_i32_opt",
+            // Not catalogued: a method symbol the hand-written list keeps.
+            "__vow_string_parse_u64_opt",
+        ];
+        for sym in known {
+            assert!(is_known_builtin(sym), "{sym} must stay known");
+        }
+        let unknown = [
+            "__vow_string_parse_i8_opt_in_arena",
+            "__vow_string_parse_u8_opt_in_arena",
+            "__vow_string_parse_i16_opt_in_arena",
+            "__vow_string_parse_u16_opt_in_arena",
+            "__vow_string_parse_u32_opt_in_arena",
+            "__vow_string_parse_i32_opt_in_arena",
+            "__vow_string_parse_i128_opt",
+            "__vow_string_parse_u128_opt",
+            "__vow_string_from_i128",
+            "__vow_string_from_u128",
+            "__vow_string_split",
+            "__vow_string_starts_with",
+            "__vow_string_ends_with",
+            "__vow_string_replace",
+            "__vow_string_join",
+            "__vow_hex_encode",
+            "__vow_hex_decode",
+            "__vow_vec_sort",
+            "__vow_parse_f64_bits",
+            "__vow_format_f64_bits",
+            "__vow_time_unix",
+            "__vow_time_unix_ms",
+            "__vow_time_micros",
+            "__vow_num_cpus",
+            "__vow_proc_sample",
+            "__vow_gzip_write_file",
+            "__vow_memory_peak_bytes",
+            "__vow_hash_u64",
+            "__vow_hash_str",
+        ];
+        for sym in unknown {
+            assert!(!is_known_builtin(sym), "{sym} must stay unknown");
         }
     }
 

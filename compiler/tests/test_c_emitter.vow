@@ -1626,6 +1626,64 @@ fn check_callee_ensures_label_carries_function_id() -> i64 {
     0
 }
 
+// The C model's knowledge of the catalogued query/utility builtins lives in
+// docs/spec/operations.json (`c_model`). This pins the generated set to the one
+// the hand-written lists held before the migration, and the Rust twin in
+// vow-verify/src/c_emitter.rs pins the same set, so the two emitters cannot drift.
+fn check_catalogue_c_model_keeps_the_pre_migration_known_set() -> i64 {
+    if !is_known_builtin(String::from("__vow_string_substr")) { return 800; }
+    if !is_known_builtin(String::from("__vow_string_substr_in_arena")) { return 801; }
+    if !is_known_builtin(String::from("__vow_string_trim")) { return 802; }
+    if !is_known_builtin(String::from("__vow_string_trim_in_arena")) { return 803; }
+    if !is_known_builtin(String::from("__vow_string_to_upper")) { return 804; }
+    if !is_known_builtin(String::from("__vow_string_to_upper_in_arena")) { return 805; }
+    if !is_known_builtin(String::from("__vow_string_to_lower")) { return 806; }
+    if !is_known_builtin(String::from("__vow_string_to_lower_in_arena")) { return 807; }
+    if !is_known_builtin(String::from("__vow_string_from_i64")) { return 808; }
+    if !is_known_builtin(String::from("__vow_string_from_i64_in_arena")) { return 809; }
+    if !is_known_builtin(String::from("__vow_string_from_u64")) { return 810; }
+    if !is_known_builtin(String::from("__vow_string_from_u64_in_arena")) { return 811; }
+    if !is_known_builtin(String::from("__vow_string_parse_i64_opt")) { return 812; }
+    if !is_known_builtin(String::from("__vow_string_parse_i64_opt_in_arena")) { return 813; }
+    if !is_known_builtin(String::from("__vow_string_parse_i8_opt")) { return 814; }
+    if !is_known_builtin(String::from("__vow_string_parse_u8_opt")) { return 815; }
+    if !is_known_builtin(String::from("__vow_string_parse_i16_opt")) { return 816; }
+    if !is_known_builtin(String::from("__vow_string_parse_u16_opt")) { return 817; }
+    if !is_known_builtin(String::from("__vow_string_parse_u32_opt")) { return 818; }
+    if !is_known_builtin(String::from("__vow_string_parse_i32_opt")) { return 819; }
+    if !is_known_builtin(String::from("__vow_string_parse_u64_opt")) { return 820; }
+    if is_known_builtin(String::from("__vow_string_parse_i8_opt_in_arena")) { return 900; }
+    if is_known_builtin(String::from("__vow_string_parse_u8_opt_in_arena")) { return 901; }
+    if is_known_builtin(String::from("__vow_string_parse_i16_opt_in_arena")) { return 902; }
+    if is_known_builtin(String::from("__vow_string_parse_u16_opt_in_arena")) { return 903; }
+    if is_known_builtin(String::from("__vow_string_parse_u32_opt_in_arena")) { return 904; }
+    if is_known_builtin(String::from("__vow_string_parse_i32_opt_in_arena")) { return 905; }
+    if is_known_builtin(String::from("__vow_string_parse_i128_opt")) { return 906; }
+    if is_known_builtin(String::from("__vow_string_parse_u128_opt")) { return 907; }
+    if is_known_builtin(String::from("__vow_string_from_i128")) { return 908; }
+    if is_known_builtin(String::from("__vow_string_from_u128")) { return 909; }
+    if is_known_builtin(String::from("__vow_string_split")) { return 910; }
+    if is_known_builtin(String::from("__vow_string_starts_with")) { return 911; }
+    if is_known_builtin(String::from("__vow_string_ends_with")) { return 912; }
+    if is_known_builtin(String::from("__vow_string_replace")) { return 913; }
+    if is_known_builtin(String::from("__vow_string_join")) { return 914; }
+    if is_known_builtin(String::from("__vow_hex_encode")) { return 915; }
+    if is_known_builtin(String::from("__vow_hex_decode")) { return 916; }
+    if is_known_builtin(String::from("__vow_vec_sort")) { return 917; }
+    if is_known_builtin(String::from("__vow_parse_f64_bits")) { return 918; }
+    if is_known_builtin(String::from("__vow_format_f64_bits")) { return 919; }
+    if is_known_builtin(String::from("__vow_time_unix")) { return 920; }
+    if is_known_builtin(String::from("__vow_time_unix_ms")) { return 921; }
+    if is_known_builtin(String::from("__vow_time_micros")) { return 922; }
+    if is_known_builtin(String::from("__vow_num_cpus")) { return 923; }
+    if is_known_builtin(String::from("__vow_proc_sample")) { return 924; }
+    if is_known_builtin(String::from("__vow_gzip_write_file")) { return 925; }
+    if is_known_builtin(String::from("__vow_memory_peak_bytes")) { return 926; }
+    if is_known_builtin(String::from("__vow_hash_u64")) { return 927; }
+    if is_known_builtin(String::from("__vow_hash_str")) { return 928; }
+    0
+}
+
 fn main() -> i32 {
     let r1: i64 = check_name_modelable_and_mangled(String::from("abs"), 7, 1);
     if r1 != 0 { return i64_to_i32_wrap(r1); }
@@ -1739,5 +1797,7 @@ fn main() -> i32 {
     if r54 != 0 { return i64_to_i32_wrap(r54); }
     let r55: i64 = check_float_phi_temporary_keeps_its_type(ITY_F32(), String::from("float"), 750);
     if r55 != 0 { return i64_to_i32_wrap(r55); }
+    let r56: i64 = check_catalogue_c_model_keeps_the_pre_migration_known_set();
+    if r56 != 0 { return i64_to_i32_wrap(r56); }
     0
 }

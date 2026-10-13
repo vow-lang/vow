@@ -1,0 +1,168 @@
+// TEST: stdout "memory ok\ntime ok\nhex 0a7fff|3\nparse 42 -7 200 -300 7 70000 9 340282366920938463463374607431768211455 -170141183460469231731687303715884105728\nformat 9007199254740993|18446744073709551615|-170141183460469231731687303715884105728|340282366920938463463374607431768211455\nfloat 1.5 4611686018427387904\nstring ab|[a,b,c]|1|0|1|0|hi|HI|hi|x-y|c-b-a\nsorted 1 2 3\ngzip 0 1\n"
+module QueryUtilityCatalogueSmoke
+
+fn parse_line() [io] {
+    let a: i64 = match parse_i64(String::from(" 42 ")) { Option::Some(v) => { v }, Option::None => { 0 } };
+    let b: i8 = match parse_i8(String::from("-7")) { Option::Some(v) => { v }, Option::None => { 0i8 } };
+    let c: u8 = match parse_u8(String::from("200")) { Option::Some(v) => { v }, Option::None => { 0u8 } };
+    let d: i16 = match parse_i16(String::from("-300")) { Option::Some(v) => { v }, Option::None => { 0i16 } };
+    let e: u16 = match parse_u16(String::from("7")) { Option::Some(v) => { v }, Option::None => { 0u16 } };
+    let f: u32 = match parse_u32(String::from("70000")) { Option::Some(v) => { v }, Option::None => { 0u32 } };
+    let g: i32 = match parse_i32(String::from("9")) { Option::Some(v) => { v }, Option::None => { 0i32 } };
+    let h: u128 = match parse_u128(String::from("340282366920938463463374607431768211455")) {
+        Option::Some(v) => { v },
+        Option::None => { 0u128 },
+    };
+    let i: i128 = match parse_i128(String::from("-170141183460469231731687303715884105728")) {
+        Option::Some(v) => { v },
+        Option::None => { 0i128 },
+    };
+    print_str(String::from("parse "));
+    print_str(int_to_string(a));
+    print_str(String::from(" "));
+    print_str(int_to_string(b as i64));
+    print_str(String::from(" "));
+    print_str(uint_to_string(c as u64));
+    print_str(String::from(" "));
+    print_str(int_to_string(d as i64));
+    print_str(String::from(" "));
+    print_str(uint_to_string(e as u64));
+    print_str(String::from(" "));
+    print_str(uint_to_string(f as u64));
+    print_str(String::from(" "));
+    print_str(int_to_string(g as i64));
+    print_str(String::from(" "));
+    print_str(uint128_to_string(h));
+    print_str(String::from(" "));
+    print_str(int128_to_string(i));
+    print_str(String::from("\n"));
+}
+
+fn main() -> i32 [io, read] {
+    let allocs_before: u64 = memory_alloc_count_since_start();
+    let touched: String = String::from("allocate");
+    let root_bytes: u64 = memory_root_arena_bytes();
+    let allocs_after: u64 = memory_alloc_count_since_start();
+    if memory_peak_bytes() == 0u64 || allocs_after < allocs_before || touched.len() == 0u64 ||
+       root_bytes > memory_peak_bytes() || num_cpus() < 1 {
+        return 1;
+    }
+    print_str(String::from("memory ok\n"));
+
+    let t0: i64 = time_micros();
+    let t1: i64 = time_micros();
+    if time_unix() <= 0 || time_unix_ms() <= 0 || t1 < t0 || t0 < 0 {
+        return 2;
+    }
+    let sample: String = proc_sample();
+    if sample.len() > 1000000u64 {
+        return 3;
+    }
+    print_str(String::from("time ok\n"));
+
+    let bytes: Vec<u8> = Vec::new();
+    bytes.push(10u8);
+    bytes.push(127u8);
+    bytes.push(255u8);
+    let hex: String = hex_encode(bytes);
+    let back: Vec<u8> = hex_decode(hex);
+    print_str(String::from("hex "));
+    print_str(hex);
+    print_str(String::from("|"));
+    print_str(uint_to_string(back.len()));
+    print_str(String::from("\n"));
+
+    parse_line();
+
+    print_str(String::from("format "));
+    print_str(int_to_string(9007199254740993));
+    print_str(String::from("|"));
+    print_str(uint_to_string(18446744073709551615u64));
+    print_str(String::from("|"));
+    print_str(int128_to_string(parse_i128_or_zero(String::from("-170141183460469231731687303715884105728"))));
+    print_str(String::from("|"));
+    print_str(uint128_to_string(parse_u128_or_zero(String::from("340282366920938463463374607431768211455"))));
+    print_str(String::from("\n"));
+
+    let bits: u64 = parse_f64_bits(String::from("1.5"));
+    print_str(String::from("float "));
+    print_str(format_f64_bits(bits));
+    print_str(String::from(" "));
+    print_str(uint_to_string(parse_f64_bits(String::from("2.0"))));
+    print_str(String::from("\n"));
+
+    let s: String = String::from("  abc  ");
+    let parts: Vec<String> = string_split(String::from("a,b,c"), String::from(","));
+    let listed: String = String::from("[");
+    let mut k: u64 = 0u64;
+    while k < parts.len() {
+        if k > 0u64 { listed.push_str(String::from(",")); }
+        listed.push_str(parts[k]);
+        k = k + 1u64;
+    }
+    listed.push_str(String::from("]"));
+    print_str(String::from("string "));
+    print_str(string_substr(string_trim(s), 0u64, 2u64));
+    print_str(String::from("|"));
+    print_str(listed);
+    print_str(String::from("|"));
+    print_i64(string_starts_with(String::from("abc"), String::from("ab")));
+    print_str(String::from("|"));
+    print_i64(string_ends_with(String::from("abc"), String::from("ab")));
+    print_str(String::from("|"));
+    print_i64(string_starts_with(String::from("abc"), String::from("")));
+    print_str(String::from("|"));
+    print_i64(string_ends_with(String::from("abc"), String::from("x")));
+    print_str(String::from("|"));
+    print_str(string_to_lower(String::from("Hi")));
+    print_str(String::from("|"));
+    print_str(string_to_upper(String::from("hi")));
+    print_str(String::from("|"));
+    print_str(string_replace(String::from("hi"), String::from("x"), String::from("y")));
+    print_str(String::from("|"));
+    let joined: Vec<String> = Vec::new();
+    joined.push(String::from("x"));
+    joined.push(String::from("y"));
+    print_str(string_join(joined, String::from("-")));
+    print_str(String::from("|"));
+    let rev: Vec<String> = Vec::new();
+    rev.push(String::from("c"));
+    rev.push(String::from("b"));
+    rev.push(String::from("a"));
+    print_str(string_join(rev, String::from("-")));
+    print_str(String::from("\n"));
+
+    let unsorted: Vec<i64> = Vec::new();
+    unsorted.push(3);
+    unsorted.push(1);
+    unsorted.push(2);
+    let sorted: Vec<i64> = vec_sort(unsorted);
+    print_str(String::from("sorted "));
+    print_i64(sorted[0u64]);
+    print_str(String::from(" "));
+    print_i64(sorted[1u64]);
+    print_str(String::from(" "));
+    print_i64(sorted[2u64]);
+    print_str(String::from("\n"));
+
+    let dir: String = mktemp_dir(String::from("vow_query_smoke"));
+    let path: String = dir;
+    path.push_str(String::from("/out.gz"));
+    let rc: i64 = gzip_write_file(path, String::from("payload"));
+    print_str(String::from("gzip "));
+    print_i64(rc);
+    print_str(String::from(" "));
+    print_i64(fs_exists(path));
+    print_str(String::from("\n"));
+    fs_remove(path);
+    fs_remove_dir(dir);
+    0
+}
+
+fn parse_i128_or_zero(s: String) -> i128 {
+    match parse_i128(s) { Option::Some(v) => { v }, Option::None => { 0i128 } }
+}
+
+fn parse_u128_or_zero(s: String) -> u128 {
+    match parse_u128(s) { Option::Some(v) => { v }, Option::None => { 0u128 } }
+}

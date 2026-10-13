@@ -381,7 +381,8 @@
       "return": "u64",
       "doc_signature": "fn(x: u64) -> u64",
       "effects": "[]",
-      "verifier_model": "unmodeled"
+      "verifier_model": "unmodeled",
+      "c_model": "unmodeled"
     },
     {
       "name": "hash_str",
@@ -390,7 +391,8 @@
       "return": "u64",
       "doc_signature": "fn(s: String) -> u64",
       "effects": "[]",
-      "verifier_model": "unmodeled"
+      "verifier_model": "unmodeled",
+      "c_model": "unmodeled"
     },
     {
       "name": "fs_read_status",
@@ -430,6 +432,381 @@
       "effects": "[io]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled"
+    },
+    {
+      "name": "memory_root_arena_bytes",
+      "runtime_symbol": "__vow_memory_root_arena_bytes",
+      "params": [],
+      "return": "u64",
+      "doc_signature": "fn() -> u64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "memory_peak_bytes",
+      "runtime_symbol": "__vow_memory_peak_bytes",
+      "params": [],
+      "return": "u64",
+      "doc_signature": "fn() -> u64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "memory_alloc_count_since_start",
+      "runtime_symbol": "__vow_memory_alloc_count_since_start",
+      "params": [],
+      "return": "u64",
+      "doc_signature": "fn() -> u64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "time_unix",
+      "runtime_symbol": "__vow_time_unix",
+      "params": [],
+      "return": "i64",
+      "doc_signature": "fn() -> i64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "time_unix_ms",
+      "runtime_symbol": "__vow_time_unix_ms",
+      "params": [],
+      "return": "i64",
+      "doc_signature": "fn() -> i64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "time_micros",
+      "runtime_symbol": "__vow_time_micros",
+      "params": [],
+      "return": "i64",
+      "doc_signature": "fn() -> i64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "num_cpus",
+      "runtime_symbol": "__vow_num_cpus",
+      "params": [],
+      "return": "i64",
+      "doc_signature": "fn() -> i64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "proc_sample",
+      "runtime_symbol": "__vow_proc_sample",
+      "params": [],
+      "return": "ptr",
+      "doc_signature": "fn() -> String",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "gzip_write_file",
+      "runtime_symbol": "__vow_gzip_write_file",
+      "params": ["ptr", "ptr"],
+      "return": "i64",
+      "doc_signature": "fn(path: String, data: String) -> i64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "hex_encode",
+      "runtime_symbol": "__vow_hex_encode",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(data: Vec<u8>) -> String",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "unmodeled"
+    },
+    {
+      "name": "hex_decode",
+      "runtime_symbol": "__vow_hex_decode",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(s: String) -> Vec<u8>",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "unmodeled"
+    },
+    {
+      "name": "parse_i64",
+      "runtime_symbol": "__vow_string_parse_i64_opt",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(s: String) -> Option<i64>",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "base_and_arena"
+    },
+    {
+      "name": "parse_i8",
+      "runtime_symbol": "__vow_string_parse_i8_opt",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(s: String) -> Option<i8>",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "base"
+    },
+    {
+      "name": "parse_i16",
+      "runtime_symbol": "__vow_string_parse_i16_opt",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(s: String) -> Option<i16>",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "base"
+    },
+    {
+      "name": "parse_i32",
+      "runtime_symbol": "__vow_string_parse_i32_opt",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(s: String) -> Option<i32>",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "base"
+    },
+    {
+      "name": "parse_i128",
+      "runtime_symbol": "__vow_string_parse_i128_opt",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(s: String) -> Option<i128>",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "unmodeled"
+    },
+    {
+      "name": "parse_u8",
+      "runtime_symbol": "__vow_string_parse_u8_opt",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(s: String) -> Option<u8>",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "base"
+    },
+    {
+      "name": "parse_u16",
+      "runtime_symbol": "__vow_string_parse_u16_opt",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(s: String) -> Option<u16>",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "base"
+    },
+    {
+      "name": "parse_u32",
+      "runtime_symbol": "__vow_string_parse_u32_opt",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(s: String) -> Option<u32>",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "base"
+    },
+    {
+      "name": "parse_u128",
+      "runtime_symbol": "__vow_string_parse_u128_opt",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(s: String) -> Option<u128>",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "unmodeled"
+    },
+    {
+      "name": "parse_f64_bits",
+      "runtime_symbol": "__vow_parse_f64_bits",
+      "params": ["ptr"],
+      "return": "u64",
+      "doc_signature": "fn(s: String) -> u64",
+      "effects": "[]",
+      "verifier_model": "unmodeled",
+      "c_model": "unmodeled"
+    },
+    {
+      "name": "format_f64_bits",
+      "runtime_symbol": "__vow_format_f64_bits",
+      "params": ["u64"],
+      "return": "ptr",
+      "doc_signature": "fn(bits: u64) -> String",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "unmodeled"
+    },
+    {
+      "name": "int_to_string",
+      "runtime_symbol": "__vow_string_from_i64",
+      "params": ["i64"],
+      "return": "ptr",
+      "doc_signature": "fn(v: i64) -> String",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "base_and_arena"
+    },
+    {
+      "name": "uint_to_string",
+      "runtime_symbol": "__vow_string_from_u64",
+      "params": ["u64"],
+      "return": "ptr",
+      "doc_signature": "fn(v: u64) -> String",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "base_and_arena"
+    },
+    {
+      "name": "int128_to_string",
+      "runtime_symbol": "__vow_string_from_i128",
+      "params": ["i128"],
+      "return": "ptr",
+      "doc_signature": "fn(v: i128) -> String",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "unmodeled"
+    },
+    {
+      "name": "uint128_to_string",
+      "runtime_symbol": "__vow_string_from_u128",
+      "params": ["u128"],
+      "return": "ptr",
+      "doc_signature": "fn(v: u128) -> String",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "unmodeled"
+    },
+    {
+      "name": "string_substr",
+      "runtime_symbol": "__vow_string_substr",
+      "params": ["ptr", "u64", "u64"],
+      "return": "ptr",
+      "doc_signature": "fn(s: String, start: u64, len: u64) -> String",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "base_and_arena"
+    },
+    {
+      "name": "string_split",
+      "runtime_symbol": "__vow_string_split",
+      "params": ["ptr", "ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(s: String, delim: String) -> Vec<String>",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "unmodeled"
+    },
+    {
+      "name": "string_starts_with",
+      "runtime_symbol": "__vow_string_starts_with",
+      "params": ["ptr", "ptr"],
+      "return": "i64",
+      "doc_signature": "fn(s: String, prefix: String) -> i64",
+      "effects": "[]",
+      "verifier_model": "unmodeled",
+      "c_model": "unmodeled"
+    },
+    {
+      "name": "string_ends_with",
+      "runtime_symbol": "__vow_string_ends_with",
+      "params": ["ptr", "ptr"],
+      "return": "i64",
+      "doc_signature": "fn(s: String, suffix: String) -> i64",
+      "effects": "[]",
+      "verifier_model": "unmodeled",
+      "c_model": "unmodeled"
+    },
+    {
+      "name": "string_trim",
+      "runtime_symbol": "__vow_string_trim",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(s: String) -> String",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "base_and_arena"
+    },
+    {
+      "name": "string_to_upper",
+      "runtime_symbol": "__vow_string_to_upper",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(s: String) -> String",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "base_and_arena"
+    },
+    {
+      "name": "string_to_lower",
+      "runtime_symbol": "__vow_string_to_lower",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(s: String) -> String",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "base_and_arena"
+    },
+    {
+      "name": "string_replace",
+      "runtime_symbol": "__vow_string_replace",
+      "params": ["ptr", "ptr", "ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(s: String, from: String, to: String) -> String",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "unmodeled"
+    },
+    {
+      "name": "string_join",
+      "runtime_symbol": "__vow_string_join",
+      "params": ["ptr", "ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(parts: Vec<String>, sep: String) -> String",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "unmodeled"
+    },
+    {
+      "name": "vec_sort",
+      "runtime_symbol": "__vow_vec_sort",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(v: Vec<i64>) -> Vec<i64>",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled",
+      "c_model": "unmodeled"
     }
   ],
   "arena_routes": [

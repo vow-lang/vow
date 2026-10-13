@@ -1639,23 +1639,19 @@ fn main() -> i32 [io] {
         let lang = &parsed["language"];
         assert!(lang["builtins"]["print_i64"].is_string());
         assert!(lang["builtins"]["print_str"].is_string());
-        for name in [
-            "parse_i8",
-            "parse_i16",
-            "parse_i32",
-            "parse_i64",
-            "parse_i128",
-            "parse_u8",
-            "parse_u16",
-            "parse_u32",
-            "parse_u64",
-            "parse_u128",
+        for ty in [
+            "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u128",
         ] {
-            assert!(
-                lang["builtins"].get(name).is_none(),
-                "{name} is documented in the Parsing table, not in language.builtins"
+            assert_eq!(
+                lang["builtins"][format!("parse_{ty}")],
+                format!("fn(s: String) -> Option<{ty}> []"),
+                "parse_{ty} must be documented in the Parsing table"
             );
         }
+        assert!(
+            lang["builtins"].get("parse_u64").is_none(),
+            "there is no free parse_u64; it is only the .parse_u64() method"
+        );
         let string_methods = lang["methods"]["String"].as_array().unwrap();
         assert!(
             string_methods

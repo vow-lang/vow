@@ -426,10 +426,349 @@ ENV_OPS = [
     },
 ]
 
-# The native verifier models none of these builtins yet.
+
+def _query_op(name, symbol, params, ret, sig, effects, heap=False, c_model=None):
+    op = {
+        "name": name,
+        "runtime_symbol": symbol,
+        "params": params,
+        "return": ret,
+        "doc_signature": sig,
+        "effects": effects,
+    }
+    if heap:
+        op["arena_routing"] = "heap_fresh"
+    if c_model:
+        op["c_model"] = c_model
+    return op
+
+
+# Query and utility operations migrated in #1271: memory and time queries,
+# hex helpers, parse and string-conversion helpers, and the String helpers.
+# (name, symbol, params, ret, doc_signature, effects, heap_fresh, c_model)
+_QUERY_UTILITY_ROWS = [
+    (
+        "memory_root_arena_bytes",
+        "__vow_memory_root_arena_bytes",
+        [],
+        "u64",
+        "fn() -> u64",
+        "[io]",
+    ),
+    ("memory_peak_bytes", "__vow_memory_peak_bytes", [], "u64", "fn() -> u64", "[io]"),
+    (
+        "memory_alloc_count_since_start",
+        "__vow_memory_alloc_count_since_start",
+        [],
+        "u64",
+        "fn() -> u64",
+        "[io]",
+    ),
+    ("time_unix", "__vow_time_unix", [], "i64", "fn() -> i64", "[io]"),
+    ("time_unix_ms", "__vow_time_unix_ms", [], "i64", "fn() -> i64", "[io]"),
+    ("time_micros", "__vow_time_micros", [], "i64", "fn() -> i64", "[io]"),
+    ("num_cpus", "__vow_num_cpus", [], "i64", "fn() -> i64", "[io]"),
+    ("proc_sample", "__vow_proc_sample", [], "ptr", "fn() -> String", "[io]"),
+    (
+        "gzip_write_file",
+        "__vow_gzip_write_file",
+        ["ptr", "ptr"],
+        "i64",
+        "fn(path: String, data: String) -> i64",
+        "[io]",
+    ),
+    (
+        "hex_encode",
+        "__vow_hex_encode",
+        ["ptr"],
+        "ptr",
+        "fn(data: Vec<u8>) -> String",
+        "[]",
+        True,
+        "unmodeled",
+    ),
+    (
+        "hex_decode",
+        "__vow_hex_decode",
+        ["ptr"],
+        "ptr",
+        "fn(s: String) -> Vec<u8>",
+        "[]",
+        True,
+        "unmodeled",
+    ),
+    (
+        "parse_i64",
+        "__vow_string_parse_i64_opt",
+        ["ptr"],
+        "ptr",
+        "fn(s: String) -> Option<i64>",
+        "[]",
+        True,
+        "base_and_arena",
+    ),
+    (
+        "parse_i8",
+        "__vow_string_parse_i8_opt",
+        ["ptr"],
+        "ptr",
+        "fn(s: String) -> Option<i8>",
+        "[]",
+        True,
+        "base",
+    ),
+    (
+        "parse_i16",
+        "__vow_string_parse_i16_opt",
+        ["ptr"],
+        "ptr",
+        "fn(s: String) -> Option<i16>",
+        "[]",
+        True,
+        "base",
+    ),
+    (
+        "parse_i32",
+        "__vow_string_parse_i32_opt",
+        ["ptr"],
+        "ptr",
+        "fn(s: String) -> Option<i32>",
+        "[]",
+        True,
+        "base",
+    ),
+    (
+        "parse_i128",
+        "__vow_string_parse_i128_opt",
+        ["ptr"],
+        "ptr",
+        "fn(s: String) -> Option<i128>",
+        "[]",
+        True,
+        "unmodeled",
+    ),
+    (
+        "parse_u8",
+        "__vow_string_parse_u8_opt",
+        ["ptr"],
+        "ptr",
+        "fn(s: String) -> Option<u8>",
+        "[]",
+        True,
+        "base",
+    ),
+    (
+        "parse_u16",
+        "__vow_string_parse_u16_opt",
+        ["ptr"],
+        "ptr",
+        "fn(s: String) -> Option<u16>",
+        "[]",
+        True,
+        "base",
+    ),
+    (
+        "parse_u32",
+        "__vow_string_parse_u32_opt",
+        ["ptr"],
+        "ptr",
+        "fn(s: String) -> Option<u32>",
+        "[]",
+        True,
+        "base",
+    ),
+    (
+        "parse_u128",
+        "__vow_string_parse_u128_opt",
+        ["ptr"],
+        "ptr",
+        "fn(s: String) -> Option<u128>",
+        "[]",
+        True,
+        "unmodeled",
+    ),
+    (
+        "parse_f64_bits",
+        "__vow_parse_f64_bits",
+        ["ptr"],
+        "u64",
+        "fn(s: String) -> u64",
+        "[]",
+        False,
+        "unmodeled",
+    ),
+    (
+        "format_f64_bits",
+        "__vow_format_f64_bits",
+        ["u64"],
+        "ptr",
+        "fn(bits: u64) -> String",
+        "[]",
+        True,
+        "unmodeled",
+    ),
+    (
+        "int_to_string",
+        "__vow_string_from_i64",
+        ["i64"],
+        "ptr",
+        "fn(v: i64) -> String",
+        "[]",
+        True,
+        "base_and_arena",
+    ),
+    (
+        "uint_to_string",
+        "__vow_string_from_u64",
+        ["u64"],
+        "ptr",
+        "fn(v: u64) -> String",
+        "[]",
+        True,
+        "base_and_arena",
+    ),
+    (
+        "int128_to_string",
+        "__vow_string_from_i128",
+        ["i128"],
+        "ptr",
+        "fn(v: i128) -> String",
+        "[]",
+        True,
+        "unmodeled",
+    ),
+    (
+        "uint128_to_string",
+        "__vow_string_from_u128",
+        ["u128"],
+        "ptr",
+        "fn(v: u128) -> String",
+        "[]",
+        True,
+        "unmodeled",
+    ),
+    (
+        "string_substr",
+        "__vow_string_substr",
+        ["ptr", "u64", "u64"],
+        "ptr",
+        "fn(s: String, start: u64, len: u64) -> String",
+        "[]",
+        True,
+        "base_and_arena",
+    ),
+    (
+        "string_split",
+        "__vow_string_split",
+        ["ptr", "ptr"],
+        "ptr",
+        "fn(s: String, delim: String) -> Vec<String>",
+        "[]",
+        True,
+        "unmodeled",
+    ),
+    (
+        "string_starts_with",
+        "__vow_string_starts_with",
+        ["ptr", "ptr"],
+        "i64",
+        "fn(s: String, prefix: String) -> i64",
+        "[]",
+        False,
+        "unmodeled",
+    ),
+    (
+        "string_ends_with",
+        "__vow_string_ends_with",
+        ["ptr", "ptr"],
+        "i64",
+        "fn(s: String, suffix: String) -> i64",
+        "[]",
+        False,
+        "unmodeled",
+    ),
+    (
+        "string_trim",
+        "__vow_string_trim",
+        ["ptr"],
+        "ptr",
+        "fn(s: String) -> String",
+        "[]",
+        True,
+        "base_and_arena",
+    ),
+    (
+        "string_to_upper",
+        "__vow_string_to_upper",
+        ["ptr"],
+        "ptr",
+        "fn(s: String) -> String",
+        "[]",
+        True,
+        "base_and_arena",
+    ),
+    (
+        "string_to_lower",
+        "__vow_string_to_lower",
+        ["ptr"],
+        "ptr",
+        "fn(s: String) -> String",
+        "[]",
+        True,
+        "base_and_arena",
+    ),
+    (
+        "string_replace",
+        "__vow_string_replace",
+        ["ptr", "ptr", "ptr"],
+        "ptr",
+        "fn(s: String, from: String, to: String) -> String",
+        "[]",
+        True,
+        "unmodeled",
+    ),
+    (
+        "string_join",
+        "__vow_string_join",
+        ["ptr", "ptr"],
+        "ptr",
+        "fn(parts: Vec<String>, sep: String) -> String",
+        "[]",
+        True,
+        "unmodeled",
+    ),
+    (
+        "vec_sort",
+        "__vow_vec_sort",
+        ["ptr"],
+        "ptr",
+        "fn(v: Vec<i64>) -> Vec<i64>",
+        "[]",
+        True,
+        "unmodeled",
+    ),
+]
+QUERY_UTILITY_OPS = [_query_op(*row) for row in _QUERY_UTILITY_ROWS]
+
+
+def _pure_c_model(op):
+    if op["effects"] == "[]" and "c_model" not in op:
+        return {"c_model": "unmodeled"}
+    return {}
+
+
+# The native verifier models none of these builtins yet. The two pure hash
+# builtins still say whether the ESBMC C model knows them.
 KNOWN_OPS = [
-    dict(op, verifier_model="unmodeled")
-    for op in PRINT_OPS + FS_STDIN_ARGS_STDERR_OPS + PROCESS_OPS + HASH_OPS + ENV_OPS
+    dict(op, verifier_model="unmodeled", **_pure_c_model(op))
+    for op in (
+        PRINT_OPS
+        + FS_STDIN_ARGS_STDERR_OPS
+        + PROCESS_OPS
+        + HASH_OPS
+        + ENV_OPS
+        + QUERY_UTILITY_OPS
+    )
 ]
 
 
@@ -945,22 +1284,49 @@ class GenRustIrBlockTest(unittest.TestCase):
             block,
         )
 
-    def test_arena_routing_heap_fresh_produces_string_heap_arm(self):
-        op = dict(PRINT_OPS[1])
-        op["arena_routing"] = "heap_fresh"
-        block = go.gen_rust_ir_block([op], [])
-        self.assertIn(f'"{op["name"]}" => Some(BuiltinResultTag::StringHeap),', block)
+    def _op_returning(self, doc_ret, name="op"):
+        return {
+            "name": name,
+            "runtime_symbol": f"__vow_{name}",
+            "params": [],
+            "return": "ptr",
+            "doc_signature": f"fn() -> {doc_ret}",
+            "effects": "[]",
+        }
 
-    def test_arena_routing_none_produces_no_string_heap_arm(self):
-        op = dict(PRINT_OPS[1])
-        op["arena_routing"] = "none"
-        block = go.gen_rust_ir_block([op], [])
-        self.assertNotIn("BuiltinResultTag::StringHeap", block)
-        self.assertIn("fn catalogue_builtin_result_tag", block)
+    def test_string_return_is_tagged_string_heap(self):
+        block = go.gen_rust_ir_block([self._op_returning("String")], [])
+        self.assertIn('"op" => Some(BuiltinResultTag::StringHeap),', block)
 
-    def test_missing_arena_routing_produces_no_string_heap_arm(self):
-        block = go.gen_rust_ir_block([PRINT_OPS[1]], [])
-        self.assertNotIn("BuiltinResultTag::StringHeap", block)
+    def test_vec_return_is_tagged_vec_heap(self):
+        block = go.gen_rust_ir_block([self._op_returning("Vec<u8>")], [])
+        self.assertIn('"op" => Some(BuiltinResultTag::VecHeap),', block)
+
+    def test_option_return_is_tagged_with_its_element_type(self):
+        for elem in go.OPTION_ELEMS:
+            block = go.gen_rust_ir_block([self._op_returning(f"Option<{elem}>")], [])
+            rust_ty = go.OPTION_ELEMS[elem]["rust_ty"]
+            self.assertIn(
+                f'"op" => Some(BuiltinResultTag::OptionOf({rust_ty})),', block, elem
+            )
+
+    def test_scalar_and_unit_returns_are_untagged(self):
+        for doc_ret in ("i64", "u64", "bool", "()"):
+            block = go.gen_rust_ir_block([self._op_returning(doc_ret)], [])
+            self.assertNotIn(
+                "BuiltinResultTag::", block.split("fn catalogue_builtin_result_tag")[1]
+            )
+
+    def test_tag_does_not_depend_on_arena_routing(self):
+        plain = self._op_returning("String")
+        routed = dict(plain, arena_routing="heap_fresh")
+        none = dict(plain, arena_routing="none")
+        self.assertEqual(
+            go.gen_rust_ir_block([plain], []), go.gen_rust_ir_block([routed], [])
+        )
+        self.assertEqual(
+            go.gen_rust_ir_block([plain], []), go.gen_rust_ir_block([none], [])
+        )
 
 
 class GenCraneliftBlockTest(unittest.TestCase):
@@ -1100,25 +1466,40 @@ class GenVowLowerBlockTest(unittest.TestCase):
             block,
         )
 
-    def test_arena_routing_heap_fresh_produces_brt_string_arm(self):
-        op = dict(PRINT_OPS[1])
-        op["arena_routing"] = "heap_fresh"
-        block = go.gen_vow_lower_block([op], [])
+    def _op_returning(self, doc_ret, name="op"):
+        return {
+            "name": name,
+            "runtime_symbol": f"__vow_{name}",
+            "params": [],
+            "return": "ptr",
+            "doc_signature": f"fn() -> {doc_ret}",
+            "effects": "[]",
+        }
+
+    def test_string_and_vec_returns_are_tagged(self):
+        string_block = go.gen_vow_lower_block([self._op_returning("String")], [])
+        vec_block = go.gen_vow_lower_block([self._op_returning("Vec<String>")], [])
         self.assertIn(
-            f'if name == String::from("{op["name"]}") {{ return BRT_STRING(); }}',
-            block,
+            'if name == String::from("op") { return BRT_STRING(); }', string_block
         )
+        self.assertIn('if name == String::from("op") { return BRT_VEC(); }', vec_block)
 
-    def test_arena_routing_none_produces_no_brt_string_arm(self):
-        op = dict(PRINT_OPS[1])
-        op["arena_routing"] = "none"
-        block = go.gen_vow_lower_block([op], [])
-        self.assertNotIn("BRT_STRING()", block)
-        self.assertIn("fn catalogue_builtin_result_tag", block)
+    def test_option_return_is_tagged_with_its_element_type(self):
+        for elem in go.OPTION_ELEMS:
+            block = go.gen_vow_lower_block([self._op_returning(f"Option<{elem}>")], [])
+            ity = go.OPTION_ELEMS[elem]["ity_const"]
+            self.assertIn(
+                f'if name == String::from("op") {{ return {ity}; }}',
+                block.split("fn catalogue_builtin_result_tag")[1],
+                elem,
+            )
 
-    def test_missing_arena_routing_produces_no_brt_string_arm(self):
-        block = go.gen_vow_lower_block([PRINT_OPS[1]], [])
-        self.assertNotIn("BRT_STRING()", block)
+    def test_scalar_return_is_untagged(self):
+        block = go.gen_vow_lower_block([self._op_returning("i64")], [])
+        self.assertEqual(
+            block.split("fn catalogue_builtin_result_tag")[1].count("return BRT_"), 1
+        )
+        self.assertIn("return BRT_NONE();", block)
 
 
 class GeneratorDeterminismTest(unittest.TestCase):
@@ -1342,6 +1723,8 @@ def _write_target_fixtures(tmp: Path) -> None:
         ("vow-ir/src/region.rs", "fn infer_regions() {}\n"),
         ("compiler/ir.vow", "fn lower_to_ir() {}\n"),
         ("compiler/vc_ops.vow", "fn vc_op_model() {}\n"),
+        ("vow-verify/src/c_emitter.rs", "fn is_known_builtin() {}\n"),
+        ("compiler/c_emitter.vow", "fn is_known_builtin() {}\n"),
     ]:
         path = tmp / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1651,6 +2034,266 @@ class GenVowVcOpsBlockTest(unittest.TestCase):
         self.assertIn("fn catalogue_verifier_known(sym: String) -> bool", block)
         self.assertIn("return false;", block)
         self.assertNotIn("let n", block)
+
+
+# The symbols the ESBMC C model recognised in vow-verify/src/c_emitter.rs's
+# hand-written is_known_builtin before the migration, restricted to the
+# catalogued query/utility builtins. Pinned independently of the catalogue so
+# that moving the fact into operations.json provably did not change it.
+PRE_MIGRATION_C_MODEL_SYMBOLS = {
+    "__vow_string_substr",
+    "__vow_string_substr_in_arena",
+    "__vow_string_trim",
+    "__vow_string_trim_in_arena",
+    "__vow_string_to_upper",
+    "__vow_string_to_upper_in_arena",
+    "__vow_string_to_lower",
+    "__vow_string_to_lower_in_arena",
+    "__vow_string_from_i64",
+    "__vow_string_from_i64_in_arena",
+    "__vow_string_from_u64",
+    "__vow_string_from_u64_in_arena",
+    "__vow_string_parse_i64_opt",
+    "__vow_string_parse_i64_opt_in_arena",
+    "__vow_string_parse_i8_opt",
+    "__vow_string_parse_u8_opt",
+    "__vow_string_parse_i16_opt",
+    "__vow_string_parse_u16_opt",
+    "__vow_string_parse_u32_opt",
+    "__vow_string_parse_i32_opt",
+}
+
+
+def _write_catalogue(tmp: Path, ops: list) -> None:
+    spec = tmp / "docs" / "spec"
+    spec.mkdir(parents=True, exist_ok=True)
+    (spec / "operations.json").write_text(json.dumps({"operations": ops}))
+
+
+class ResultShapeTest(unittest.TestCase):
+    def _op(self, doc_ret):
+        return {"doc_signature": f"fn() -> {doc_ret}"}
+
+    def test_shapes_follow_the_doc_return_type(self):
+        self.assertEqual(go.result_shape(self._op("String")), ("string", None))
+        self.assertEqual(go.result_shape(self._op("Vec<String>")), ("vec", None))
+        self.assertEqual(go.result_shape(self._op("Option<u8>")), ("option", "u8"))
+        for scalar in ("i64", "u64", "bool", "()", "!"):
+            self.assertIsNone(go.result_shape(self._op(scalar)), scalar)
+
+    def test_unknown_option_element_is_rejected_by_name(self):
+        op = {
+            "name": "bad",
+            "runtime_symbol": "__vow_bad",
+            "params": ["ptr"],
+            "return": "ptr",
+            "doc_signature": "fn(s: String) -> Option<f64>",
+            "effects": "[]",
+        }
+        with tempfile.TemporaryDirectory() as d:
+            _write_catalogue(Path(d), [op])
+            with self.assertRaises(ValueError) as ctx:
+                go.load_catalogue(Path(d))
+        self.assertIn("Option element type 'f64'", str(ctx.exception))
+
+    def test_wide_params_and_option_returns_are_valid_doc_types(self):
+        self.assertEqual(go._doc_type_to_token("i128"), "i128")
+        self.assertEqual(go._doc_type_to_token("u128"), "u128")
+        self.assertEqual(go._doc_type_to_token("Option<i64>"), "ptr")
+        self.assertEqual(go.PARAM_TOKENS["i128"], "types::I128")
+        self.assertEqual(go.PARAM_TOKENS["u128"], "types::I128")
+
+    def test_wide_param_reaches_the_cranelift_signature(self):
+        op = next(o for o in QUERY_UTILITY_OPS if o["name"] == "int128_to_string")
+        block = go.gen_cranelift_block([op], [])
+        self.assertIn("sig.params.push(AbiParam::new(types::I128));", block)
+        self.assertIn("sig.returns.push(AbiParam::new(types::I64));", block)
+
+    def test_real_catalogue_tags_match_each_ops_runtime_shape(self):
+        shapes = {o["name"]: go.result_shape(o) for o in go.load_catalogue(REPO_ROOT)}
+        for name in ("hex_decode", "string_split", "vec_sort", "args", "fs_listdir"):
+            self.assertEqual(shapes[name], ("vec", None), name)
+        for name in (
+            "hex_encode",
+            "format_f64_bits",
+            "proc_sample",
+            "int_to_string",
+            "uint_to_string",
+            "int128_to_string",
+            "uint128_to_string",
+            "string_substr",
+            "string_trim",
+            "string_to_upper",
+            "string_to_lower",
+            "string_replace",
+            "string_join",
+            "fs_read",
+            "stdin_read_line",
+        ):
+            self.assertEqual(shapes[name], ("string", None), name)
+        for name in (
+            "parse_i64",
+            "parse_i8",
+            "parse_i16",
+            "parse_i32",
+            "parse_i128",
+            "parse_u8",
+            "parse_u16",
+            "parse_u32",
+            "parse_u128",
+        ):
+            self.assertEqual(
+                shapes[name], ("option", name.removeprefix("parse_")), name
+            )
+        for name in (
+            "parse_f64_bits",
+            "string_starts_with",
+            "string_ends_with",
+            "time_micros",
+            "num_cpus",
+            "gzip_write_file",
+            "memory_peak_bytes",
+        ):
+            self.assertIsNone(shapes[name], name)
+
+
+class QueryUtilityCatalogueTest(unittest.TestCase):
+    def setUp(self):
+        self.catalogue = go.load_catalogue(REPO_ROOT)
+        self.ops = {o["name"]: o for o in self.catalogue}
+
+    def test_every_query_and_utility_builtin_is_catalogued(self):
+        for row in _QUERY_UTILITY_ROWS:
+            op = self.ops[row[0]]
+            self.assertEqual(op["runtime_symbol"], row[1], row[0])
+            self.assertEqual(op["return"], row[3], row[0])
+
+    def test_hand_written_survivors_are_not_catalogued(self):
+        # `i64_to_string` shares its runtime symbol with `int_to_string`, the
+        # literal-bytes lowering of `string_matches_literal_at` is a special
+        # operation body, and there is no free `parse_u64`.
+        for name in ("i64_to_string", "string_matches_literal_at", "parse_u64"):
+            self.assertNotIn(name, self.ops)
+
+    def test_arena_routing_is_recorded_exactly_where_a_route_exists(self):
+        routes = go.load_arena_routes(REPO_ROOT, self.catalogue)
+        for row in _QUERY_UTILITY_ROWS:
+            op = self.ops[row[0]]
+            has_route = op["runtime_symbol"] in routes
+            self.assertEqual(op.get("arena_routing") == "heap_fresh", has_route, row[0])
+
+    def test_native_verifier_models_none_of_them(self):
+        for row in _QUERY_UTILITY_ROWS:
+            self.assertEqual(self.ops[row[0]]["verifier_model"], "unmodeled", row[0])
+        block = go.gen_vow_vc_ops_block(self.catalogue, [])
+        self.assertIn("return false;", block)
+
+    def test_c_model_symbols_equal_the_pre_migration_hand_list(self):
+        routes = go.load_arena_routes(REPO_ROOT, self.catalogue)
+        query_symbols = {r[1] for r in _QUERY_UTILITY_ROWS}
+        query_symbols |= {go.arena_variant(r[1]) for r in _QUERY_UTILITY_ROWS}
+        catalogued = {
+            sym for sym in go.c_model_symbols(self.catalogue) if sym in query_symbols
+        }
+        self.assertEqual(catalogued, PRE_MIGRATION_C_MODEL_SYMBOLS)
+        self.assertEqual(go.check_c_models(self.catalogue, routes), [])
+
+    def test_effectful_query_ops_have_no_c_model(self):
+        for name in ("time_unix", "num_cpus", "proc_sample", "gzip_write_file"):
+            self.assertNotIn("c_model", self.ops[name], name)
+
+
+class CModelTest(unittest.TestCase):
+    def _op(self, name, model, effects="[]"):
+        op = {
+            "name": name,
+            "runtime_symbol": f"__vow_{name}",
+            "params": [],
+            "return": "i64",
+            "doc_signature": "fn() -> i64",
+            "effects": effects,
+        }
+        if model is not None:
+            op["c_model"] = model
+        return op
+
+    def test_symbols_are_base_and_optionally_arena_variant(self):
+        ops = [
+            self._op("a", "base"),
+            self._op("b", "base_and_arena"),
+            self._op("c", "unmodeled"),
+            self._op("d", None),
+        ]
+        self.assertEqual(
+            go.c_model_symbols(ops), ["__vow_a", "__vow_b", "__vow_b_in_arena"]
+        )
+
+    def test_rust_block_is_a_rustfmt_shaped_matches(self):
+        ops = [self._op("a", "base"), self._op("b", "base_and_arena")]
+        self.assertEqual(
+            go.gen_rust_c_model_block(ops, ["__vow_b"]),
+            "// GENERATE:OPERATIONS:START\n"
+            "fn catalogue_c_model_known(name: &str) -> bool {\n"
+            "    matches!(\n"
+            "        name,\n"
+            '        "__vow_a"\n'
+            '            | "__vow_b"\n'
+            '            | "__vow_b_in_arena"\n'
+            "    )\n"
+            "}\n"
+            "// GENERATE:OPERATIONS:END",
+        )
+
+    def test_rust_block_with_one_symbol_stays_on_one_line(self):
+        block = go.gen_rust_c_model_block([self._op("a", "base")], [])
+        self.assertIn('    matches!(name, "__vow_a")\n', block)
+
+    def test_vow_block_answers_exactly_the_c_model_symbols(self):
+        ops = [self._op("a", "base"), self._op("b", "base_and_arena")]
+        block = go.gen_vow_c_model_block(ops, ["__vow_b"])
+        fn = block.split("\n", 1)[1].rsplit("\n", 1)[0]
+        for sym in ("__vow_a", "__vow_b", "__vow_b_in_arena"):
+            self.assertTrue(_eval_vow_symbol_set(fn, sym), sym)
+        for sym in ("__vow_a_in_arena", "__vow_c", ""):
+            self.assertFalse(_eval_vow_symbol_set(fn, sym), sym)
+
+    def test_pure_builtin_without_c_model_is_reported_by_name(self):
+        problems = go.check_c_models([self._op("a", None)], [])
+        self.assertEqual(len(problems), 1)
+        self.assertIn("'a'", problems[0])
+
+    def test_effectful_builtin_without_c_model_is_clean(self):
+        self.assertEqual(go.check_c_models([self._op("a", None, "[io]")], []), [])
+
+    def test_effectful_builtin_cannot_be_known_to_the_c_model(self):
+        problems = go.check_c_models([self._op("a", "base", "[io]")], [])
+        self.assertEqual(len(problems), 1)
+        self.assertIn("only knows pure builtins", problems[0])
+
+    def test_arena_variant_needs_a_route(self):
+        problems = go.check_c_models([self._op("a", "base_and_arena")], [])
+        self.assertEqual(len(problems), 1)
+        self.assertIn("no arena route", problems[0])
+        self.assertEqual(
+            go.check_c_models([self._op("a", "base_and_arena")], ["__vow_a"]), []
+        )
+
+    def test_unknown_c_model_value_is_rejected_by_the_loader(self):
+        with tempfile.TemporaryDirectory() as d:
+            _write_catalogue(Path(d), [dict(PRINT_OPS[0], c_model="maybe")])
+            with self.assertRaises(ValueError) as ctx:
+                go.load_catalogue(Path(d))
+        self.assertIn("c_model", str(ctx.exception))
+
+    def test_c_model_projection_targets_are_in_the_target_list(self):
+        targets = {str(path) for path, _ in go.TARGET_FILES}
+        self.assertIn("vow-verify/src/c_emitter.rs", targets)
+        self.assertIn("compiler/c_emitter.vow", targets)
+
+    def test_real_catalogue_has_a_decision_for_every_pure_builtin(self):
+        ops = go.load_catalogue(REPO_ROOT)
+        routes = go.load_arena_routes(REPO_ROOT, ops)
+        self.assertEqual(go.check_c_models(ops, routes), [])
 
 
 if __name__ == "__main__":
