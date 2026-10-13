@@ -655,6 +655,10 @@ like the Vec ones; the catalogue entries for the modelled parse, format and
   written as the state of the creating block (`vc_vec_slot_fresh`), because a
   join skips an allocation's edge that carries no state
   (`tests/verify-native/fail/string_format_result_branch_push.vow`).
+- **Literal mutation.** The runtime traps when a literal's read-only storage is
+  mutated (`region_literal_mutation_trap`); the model treats a literal as an
+  ordinary mutable string, so the trapping path is a run that never returns and a
+  counterexample that needs it does not reproduce under `--replay-cex`.
 - **Counterexamples.** A String parameter's length and contents are not listed
   (ESBMC does not either); replay of such a counterexample is `skipped`.
 
