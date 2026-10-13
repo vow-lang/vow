@@ -241,8 +241,9 @@ fn vc_str_reads_bytes(f: IrFunction) -> bool {
 
 // Gate rule for the `String` operations (`vc_vec_shape_detail` covers aliasing): the
 // static bytes of a literal (`ConstStr`) are read only by `__vow_string_literal` and
-// by the literal operand of `__vow_string_matches_literal_at`, `String::new` has a
-// null pointer and length 0, and a string built from a literal's static bytes is
+// by the literal operand of `__vow_string_matches_literal_at` (whose operand is
+// exactly such bytes, with the length argument a constant equal to their length),
+// `String::new` has a null pointer and length 0, and a string built from a literal's static bytes is
 // read-only at run time (`__vow_string_clear` and the pushes trap on it), so
 // mutating one is outside the model. "" when the shape is fine, else the detail of
 // an `unsupported-opcode` skip.
@@ -250,6 +251,8 @@ fn vc_str_shape_detail(f: IrFunction, n_ids: u64) -> String {
     let is_cstr: Vec<i64> = dom_fill(n_ids, 0);
     let is_lit: Vec<i64> = dom_fill(n_ids, 0);
     let zero: Vec<i64> = dom_fill(n_ids, 0);
+    let cstr_len: Vec<i64> = dom_fill(n_ids, -1);
+    let const_val: Vec<i64> = dom_fill(n_ids, -1);
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
         let blk: IrBlock = f.blocks[bi];
@@ -257,7 +260,11 @@ fn vc_str_shape_detail(f: IrFunction, n_ids: u64) -> String {
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
             if inst.id >= 0 {
-                if inst.op == IOP_CONST_STR() { is_cstr[inst.id as u64] = 1; }
+                if inst.op == IOP_CONST_STR() {
+                    is_cstr[inst.id as u64] = 1;
+                    cstr_len[inst.id as u64] = inst.ds.len() as i64;
+                }
+                if inst.op == IOP_CONST_I64() { const_val[inst.id as u64] = inst.dv; }
                 if inst.op == IOP_CONST_I64() && inst.dv == 0 { zero[inst.id as u64] = 1; }
                 if vc_inst_vec_kind(inst) == VC_STR_LITERAL() { is_lit[inst.id as u64] = 1; }
             }
@@ -297,6 +304,14 @@ fn vc_str_shape_detail(f: IrFunction, n_ids: u64) -> String {
                     if !ok { return String::from("String literal bytes used outside a literal"); }
                 }
                 a = a + 1;
+            }
+            if k == VC_STR_LITERAL() && (inst.args.len() != 1 || is_cstr[inst.args[0] as u64] != 1) {
+                return String::from("String literal without static bytes");
+            }
+            if k == VC_STR_MATCHES_LITERAL_AT() {
+                let ok: bool = inst.args.len() == 4 && is_cstr[inst.args[2] as u64] == 1
+                    && const_val[inst.args[3] as u64] == cstr_len[inst.args[2] as u64];
+                if !ok { return String::from("string_matches_literal_at literal operand is not its static bytes"); }
             }
             if k == VC_STR_NEW() {
                 if inst.args.len() != 2 || zero[inst.args[0] as u64] != 1 || zero[inst.args[1] as u64] != 1 {

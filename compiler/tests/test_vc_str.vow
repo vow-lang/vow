@@ -480,6 +480,37 @@ fn check_shape_rejections() -> i64 {
     if vc_str_shape_detail(f2, 8) != String::from("String literal mutated") { return 162; }
     if vc_skip_reason(f2).len() == 0 { return 163; }
 
+    // `string_literal` and the literal operand of `matches_literal_at` are the
+    // static bytes of a `ConstStr`, with the length argument matching them.
+    let unliteral: Vec<IrInst> = Vec::new();
+    unliteral.push(mk_inst_arg(0, ITY_PTR(), 0));
+    unliteral.push(call(1, ITY_PTR(), args1(0), String::from("__vow_string_literal")));
+    unliteral.push(mk_inst_return(2, 1));
+    let g1: IrFunction = one_block(ptr_params(1), ITY_PTR(), unliteral);
+    if vc_str_shape_detail(g1, 8) != String::from("String literal without static bytes") { return 174; }
+
+    let badmatch: Vec<IrInst> = Vec::new();
+    badmatch.push(mk_inst_arg(0, ITY_PTR(), 0));
+    badmatch.push(mk_inst_arg(1, ITY_U64(), 1));
+    badmatch.push(mk_inst_arg(2, ITY_PTR(), 2));
+    badmatch.push(mk_inst_const_i64(3, 0));
+    badmatch.push(call(4, ITY_I64(), args4(0, 1, 2, 3), String::from("__vow_string_matches_literal_at")));
+    badmatch.push(mk_inst_return(5, 4));
+    let p3: Vec<i64> = ptr_u64_params();
+    p3.push(ITY_PTR());
+    let g2: IrFunction = one_block(p3, ITY_I64(), badmatch);
+    if vc_str_shape_detail(g2, 8) != String::from("string_matches_literal_at literal operand is not its static bytes") { return 175; }
+
+    let badlen: Vec<IrInst> = Vec::new();
+    badlen.push(mk_inst_arg(0, ITY_PTR(), 0));
+    badlen.push(mk_inst_arg(1, ITY_U64(), 1));
+    badlen.push(mk_str(2, String::from("ab")));
+    badlen.push(mk_inst_const_i64(3, 3));
+    badlen.push(call(4, ITY_I64(), args4(0, 1, 2, 3), String::from("__vow_string_matches_literal_at")));
+    badlen.push(mk_inst_return(5, 4));
+    let g3: IrFunction = one_block(ptr_u64_params(), ITY_I64(), badlen);
+    if vc_str_shape_detail(g3, 8) != String::from("string_matches_literal_at literal operand is not its static bytes") { return 176; }
+
     // A clone of a literal is a fresh, mutable string.
     let cloned: Vec<IrInst> = Vec::new();
     cloned.push(mk_str(0, String::from("x")));
