@@ -1,0 +1,17 @@
+// TEST: skip-reason unmodeled-builtin
+module VecSortSkipped
+
+fn sorted_len() -> u64 vow {
+  ensures: result == 2
+} {
+  let v: Vec<i64> = Vec::new();
+  v.push(2);
+  v.push(1);
+  let s: Vec<i64> = vec_sort(v);
+  s.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(sorted_len());
+  0
+}

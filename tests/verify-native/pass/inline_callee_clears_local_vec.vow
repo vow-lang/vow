@@ -1,0 +1,20 @@
+module InlineCalleeClearsLocalVec
+
+fn scratch() -> u64 {
+  let v: Vec<i64> = Vec::new();
+  v.push(4);
+  v.push(5);
+  v.clear();
+  v.len()
+}
+
+fn caller() -> u64 vow {
+  ensures: result == 0
+} {
+  scratch()
+}
+
+fn main() -> i32 [io] {
+  print_u64(caller());
+  0
+}

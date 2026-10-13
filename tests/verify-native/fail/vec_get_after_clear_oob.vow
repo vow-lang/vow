@@ -1,0 +1,20 @@
+// TEST: replay-skipped the abort is a bounds check, which the replay harness does not reproduce
+// TEST: counterexample-fn "stale"
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-blame None
+// TEST: counterexample-violation "index out of bounds"
+module VecGetAfterClearOob
+
+fn stale() -> i64 vow {
+  ensures: result == result
+} {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v.clear();
+  v[0]
+}
+
+fn main() -> i32 [io] {
+  print_i64(stale());
+  0
+}

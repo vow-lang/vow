@@ -1,0 +1,18 @@
+// TEST: counterexample-fn "shortened"
+module VecTruncateWrongPost
+
+fn shortened() -> u64 vow {
+  ensures: result == 3
+} {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v.push(2);
+  v.push(3);
+  v.truncate(2);
+  v.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(shortened());
+  0
+}

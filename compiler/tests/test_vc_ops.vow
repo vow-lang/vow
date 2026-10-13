@@ -81,7 +81,13 @@ fn check_vec_op_table() -> i64 {
     if vc_vec_op_kind(String::from("__vow_vec_set_val")) != VC_VEC_SET() { return 713; }
     if vc_vec_op_kind(String::from("__vow_vec_len")) != VC_VEC_LEN() { return 714; }
     if vc_vec_op_kind(String::from("__vow_vec_pop")) != VC_VEC_POP() { return 715; }
-    if vc_vec_op_kind(String::from("__vow_vec_clear")) != VC_VEC_NONE() { return 716; }
+    if vc_vec_op_kind(String::from("__vow_vec_clear")) != VC_VEC_CLEAR() { return 716; }
+    if vc_vec_op_kind(String::from("__vow_vec_truncate")) != VC_VEC_TRUNCATE() { return 720; }
+    if vc_vec_op_kind(String::from("__vow_vec_clear_in_arena")) != VC_VEC_NONE() { return 721; }
+    if vc_vec_op_kind(String::from("__vow_vec_truncate_in_arena")) != VC_VEC_NONE() { return 722; }
+    if !vc_vec_kind_writes(VC_VEC_CLEAR()) || !vc_vec_kind_writes(VC_VEC_TRUNCATE()) { return 723; }
+    if !vc_vec_kind_writes(VC_VEC_PUSH()) || !vc_vec_kind_writes(VC_VEC_SET()) || !vc_vec_kind_writes(VC_VEC_POP()) { return 724; }
+    if vc_vec_kind_writes(VC_VEC_GET()) || vc_vec_kind_writes(VC_VEC_LEN()) || vc_vec_kind_writes(VC_VEC_NEW()) || vc_vec_kind_writes(VC_VEC_NONE()) { return 725; }
     if vc_vec_op_kind(String::from("__vow_vec_from_raw_parts_copy_val")) != VC_VEC_NONE() { return 717; }
     if vc_vec_op_kind(String::from("__vow_vec_push_val_in_arena")) != VC_VEC_NONE() { return 718; }
     if vc_vec_op_kind(String::from("__vow_vec_get_wide_ptr")) != VC_VEC_NONE() { return 719; }

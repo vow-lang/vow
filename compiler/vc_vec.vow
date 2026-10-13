@@ -246,6 +246,20 @@ fn vc_vec_pop(vv: VcVec, ar: VcArena, hdr: SmtScript, s: i64, bi: i64) {
     vc_vec_write(vv, ar, hdr, s, bi, arr, next);
 }
 
+// `clear` drops every element; the stale array slots stay unreadable because
+// every read is claimed against the length.
+fn vc_vec_clear(vv: VcVec, ar: VcArena, hdr: SmtScript, s: i64, bi: i64) {
+    vc_vec_write(vv, ar, hdr, s, bi, vc_vec_cur_arr(vv, s, bi), vc_tm_bv(ar, 64, 0, 0));
+}
+
+// `truncate(n)` keeps the first `n` elements and does nothing when `n` is at
+// least the length; `n` is an unsigned count.
+fn vc_vec_truncate(vv: VcVec, ar: VcArena, hdr: SmtScript, s: i64, bi: i64, n: i64) {
+    let len: i64 = vc_vec_cur_len(vv, s, bi);
+    let next: i64 = vc_tm_app3(ar, VC_OP_ITE(), vc_tm_app2(ar, VC_OP_BVUGE(), n, len), len, n);
+    vc_vec_write(vv, ar, hdr, s, bi, vc_vec_cur_arr(vv, s, bi), next);
+}
+
 fn vc_vec_any_arg(inst: IrInst, is_vec: Vec<i64>) -> bool {
     let mut k: u64 = 0;
     while k < inst.args.len() {

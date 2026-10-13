@@ -270,6 +270,27 @@ fn check_step_structure() -> i64 {
     0
 }
 
+// `count_up` with one Vec call, over value 1, at the top of its loop body.
+fn with_vec_call(sym: String, nargs: u64) -> IrFunction {
+    let f: IrFunction = count_up();
+    let args: Vec<i64> = Vec::new();
+    let mut k: u64 = 0;
+    while k < nargs {
+        args.push(1);
+        k = k + 1;
+    }
+    let body: Vec<IrInst> = Vec::new();
+    body.push(mk_inst_call_extern(32, ITY_UNIT(), args, sym));
+    let old: IrBlock = f.blocks[2];
+    let mut i: u64 = 0;
+    while i < old.insts.len() {
+        body.push(old.insts[i]);
+        i = i + 1;
+    }
+    f.blocks[2] = mk_block(2, body);
+    f
+}
+
 fn check_step_not_applicable() -> i64 {
     if vc_unroll_step(nested(), 2).status != VC_UNROLL_NOT_APPLICABLE() { return 90; }
     let i: Vec<IrInst> = Vec::new();
@@ -322,6 +343,8 @@ fn check_step_not_applicable() -> i64 {
     }
     v.blocks[2] = mk_block(2, push);
     if vc_unroll_step(v, 2).status != VC_UNROLL_NOT_APPLICABLE() { return 94; }
+    if vc_unroll_step(with_vec_call(String::from("__vow_vec_clear"), 1), 2).status != VC_UNROLL_NOT_APPLICABLE() { return 95; }
+    if vc_unroll_step(with_vec_call(String::from("__vow_vec_truncate"), 2), 2).status != VC_UNROLL_NOT_APPLICABLE() { return 96; }
     0
 }
 

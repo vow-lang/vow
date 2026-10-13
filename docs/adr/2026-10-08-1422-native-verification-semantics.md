@@ -423,7 +423,7 @@ of this change and stay `Skipped`.
   records for the ESBMC model as well. No other bound on a length, index or
   capacity is introduced anywhere; in particular there is no `len <= 128`.
 - **Skipped classes, fail closed.** Any other `__vow_vec_*` symbol
-  (`clear`, `truncate`, `reserve`, `sort`, `from_raw_parts_copy`,
+  (`reserve`, `sort`, `from_raw_parts_copy`,
   `pin_to_root`, the wide-slot variants, the `_in_arena` variants) is
   `unmodeled-builtin`; a pushed or stored value, or a `get` result, that is not
   `Bool` or an integer of up to 64 bits, and an index that is not 64-bit, is
@@ -475,8 +475,45 @@ length.
 Follow-ups, not done here: `from_raw_parts_copy`/`pin_to_root` (and the harness
 decision for the `*_beyond_model_cap` fixtures, which would flip to class
 `soundness` because the corpus labels them failing only through ESBMC's cap),
-a Vec across a call boundary, `clear`/`truncate`, `Vec<i128>`, a Vec merged by a
+a Vec across a call boundary, `Vec<i128>`, a Vec merged by a
 Phi, `String` (same model, exact `string_eq`), and the maps.
+
+## Addendum (#1613): Vec clear and truncate
+
+`__vow_vec_clear` and `__vow_vec_truncate` join the Vec table in `vc_ops`.
+Both are pure `(array, length)` transitions, mirroring `vow-runtime` exactly:
+
+- **`clear`** sets the length to 0 and keeps the array; the stale slots are
+  unreadable because every read is claimed `idx <u len`.
+- **`truncate(n)`** sets the length to `ite(n >=u len, len, n)` and keeps the
+  array. `n` is an unsigned 64-bit count, so the comparison is unsigned: a
+  count of `2^64 - 1` is a no-op, never a negative length.
+- **No new claim, no new assumption.** Neither raises a bounds or abort claim,
+  and neither needs the length mask: both only lower the length, so the one
+  length fact of the #1423 addendum (`len < 2^63 - 1`) is untouched. A Vec that
+  is a read-only literal traps on both operations in the runtime; like `push`,
+  `set` and `pop` the model describes only the returning path.
+- **Loops.** Both write the Vec, so `vc_vec_kind_writes` (one predicate, now
+  shared by `vc_induct` and `vc_unroll`) keeps a loop that calls them out of
+  the inductive cut and the k-induction step: a havoc copy would keep the entry
+  state, the failure this ADR documents for `push`/`set`/`pop`.
+- **Map receivers.** `HashMap`/`BTreeMap` `.clear()` falls through to the
+  generic Vec row of `builtin_method_spec`, but the type checker rejects it
+  (`UnknownMethod`) before lowering, so no non-Vec pointer reaches the model
+  through `clear`.
+- **`reserve` has no model to add.** It has no source-level builtin; only the
+  arena passes emit `__vow_vec_reserve_in_arena`, so it never reaches the
+  verifier.
+
+Verdict movement: no `tests/verify*` fixture uses `Vec::clear`/`truncate`, so
+no row of `scripts/verify_diff.py` moves. `examples/sat` (which uses both) keeps
+its one `unknown` function, `make_zero_vec`, which does not call them.
+
+Still `Skipped` (the rest of #1613, each its own change): `from_raw_parts_copy`
+and `pin_to_root` (needs the corpus-label ruling above), `bool` parameters and a
+`Vec<bool>` element read, a Vec across a call boundary, in a struct field or
+merged by a differing Phi, `Vec<i128>`/`Vec<u128>` and pointer elements, Vec
+counterexample values, and `sort` (returns a new Vec).
 
 ## Addendum (#1425): automatic k-induction for loops with no usable invariant
 
