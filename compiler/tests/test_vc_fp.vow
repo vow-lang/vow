@@ -1,0 +1,295 @@
+module TestVcFp
+
+use ir
+use vc_term
+use vc_smt
+use vc_fp
+use vc_int
+use vc_gate
+use vc_ops
+use vc_exec
+use vc_solver
+use vc_fmt
+use tests.builders
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn args2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v.push(b);
+    v
+}
+
+fn params_ff(ty: i64) -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ty);
+    p.push(ty);
+    p
+}
+
+fn mk_vow(id: i64, op: i64, pred: i64, vow_id: i64) -> IrInst {
+    ir_inst_new(id, op, ITY_UNIT(), args1(pred), IDATA_VOW_ID(), vow_id, 0, String::from(""))
+}
+
+fn mk_const_f64(id: i64, bits: i64) -> IrInst {
+    ir_inst_new(id, IOP_CONST_F64(), ITY_F64(), Vec::new(), IDATA_CONST_F64(), bits, 0, String::from(""))
+}
+
+fn mk_const_f32(id: i64, bits: i64) -> IrInst {
+    ir_inst_new(id, IOP_CONST_F32(), ITY_F32(), Vec::new(), IDATA_CONST_F32(), bits, 0, String::from(""))
+}
+
+fn one_block(name: String, params: Vec<i64>, ret: i64, insts: Vec<IrInst>) -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(1, name, params, ret, blocks)
+}
+
+fn query(cs: VcClaims, k: u64) -> String {
+    vc_smt_render(cs.arena, vc_claim_script(cs, k))
+}
+
+// add(a, b) ensures result == b + a, over the float type `ty` with opcodes
+// `add` and `eq`.
+fn add_commutes(ty: i64, add: i64, eq: i64) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ty, 0));
+    i.push(mk_inst_arg(1, ty, 1));
+    i.push(mk_inst(2, add, ty, args2(0, 1)));
+    i.push(mk_inst(3, add, ty, args2(1, 0)));
+    i.push(mk_inst(4, eq, ITY_BOOL(), args2(2, 3)));
+    i.push(mk_vow(5, IOP_VOW_ENS(), 4, 0));
+    i.push(mk_inst_return(6, 2));
+    one_block(String::from("add"), params_ff(ty), ty, i)
+}
+
+fn check_terms_and_symbols() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let a: i64 = vc_tm_var(ar, String::from("a"));
+    let b: i64 = vc_tm_var(ar, String::from("b"));
+    let s: SmtScript = vc_script_new();
+    vc_script_assert(s, vc_tm_app2(ar, VC_OP_FPADD(), a, b));
+    vc_script_assert(s, vc_tm_app2(ar, VC_OP_FPSUB(), a, b));
+    vc_script_assert(s, vc_tm_app2(ar, VC_OP_FPMUL(), a, b));
+    vc_script_assert(s, vc_tm_app2(ar, VC_OP_FPDIV(), a, b));
+    vc_script_assert(s, vc_tm_app2(ar, VC_OP_FPEQ(), a, b));
+    vc_script_assert(s, vc_tm_app2(ar, VC_OP_FPLT(), a, b));
+    vc_script_assert(s, vc_tm_app2(ar, VC_OP_FPLE(), a, b));
+    vc_script_assert(s, vc_tm_app2(ar, VC_OP_FPGT(), a, b));
+    vc_script_assert(s, vc_tm_app2(ar, VC_OP_FPGE(), a, b));
+    let want: String = String::from("(assert (fp.add RNE a b))\n(assert (fp.sub RNE a b))\n");
+    want.push_str(String::from("(assert (fp.mul RNE a b))\n(assert (fp.div RNE a b))\n"));
+    want.push_str(String::from("(assert (fp.eq a b))\n(assert (fp.lt a b))\n(assert (fp.leq a b))\n"));
+    want.push_str(String::from("(assert (fp.gt a b))\n(assert (fp.geq a b))\n"));
+    if vc_smt_render(ar, s) != want { return 1; }
+    if vc_sort_text(VC_SORT_F32()) != String::from("(_ FloatingPoint 8 24)") { return 2; }
+    if vc_sort_text(VC_SORT_F64()) != String::from("(_ FloatingPoint 11 53)") { return 3; }
+    0
+}
+
+fn check_constants() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let one: i64 = vc_fp_const(ar, ITY_F64(), 4607182418800017408);
+    if one != vc_fp_const(ar, ITY_F64(), 4607182418800017408) { return 10; }
+    let s: SmtScript = vc_script_new();
+    vc_script_assert(s, one);
+    vc_script_assert(s, vc_fp_const(ar, ITY_F32(), 1065353216));
+    // the high bits an `f32` constant carries when sign-extended are dropped
+    vc_script_assert(s, vc_fp_const(ar, ITY_F32(), -1082130432));
+    let want: String = String::from("(assert ((_ to_fp 11 53) #x3ff0000000000000))\n");
+    want.push_str(String::from("(assert ((_ to_fp 8 24) #x3f800000))\n"));
+    want.push_str(String::from("(assert ((_ to_fp 8 24) #xbf800000))\n"));
+    if vc_smt_render(ar, s) != want { return 11; }
+    0
+}
+
+// IEEE: the simplifier never decides a float predicate on equal operands, since
+// `x == x` is false for a NaN and `x <= x` is false for a NaN.
+fn check_no_reflexive_folding() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let x: i64 = vc_tm_var(ar, String::from("x"));
+    if vc_tm_is_true(ar, vc_tm_app2(ar, VC_OP_FPEQ(), x, x)) { return 20; }
+    if vc_tm_is_true(ar, vc_tm_app2(ar, VC_OP_FPLE(), x, x)) { return 21; }
+    if vc_tm_is_true(ar, vc_tm_app2(ar, VC_OP_FPGE(), x, x)) { return 22; }
+    if vc_tm_is_false(ar, vc_tm_app2(ar, VC_OP_FPLT(), x, x)) { return 23; }
+    if vc_tm_is_false(ar, vc_tm_app2(ar, VC_OP_FPGT(), x, x)) { return 24; }
+    let zero: i64 = vc_fp_const(ar, ITY_F64(), 0);
+    if vc_tm_app2(ar, VC_OP_FPADD(), x, zero) == x { return 25; }
+    if vc_tm_app2(ar, VC_OP_FPMUL(), x, vc_fp_const(ar, ITY_F64(), 4607182418800017408)) == x { return 26; }
+    0
+}
+
+fn check_op_tables() -> i64 {
+    if vc_fp_op_ty(IOP_ADD_F32()) != ITY_F32() { return 30; }
+    if vc_fp_op_ty(IOP_GE_F64()) != ITY_F64() { return 31; }
+    if vc_fp_op_ty(IOP_CONST_F32()) != ITY_F32() { return 32; }
+    if vc_fp_op_ty(IOP_REM_F32()) >= 0 || vc_fp_op_ty(IOP_REM_F64()) >= 0 { return 33; }
+    if vc_fp_op_ty(IOP_WADD()) >= 0 { return 34; }
+    if vc_fp_arith_smt(IOP_DIV_F64()) != VC_OP_FPDIV() { return 35; }
+    if vc_fp_arith_smt(IOP_EQ_F64()) >= 0 { return 36; }
+    if vc_fp_cmp_smt(IOP_NE_F32()) != VC_OP_FPEQ() { return 37; }
+    if !vc_fp_is_ne(IOP_NE_F64()) || vc_fp_is_ne(IOP_EQ_F64()) { return 38; }
+    if vc_ty_sort(ITY_F32()) != VC_SORT_F32() || vc_ty_sort(ITY_F64()) != VC_SORT_F64() { return 39; }
+    if vc_ty_sort(ITY_I64()) != 64 || vc_ty_sort(ITY_PTR()) != -1 { return 40; }
+    0
+}
+
+fn check_not_equal_is_negated_fp_eq() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let x: i64 = vc_tm_var(ar, String::from("x"));
+    let y: i64 = vc_tm_var(ar, String::from("y"));
+    let ne: i64 = vc_fp_cmp(ar, IOP_NE_F64(), x, y);
+    let s: SmtScript = vc_script_new();
+    vc_script_assert(s, ne);
+    if vc_smt_render(ar, s) != String::from("(assert (not (fp.eq x y)))\n") { return 50; }
+    if vc_tm_negated(ar, ne) != vc_fp_cmp(ar, IOP_EQ_F64(), x, y) { return 51; }
+    0
+}
+
+fn check_gate() -> i64 {
+    if vc_skip_reason(add_commutes(ITY_F64(), IOP_ADD_F64(), IOP_EQ_F64())).len() != 0 { return 60; }
+    if vc_skip_reason(add_commutes(ITY_F32(), IOP_ADD_F32(), IOP_EQ_F32())).len() != 0 { return 61; }
+    // an `f32` opcode on `f64` values, and a comparison that reads an `f32` and an `f64`
+    let wrong: String = vc_skip_reason(add_commutes(ITY_F64(), IOP_ADD_F32(), IOP_EQ_F64()));
+    if !wrong.contains(String::from("unsupported-opcode: ")) { return 62; }
+    let mixed: Vec<IrInst> = Vec::new();
+    mixed.push(mk_inst_arg(0, ITY_F64(), 0));
+    mixed.push(mk_inst_arg(1, ITY_F32(), 1));
+    mixed.push(mk_inst(2, IOP_LT_F64(), ITY_BOOL(), args2(0, 1)));
+    mixed.push(mk_inst_return(3, 2));
+    let pm: Vec<i64> = Vec::new();
+    pm.push(ITY_F64());
+    pm.push(ITY_F32());
+    if !vc_skip_reason(one_block(String::from("m"), pm, ITY_BOOL(), mixed)).contains(String::from("unsupported-opcode: ")) { return 63; }
+    // a float result of an integer opcode is not a float operation
+    let bad_ty: Vec<IrInst> = Vec::new();
+    bad_ty.push(mk_const_f64(0, 0));
+    bad_ty.push(mk_const_f64(1, 0));
+    bad_ty.push(mk_inst(2, IOP_ADD_F64(), ITY_I64(), args2(0, 1)));
+    bad_ty.push(mk_inst_return(3, 2));
+    if vc_skip_reason(one_block(String::from("b"), Vec::new(), ITY_I64(), bad_ty)).len() == 0 { return 64; }
+    // a constant carries the data kind of its own type
+    let kind: Vec<IrInst> = Vec::new();
+    kind.push(ir_inst_new(0, IOP_CONST_F64(), ITY_F64(), Vec::new(), IDATA_CONST_F32(), 0, 0, String::from("")));
+    kind.push(mk_inst_return(1, 0));
+    if vc_skip_reason(one_block(String::from("k"), Vec::new(), ITY_F64(), kind)).len() == 0 { return 65; }
+    // float remainder keeps its own reason, on either width
+    let rem: Vec<IrInst> = Vec::new();
+    rem.push(mk_const_f32(0, 0));
+    rem.push(mk_inst(1, IOP_REM_F32(), ITY_F32(), args2(0, 0)));
+    rem.push(mk_inst_return(2, 1));
+    if !vc_skip_reason(one_block(String::from("r"), Vec::new(), ITY_F32(), rem)).contains(String::from("float-rem-unsupported: ")) { return 66; }
+    0
+}
+
+fn check_query_shape() -> i64 {
+    let cs: VcClaims = vc_claims(add_commutes(ITY_F64(), IOP_ADD_F64(), IOP_EQ_F64()));
+    if cs.kinds.len() != 1 || cs.kinds[0] != VC_CLAIM_ENSURES() { return 70; }
+    let q: String = query(cs, 0);
+    if !q.contains(String::from("(set-logic QF_BVFP)\n")) { return 71; }
+    if !q.contains(String::from("(declare-const p0 (_ FloatingPoint 11 53))\n(declare-const p1 (_ FloatingPoint 11 53))\n")) { return 72; }
+    if !q.contains(String::from("(define-fun v2 () (_ FloatingPoint 11 53) (fp.add RNE p0 p1))\n")) { return 73; }
+    if !q.contains(String::from("(define-fun v3 () (_ FloatingPoint 11 53) (fp.add RNE p1 p0))\n")) { return 74; }
+    if !q.contains(String::from("(define-fun v4 () Bool (fp.eq v2 v3))\n")) { return 75; }
+    if !q.contains(String::from("(assert (not v4))\n(check-sat)\n(get-value (p0 p1))")) { return 79; }
+    let cs32: VcClaims = vc_claims(add_commutes(ITY_F32(), IOP_ADD_F32(), IOP_EQ_F32()));
+    let q32: String = query(cs32, 0);
+    if !q32.contains(String::from("(declare-const p0 (_ FloatingPoint 8 24))\n")) { return 76; }
+    if cs32.model_widths[0] != VC_SORT_F32() || cs.model_widths[0] != VC_SORT_F64() { return 77; }
+    if cs.model_tys[0] != ITY_F64() { return 78; }
+    0
+}
+
+// A float parameter nothing reads still needs the floating-point logic, and an
+// integer-only function keeps the plain bit-vector one.
+fn check_logic_selection() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_return(1, 0));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    p.push(ITY_F64());
+    let cs: VcClaims = vc_claims(one_block(String::from("unused"), p, ITY_I64(), i));
+    let s: SmtScript = vc_script_new();
+    vc_script_set_logic(s, vc_logic_name(false, true));
+    if vc_smt_render(cs.arena, cs.header) != String::from("(set-logic QF_BVFP)\n(set-option :produce-models true)\n(declare-const p0 (_ BitVec 64))\n(declare-const p1 (_ FloatingPoint 11 53))\n") { return 80; }
+    if vc_logic_name(false, false) != String::from("QF_BV") { return 81; }
+    if vc_logic_name(true, false) != String::from("QF_ABV") { return 82; }
+    if vc_logic_name(true, true) != String::from("QF_ABVFP") { return 83; }
+    0
+}
+
+fn check_parse_models() -> i64 {
+    let names: Vec<String> = Vec::new();
+    names.push(String::from("p0"));
+    names.push(String::from("p1"));
+    names.push(String::from("p2"));
+    let widths: Vec<i64> = Vec::new();
+    widths.push(VC_SORT_F64());
+    widths.push(VC_SORT_F32());
+    widths.push(64);
+    let out: String = String::from("sat\n(\n  (p0 (fp #b1 #b01111111111 #b1000000000000000000000000000000000000000000000000000))\n");
+    out.push_str(String::from("  (p1 (fp #b0 #b11111111 #b10000000000000000000000))\n"));
+    out.push_str(String::from("  (p2 #x0000000000000007)\n)\n"));
+    let m: VcModel = vc_parse_model(out, names, widths);
+    if m.ok != 1 { return 90; }
+    // -1.5 as an f64 and the canonical f32 NaN
+    if m.values[0] != -4613937818241073152 { return 91; }
+    if m.values[1] != 2143289344 { return 92; }
+    if m.values[2] != 7 { return 93; }
+    let one: Vec<String> = Vec::new();
+    one.push(String::from("p0"));
+    let w64: Vec<i64> = Vec::new();
+    w64.push(VC_SORT_F64());
+    let w32: Vec<i64> = Vec::new();
+    w32.push(VC_SORT_F32());
+    let plus_inf: String = String::from("sat\n((p0 (fp #b0 #b11111111111 #b0000000000000000000000000000000000000000000000000000)))\n");
+    let pi: VcModel = vc_parse_model(plus_inf, one, w64);
+    if pi.ok != 1 || pi.values[0] != 9218868437227405312 { return 94; }
+    // a literal of the other format, a short group and a missing close all fail
+    let wrong_fmt: VcModel = vc_parse_model(plus_inf, one, w32);
+    if wrong_fmt.ok != 0 { return 95; }
+    let short: String = String::from("sat\n((p0 (fp #b0 #b11111111 #b0000000000000000000000)))\n");
+    if vc_parse_model(short, one, w32).ok != 0 { return 96; }
+    let open: String = String::from("sat\n((p0 (fp #b0 #b11111111 #b00000000000000000000000\n");
+    if vc_parse_model(open, one, w32).ok != 0 { return 97; }
+    let bits: String = String::from("sat\n((p0 #x7f800000))\n");
+    if vc_parse_model(bits, one, w32).ok != 0 { return 98; }
+    0
+}
+
+fn check_widen_and_format() -> i64 {
+    if vc_fp_widen_f32(1069547520) != 4609434218613702656 { return 100; }
+    if vc_fp_widen_f32(2139095040) != 9218868437227405312 { return 101; }
+    if vc_fp_widen_f32(1) != 3936146074321813504 { return 102; }
+    if vc_fp_widen_f32(8388607) != 4039728864677593088 { return 103; }
+    if vc_fp_widen_f32(0) != 0 { return 104; }
+    if vc_fp_widen_f32(-2147483648) != -9223372036854775807 - 1 { return 105; }
+    if vc_format_value(ITY_F64(), 4609434218613702656, 0) != String::from("1.5") { return 106; }
+    if vc_format_value(ITY_F32(), 1069547520, 0) != String::from("1.5") { return 107; }
+    if vc_format_value(ITY_F32(), 2143289344, 0) != String::from("NaN") { return 108; }
+    if vc_format_value(ITY_F64(), 9218868437227405312, 0) != String::from("inf") { return 109; }
+    if vc_format_value(ITY_F32(), -8388608, 0) != String::from("-inf") { return 110; }
+    if vc_format_value(ITY_F64(), 0, 0) != String::from("0") { return 111; }
+    if vc_format_value(ITY_I64(), 5, 0) != String::from("5") { return 112; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_terms_and_symbols();
+    if r == 0 { r = check_constants(); }
+    if r == 0 { r = check_no_reflexive_folding(); }
+    if r == 0 { r = check_op_tables(); }
+    if r == 0 { r = check_not_equal_is_negated_fp_eq(); }
+    if r == 0 { r = check_gate(); }
+    if r == 0 { r = check_query_shape(); }
+    if r == 0 { r = check_logic_selection(); }
+    if r == 0 { r = check_parse_models(); }
+    if r == 0 { r = check_widen_and_format(); }
+    i64_to_i32_wrap(r)
+}

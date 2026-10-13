@@ -81,7 +81,7 @@ fn vc_claim_result(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnswer) -> 
         let mut j: u64 = 0;
         while j < ans.values.len() {
             names.push(vc_model_symbol_name(f, cs, j));
-            values.push(vc_format_int(cs.model_tys[j], ans.values[j], ans.highs[j]));
+            values.push(vc_format_value(cs.model_tys[j], ans.values[j], ans.highs[j]));
             j = j + 1;
         }
         let kind: i64 = cs.kinds[k];

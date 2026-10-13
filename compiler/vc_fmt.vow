@@ -3,6 +3,7 @@ module VcFmt
 use ir
 use ast
 use vc_int
+use vc_fp
 
 // Decimal text of solver-model integers for counterexample values, by the
 // declared IR type: signed types print their two's-complement value, unsigned
@@ -22,6 +23,23 @@ fn vc_i128_decimal(hi: i64, lo: i64) -> String {
     let out: String = String::from("-");
     out.push_str(vc_u128_decimal(hi2 as i64, lo2 as i64));
     out
+}
+
+// Text of a float counterexample value from its IEEE bit pattern: the shortest
+// decimal that reads back as the same `f64` (an `f32` is widened first, which is
+// exact). A NaN has one canonical bit pattern in the model, so its payload is
+// not shown.
+fn vc_format_float(ty: i64, bits: i64) -> String {
+    let mut wide: i64 = bits;
+    if ty == ITY_F32() { wide = vc_fp_widen_f32(bits); }
+    format_f64_bits(wide as u64)
+}
+
+// Text of a model value of IR type `ty`: a float from its bit pattern, anything
+// else as `vc_format_int`.
+fn vc_format_value(ty: i64, lo: i64, hi: i64) -> String {
+    if vc_ty_is_float(ty) { return vc_format_float(ty, lo); }
+    vc_format_int(ty, lo, hi)
 }
 
 // Decimal text of the `ty`-typed value with limbs `hi:lo`; bits above the

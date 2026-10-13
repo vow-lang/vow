@@ -5,6 +5,7 @@ use ir_printer
 use ir_dominance
 use vc_ops
 use vc_int
+use vc_fp
 use vc_cfg
 use vc_loops
 use vc_agg
@@ -14,7 +15,7 @@ use ast
 // Fail-closed subset gate for the native verifier. `vc_skip_reason` returns ""
 // only for a function whose only effect is `panic` (the effect of `.unwrap()`)
 // and whose loops are reducible and unrollable (`vc_loops`), built from the
-// integer (8 to 128 bits) and Bool operations the
+// integer (8 to 128 bits), IEEE float (`f32`, `f64`) and Bool operations the
 // symbolic executor models and the struct, enum and `Option` values it
 // scalarises (`vc_agg`) and the `Vec`s of Bool and integers up to 64 bits it
 // models as an array plus a length (`vc_vec`), with the control-flow shape `vc_cfg_detail` accepts;
@@ -128,16 +129,17 @@ fn vc_operand_ok(inst: IrInst, tys: Vec<i64>, lits: Vec<i64>, k: u64, want: i64)
 // whose arms each feed a Unit Phi; the executor models no value for it. A
 // pointer is an aggregate object.
 fn vc_is_merge_ty(ty: i64) -> bool {
-    vc_ty_is_int(ty) || ty == ITY_BOOL() || ty == ITY_UNIT() || ty == ITY_PTR()
+    vc_ty_is_int(ty) || vc_ty_is_float(ty) || ty == ITY_BOOL() || ty == ITY_UNIT() || ty == ITY_PTR()
 }
 
-// A struct field or enum payload slot holds Bool or an integer up to 64 bits
-// in one slot (`IDATA_FIELD`), and a 128-bit integer in two (`IDATA_WIDE_SLOT`).
+// A struct field or enum payload slot holds Bool, an integer up to 64 bits or a
+// float in one slot (`IDATA_FIELD`), and a 128-bit integer in two
+// (`IDATA_WIDE_SLOT`).
 // The slot kind and the value's width must agree: the lowerer never pairs them
 // otherwise, so a mismatch is IR the executor does not guess at.
 fn vc_field_access_ok(dk: i64, ty: i64) -> bool {
     if dk == IDATA_FIELD() {
-        return ty == ITY_BOOL() || (vc_ty_is_int(ty) && vc_ty_bits(ty) <= 64);
+        return ty == ITY_BOOL() || vc_ty_is_float(ty) || (vc_ty_is_int(ty) && vc_ty_bits(ty) <= 64);
     }
     dk == IDATA_WIDE_SLOT() && vc_ty_bits(ty) == 128
 }
@@ -182,16 +184,21 @@ fn vc_is_const_int_op(op: i64) -> bool {
         || op == IOP_CONST_I128() || op == IOP_CONST_U128()
 }
 
+// The scalar types a value can have across a call or a return.
+fn vc_scalar_value_ty(ty: i64) -> bool {
+    ty == ITY_BOOL() || vc_ty_is_int(ty) || vc_ty_is_float(ty)
+}
+
 // A call of a user function the splicer can inline: every argument and the
-// result are integer or Bool (or the result is Unit). Aggregates do not cross a
+// result are integer, float or Bool (or the result is Unit). Aggregates do not cross a
 // call yet.
 fn vc_call_scalar(inst: IrInst, tys: Vec<i64>) -> bool {
     if inst.dk != IDATA_CALL_TARGET() { return false; }
-    if inst.ty != ITY_UNIT() && inst.ty != ITY_BOOL() && !vc_ty_is_int(inst.ty) { return false; }
+    if inst.ty != ITY_UNIT() && !vc_scalar_value_ty(inst.ty) { return false; }
     let mut k: u64 = 0;
     while k < inst.args.len() {
         let t: i64 = vc_arg_ty(tys, inst, k);
-        if t != ITY_BOOL() && !vc_ty_is_int(t) { return false; }
+        if !vc_scalar_value_ty(t) { return false; }
         k = k + 1;
     }
     true
@@ -245,8 +252,9 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
     if op == IOP_UNREACHABLE() { return n == 0; }
     if op == IOP_PHI() { return n == 0 && vc_is_merge_ty(inst.ty); }
     if op == IOP_UPSILON() { return n == 1 && inst.dk == IDATA_PHI_TARGET() && vc_is_merge_ty(t0); }
+    if vc_fp_is_op(op) { return vc_fp_inst_ok(inst, t0, t1); }
     if op == IOP_GET_ARG() {
-        return (vc_ty_is_int(inst.ty) || inst.ty == ITY_PTR()) && n == 0 && inst.dv >= 0
+        return (vc_ty_is_int(inst.ty) || vc_ty_is_float(inst.ty) || inst.ty == ITY_PTR()) && n == 0 && inst.dv >= 0
             && inst.dv < f.params.len() as i64 && f.params[inst.dv as u64] == inst.ty;
     }
     if op == IOP_REGION_ALLOC() {
@@ -294,7 +302,7 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
     if op == IOP_RETURN() {
         if f.return_ty == ITY_UNIT() { return n == 0 || (n == 1 && t0 == ITY_UNIT()); }
         return n == 1 && t0 == f.return_ty
-            && (vc_ty_is_int(f.return_ty) || f.return_ty == ITY_BOOL() || f.return_ty == ITY_PTR());
+            && (vc_scalar_value_ty(f.return_ty) || f.return_ty == ITY_PTR());
     }
     false
 }
