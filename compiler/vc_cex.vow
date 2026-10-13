@@ -37,11 +37,7 @@ fn vc_model_symbol_name(f: IrFunction, cs: VcClaims, j: u64) -> String {
     out.push_str(i64_to_string(cs.model_slots[j]));
     if cs.model_ambig[j] != 0 {
         out.push_str(String::from(":"));
-        if cs.model_widths[j] == 0 {
-            out.push_str(String::from("bool"));
-        } else {
-            out.push_str(i64_to_string(cs.model_widths[j]));
-        }
+        out.push_str(vc_sort_suffix(cs.model_widths[j]));
     }
     out
 }

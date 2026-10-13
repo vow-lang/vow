@@ -35,6 +35,15 @@ fn vc_format_float(ty: i64, bits: i64) -> String {
     format_f64_bits(wide as u64)
 }
 
+// The suffix that tells the sorts of one slot apart in a counterexample name:
+// `bool`, `f32`, `f64`, or the bit-vector width.
+fn vc_sort_suffix(sort: i64) -> String {
+    if sort == VC_SORT_BOOL() { return String::from("bool"); }
+    if sort == VC_SORT_F32() { return String::from("f32"); }
+    if sort == VC_SORT_F64() { return String::from("f64"); }
+    i64_to_string(sort)
+}
+
 // Text of a model value of IR type `ty`: a float from its bit pattern, anything
 // else as `vc_format_int`.
 fn vc_format_value(ty: i64, lo: i64, hi: i64) -> String {
