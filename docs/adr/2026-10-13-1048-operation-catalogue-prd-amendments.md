@@ -168,7 +168,7 @@ so a builtin missing from the catalogue was indistinguishable from a forgotten o
 by slice, the catalogue grew to 83 operations, covering 79 of the 96 names the
 type-checker table lists literally and the four `parse_<narrow int>` builtins
 it generates. The remaining literal names, and the families the table
-generates in loops, are deliberately not catalogued. That is to be recorded (by the
+generates in loops, are deliberately not catalogued. That is recorded (by the
 coverage slice named below) as an `excluded` list in
 `docs/spec/operations.json`, each entry with a reason, so that every
 builtin name known to the type checker is either catalogued or excluded with a
@@ -187,14 +187,16 @@ stated reason. The reasons:
 The exclusion does not move any fact. The type-checker tables remain the
 single source for signatures and effects (this is user story 5, unchanged);
 the catalogue's `doc_signature` and `effects` are copies checked against
-grammar.md and the help text by (a). Today nothing compares them with the
-type-checker tables, and the purity rules of (c) read the catalogue's `effects`,
-so the coverage gate must also close that gap (see its requirement below). A
+grammar.md and the help text by (a). The purity rules of (c) read the
+catalogue's `effects`, so the coverage gate also compares them with the
+type-checker tables (see its requirement below). A
 builtin enters the catalogue by an entry in `operations`, leaves the exclusion
 list by deleting its line, and is never in both.
 
 **Enforced by:** the coverage gate and its generator unit tests (work item
-`ops-catalogue-coverage-and-type-env-tie`, *pending*). The requirement on that
+`ops-catalogue-coverage-and-type-env-tie`, landed as the `excluded` section of
+`operations.json`, the `vow-types` test `operation_catalogue_agrees_with_builtin_signature_table`
+and `compiler/tests/test_op_catalogue_env.vow`). The requirement on that
 slice: the gate must fail when a name in either compiler's type-checker table
 is neither an `operations` entry nor an `excluded` entry, when a name is in
 both, when an `excluded` entry has no reason, and when an `operations` entry's

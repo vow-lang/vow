@@ -903,5 +903,32 @@
     "__vow_string_to_lower",
     "__vow_string_replace",
     "__vow_string_join"
+  ],
+  "excluded": [
+    {
+      "prefix": "__vow_clif_",
+      "reason": "Cranelift shim FFI the self-hosted compiler declares for its own backend; compiler-internal, not a program-facing builtin operation."
+    },
+    {
+      "names": ["debug_str", "debug_i64", "debug_u64"],
+      "reason": "Debug-trace builtins lowered by hand-written arms next to the catalogue lookups; they are not part of the catalogue's runtime ABI surface yet."
+    },
+    {
+      "names": ["string_matches_literal_at"],
+      "reason": "Lowered by a dedicated call rewrite (literal comparison against a string offset), not a plain runtime call, so it has no single-symbol catalogue row."
+    },
+    {
+      "names": ["i64_to_string"],
+      "reason": "Alias of int_to_string: same runtime symbol, so the catalogue lists only int_to_string and the alias stays a one-line hand-written lowering arm."
+    },
+    {
+      "contains": "_to_",
+      "suffixes": ["_try", "_wrap", "_sat"],
+      "reason": "Narrowing-conversion families (<source>_to_<target>_{try,wrap,sat}) return narrow integer types the catalogue token vocabulary cannot express yet; they stay in the hand-written conversion tables, and their _try runtime symbols are the arena_routes entries."
+    },
+    {
+      "names": ["add_sat_u8", "sub_sat_u8", "mul_sat_u8"],
+      "reason": "Saturating u8 arithmetic takes and returns u8, which the catalogue token vocabulary cannot express yet; it stays in the hand-written conversion tables beside the narrowing families."
+    }
   ]
 }

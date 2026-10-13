@@ -2558,5 +2558,409 @@ class CModelTest(unittest.TestCase):
         self.assertEqual(go.check_c_models(ops, routes), [])
 
 
+def _write_excluded_catalogue(tmp: Path, excluded, ops=None) -> None:
+    spec = tmp / "docs" / "spec"
+    spec.mkdir(parents=True, exist_ok=True)
+    body = {"operations": PRINT_OPS if ops is None else ops, "excluded": excluded}
+    (spec / "operations.json").write_text(json.dumps(body))
+
+
+def _load_excluded_errors(excluded, ops=None) -> list[str]:
+    with tempfile.TemporaryDirectory() as d:
+        _write_excluded_catalogue(Path(d), excluded, ops)
+        try:
+            go.load_excluded(Path(d), PRINT_OPS if ops is None else ops)
+        except ValueError as e:
+            return str(e).splitlines()
+    raise AssertionError(f"load_excluded accepted {excluded!r}")
+
+
+class LoadExcludedTest(unittest.TestCase):
+    def _load(self, excluded):
+        with tempfile.TemporaryDirectory() as d:
+            _write_excluded_catalogue(Path(d), excluded)
+            return go.load_excluded(Path(d), PRINT_OPS)
+
+    def test_absent_section_excludes_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            _write_catalogue(Path(d), PRINT_OPS)
+            self.assertEqual(go.load_excluded(Path(d), PRINT_OPS), [])
+
+    def test_valid_entries_of_every_matcher_kind_are_returned_in_order(self):
+        entries = [
+            {"names": ["debug_str"], "reason": "r1"},
+            {"prefix": "__vow_clif_", "reason": "r2"},
+            {"contains": "_to_", "suffixes": ["_try", "_wrap"], "reason": "r3"},
+        ]
+        self.assertEqual(self._load(entries), entries)
+
+    def test_missing_reason_is_reported_by_matcher(self):
+        errors = _load_excluded_errors([{"names": ["debug_str"]}])
+        self.assertEqual(len(errors), 1)
+        self.assertIn("excluded entry #0", errors[0])
+        self.assertIn("debug_str", errors[0])
+        self.assertIn("no reason", errors[0])
+
+    def test_blank_reason_is_rejected(self):
+        errors = _load_excluded_errors([{"prefix": "__x_", "reason": "  "}])
+        self.assertTrue(any("__x_" in e and "no reason" in e for e in errors))
+
+    def test_name_both_catalogued_and_excluded_is_rejected_by_name(self):
+        errors = _load_excluded_errors(
+            [{"names": ["debug_str", "print_str"], "reason": "r"}]
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("'print_str'", errors[0])
+        self.assertIn("both catalogued and excluded", errors[0])
+
+    def test_prefix_and_contains_matchers_cannot_swallow_a_catalogued_name(self):
+        by_prefix = _load_excluded_errors([{"prefix": "print_", "reason": "r"}])
+        self.assertTrue(any("'print_i64'" in e for e in by_prefix))
+        by_contains = _load_excluded_errors(
+            [{"contains": "print", "suffixes": ["_u64"], "reason": "r"}]
+        )
+        self.assertEqual(len(by_contains), 1)
+        self.assertIn("'print_u64'", by_contains[0])
+
+    def test_matcher_must_be_exactly_one(self):
+        none = _load_excluded_errors([{"reason": "r"}])
+        self.assertTrue(any("exactly one matcher" in e for e in none))
+        both = _load_excluded_errors([{"names": ["a"], "prefix": "b_", "reason": "r"}])
+        self.assertTrue(any("exactly one matcher" in e for e in both))
+
+    def test_malformed_matchers_are_each_reported(self):
+        errors = _load_excluded_errors(
+            [
+                {"names": [], "reason": "r"},
+                {"names": ["bad name"], "reason": "r"},
+                {"prefix": "", "reason": "r"},
+                {"prefix": "a.*", "reason": "r"},
+                {"contains": "_to_", "reason": "r"},
+                {"contains": "_to_", "suffixes": [], "reason": "r"},
+                {"contains": "_to_", "suffixes": ["_a b"], "reason": "r"},
+                {"names": ["x"], "suffixes": ["_s"], "reason": "r"},
+                {"names": ["y"], "reason": "r", "note": "stray"},
+            ]
+        )
+        text = "\n".join(errors)
+        for index in range(9):
+            self.assertIn(f"excluded entry #{index}", text)
+        self.assertIn("at least one name", text)
+        self.assertIn("bad name", text)
+        self.assertIn("malformed prefix", text)
+        self.assertIn("non-empty 'suffixes'", text)
+        self.assertIn("malformed suffix", text)
+        self.assertIn("matcher is 'names'", text)
+        self.assertIn("unknown field", text)
+
+    def test_a_name_listed_twice_is_reported_with_both_entries(self):
+        errors = _load_excluded_errors(
+            [
+                {"names": ["debug_str"], "reason": "r"},
+                {"names": ["debug_str"], "reason": "r"},
+            ]
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("'debug_str'", errors[0])
+        self.assertIn("#0", errors[0])
+        self.assertIn("#1", errors[0])
+
+    def test_non_list_section_and_non_object_entry_are_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            _write_excluded_catalogue(Path(d), {"names": ["a"]})
+            with self.assertRaises(ValueError):
+                go.load_excluded(Path(d), PRINT_OPS)
+        errors = _load_excluded_errors(["debug_str"])
+        self.assertIn("excluded entry #0 must be an object", errors)
+
+    def test_real_catalogue_excluded_entries_are_all_valid(self):
+        ops = go.load_catalogue(REPO_ROOT)
+        excluded = go.load_excluded(REPO_ROOT, ops)
+        self.assertTrue(excluded)
+        for entry in excluded:
+            self.assertTrue(entry["reason"].strip())
+
+
+class ExcludedMatchesTest(unittest.TestCase):
+    def test_names_match_exactly(self):
+        entry = {"names": ["debug_str", "debug_i64"]}
+        self.assertTrue(go.excluded_matches(entry, "debug_i64"))
+        self.assertFalse(go.excluded_matches(entry, "debug_u64"))
+        self.assertFalse(go.excluded_matches(entry, "debug_str_x"))
+
+    def test_prefix_matches_only_at_the_start(self):
+        entry = {"prefix": "__vow_clif_"}
+        self.assertTrue(go.excluded_matches(entry, "__vow_clif_create"))
+        self.assertFalse(go.excluded_matches(entry, "x__vow_clif_create"))
+
+    def test_contains_needs_the_substring_and_a_listed_suffix(self):
+        entry = {"contains": "_to_", "suffixes": ["_try", "_wrap", "_sat"]}
+        self.assertTrue(go.excluded_matches(entry, "i64_to_u8_try"))
+        self.assertTrue(go.excluded_matches(entry, "u128_to_i128_sat"))
+        self.assertFalse(go.excluded_matches(entry, "int128_to_string"))
+        self.assertFalse(go.excluded_matches(entry, "string_to_upper"))
+        self.assertFalse(go.excluded_matches(entry, "i64_to"))
+
+    def test_seeded_real_exclusions_cover_the_known_uncataloged_builtins(self):
+        ops = go.load_catalogue(REPO_ROOT)
+        excluded = go.load_excluded(REPO_ROOT, ops)
+        covered = [
+            "__vow_clif_fn_begin",
+            "debug_str",
+            "debug_i64",
+            "debug_u64",
+            "string_matches_literal_at",
+            "i64_to_string",
+            "i64_to_u8_try",
+            "u128_to_i128_wrap",
+            "add_sat_u8",
+            "sub_sat_u8",
+            "mul_sat_u8",
+        ]
+        for name in covered:
+            self.assertTrue(any(go.excluded_matches(e, name) for e in excluded), name)
+        for op in ops:
+            self.assertFalse(
+                any(go.excluded_matches(e, op["name"]) for e in excluded), op["name"]
+            )
+
+
+EXCLUDED = [
+    {"names": ["debug_str"], "reason": "r"},
+    {"prefix": "__vow_clif_", "reason": "r"},
+    {"contains": "_to_", "suffixes": ["_try", "_wrap"], "reason": "r"},
+]
+
+FACT_FIXTURES = [
+    (
+        "vow-types/src/env.rs",
+        "    // GENERATE:OPERATION_FACTS:START\n    // GENERATE:OPERATION_FACTS:END\n",
+    ),
+    (
+        "compiler/tests/catalogue_facts.vow",
+        "// GENERATE:OPERATION_FACTS:START\n// GENERATE:OPERATION_FACTS:END\n",
+    ),
+]
+
+
+def _write_fact_fixtures(tmp: Path) -> None:
+    for rel, body in FACT_FIXTURES:
+        path = tmp / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"before\n{body}after\n")
+
+
+class OperationFactTablesTest(unittest.TestCase):
+    def test_fact_targets_use_their_own_marker_pair(self):
+        self.assertEqual(
+            {str(p) for p, _ in go.FACT_TARGET_FILES},
+            {"vow-types/src/env.rs", "compiler/tests/catalogue_facts.vow"},
+        )
+        self.assertNotEqual(go.FACTS_MARKER_START, go.MARKER_START)
+        self.assertNotEqual(go.FACTS_MARKER_END, go.MARKER_END)
+        self.assertFalse(
+            {str(p) for p, _ in go.FACT_TARGET_FILES} & {"vow-ir/src/lower/mod.rs"}
+        )
+
+    def test_generators_are_deterministic(self):
+        for rel_path, gen_fn in go.FACT_TARGET_FILES:
+            self.assertEqual(
+                gen_fn(PRINT_OPS, EXCLUDED), gen_fn(PRINT_OPS, EXCLUDED), str(rel_path)
+            )
+
+    def test_rust_block_carries_every_fact_and_exclusion(self):
+        block = go.gen_rust_facts_block(PRINT_OPS, EXCLUDED)
+        self.assertIn(
+            'CatalogueFact { name: "print_str", effects: "[io]", params: &["ptr"], '
+            'ret: "unit", doc_params: &["String"], doc_ret: "()" },',
+            block,
+        )
+        self.assertIn('ExcludedFact::Names(&["debug_str"]),', block)
+        self.assertIn('ExcludedFact::Prefix("__vow_clif_"),', block)
+        self.assertIn(
+            'ExcludedFact::Contains { needle: "_to_", suffixes: &["_try", "_wrap"] },',
+            block,
+        )
+        self.assertIn("#[rustfmt::skip]", block)
+        self.assertTrue(block.startswith(go.FACTS_MARKER_START))
+        self.assertTrue(block.endswith(go.FACTS_MARKER_END))
+
+    def test_rust_block_indents_every_line_after_the_first(self):
+        lines = go.gen_rust_facts_block(PRINT_OPS, EXCLUDED).splitlines()
+        self.assertFalse(lines[0].startswith(" "))
+        self.assertTrue(all(ln.startswith("    ") or not ln for ln in lines[1:]))
+
+    def test_vow_block_carries_every_fact_and_exclusion(self):
+        block = go.gen_vow_facts_block(PRINT_OPS, EXCLUDED)
+        self.assertIn(
+            'v.push(op_fact(String::from("print_str"), String::from("[io]"), '
+            'String::from("ptr"), String::from("unit"), String::from("String"), '
+            'String::from("()")));',
+            block,
+        )
+        self.assertIn(
+            'v.push(op_excluded(OPX_NAMES(), String::from("debug_str"), String::from("")));',
+            block,
+        )
+        self.assertIn(
+            'v.push(op_excluded(OPX_PREFIX(), String::from("__vow_clif_"), String::from("")));',
+            block,
+        )
+        self.assertIn(
+            'v.push(op_excluded(OPX_CONTAINS(), String::from("_to_"), '
+            'String::from("_try,_wrap")));',
+            block,
+        )
+
+    def test_multi_param_op_joins_tokens_and_empty_params_stay_empty(self):
+        two = dict(PRINT_OPS[0], name="two", params=["ptr", "i64"])
+        none = dict(PRINT_OPS[0], name="none", params=[])
+        block = go.gen_vow_facts_block([two, none], [])
+        self.assertIn('String::from("ptr,i64")', block)
+        self.assertIn(
+            'String::from("none"), String::from("[io]"), String::from("")', block
+        )
+        rust = go.gen_rust_facts_block([two, none], [])
+        self.assertIn('params: &["ptr", "i64"]', rust)
+        self.assertIn("params: &[]", rust)
+
+    def test_doc_params_are_the_signature_parameter_types(self):
+        join = dict(
+            PRINT_OPS[0],
+            name="join",
+            params=["ptr", "ptr"],
+            doc_signature="fn(parts: Vec<String>, sep: String) -> String",
+        )
+        self.assertEqual(go._doc_params(join), ["Vec<String>", "String"])
+        self.assertEqual(go._doc_params(dict(join, doc_signature="fn() -> i64")), [])
+        self.assertIn(
+            'doc_params: &["Vec<String>", "String"]',
+            go.gen_rust_facts_block([join], []),
+        )
+        self.assertIn(
+            'String::from("Vec<String>|String")', go.gen_vow_facts_block([join], [])
+        )
+
+    def test_doc_return_is_the_signature_return_type(self):
+        listing = dict(
+            PRINT_OPS[0],
+            doc_signature="fn(p: String) -> Vec<String>",
+            **{"return": "ptr"},
+        )
+        self.assertIn('doc_ret: "Vec<String>"', go.gen_rust_facts_block([listing], []))
+
+    def test_write_then_check_reports_clean(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _write_fact_fixtures(tmp)
+            go.write_fact_tables(PRINT_OPS, tmp, EXCLUDED)
+            self.assertEqual(go.check_fact_tables(PRINT_OPS, tmp, EXCLUDED), [])
+            content = (tmp / "vow-types/src/env.rs").read_text()
+        self.assertTrue(content.startswith("before\n"))
+        self.assertTrue(content.endswith("after\n"))
+        self.assertIn("const CATALOGUE_FACTS", content)
+
+    def test_check_goes_stale_when_an_exclusion_changes(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _write_fact_fixtures(tmp)
+            go.write_fact_tables(PRINT_OPS, tmp, EXCLUDED)
+            changed = EXCLUDED + [{"names": ["debug_i64"], "reason": "r"}]
+            mismatches = go.check_fact_tables(PRINT_OPS, tmp, changed)
+        self.assertEqual(len(mismatches), 2)
+        self.assertTrue(any("env.rs" in m for m in mismatches))
+        self.assertTrue(any("catalogue_facts.vow" in m for m in mismatches))
+
+    def test_check_goes_stale_when_an_op_changes(self):
+        for field, value in [
+            ("effects", "[read]"),
+            ("params", ["i64"]),
+            ("name", "print_renamed"),
+        ]:
+            with tempfile.TemporaryDirectory() as d:
+                tmp = Path(d)
+                _write_fact_fixtures(tmp)
+                go.write_fact_tables(PRINT_OPS, tmp, EXCLUDED)
+                edited = [dict(op) for op in PRINT_OPS]
+                edited[0][field] = value
+                mismatches = go.check_fact_tables(edited, tmp, EXCLUDED)
+            self.assertEqual(len(mismatches), 2, field)
+
+    def test_hand_edited_fact_table_is_flagged(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _write_fact_fixtures(tmp)
+            go.write_fact_tables(PRINT_OPS, tmp, EXCLUDED)
+            path = tmp / "compiler/tests/catalogue_facts.vow"
+            path.write_text(path.read_text().replace('"[io]"', '"[]"', 1))
+            mismatches = go.check_fact_tables(PRINT_OPS, tmp, EXCLUDED)
+        self.assertEqual(
+            mismatches,
+            ["compiler/tests/catalogue_facts.vow: spliced fact table is stale"],
+        )
+
+    def test_missing_marker_raises_instead_of_reporting_clean(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _write_fact_fixtures(tmp)
+            (tmp / "vow-types/src/env.rs").write_text("no markers\n")
+            with self.assertRaises(ValueError):
+                go.check_fact_tables(PRINT_OPS, tmp, EXCLUDED)
+
+    def test_fact_splice_leaves_an_operations_block_in_the_same_file_alone(self):
+        content = (
+            f"{go.MARKER_START}\nops\n{go.MARKER_END}\n"
+            f"{go.FACTS_MARKER_START}\nold\n{go.FACTS_MARKER_END}\n"
+        )
+        spliced = go._replace_between_markers(
+            content, go.FACTS_MARKER_START, go.FACTS_MARKER_END, "new"
+        )
+        self.assertIn(f"{go.MARKER_START}\nops\n{go.MARKER_END}", spliced)
+        self.assertIn("new", spliced)
+        self.assertNotIn("old", spliced)
+
+    def test_real_repo_fact_tables_are_fresh(self):
+        ops = go.load_catalogue(REPO_ROOT)
+        excluded = go.load_excluded(REPO_ROOT, ops)
+        self.assertEqual(go.check_fact_tables(ops, REPO_ROOT, excluded), [])
+
+    def _run_main(self, tmp: Path, *flags: str) -> tuple[str, int]:
+        stdout = io.StringIO()
+        old_argv = sys.argv
+        sys.argv = ["generate_operations.py", *flags, "--repo-root", str(tmp)]
+        code = 0
+        try:
+            with contextlib.redirect_stdout(stdout):
+                go.main()
+        except SystemExit as e:
+            code = e.code
+        finally:
+            sys.argv = old_argv
+        return stdout.getvalue(), code
+
+    def test_main_writes_and_checks_fact_tables_end_to_end(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _write_fixture_tree(tmp)
+            ops = [dict(op, verifier_model="unmodeled") for op in PRINT_OPS]
+            _write_excluded_catalogue(tmp, EXCLUDED, ops)
+            _write_target_fixtures(tmp)
+            _write_fact_fixtures(tmp)
+
+            written, code = self._run_main(tmp)
+            self.assertEqual(code, 0)
+            self.assertIn("Updated compiler/tests/catalogue_facts.vow", written)
+            checked, code = self._run_main(tmp, "--check")
+            self.assertEqual((code, "OK:" in checked), (0, True), checked)
+
+            facts = tmp / "compiler/tests/catalogue_facts.vow"
+            facts.write_text(facts.read_text().replace("print_u64", "print_u64_X"))
+            stale, code = self._run_main(tmp, "--check")
+        self.assertEqual(code, 1)
+        self.assertIn(
+            "compiler/tests/catalogue_facts.vow: spliced fact table is stale", stale
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
