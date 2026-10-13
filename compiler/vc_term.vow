@@ -8,6 +8,14 @@ use ir_dominance
 // text is produced by `vc_smt`, which maps the operator codes below to
 // symbols.
 //
+// A `VC_T_QEQ` node is the one binder of the language: for every index `i`
+// below the bit-vector `n` (its `aux`), the low byte of `a[i]` equals the low
+// byte of `b[i + k]` (`a` and `b` are its first two children, `k` its third). It
+// has no operator code, is never simplified and its bound variable is not a
+// term, so a rule or a traversal never sees a binder; `vc_smt` prints it as a
+// `forall` over a reserved name. Only `vc_str` builds one, and only inside an
+// assumption, never in a goal.
+//
 // A sort code is the bit-vector width (8, 16, 32, 64, 128), or 0 for Bool, or
 // `VC_SORT_ARRAY64` for an array from 64-bit indices to 64-bit elements.
 // A bit-vector constant holds its width in `a` and its low and high 64-bit
@@ -24,6 +32,7 @@ fn VC_T_BV() -> i64 { 1 }
 fn VC_T_BOOL() -> i64 { 2 }
 fn VC_T_APP() -> i64 { 3 }
 fn VC_T_EXT() -> i64 { 4 }
+fn VC_T_QEQ() -> i64 { 5 }
 
 fn VC_EXT_ZERO() -> i64 { 0 }
 fn VC_EXT_SIGN() -> i64 { 1 }
@@ -242,7 +251,7 @@ fn vc_tm_is_false(ar: VcArena, t: i64) -> bool {
 // never named.
 fn vc_tm_is_leaf(ar: VcArena, t: i64) -> bool {
     let kind: i64 = ar.kinds[t as u64];
-    kind != VC_T_APP() && kind != VC_T_EXT()
+    kind != VC_T_APP() && kind != VC_T_EXT() && kind != VC_T_QEQ()
 }
 
 // The variable already standing for `t`, `t` itself when it is a leaf, or -1
@@ -560,4 +569,10 @@ fn vc_tm_ext(ar: VcArena, kind: i64, amount: i64, x: i64) -> i64 {
         if r >= 0 { return r; }
     }
     vc_arena_intern(ar, VC_T_EXT(), x, amount, -1, kind)
+}
+
+// `forall i < n. low8(a[i]) == low8(b[i + k])`: the `String` byte-range equality
+// (`vc_str`). Not interned through the simplifier on purpose.
+fn vc_tm_qeq(ar: VcArena, a: i64, b: i64, k: i64, n: i64) -> i64 {
+    vc_arena_intern(ar, VC_T_QEQ(), a, b, k, n)
 }
