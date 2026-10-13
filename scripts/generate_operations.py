@@ -136,9 +136,12 @@ REQUIRED_FIELDS = [
 #
 # "arena_routing: heap_fresh" means the op returns a fresh heap aggregate whose
 # runtime symbol has an `_in_arena` variant (the `arena_routes` section lists
-# it); "none" (or omitting the field) means it has no arena variant. The shape
-# tag the lowerer attaches to a result is a separate fact, derived from the
-# doc_signature return type (`result_shape`).
+# it); "none" means it has no arena variant. An op whose result is a String, a
+# Vec or an Option must declare one of the two; a scalar or unit op may omit
+# the field. `check_arena_routing` enforces that `heap_fresh` holds exactly when
+# the op's symbol is a route, and that a heap-returning `none` carries a
+# reason. The shape tag the lowerer attaches to a result is a separate fact,
+# derived from the doc_signature return type (`result_shape`).
 #
 # "verifier_model" is the native verifier's category (`known` means its
 # symbolic executor models the call). "c_model" is the ESBMC C model's: `base`
@@ -152,7 +155,14 @@ OPTIONAL_FIELD_VALUES = {
     "c_model": {"unmodeled", "base", "base_and_arena"},
 }
 
-ALLOWED_FIELDS = set(REQUIRED_FIELDS) | set(OPTIONAL_FIELD_VALUES)
+# "arena_routing_reason" is free text, so it sits outside the closed
+# vocabularies above: it says why an op that returns a heap value has no arena
+# variant, and `check_arena_routing` requires it exactly on those ops.
+ARENA_REASON_FIELD = "arena_routing_reason"
+
+ALLOWED_FIELDS = (
+    set(REQUIRED_FIELDS) | set(OPTIONAL_FIELD_VALUES) | {ARENA_REASON_FIELD}
+)
 
 
 def load_catalogue(repo_root: Path) -> list[dict]:
@@ -369,19 +379,71 @@ def load_arena_routes(repo_root: Path, ops: list[dict]) -> list[str]:
                 errors.append(f"arena route symbol '{sym}' appears more than once")
             seen.add(sym)
 
-    for op in ops:
-        if (
-            op.get("arena_routing") == "heap_fresh"
-            and op["runtime_symbol"] not in routes
-        ):
-            errors.append(
-                f"operation '{op['name']}' is heap_fresh but its runtime_symbol "
-                f"'{op['runtime_symbol']}' has no arena route"
-            )
-
     if errors:
         raise ValueError("\n".join(errors))
     return routes
+
+
+def check_arena_routing(ops: list[dict], routes: list[str]) -> list[str]:
+    """Drift check for the arena-routing category: a builtin with a String, Vec
+    or Option result must say whether it has an arena route, and the category
+    must agree with `arena_routes` in both directions (`heap_fresh` exactly when
+    the runtime symbol is a route, `none` never with one). A heap-returning
+    `none` must say why in `arena_routing_reason`, and only a `none` may. Routes
+    no catalogued op uses, such as `map_get` or the `*_try` casts, stay legal."""
+    problems: list[str] = []
+    for op in ops:
+        where = f"docs/spec/operations.json: '{op['name']}'"
+        symbol = op["runtime_symbol"]
+        routing = op.get("arena_routing")
+        routed = symbol in routes
+        heap_result = result_shape(op) is not None
+        if routing is None:
+            if heap_result:
+                problems.append(
+                    f"{where} returns a heap value but has no arena_routing (set "
+                    "'heap_fresh' with an arena route, or an explicit 'none')"
+                )
+            elif routed:
+                problems.append(
+                    f"{where} has an arena route for '{symbol}' but is not heap_fresh"
+                )
+        elif routing == "heap_fresh":
+            if not heap_result:
+                problems.append(
+                    f"{where} is heap_fresh but its return type is not a String, "
+                    "Vec or Option"
+                )
+            if not routed:
+                problems.append(
+                    f"{where} is heap_fresh but its runtime_symbol '{symbol}' has "
+                    "no arena route"
+                )
+        elif routed:
+            problems.append(
+                f"{where} is arena_routing 'none' but its runtime_symbol "
+                f"'{symbol}' has an arena route"
+            )
+        problems += _check_arena_reason(op, where, routing, heap_result)
+    return problems
+
+
+def _check_arena_reason(
+    op: dict, where: str, routing: str | None, heap_result: bool
+) -> list[str]:
+    reason = op.get(ARENA_REASON_FIELD)
+    if reason is None:
+        if routing == "none" and heap_result:
+            return [
+                f"{where} is arena_routing 'none' but has no {ARENA_REASON_FIELD} "
+                "saying why a heap result has no arena variant"
+            ]
+        return []
+    if not isinstance(reason, str) or not reason.strip():
+        return [f"{where} has an empty or non-string {ARENA_REASON_FIELD}"]
+    if routing != "none":
+        return [f"{where} has an {ARENA_REASON_FIELD} but is not arena_routing 'none'"]
+    return []
 
 
 def check_runtime_exports(routes: list[str], repo_root: Path) -> list[str]:
@@ -861,7 +923,11 @@ def main() -> None:
         print(str(e), file=sys.stderr)
         sys.exit(1)
 
-    undecided = check_verifier_models(ops) + check_c_models(ops, routes)
+    undecided = (
+        check_verifier_models(ops)
+        + check_c_models(ops, routes)
+        + check_arena_routing(ops, routes)
+    )
     if undecided:
         for m in undecided:
             print(m, file=sys.stderr)

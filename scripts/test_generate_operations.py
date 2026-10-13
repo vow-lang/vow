@@ -59,6 +59,7 @@ FS_STDIN_ARGS_STDERR_OPS = [
         "return": "ptr",
         "doc_signature": "fn(path: String) -> String",
         "effects": "[read]",
+        "arena_routing": "heap_fresh",
     },
     {
         "name": "fs_open",
@@ -75,6 +76,7 @@ FS_STDIN_ARGS_STDERR_OPS = [
         "return": "ptr",
         "doc_signature": "fn(handle: i64) -> String",
         "effects": "[read]",
+        "arena_routing": "heap_fresh",
     },
     {
         "name": "fs_status",
@@ -123,6 +125,7 @@ FS_STDIN_ARGS_STDERR_OPS = [
         "return": "ptr",
         "doc_signature": "fn(path: String) -> Vec<String>",
         "effects": "[read]",
+        "arena_routing": "heap_fresh",
     },
     {
         "name": "fs_remove",
@@ -179,6 +182,7 @@ FS_STDIN_ARGS_STDERR_OPS = [
         "return": "ptr",
         "doc_signature": "fn() -> Vec<String>",
         "effects": "[read]",
+        "arena_routing": "heap_fresh",
     },
     {
         "name": "stdin_read",
@@ -187,6 +191,7 @@ FS_STDIN_ARGS_STDERR_OPS = [
         "return": "ptr",
         "doc_signature": "fn() -> String",
         "effects": "[read]",
+        "arena_routing": "heap_fresh",
     },
     {
         "name": "stdin_read_line",
@@ -195,6 +200,8 @@ FS_STDIN_ARGS_STDERR_OPS = [
         "return": "ptr",
         "doc_signature": "fn() -> String",
         "effects": "[read]",
+        "arena_routing": "none",
+        "arena_routing_reason": "Returns a view of a per-thread scratch line buffer that the next call overwrites; it allocates in no arena, so there is nothing to route and memory stays bounded by the longest line.",
     },
     {
         "name": "stdin_ready",
@@ -437,7 +444,12 @@ def _query_op(name, symbol, params, ret, sig, effects, heap=False, c_model=None)
         "effects": effects,
     }
     if heap:
-        op["arena_routing"] = "heap_fresh"
+        op["arena_routing"] = "none" if heap == "none" else "heap_fresh"
+    if heap == "none":
+        op["arena_routing_reason"] = (
+            "Allocates in the root arena and has no _in_arena variant, so each "
+            "call retains its result until exit; tracked in issue 1639."
+        )
     if c_model:
         op["c_model"] = c_model
     return op
@@ -445,7 +457,7 @@ def _query_op(name, symbol, params, ret, sig, effects, heap=False, c_model=None)
 
 # Query and utility operations migrated in #1271: memory and time queries,
 # hex helpers, parse and string-conversion helpers, and the String helpers.
-# (name, symbol, params, ret, doc_signature, effects, heap_fresh, c_model)
+# (name, symbol, params, ret, doc_signature, effects, arena_routing, c_model)
 _QUERY_UTILITY_ROWS = [
     (
         "memory_root_arena_bytes",
@@ -468,7 +480,15 @@ _QUERY_UTILITY_ROWS = [
     ("time_unix_ms", "__vow_time_unix_ms", [], "i64", "fn() -> i64", "[io]"),
     ("time_micros", "__vow_time_micros", [], "i64", "fn() -> i64", "[io]"),
     ("num_cpus", "__vow_num_cpus", [], "i64", "fn() -> i64", "[io]"),
-    ("proc_sample", "__vow_proc_sample", [], "ptr", "fn() -> String", "[io]"),
+    (
+        "proc_sample",
+        "__vow_proc_sample",
+        [],
+        "ptr",
+        "fn() -> String",
+        "[io]",
+        "none",
+    ),
     (
         "gzip_write_file",
         "__vow_gzip_write_file",
@@ -1229,6 +1249,23 @@ class MainCliTest(unittest.TestCase):
             self.assertNotIn("Traceback (most recent call last)", combined)
             self.assertIn("verifier_model", combined)
 
+    def test_heap_result_without_arena_routing_exits_naming_the_op(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            op = _heap_op("undeclared", verifier_model="unmodeled", c_model="unmodeled")
+            self._write_minimal_catalogue(tmp, [op])
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with (
+                self.assertRaises(SystemExit) as ctx,
+                contextlib.redirect_stdout(stdout),
+                contextlib.redirect_stderr(stderr),
+            ):
+                self._run_main(["--check", "--repo-root", str(tmp)])
+            self.assertEqual(ctx.exception.code, 1)
+            combined = stdout.getvalue() + stderr.getvalue()
+            self.assertNotIn("Traceback (most recent call last)", combined)
+            self.assertIn("'undeclared' returns a heap value", combined)
+
     def test_malformed_json_exits_cleanly_without_traceback(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
@@ -1846,14 +1883,6 @@ class LoadArenaRoutesTest(unittest.TestCase):
     def test_non_string_route_raises(self):
         self.assertIn("is not a symbol", self._errors([{"runtime_symbol": "x"}]))
 
-    def test_heap_fresh_operation_needs_a_route(self):
-        op = dict(
-            PROCESS_OPS[0],
-            runtime_symbol="__vow_process_get_stdout",
-            arena_routing="heap_fresh",
-        )
-        self.assertIn("has no arena route", self._errors(ROUTES, [op]))
-
     def test_non_list_section_raises(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
@@ -2016,6 +2045,139 @@ class VerifierModelDriftTest(unittest.TestCase):
         self.assertEqual(go.check_verifier_models(go.load_catalogue(REPO_ROOT)), [])
 
 
+def _heap_op(name="heap_op", ret="String", **extra):
+    if extra.get("arena_routing") == "none":
+        extra.setdefault("arena_routing_reason", "returns a reused scratch buffer")
+    return dict(
+        name=name,
+        runtime_symbol=f"__vow_{name}",
+        params=[],
+        **{"return": "ptr"},
+        doc_signature=f"fn() -> {ret}",
+        effects="[]",
+        **extra,
+    )
+
+
+class ArenaRoutingInvariantsTest(unittest.TestCase):
+    def _problems(self, op, routes):
+        return go.check_arena_routing([op], routes)
+
+    def test_heap_result_without_arena_routing_is_reported_by_name(self):
+        for ret in ("String", "Vec<i64>", "Option<u8>"):
+            problems = self._problems(_heap_op(ret=ret), [])
+            self.assertEqual(len(problems), 1, ret)
+            self.assertIn("'heap_op' returns a heap value", problems[0])
+
+    def test_scalar_result_may_omit_arena_routing(self):
+        scalar = dict(_heap_op(), doc_signature="fn() -> i64", **{"return": "i64"})
+        self.assertEqual(self._problems(scalar, []), [])
+
+    def test_route_without_heap_fresh_is_reported(self):
+        scalar = dict(_heap_op(), doc_signature="fn() -> i64", **{"return": "i64"})
+        problems = self._problems(scalar, ["__vow_heap_op"])
+        self.assertEqual(len(problems), 1)
+        self.assertIn("has an arena route", problems[0])
+        self.assertIn("'heap_op'", problems[0])
+
+    def test_undeclared_heap_op_with_a_route_is_reported_once(self):
+        problems = self._problems(_heap_op(), ["__vow_heap_op"])
+        self.assertEqual(len(problems), 1)
+        self.assertIn("returns a heap value but has no arena_routing", problems[0])
+
+    def test_heap_fresh_needs_a_heap_result(self):
+        scalar = dict(
+            _heap_op(arena_routing="heap_fresh"),
+            doc_signature="fn() -> i64",
+            **{"return": "i64"},
+        )
+        problems = self._problems(scalar, ["__vow_heap_op"])
+        self.assertEqual(len(problems), 1)
+        self.assertIn("'heap_op' is heap_fresh", problems[0])
+        self.assertIn("not a String, Vec or Option", problems[0])
+
+    def test_heap_fresh_without_route_is_reported(self):
+        problems = self._problems(_heap_op(arena_routing="heap_fresh"), [])
+        self.assertEqual(len(problems), 1)
+        self.assertIn("'heap_op' is heap_fresh", problems[0])
+        self.assertIn("has no arena route", problems[0])
+
+    def test_none_with_route_is_reported(self):
+        problems = self._problems(_heap_op(arena_routing="none"), ["__vow_heap_op"])
+        self.assertEqual(len(problems), 1)
+        self.assertIn("'heap_op' is arena_routing 'none'", problems[0])
+
+    def test_consistent_declarations_are_clean(self):
+        self.assertEqual(
+            self._problems(_heap_op(arena_routing="heap_fresh"), ["__vow_heap_op"]),
+            [],
+        )
+        self.assertEqual(self._problems(_heap_op(arena_routing="none"), []), [])
+
+    def test_none_on_a_heap_result_needs_a_reason(self):
+        op = _heap_op(arena_routing="none")
+        del op["arena_routing_reason"]
+        problems = self._problems(op, [])
+        self.assertEqual(len(problems), 1)
+        self.assertIn("'heap_op' is arena_routing 'none'", problems[0])
+        self.assertIn("arena_routing_reason", problems[0])
+
+    def test_none_on_a_scalar_result_needs_no_reason(self):
+        scalar = dict(_heap_op(), doc_signature="fn() -> i64", **{"return": "i64"})
+        scalar["arena_routing"] = "none"
+        self.assertEqual(self._problems(scalar, []), [])
+
+    def test_reason_is_only_allowed_on_none(self):
+        op = _heap_op(arena_routing="heap_fresh", arena_routing_reason="why")
+        problems = self._problems(op, ["__vow_heap_op"])
+        self.assertEqual(len(problems), 1)
+        self.assertIn("is not arena_routing 'none'", problems[0])
+
+    def test_blank_or_non_string_reason_is_reported(self):
+        for reason in ("  ", 7):
+            op = _heap_op(arena_routing="none", arena_routing_reason=reason)
+            problems = self._problems(op, [])
+            self.assertEqual(len(problems), 1, reason)
+            self.assertIn("empty or non-string", problems[0])
+
+    def test_real_catalogue_reasons_sit_only_on_heap_nones(self):
+        for op in go.load_catalogue(REPO_ROOT):
+            heap_none = (
+                op.get("arena_routing") == "none" and go.result_shape(op) is not None
+            )
+            self.assertEqual("arena_routing_reason" in op, heap_none, op["name"])
+
+    def test_route_without_a_catalogued_op_stays_legal(self):
+        self.assertEqual(go.check_arena_routing([], ["__vow_map_get"]), [])
+
+    def test_every_violation_across_the_catalogue_is_reported(self):
+        ops = [
+            _heap_op("a"),
+            _heap_op("b", arena_routing="heap_fresh"),
+            _heap_op("c", arena_routing="none"),
+        ]
+        self.assertEqual(len(go.check_arena_routing(ops, ["__vow_c"])), 3)
+
+    def test_real_catalogue_declares_routing_exactly_where_a_route_exists(self):
+        catalogue = go.load_catalogue(REPO_ROOT)
+        routes = go.load_arena_routes(REPO_ROOT, catalogue)
+        self.assertEqual(go.check_arena_routing(catalogue, routes), [])
+        for op in catalogue:
+            routed = op["runtime_symbol"] in routes
+            self.assertEqual(
+                op.get("arena_routing") == "heap_fresh", routed, op["name"]
+            )
+            if go.result_shape(op) is not None:
+                self.assertIn("arena_routing", op, op["name"])
+
+    def test_unrouted_heap_returns_are_explicit_nones(self):
+        ops = {o["name"]: o for o in go.load_catalogue(REPO_ROOT)}
+        for name in ("stdin_read_line", "proc_sample"):
+            self.assertEqual(ops[name]["arena_routing"], "none", name)
+        for name in ("fs_read", "fs_read_line", "fs_listdir", "args", "stdin_read"):
+            self.assertEqual(ops[name]["arena_routing"], "heap_fresh", name)
+
+
 class GenVowVcOpsBlockTest(unittest.TestCase):
     def test_only_known_symbols_land_in_the_lookup(self):
         ops = [
@@ -2174,13 +2336,6 @@ class QueryUtilityCatalogueTest(unittest.TestCase):
         # operation body, and there is no free `parse_u64`.
         for name in ("i64_to_string", "string_matches_literal_at", "parse_u64"):
             self.assertNotIn(name, self.ops)
-
-    def test_arena_routing_is_recorded_exactly_where_a_route_exists(self):
-        routes = go.load_arena_routes(REPO_ROOT, self.catalogue)
-        for row in _QUERY_UTILITY_ROWS:
-            op = self.ops[row[0]]
-            has_route = op["runtime_symbol"] in routes
-            self.assertEqual(op.get("arena_routing") == "heap_fresh", has_route, row[0])
 
     def test_native_verifier_models_none_of_them(self):
         for row in _QUERY_UTILITY_ROWS:

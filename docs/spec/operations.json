@@ -34,6 +34,7 @@
       "return": "ptr",
       "doc_signature": "fn(path: String) -> String",
       "effects": "[read]",
+      "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled"
     },
     {
@@ -52,6 +53,7 @@
       "return": "ptr",
       "doc_signature": "fn(handle: i64) -> String",
       "effects": "[read]",
+      "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled"
     },
     {
@@ -106,6 +108,7 @@
       "return": "ptr",
       "doc_signature": "fn(path: String) -> Vec<String>",
       "effects": "[read]",
+      "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled"
     },
     {
@@ -169,6 +172,7 @@
       "return": "ptr",
       "doc_signature": "fn() -> Vec<String>",
       "effects": "[read]",
+      "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled"
     },
     {
@@ -178,6 +182,7 @@
       "return": "ptr",
       "doc_signature": "fn() -> String",
       "effects": "[read]",
+      "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled"
     },
     {
@@ -187,6 +192,8 @@
       "return": "ptr",
       "doc_signature": "fn() -> String",
       "effects": "[read]",
+      "arena_routing": "none",
+      "arena_routing_reason": "Returns a view of a per-thread scratch line buffer that the next call overwrites; it allocates in no arena, so there is nothing to route and memory stays bounded by the longest line.",
       "verifier_model": "unmodeled"
     },
     {
@@ -503,6 +510,8 @@
       "return": "ptr",
       "doc_signature": "fn() -> String",
       "effects": "[io]",
+      "arena_routing": "none",
+      "arena_routing_reason": "Allocates in the root arena and has no _in_arena variant, so each call retains its result until exit; tracked in issue 1639.",
       "verifier_model": "unmodeled"
     },
     {
