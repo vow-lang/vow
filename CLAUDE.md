@@ -259,8 +259,8 @@ tokens in alphabetical order (matching `vow-syntax/src/printer.rs`'s `print_effe
 same way); `doc_signature` must parse as `fn(...) -> Type` with arity and
 per-parameter/return types matching `params`/`return` (`String`/`Vec<...>` both denote `ptr`); the
 `verifier_model` (`known`/`unmodeled`; `main()` rejects an entry without one), the
-`arena_routing` (`none`/`heap_fresh`; `main()` rejects a heap-returning entry without one) and `c_model` (`unmodeled`/`base`/`base_and_arena`; `main()` rejects
-a pure entry without one) fields, when present, must be in their closed sets; an `Option<T>` return type
+`arena_routing` (`none`/`heap_fresh`; `main()` rejects a heap-returning entry without one) and `c_model`
+(`unmodeled`/`base`/`base_and_arena`; `main()` rejects a pure entry without one) fields, when present, must be in their closed sets; an `Option<T>` return type
 needs a `T` the generator can tag; and any field name not in the recognized set (required or optional)
 is rejected outright, so a misspelled field can never silently defeat its own check. All
 violations across all entries are collected and reported together, not just the first. `main()` never

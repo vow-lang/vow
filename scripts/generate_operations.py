@@ -393,47 +393,47 @@ def check_arena_routing(ops: list[dict], routes: list[str]) -> list[str]:
     no catalogued op uses, such as `map_get` or the `*_try` casts, stay legal."""
     problems: list[str] = []
     for op in ops:
-        name = op["name"]
+        where = f"docs/spec/operations.json: '{op['name']}'"
         symbol = op["runtime_symbol"]
         routing = op.get("arena_routing")
         routed = symbol in routes
         heap_result = result_shape(op) is not None
-        undeclared = routing is None and heap_result
-        if undeclared:
+        if routing is None:
+            if heap_result:
+                problems.append(
+                    f"{where} returns a heap value but has no arena_routing (set "
+                    "'heap_fresh' with an arena route, or an explicit 'none')"
+                )
+            elif routed:
+                problems.append(
+                    f"{where} has an arena route for '{symbol}' but is not heap_fresh"
+                )
+        elif routing == "heap_fresh":
+            if not heap_result:
+                problems.append(
+                    f"{where} is heap_fresh but its return type is not a String, "
+                    "Vec or Option"
+                )
+            if not routed:
+                problems.append(
+                    f"{where} is heap_fresh but its runtime_symbol '{symbol}' has "
+                    "no arena route"
+                )
+        elif routed:
             problems.append(
-                f"docs/spec/operations.json: '{name}' returns a heap value but has "
-                "no arena_routing (set 'heap_fresh' with an arena route, or an "
-                "explicit 'none')"
+                f"{where} is arena_routing 'none' but its runtime_symbol "
+                f"'{symbol}' has an arena route"
             )
-        if routing == "heap_fresh" and not heap_result:
-            problems.append(
-                f"docs/spec/operations.json: '{name}' is heap_fresh but its "
-                "return type is not a String, Vec or Option"
-            )
-        if routing == "heap_fresh" and not routed:
-            problems.append(
-                f"docs/spec/operations.json: '{name}' is heap_fresh but its "
-                f"runtime_symbol '{symbol}' has no arena route"
-            )
-        elif routing == "none" and routed:
-            problems.append(
-                f"docs/spec/operations.json: '{name}' is arena_routing 'none' but "
-                f"its runtime_symbol '{symbol}' has an arena route"
-            )
-        elif routing != "heap_fresh" and routed and not undeclared:
-            problems.append(
-                f"docs/spec/operations.json: '{name}' has an arena route for "
-                f"'{symbol}' but is not heap_fresh"
-            )
-        problems += _check_arena_reason(op, routing)
+        problems += _check_arena_reason(op, where, routing, heap_result)
     return problems
 
 
-def _check_arena_reason(op: dict, routing: str | None) -> list[str]:
-    where = f"docs/spec/operations.json: '{op['name']}'"
+def _check_arena_reason(
+    op: dict, where: str, routing: str | None, heap_result: bool
+) -> list[str]:
     reason = op.get(ARENA_REASON_FIELD)
     if reason is None:
-        if routing == "none" and result_shape(op) is not None:
+        if routing == "none" and heap_result:
             return [
                 f"{where} is arena_routing 'none' but has no {ARENA_REASON_FIELD} "
                 "saying why a heap result has no arena variant"
