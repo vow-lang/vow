@@ -13,6 +13,8 @@ SKIP_CARGO=false
 STAGE3_NO_VERIFY=false
 NO_VERIFY=false
 NO_CACHE=false
+NATIVE_VERIFY=false
+NATIVE_JOBS="${VOW_BOOTSTRAP_NATIVE_JOBS:-2}"
 VMEM_LIMIT_KB="${VOW_BOOTSTRAP_VMEM_KB:-0}"
 if ! [[ "$VMEM_LIMIT_KB" =~ ^[0-9]+$ ]]; then
     echo "Error: VOW_BOOTSTRAP_VMEM_KB must be a non-negative integer (got: '$VMEM_LIMIT_KB')" >&2
@@ -20,7 +22,7 @@ if ! [[ "$VMEM_LIMIT_KB" =~ ^[0-9]+$ ]]; then
 fi
 
 usage() {
-    echo "Usage: $0 [--skip-cargo] [--no-verify] [--stage3-no-verify] [--no-cache] [--help|-h]"
+    echo "Usage: $0 [--skip-cargo] [--no-verify] [--native-verify] [--stage3-no-verify] [--no-cache] [--help|-h]"
     echo ""
     echo "Bootstrap the self-hosted Vow compiler and verify the fixed point."
     echo ""
@@ -41,6 +43,11 @@ usage() {
     echo "                       ESBMC is unavailable."
     echo "                       Verification does not change codegen, so the"
     echo "                       SHA-256 fixed-point check remains meaningful."
+    echo "  --native-verify      After the fixed point, verify compiler/*.vow with the native"
+    echo "                       backend using both the Stage 1 (build/vowc) and Stage 2"
+    echo "                       (build/vowc2) binaries and require identical outcomes"
+    echo "                       (scripts/verify_compiler.py --native-only, #1432). Needs"
+    echo "                       bitwuzla on PATH, not ESBMC; independent of --no-verify."
     echo "  --stage3-no-verify   Retained for compatibility: Stage 3 never verifies, so"
     echo "                       this is a no-op."
     echo "  --no-cache           Disable the on-disk verify cache. Forwarded to every"
@@ -61,6 +68,7 @@ usage() {
     echo "Environment:"
     echo "  VOW_BOOTSTRAP_VMEM_KB  Optional per-stage virtual-memory cap in KB for"
     echo "                         self-hosted rebuilds (default: unlimited)"
+    echo "  VOW_BOOTSTRAP_NATIVE_JOBS  --verify-jobs of the --native-verify pass (default 2)"
     exit 0
 }
 
@@ -140,6 +148,7 @@ for arg in "$@"; do
         --no-verify)         NO_VERIFY=true ;;
         --stage3-no-verify)  STAGE3_NO_VERIFY=true ;;
         --no-cache)          NO_CACHE=true ;;
+        --native-verify)     NATIVE_VERIFY=true ;;
         -h|--help)           usage ;;
         *)                   echo "Unknown flag: $arg"; usage ;;
     esac
@@ -267,6 +276,19 @@ if [ "$sha_vowc2" = "$sha_vowc3" ]; then
             if [ "$VMEM_LIMIT_KB" -gt 0 ]; then
                 printf "  Hint: rerun with a higher VOW_BOOTSTRAP_VMEM_KB or unset it for no cap.\n"
             fi
+            exit 1
+        fi
+        t1=$(date +%s)
+        printf "  done in %ds\n" $((t1 - t0))
+    fi
+
+    # ─── Native verify: Stage 1 and Stage 2 over the whole compiler ──
+    # Runs before the promotion: build/vowc is still the Stage 1 binary here.
+    if [ "$NATIVE_VERIFY" = true ]; then
+        printf "${BOLD}Native verify:${RESET} build/vowc (Stage 1) and build/vowc2 (Stage 2) over compiler/*.vow\n"
+        t0=$(date +%s)
+        if ! run_logged "python3 scripts/verify_compiler.py --native-only --vowc build/vowc --vowc build/vowc2 --verify-jobs $NATIVE_JOBS --output build/native-verify.json"; then
+            printf "  ${RED}FAILED${RESET} (report: build/native-verify.json)\n"
             exit 1
         fi
         t1=$(date +%s)
