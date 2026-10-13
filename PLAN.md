@@ -3,15 +3,17 @@
 ## Goal
 #1613 is an umbrella of independent, fail-closed `Skipped` items. This PR lands exactly one: `clear` and `truncate`
 (`__vow_vec_clear`, `__vow_vec_truncate`), which are pure `(array, len)` transitions and need no new design. The PR
-body says `Refs #1613` (not `Closes`); every other item is recorded below as a follow-up and posted to #1613 as a
-checklist comment.
+body says `Closes #1613` and links one new issue per remaining item (follow-ups 1-6, created with `gh issue create` by the
+implementation stage), so #1613 is not left `ready-for-agent` and re-dispatched.
 
 ## Assumptions
+- `Closes #1613` plus one filed issue per deferred item (best guess; the run contract asks for the minimal slice that
+  closes the issue, with the rest as follow-ups). Alternative `Refs` would keep an open umbrella that invites re-dispatch.
 - First slice = `clear` + `truncate` only (best guess): smallest item with exact runtime semantics, no harness ruling, no
   new sort/axis, no dependency on the other items. ESBMC does not model them, so no soundness-class risk.
-- `reserve` is dropped from the issue: it has no user-facing builtin (`__vow_vec_reserve` is a private, non-`extern "C"`
-  runtime fn; grep of `compiler/lower.vow`/`vow-types/src/env.rs` finds no `reserve` method). Nothing can be `Skipped` on it.
-  The only growth ops are `push` (already modelled, the push guard is its capacity trap). Recorded in the ADR addendum.
+- `reserve` has no user-facing builtin (no `reserve` method in `compiler/lower.vow`/`vow-types/src/env.rs`; only the
+  arena-internal `__vow_vec_reserve_in_arena`, emitted by the region/arena passes, never by source). It is not modelled
+  here; the spec text that lists it as `Skipped` is left untouched (harmless), and the ADR addendum records the finding.
 - `sort` is `vec_sort(Vec<i64>) -> Vec<i64>` (`vow-types/src/env.rs:227`): it returns a *new* Vec, so it needs a
   permutation + sortedness axiomatisation and a fresh object. Deferred (follow-up 6).
 - `from_raw_parts_copy`/`pin_to_root` need a corpus-label ruling (`tests/verify-fail/raw_parts_copy_*_beyond_model_cap.vow`
@@ -91,8 +93,9 @@ checklist comment.
   `vc_induct.vow:243` and `vc_unroll.vow:306`; update the "(`push`, `set`, `pop`)" doc comments. This is a *required*
   soundness edit, not a refactor: without it a loop that clears the Vec would be cut for invariant induction while the
   havoc copy keeps the entry `(array, len)` (the exact failure #1423 documents at ADR 436-441).
-- Fixture `pass/vec_clear_in_loop.vow`: `while i < n { v.push(i); v.clear(); i += 1 }` with an `ensures: result == 0` on
-  `v.len()`, proven by unwinding only (`TEST` expectation mirrors `pass/vec_fill_loop.vow`).
+- Fixture `pass/vec_clear_in_loop.vow`: a literal trip count, as in `pass/vec_fill_loop.vow` (`while i < 8 vow { invariant: i <= 8 }`
+  with `v.push(i as i64); v.clear(); i = i + 1`), `ensures: result == 0` on `v.len()`. Proven by unwinding only. Do NOT use
+  a symbolic bound: a Vec-writing loop is not inductively cut, so an unbounded loop would end `unknown`, not `Verified`.
 
 ### 4. Inlined callee and arena-free check
 - **Red**: `tests/verify-native/pass/inline_callee_clears_local_vec.vow`: callee creates a local Vec, pushes, clears; caller
@@ -101,18 +104,41 @@ checklist comment.
   mis-maps `ds`, fix in `vc_inline.vow:246` `vc_map_inst`. Confirm `__vow_vec_clear` has no `_in_arena` variant in
   `docs/spec/operations.json` `arena_routes` (it should not: only fresh-aggregate builtins do).
 
-### 5. Differential harness and verdict table
-- Run `scripts/verify_diff.py` over `tests/verify*/` and `tests/verify-native/`. Expectation: every changed row moves
-  `skipped -> proven|refuted`, class `weaker` (native decides what ESBMC skips), never `soundness`. Any `soundness` row
-  is a bug in the model: stop and fix. Record the changed rows in the ADR addendum table (same format as ADR 455-466).
-- `tests/verify/string_clear_resets_len.vow` is `String`, unaffected (confirm still `Skipped`).
+### 5. Receiver routing and blast radius (before any long gate)
+- **Routing**: `compiler/lower.vow:1762-1830` (`method_spec`): `String::clear` is its own row (7, `__vow_string_clear`), but
+  `HashMap`/`BTreeMap` `.clear()` falls through to the generic Vec row 19 (`__vow_vec_clear`; the comment at 1762-1764
+  says so), and `truncate` row 20 is generic too. After this change a map pointer gets a Vec slot for `clear`. Consequence:
+  harmless unless a function does *only* map `.clear()` (every other map op, `__vow_hashmap_*`, stays
+  `unmodeled-builtin`, so any function that reads the map stays `Skipped`); a clear-only function would flip
+  `Skipped -> Verified`, correctly (the contract cannot mention the map). The implementer first lists every receiver type
+  reaching rows 19/20 by reading `method_spec` and the Rust twin `vow-ir/src/lower/` method table; if any non-Vec
+  receiver reaches a *modelled* Vec op (`len`, `pop`, `get`, `push`) beyond these two, that is a blocker: stop and
+  comment on #1613 rather than shipping. Fixture `tests/verify-native/pass/hashmap_clear_only.vow` (or `skip/` if it
+  stays `Skipped`; whichever the verifier reports) pins the behaviour either way.
+- **Blast radius**: functions that call `.clear()`/`.truncate(` were `Skipped` and are now decided, so a refutation can turn a
+  passing build red. `grep -rn '\.clear()\|\.truncate(' tests/ examples/ benchmarks/ compiler/` (known hits:
+  `tests/run/vec_clear.vow`, `tests/run/vec_truncate.vow`, `tests/run/vec_oversized_release_on_grow.vow`,
+  `tests/run/wide_vec_element.vow`, `compiler/lower.vow:2946`, `:5176`) and run
+  `build/vowc verify --backend native --no-cache <file>` on each hit; none may turn `VerifyFailed` unless the program is
+  genuinely wrong (then fix the fixture/source in a separate commit, noting it in the PR body). Do this before the
+  ~40 min `full_test.sh`.
 
-### 6. Docs (same PR)
+### 6. Differential harness and verdict table
+- Read the class definitions in the `scripts/verify_diff.py` docstring (lines ~4-30: `weaker` = native less conclusive than
+  ESBMC, `soundness` = native proves what ESBMC refutes or the corpus labels failing) and its corpus
+  (`tests/verify`, `tests/verify-fail`, `tests/verify-skip`; confirm whether `tests/verify-native/` is included). Run it
+  before and after; list only the rows that moved. Moving `skipped -> proven|refuted` where ESBMC also skips is not a
+  `weaker` row. A `soundness` row is *inspected, not assumed to be a model bug*: ESBMC not modelling clear/truncate can
+  itself produce that class. The earlier grep found no `tests/verify*` fixture using `Vec` `clear`/`truncate` (only
+  `string_clear_resets_len.vow`, a `String`, which must stay `Skipped`), so expect no moved row; confirm, do not assume.
+  Record any moved rows in the ADR addendum table (format of ADR 455-466).
+
+### 7. Docs (same PR)
 - ADR-2026-10-08-1422: append `## Addendum (#1613): Vec clear and truncate`: semantics above, no new length fact, why no
   claim, induction rule, the `reserve` finding, the follow-up list with the harness-ruling note. Edit the #1423 addendum
   follow-up paragraph (478-482) to point at it.
 - `docs/spec/cli.md:73`, `contracts.md:56`, `errors.md:1410`: move `clear`/`truncate` from Skipped to the modelled list;
-  keep `reserve`, `sort`, ... as Skipped text but drop `reserve` as nonexistent.
+  leave `reserve`, `sort`, ... in the Skipped text unchanged.
 - No `grammar.md`/help change (no language or flag change), so no `generate_help.py`.
 
 ## Testing
