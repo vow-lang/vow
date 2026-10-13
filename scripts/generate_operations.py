@@ -77,6 +77,8 @@ EFFECT_TOKENS = {"read", "write", "io", "panic", "unsafe"}
 EFFECTS_RE = re.compile(r"^\[(?P<tokens>[a-z]+(?:, [a-z]+)*)?\]$")
 
 DOC_SIGNATURE_RE = re.compile(r"^fn\((?P<params>.*)\) -> (?P<ret>.+)$")
+VEC_DOC_RE = re.compile(r"^Vec<.*>$")
+OPTION_DOC_RE = re.compile(r"^Option<(?P<elem>.+)>$")
 
 
 def _split_top_level_commas(s: str) -> list[str]:
@@ -106,8 +108,8 @@ def _doc_type_to_token(type_str: str) -> str | None:
     bijection."""
     if (
         type_str == "String"
-        or re.match(r"^Vec<.*>$", type_str)
-        or re.match(r"^Option<.*>$", type_str)
+        or VEC_DOC_RE.match(type_str)
+        or OPTION_DOC_RE.match(type_str)
     ):
         return "ptr"
     if type_str in ("i64", "u64", "i128", "u128", "bool"):
@@ -314,9 +316,6 @@ def load_catalogue(repo_root: Path) -> list[dict]:
     return ops
 
 
-OPTION_DOC_RE = re.compile(r"^Option<(?P<elem>.+)>$")
-
-
 def result_shape(op: dict) -> tuple[str, str | None] | None:
     """The shape tag the lowerer attaches to the op's result, read from the
     doc_signature return type: ("string", None), ("vec", None) or
@@ -326,7 +325,7 @@ def result_shape(op: dict) -> tuple[str, str | None] | None:
     ret = DOC_SIGNATURE_RE.match(op["doc_signature"]).group("ret").strip()
     if ret == "String":
         return ("string", None)
-    if re.match(r"^Vec<.*>$", ret):
+    if VEC_DOC_RE.match(ret):
         return ("vec", None)
     option = OPTION_DOC_RE.match(ret)
     if option:
