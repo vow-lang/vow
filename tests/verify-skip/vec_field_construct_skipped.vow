@@ -1,0 +1,24 @@
+// TEST: category unverifiable
+module VecFieldConstructSkipped
+
+// Regression test for issue #1624. `Holder { data: v, size: 0 }` stores a Vec
+// handle into a struct field. Struct fields are `int64_t` slots in the C model,
+// so the store used to emit `slot = __vow_vec_t` and ESBMC halted with a parse
+// error. A FieldSet of a collection value now makes the function non-modelable,
+// so it is Skipped.
+struct Holder {
+  data: Vec<i64>,
+  size: u64,
+}
+
+fn new_holder() -> Holder vow {
+  ensures: result.size == 0
+} {
+  let v: Vec<i64> = Vec::new();
+  Holder { data: v, size: 0 }
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

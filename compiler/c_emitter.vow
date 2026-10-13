@@ -503,6 +503,7 @@ fn MCI_NONSCALAR_EXTERN() -> i64 { 4 }
 fn MCI_STRUCTURED_TARGET() -> i64 { 5 }
 fn MCI_TARGET() -> i64 { 6 }
 fn MCI_BAD_CALL() -> i64 { 7 }
+fn MCI_COLLECTION_FIELD() -> i64 { 8 }
 
 // The modelability gate and the skip diagnostic share this instruction policy.
 // Strings are rendered only for an issue, never on the successful scan path.
@@ -571,6 +572,7 @@ fn modelability_issue(inst: IrInst, facts: ModelFacts, m: IrModule, const_fn_ind
     }
     if op == IOP_FIELD_GET() || op == IOP_FIELD_SET() {
         if field_access_is_wide(inst, facts.wide_vars) { return MCI_WIDE(); }
+        if field_set_stores_collection(inst, facts) { return MCI_COLLECTION_FIELD(); }
         return MCI_OK();
     }
     MCI_UNSUPPORTED()
@@ -650,6 +652,9 @@ fn model_issue_name(issue: i64, inst: IrInst, m: IrModule) -> String {
     }
     if issue == MCI_WIDE() {
         return cemit_str2(opcode_name(inst.op), String::from(" at 128-bit width"));
+    }
+    if issue == MCI_COLLECTION_FIELD() {
+        return String::from("FieldSet of a collection value");
     }
     if issue == MCI_EXTERN() {
         return str3(String::from("Call extern `"), inst.ds, String::from("`"));
@@ -1386,6 +1391,16 @@ fn field_access_is_wide(inst: IrInst, wide_vars: Vec<i64>) -> bool {
     }
     let iargs: Vec<i64> = inst.args;
     op == IOP_FIELD_SET() && iargs.len() > 1 && vec_contains_i64(wide_vars, iargs[1])
+}
+
+// A FieldSet of a Vec/String/map/Option model struct into an int64_t slot is an
+// ESBMC type error (#1624). Classified values only: a ConstStr is Ptr but emits
+// 0, so struct fields holding string literals stay modelable. Mirrors
+// `field_set_stores_collection` in vow-verify/src/c_emitter.rs.
+fn field_set_stores_collection(inst: IrInst, facts: ModelFacts) -> bool {
+    let iargs: Vec<i64> = inst.args;
+    inst.op == IOP_FIELD_SET() && iargs.len() > 1
+        && is_structured_value_id(iargs[1], facts.vec_vars, facts.string_vars, facts.hashmap_vars, facts.btreemap_vars, facts.option_vars)
 }
 
 // Floats travel through the model's int64 aggregate slots by IEEE-754 bit

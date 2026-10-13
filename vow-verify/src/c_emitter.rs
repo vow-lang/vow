@@ -689,6 +689,24 @@ fn field_access_is_wide(inst: &Inst, wide_vars: &HashSet<u32>) -> bool {
 
 // ---------------------------------------------------------------------------
 // Modelable function detection (for cross-function spec verification)
+// A `FieldSet` of a Vec/String/map/Option model struct into an `int64_t` slot
+// is an ESBMC type error (#1624). Classified values only: `ConstStr` is `Ptr`
+// but emits `0`, so struct fields holding string literals stay modelable.
+// Self-hosted mirror: `compiler/c_emitter.vow::field_set_stores_collection`.
+fn field_set_stores_collection(inst: &Inst, facts: &ModelFacts) -> bool {
+    inst.opcode == Opcode::FieldSet
+        && inst.args.get(1).is_some_and(|value| {
+            is_structured_value_id(
+                value.0,
+                &facts.vec_vars,
+                &facts.string_vars,
+                &facts.hashmap_vars,
+                &facts.btreemap_vars,
+                &facts.option_vars,
+            )
+        })
+}
+
 // ---------------------------------------------------------------------------
 
 // GENERATE:OPERATIONS:START
@@ -889,6 +907,7 @@ impl ModelFacts {
 enum ModelIssue<'a> {
     Unsupported,
     Wide,
+    CollectionField,
     UnknownExtern(&'a str),
     NonScalarExtern(&'a str),
     StructuredTarget,
@@ -1008,7 +1027,11 @@ fn modelability_issue<'a>(
             _ => Some(ModelIssue::InvalidCall),
         },
         Opcode::FieldGet | Opcode::FieldSet => {
-            field_access_is_wide(inst, &facts.wide_vars).then_some(ModelIssue::Wide)
+            if field_access_is_wide(inst, &facts.wide_vars) {
+                Some(ModelIssue::Wide)
+            } else {
+                field_set_stores_collection(inst, facts).then_some(ModelIssue::CollectionField)
+            }
         }
         Opcode::CheckedAdd
         | Opcode::CheckedSub
@@ -1101,6 +1124,7 @@ fn first_unsupported_opcode(
                 let name = match issue {
                     ModelIssue::Unsupported => format!("{:?}", inst.opcode),
                     ModelIssue::Wide => format!("{:?} at 128-bit width", inst.opcode),
+                    ModelIssue::CollectionField => "FieldSet of a collection value".to_string(),
                     ModelIssue::UnknownExtern(name) => format!("Call extern `{name}`"),
                     ModelIssue::NonScalarExtern(name) => {
                         format!("Call extern `{name}` with non-scalar element")
@@ -3954,6 +3978,73 @@ mod tests {
             ),
             Some(ModelIssue::Wide)
         );
+    }
+
+    // A struct field slot is `int64_t`, so storing a Vec/String model struct
+    // into it is an ESBMC type error (#1624); the function is Skipped instead.
+    #[test]
+    fn field_set_of_collection_value_is_not_modelable() {
+        fn field_set_issue(value: Inst) -> (bool, Option<String>) {
+            let value_id = value.id.0;
+            let (f, m) = one_block_func_module(
+                "holder_new",
+                Ty::Ptr,
+                vec![
+                    inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(16)),
+                    inst(
+                        1,
+                        Opcode::RegionAlloc,
+                        Ty::Ptr,
+                        vec![],
+                        InstData::AllocSize { size: 16, align: 8 },
+                    ),
+                    value,
+                    inst(
+                        10,
+                        Opcode::FieldSet,
+                        Ty::Unit,
+                        vec![1, value_id],
+                        InstData::FieldIndex(0),
+                    ),
+                    inst(11, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                ],
+            );
+            let facts = ModelFacts::new(&f);
+            let mut cache = HashMap::new();
+            let flagged = matches!(
+                modelability_issue(
+                    &f.blocks[0].insts[3],
+                    &facts,
+                    &m,
+                    &HashMap::new(),
+                    &mut cache,
+                ),
+                Some(ModelIssue::CollectionField)
+            );
+            (flagged, non_modelable_reason(&f, &m, &HashMap::new()))
+        }
+        let call = |name: &str| {
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0],
+                InstData::CallExtern(name.into()),
+            )
+        };
+        for name in ["__vow_vec_new", "__vow_string_new"] {
+            let (flagged, reason) = field_set_issue(call(name));
+            assert!(flagged, "{name}");
+            let reason = reason.expect("must be non-modelable");
+            assert!(
+                reason.contains("unsupported opcode `FieldSet of a collection value`"),
+                "{reason}"
+            );
+        }
+        let scalar = inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0));
+        assert_eq!(field_set_issue(scalar), (false, None));
+        let literal = inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0));
+        assert_eq!(field_set_issue(literal), (false, None));
     }
 
     #[test]

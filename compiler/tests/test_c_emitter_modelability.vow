@@ -31,7 +31,40 @@ fn main() -> i32 {
     if collection_issue(String::from("__vow_vec_push_val"), 2, ITY_PTR(), ITY_I64(), ITY_I64()) != MCI_OK() { return 8; }
     if collection_issue(String::from("__vow_map_insert"), 3, ITY_PTR(), ITY_I64(), ITY_I64()) != MCI_OK() { return 9; }
     if collection_issue(String::from("__vow_btreemap_insert"), 3, ITY_PTR(), ITY_I64(), ITY_BOOL()) != MCI_OK() { return 10; }
+    if field_set_issue(IOP_CALL(), String::from("__vow_vec_new")) != MCI_COLLECTION_FIELD() { return 11; }
+    if field_set_issue(IOP_CALL(), String::from("__vow_string_new")) != MCI_COLLECTION_FIELD() { return 12; }
+    if field_set_issue(IOP_CONST_I64(), String::from("")) != MCI_OK() { return 13; }
+    if field_set_issue(IOP_CONST_STR(), String::from("")) != MCI_OK() { return 14; }
+    let m0: IrModule = mk_module(Vec::new());
+    if model_issue_name(MCI_COLLECTION_FIELD(), insts[0], m0) != String::from("FieldSet of a collection value") { return 15; }
     0
+}
+
+// Region alloc, a value of kind `vop` (a `__vow_*_new` extern call, a scalar
+// or a string literal) and a FieldSet storing it; returns the FieldSet's issue.
+fn field_set_issue(vop: i64, name: String) -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_const_i64(0, 16));
+    insts.push(mk_inst_alloc(1, 16));
+    if vop == IOP_CALL() {
+        let call_args: Vec<i64> = Vec::new();
+        call_args.push(0);
+        insts.push(mk_inst_call_extern(2, ITY_PTR(), call_args, name));
+    } else if vop == IOP_CONST_STR() {
+        insts.push(ir_inst_new(2, IOP_CONST_STR(), ITY_PTR(), Vec::new(), IDATA_CONST_STR(), 0, 0, String::from("")));
+    } else {
+        insts.push(mk_inst_const_i64(2, 0));
+    }
+    insts.push(mk_inst_field_set(3, 1, 0, 2));
+    insts.push(mk_inst_return(4, 1));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let f: IrFunction = mk_function(0, String::from("holder_new"), Vec::new(), ITY_PTR(), blocks);
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(f);
+    let m: IrModule = mk_module(funcs);
+    let facts: ModelFacts = model_facts(f);
+    modelability_issue(insts[3], facts, m, Vec::new(), Vec::new(), Vec::new())
 }
 
 // One GetArg per operand (tys[i] = type of arg i) followed by a call to `name`;
