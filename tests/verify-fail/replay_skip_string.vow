@@ -17,3 +17,4 @@ fn want_big(s: String) -> i64 vow {
 } {
   s.len() as i64
 }
+// TEST: replay-skipped String parameter is not rebuilt by the replay harness (#1649)
