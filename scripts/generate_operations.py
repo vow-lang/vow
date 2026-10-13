@@ -1089,16 +1089,14 @@ FACT_TARGET_FILES = [
 
 
 def write_fact_tables(ops: list[dict], repo_root: Path, excluded: list[dict]) -> None:
-    for rel_path, gen_fn in FACT_TARGET_FILES:
-        path = repo_root / rel_path
-        path.write_text(
-            _replace_between_markers(
-                path.read_text(),
-                FACTS_MARKER_START,
-                FACTS_MARKER_END,
-                gen_fn(ops, excluded),
-            )
-        )
+    _write_blocks(
+        FACT_TARGET_FILES,
+        FACTS_MARKER_START,
+        FACTS_MARKER_END,
+        repo_root,
+        ops,
+        excluded,
+    )
 
 
 def check_fact_tables(
@@ -1106,15 +1104,15 @@ def check_fact_tables(
 ) -> list[str]:
     """Regenerate each fact table in-memory and diff it against the checked-in
     file; a target missing its marker pair raises rather than reporting clean."""
-    mismatches: list[str] = []
-    for rel_path, gen_fn in FACT_TARGET_FILES:
-        content = (repo_root / rel_path).read_text()
-        expected = _replace_between_markers(
-            content, FACTS_MARKER_START, FACTS_MARKER_END, gen_fn(ops, excluded)
-        )
-        if expected != content:
-            mismatches.append(f"{rel_path}: spliced fact table is stale")
-    return mismatches
+    return _stale_blocks(
+        FACT_TARGET_FILES,
+        FACTS_MARKER_START,
+        FACTS_MARKER_END,
+        repo_root,
+        ops,
+        excluded,
+        "spliced fact table is stale",
+    )
 
 
 def check_doc_facts(ops: list[dict], repo_root: Path) -> list[str]:
@@ -1167,30 +1165,51 @@ TARGET_FILES = [
 ]
 
 
-def write_projections(ops: list[dict], repo_root: Path, routes: list[str]) -> None:
-    for rel_path, gen_fn in TARGET_FILES:
+def _write_blocks(
+    targets: list, start: str, end: str, repo_root: Path, ops: list[dict], extra
+) -> None:
+    for rel_path, gen_fn in targets:
         path = repo_root / rel_path
-        content = path.read_text()
-        new_content = _replace_between_markers(
-            content, MARKER_START, MARKER_END, gen_fn(ops, routes)
+        path.write_text(
+            _replace_between_markers(path.read_text(), start, end, gen_fn(ops, extra))
         )
-        path.write_text(new_content)
+
+
+def _stale_blocks(
+    targets: list,
+    start: str,
+    end: str,
+    repo_root: Path,
+    ops: list[dict],
+    extra,
+    message: str,
+) -> list[str]:
+    """Regenerate each target's block in-memory and name every file whose
+    checked-in block differs. Raises if a target is missing its marker pair
+    (never silently reports clean)."""
+    mismatches: list[str] = []
+    for rel_path, gen_fn in targets:
+        content = (repo_root / rel_path).read_text()
+        expected = _replace_between_markers(content, start, end, gen_fn(ops, extra))
+        if expected != content:
+            mismatches.append(f"{rel_path}: {message}")
+    return mismatches
+
+
+def write_projections(ops: list[dict], repo_root: Path, routes: list[str]) -> None:
+    _write_blocks(TARGET_FILES, MARKER_START, MARKER_END, repo_root, ops, routes)
 
 
 def check_projections(ops: list[dict], repo_root: Path, routes: list[str]) -> list[str]:
-    """Regenerate each target's block in-memory and diff it against what is
-    currently spliced into the checked-in file. Raises if a target is
-    missing its marker pair (never silently reports clean)."""
-    mismatches: list[str] = []
-    for rel_path, gen_fn in TARGET_FILES:
-        path = repo_root / rel_path
-        content = path.read_text()
-        expected = _replace_between_markers(
-            content, MARKER_START, MARKER_END, gen_fn(ops, routes)
-        )
-        if expected != content:
-            mismatches.append(f"{rel_path}: spliced block is stale")
-    return mismatches
+    return _stale_blocks(
+        TARGET_FILES,
+        MARKER_START,
+        MARKER_END,
+        repo_root,
+        ops,
+        routes,
+        "spliced block is stale",
+    )
 
 
 def main() -> None:

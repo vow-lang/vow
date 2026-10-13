@@ -1085,11 +1085,11 @@ mod tests {
                 ));
             }
             for (i, (ty, token)) in sig.params.iter().zip(fact.params).enumerate() {
-                if ty_token(ty) != *token {
+                let actual = ty_token(ty);
+                if actual != *token {
                     problems.push(format!(
-                        "'{}': parameter {i} is {ty:?} ({}), catalogue token '{token}'",
-                        fact.name,
-                        ty_token(ty)
+                        "'{}': parameter {i} is {ty:?} ({actual}), catalogue token '{token}'",
+                        fact.name
                     ));
                 }
             }
@@ -1102,13 +1102,11 @@ mod tests {
                     ));
                 }
             }
-            if ty_token(&sig.return_ty) != fact.ret {
+            let ret = ty_token(&sig.return_ty);
+            if ret != fact.ret {
                 problems.push(format!(
-                    "'{}': return type {:?} ({}), catalogue token '{}'",
-                    fact.name,
-                    sig.return_ty,
-                    ty_token(&sig.return_ty),
-                    fact.ret
+                    "'{}': return type {:?} ({ret}), catalogue token '{}'",
+                    fact.name, sig.return_ty, fact.ret
                 ));
             }
             if sig.return_ty.user_name() != fact.doc_ret {
