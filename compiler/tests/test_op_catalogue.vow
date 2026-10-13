@@ -3,240 +3,174 @@ module TestOpCatalogue
 use ast
 use ir
 use lower
+use tests.catalogue_facts
 
-fn expect_extern(name: String, want: String, code: i64) -> i64 {
-    if builtin_to_extern(name) != want { return code; }
+// Ties the Operation Catalogue (docs/spec/operations.json, via the generated
+// compiler/tests/catalogue_facts.vow) to the self-hosted lowering lookups:
+// for every catalogued op, builtin_to_extern / builtin_ret_ty and their
+// generated catalogue_* halves must return the catalogued runtime symbol and
+// return type. Result tags are covered the same way by
+// test_lower_catalogue_result_tags.vow. The Rust twin is
+// `every_catalogue_op_lowers_to_its_runtime_symbol_and_return_type` in
+// vow-ir/src/lower/mod.rs; both read the same generated columns.
+
+// ITY code of a catalogue return token, -2 for an unknown token.
+fn ret_token_ity(token: String) -> i64 {
+    if token == String::from("unit") { return ITY_UNIT(); }
+    if token == String::from("i64") { return ITY_I64(); }
+    if token == String::from("u64") { return ITY_U64(); }
+    if token == String::from("ptr") { return ITY_PTR(); }
+    if token == String::from("bool") { return ITY_BOOL(); }
+    -2
+}
+
+fn lowering_problem(out: Vec<String>, name: String, what: String) {
+    let line: String = String::from("'");
+    line.push_str(name);
+    line.push_str(String::from("': "));
+    line.push_str(what);
+    out.push(line);
+}
+
+fn fact_lowering_problems(f: OpFact, out: Vec<String>) {
+    let name: String = f.name;
+    let symbol: String = f.symbol;
+    let want_ret: i64 = ret_token_ity(f.ret);
+    if want_ret == -2 { lowering_problem(out, name, String::from("unknown return token in the fact table")); }
+    if catalogue_builtin_to_extern(name) != symbol {
+        lowering_problem(out, name, String::from("catalogue_builtin_to_extern differs from the catalogue runtime symbol"));
+    }
+    if builtin_to_extern(name) != symbol {
+        lowering_problem(out, name, String::from("builtin_to_extern differs from the catalogue runtime symbol"));
+    }
+    if catalogue_builtin_ret_ty(name) != want_ret {
+        lowering_problem(out, name, String::from("catalogue_builtin_ret_ty differs from the catalogue return type"));
+    }
+    if builtin_ret_ty(name) != want_ret {
+        lowering_problem(out, name, String::from("builtin_ret_ty differs from the catalogue return type"));
+    }
+}
+
+fn lowering_problems(facts: Vec<OpFact>) -> Vec<String> {
+    let out: Vec<String> = Vec::new();
+    let mut i: u64 = 0u64;
+    while i < facts.len() {
+        fact_lowering_problems(facts[i], out);
+        i = i + 1u64;
+    }
+    out
+}
+
+fn problems_mention(problems: Vec<String>, needle: String) -> bool {
+    let mut i: u64 = 0u64;
+    while i < problems.len() {
+        if facts_str_contains(problems[i], needle) { return true; }
+        i = i + 1u64;
+    }
+    false
+}
+
+fn check_every_catalogue_op_lowers_as_catalogued() -> i32 [io] {
+    let facts: Vec<OpFact> = op_facts_all();
+    if facts.len() == 0u64 { return 1; }
+    let problems: Vec<String> = lowering_problems(facts);
+    let mut i: u64 = 0u64;
+    while i < problems.len() {
+        eprintln_str(problems[i]);
+        i = i + 1u64;
+    }
+    if problems.len() != 0u64 { return 2; }
     0
 }
 
-fn expect_ret_ty(name: String, want: i64, code: i64) -> i64 {
-    if builtin_ret_ty(name) != want { return code; }
+fn fact_named(facts: Vec<OpFact>, name: String) -> OpFact {
+    let mut i: u64 = 0u64;
+    while i < facts.len() {
+        let f: OpFact = facts[i];
+        let fname: String = f.name;
+        if fname == name { return f; }
+        i = i + 1u64;
+    }
+    facts[0u64]
+}
+
+// The same facts with `name`'s symbol and return token replaced.
+fn facts_with(facts: Vec<OpFact>, name: String, symbol: String, ret: String) -> Vec<OpFact> {
+    let out: Vec<OpFact> = Vec::new();
+    let mut i: u64 = 0u64;
+    while i < facts.len() {
+        let f: OpFact = facts[i];
+        let fname: String = f.name;
+        if fname == name {
+            out.push(op_fact(fname, f.effects, f.params, ret, f.doc_params, f.doc_ret, symbol, f.result_tag));
+        } else {
+            out.push(f);
+        }
+        i = i + 1u64;
+    }
+    out
+}
+
+// Controls: a one-column drift in any fact row must be reported against that
+// op alone, so the green run above is not vacuous.
+fn check_a_drifted_symbol_names_the_op() -> i32 {
+    let facts: Vec<OpFact> = op_facts_all();
+    let f: OpFact = fact_named(facts, String::from("fs_status"));
+    let mutated: Vec<OpFact> = facts_with(facts, String::from("fs_status"), String::from("__vow_fs_status_X"), f.ret);
+    let problems: Vec<String> = lowering_problems(mutated);
+    if problems.len() != 2u64 { return 10; }
+    if !problems_mention(problems, String::from("'fs_status': catalogue_builtin_to_extern")) { return 11; }
+    if !problems_mention(problems, String::from("'fs_status': builtin_to_extern")) { return 12; }
     0
 }
 
-fn check_print_ops() -> i64 {
-    let mut r: i64 = expect_extern(String::from("print_str"), String::from("__vow_string_print"), 1);
-    if r == 0 { r = expect_extern(String::from("print_i64"), String::from("__vow_print_i64"), 2); }
-    if r == 0 { r = expect_extern(String::from("print_u64"), String::from("__vow_print_u64"), 3); }
-    if r == 0 { r = expect_ret_ty(String::from("print_str"), ITY_UNIT(), 4); }
-    if r == 0 { r = expect_ret_ty(String::from("print_i64"), ITY_UNIT(), 5); }
-    if r == 0 { r = expect_ret_ty(String::from("print_u64"), ITY_UNIT(), 6); }
-    r
-}
-
-fn check_process_externs() -> i64 {
-    let mut r: i64 = expect_extern(String::from("process_exit"), String::from("__vow_process_exit"), 10);
-    if r == 0 { r = expect_extern(String::from("process_run"), String::from("__vow_process_run"), 11); }
-    if r == 0 { r = expect_extern(String::from("process_get_stdout"), String::from("__vow_process_get_stdout"), 12); }
-    if r == 0 { r = expect_extern(String::from("process_get_stderr"), String::from("__vow_process_get_stderr"), 13); }
-    if r == 0 { r = expect_extern(String::from("process_start"), String::from("__vow_process_start"), 14); }
-    if r == 0 { r = expect_extern(String::from("process_wait"), String::from("__vow_process_wait"), 15); }
-    if r == 0 { r = expect_extern(String::from("process_wait_timeout"), String::from("__vow_process_wait_timeout"), 16); }
-    if r == 0 { r = expect_extern(String::from("process_poll_wait"), String::from("__vow_process_poll_wait"), 17); }
-    if r == 0 { r = expect_extern(String::from("process_kill"), String::from("__vow_process_kill"), 18); }
-    if r == 0 { r = expect_extern(String::from("process_stdout_for"), String::from("__vow_process_stdout_for"), 19); }
-    if r == 0 { r = expect_extern(String::from("process_stderr_for"), String::from("__vow_process_stderr_for"), 20); }
-    if r == 0 { r = expect_extern(String::from("process_start_piped"), String::from("__vow_process_start_piped"), 21); }
-    if r == 0 { r = expect_extern(String::from("process_write_stdin"), String::from("__vow_process_write_stdin"), 22); }
-    if r == 0 { r = expect_extern(String::from("process_close_stdin"), String::from("__vow_process_close_stdin"), 23); }
-    if r == 0 { r = expect_extern(String::from("process_read_line"), String::from("__vow_process_read_line"), 24); }
-    if r == 0 { r = expect_extern(String::from("process_read_status"), String::from("__vow_process_read_status"), 25); }
-    r
-}
-
-fn check_process_ret_tys() -> i64 {
-    let mut r: i64 = expect_ret_ty(String::from("process_exit"), ITY_UNIT(), 30);
-    if r == 0 { r = expect_ret_ty(String::from("process_run"), ITY_I64(), 31); }
-    if r == 0 { r = expect_ret_ty(String::from("process_get_stdout"), ITY_PTR(), 32); }
-    if r == 0 { r = expect_ret_ty(String::from("process_get_stderr"), ITY_PTR(), 33); }
-    if r == 0 { r = expect_ret_ty(String::from("process_start"), ITY_I64(), 34); }
-    if r == 0 { r = expect_ret_ty(String::from("process_wait"), ITY_I64(), 35); }
-    if r == 0 { r = expect_ret_ty(String::from("process_wait_timeout"), ITY_I64(), 36); }
-    if r == 0 { r = expect_ret_ty(String::from("process_poll_wait"), ITY_I64(), 37); }
-    if r == 0 { r = expect_ret_ty(String::from("process_kill"), ITY_I64(), 38); }
-    if r == 0 { r = expect_ret_ty(String::from("process_stdout_for"), ITY_PTR(), 39); }
-    if r == 0 { r = expect_ret_ty(String::from("process_stderr_for"), ITY_PTR(), 40); }
-    if r == 0 { r = expect_ret_ty(String::from("process_start_piped"), ITY_I64(), 41); }
-    if r == 0 { r = expect_ret_ty(String::from("process_write_stdin"), ITY_I64(), 42); }
-    if r == 0 { r = expect_ret_ty(String::from("process_close_stdin"), ITY_I64(), 43); }
-    if r == 0 { r = expect_ret_ty(String::from("process_read_line"), ITY_PTR(), 44); }
-    if r == 0 { r = expect_ret_ty(String::from("process_read_status"), ITY_I64(), 45); }
-    r
-}
-
-fn check_hash_ops() -> i64 {
-    let mut r: i64 = expect_extern(String::from("hash_u64"), String::from("__vow_hash_u64"), 60);
-    if r == 0 { r = expect_extern(String::from("hash_str"), String::from("__vow_hash_str"), 61); }
-    if r == 0 { r = expect_ret_ty(String::from("hash_u64"), ITY_U64(), 62); }
-    if r == 0 { r = expect_ret_ty(String::from("hash_str"), ITY_U64(), 63); }
-    if r == 0 && builtin_result_tag(String::from("hash_str")) != BRT_NONE() { r = 64; }
-    r
-}
-
-fn check_env_ops() -> i64 {
-    let mut r: i64 = expect_extern(String::from("fs_read_status"), String::from("__vow_fs_read_status"), 70);
-    if r == 0 { r = expect_extern(String::from("getenv"), String::from("__vow_getenv"), 71); }
-    if r == 0 { r = expect_extern(String::from("path_lookup"), String::from("__vow_path_lookup"), 72); }
-    if r == 0 { r = expect_extern(String::from("mktemp_dir"), String::from("__vow_mktemp_dir"), 73); }
-    if r == 0 { r = expect_ret_ty(String::from("fs_read_status"), ITY_I64(), 74); }
-    if r == 0 { r = expect_ret_ty(String::from("getenv"), ITY_PTR(), 75); }
-    if r == 0 { r = expect_ret_ty(String::from("path_lookup"), ITY_PTR(), 76); }
-    if r == 0 { r = expect_ret_ty(String::from("mktemp_dir"), ITY_PTR(), 77); }
-    if r == 0 && builtin_result_tag(String::from("fs_read_status")) != BRT_NONE() { r = 78; }
-    r
-}
-
-// The StringHeap-tagged process_* names are already pinned by
-// check_string_rows in test_lower_builtin_result_tag.vow; this only covers
-// the untagged ones, which aren't asserted anywhere else.
-fn check_process_result_tags() -> i64 {
-    let mut r: i64 = 0;
-    if builtin_result_tag(String::from("process_exit")) != BRT_NONE() { r = 54; }
-    if r == 0 && builtin_result_tag(String::from("process_run")) != BRT_NONE() { r = 55; }
-    r
-}
-
-// The query and utility builtins (#1271) resolve through the generated
-// catalogue lookups: the extern symbol and the IR return type of each come from
-// docs/spec/operations.json, not from a hand-written table in lower.vow.
-fn expect_catalogued(name: String, sym: String, ret: i64, code: i64) -> i64 {
-    if catalogue_builtin_to_extern(name) != sym { return code; }
-    if catalogue_builtin_ret_ty(name) != ret { return code + 1; }
-    if builtin_to_extern(name) != sym { return code + 2; }
-    if builtin_ret_ty(name) != ret { return code + 3; }
+fn check_a_drifted_return_type_names_the_op() -> i32 {
+    let facts: Vec<OpFact> = op_facts_all();
+    let f: OpFact = fact_named(facts, String::from("fs_status"));
+    let mutated: Vec<OpFact> = facts_with(facts, String::from("fs_status"), f.symbol, String::from("u64"));
+    let problems: Vec<String> = lowering_problems(mutated);
+    if problems.len() != 2u64 { return 20; }
+    if !problems_mention(problems, String::from("'fs_status': catalogue_builtin_ret_ty")) { return 21; }
+    if !problems_mention(problems, String::from("'fs_status': builtin_ret_ty")) { return 22; }
     0
 }
 
-fn check_query_utility_rows_0() -> i64 {
-    let mut r: i64 = 0;
-    if r == 0 { r = expect_catalogued(String::from("memory_root_arena_bytes"), String::from("__vow_memory_root_arena_bytes"), ITY_U64(), 200); }
-    if r == 0 { r = expect_catalogued(String::from("memory_peak_bytes"), String::from("__vow_memory_peak_bytes"), ITY_U64(), 204); }
-    if r == 0 { r = expect_catalogued(String::from("memory_alloc_count_since_start"), String::from("__vow_memory_alloc_count_since_start"), ITY_U64(), 208); }
-    if r == 0 { r = expect_catalogued(String::from("time_unix"), String::from("__vow_time_unix"), ITY_I64(), 212); }
-    if r == 0 { r = expect_catalogued(String::from("time_unix_ms"), String::from("__vow_time_unix_ms"), ITY_I64(), 216); }
-    if r == 0 { r = expect_catalogued(String::from("time_micros"), String::from("__vow_time_micros"), ITY_I64(), 220); }
-    if r == 0 { r = expect_catalogued(String::from("num_cpus"), String::from("__vow_num_cpus"), ITY_I64(), 224); }
-    if r == 0 { r = expect_catalogued(String::from("proc_sample"), String::from("__vow_proc_sample"), ITY_PTR(), 228); }
-    if r == 0 { r = expect_catalogued(String::from("gzip_write_file"), String::from("__vow_gzip_write_file"), ITY_I64(), 232); }
-    r
+fn check_an_unlowered_row_names_the_op() -> i32 {
+    let facts: Vec<OpFact> = op_facts_all();
+    facts.push(op_fact(String::from("brand_new_builtin"), String::from("[]"), String::from(""), String::from("i64"), String::from(""), String::from("i64"), String::from("__vow_brand_new_builtin"), String::from("none")));
+    let problems: Vec<String> = lowering_problems(facts);
+    if !problems_mention(problems, String::from("'brand_new_builtin': catalogue_builtin_to_extern")) { return 30; }
+    0
 }
 
-fn check_query_utility_rows_1() -> i64 {
-    let mut r: i64 = 0;
-    if r == 0 { r = expect_catalogued(String::from("hex_encode"), String::from("__vow_hex_encode"), ITY_PTR(), 236); }
-    if r == 0 { r = expect_catalogued(String::from("hex_decode"), String::from("__vow_hex_decode"), ITY_PTR(), 240); }
-    if r == 0 { r = expect_catalogued(String::from("parse_i64"), String::from("__vow_string_parse_i64_opt"), ITY_PTR(), 244); }
-    if r == 0 { r = expect_catalogued(String::from("parse_i8"), String::from("__vow_string_parse_i8_opt"), ITY_PTR(), 248); }
-    if r == 0 { r = expect_catalogued(String::from("parse_i16"), String::from("__vow_string_parse_i16_opt"), ITY_PTR(), 252); }
-    if r == 0 { r = expect_catalogued(String::from("parse_i32"), String::from("__vow_string_parse_i32_opt"), ITY_PTR(), 256); }
-    if r == 0 { r = expect_catalogued(String::from("parse_i128"), String::from("__vow_string_parse_i128_opt"), ITY_PTR(), 260); }
-    if r == 0 { r = expect_catalogued(String::from("parse_u8"), String::from("__vow_string_parse_u8_opt"), ITY_PTR(), 264); }
-    if r == 0 { r = expect_catalogued(String::from("parse_u16"), String::from("__vow_string_parse_u16_opt"), ITY_PTR(), 268); }
-    r
-}
-
-fn check_query_utility_rows_2() -> i64 {
-    let mut r: i64 = 0;
-    if r == 0 { r = expect_catalogued(String::from("parse_u32"), String::from("__vow_string_parse_u32_opt"), ITY_PTR(), 272); }
-    if r == 0 { r = expect_catalogued(String::from("parse_u128"), String::from("__vow_string_parse_u128_opt"), ITY_PTR(), 276); }
-    if r == 0 { r = expect_catalogued(String::from("parse_f64_bits"), String::from("__vow_parse_f64_bits"), ITY_U64(), 280); }
-    if r == 0 { r = expect_catalogued(String::from("format_f64_bits"), String::from("__vow_format_f64_bits"), ITY_PTR(), 284); }
-    if r == 0 { r = expect_catalogued(String::from("int_to_string"), String::from("__vow_string_from_i64"), ITY_PTR(), 288); }
-    if r == 0 { r = expect_catalogued(String::from("uint_to_string"), String::from("__vow_string_from_u64"), ITY_PTR(), 292); }
-    if r == 0 { r = expect_catalogued(String::from("int128_to_string"), String::from("__vow_string_from_i128"), ITY_PTR(), 296); }
-    if r == 0 { r = expect_catalogued(String::from("uint128_to_string"), String::from("__vow_string_from_u128"), ITY_PTR(), 300); }
-    if r == 0 { r = expect_catalogued(String::from("string_substr"), String::from("__vow_string_substr"), ITY_PTR(), 304); }
-    r
-}
-
-fn check_query_utility_rows_3() -> i64 {
-    let mut r: i64 = 0;
-    if r == 0 { r = expect_catalogued(String::from("string_split"), String::from("__vow_string_split"), ITY_PTR(), 308); }
-    if r == 0 { r = expect_catalogued(String::from("string_starts_with"), String::from("__vow_string_starts_with"), ITY_I64(), 312); }
-    if r == 0 { r = expect_catalogued(String::from("string_ends_with"), String::from("__vow_string_ends_with"), ITY_I64(), 316); }
-    if r == 0 { r = expect_catalogued(String::from("string_trim"), String::from("__vow_string_trim"), ITY_PTR(), 320); }
-    if r == 0 { r = expect_catalogued(String::from("string_to_upper"), String::from("__vow_string_to_upper"), ITY_PTR(), 324); }
-    if r == 0 { r = expect_catalogued(String::from("string_to_lower"), String::from("__vow_string_to_lower"), ITY_PTR(), 328); }
-    if r == 0 { r = expect_catalogued(String::from("string_replace"), String::from("__vow_string_replace"), ITY_PTR(), 332); }
-    if r == 0 { r = expect_catalogued(String::from("string_join"), String::from("__vow_string_join"), ITY_PTR(), 336); }
-    if r == 0 { r = expect_catalogued(String::from("vec_sort"), String::from("__vow_vec_sort"), ITY_PTR(), 340); }
-    r
+fn any_fact_named(facts: Vec<OpFact>, name: String) -> bool {
+    let mut i: u64 = 0u64;
+    while i < facts.len() {
+        let f: OpFact = facts[i];
+        let fname: String = f.name;
+        if fname == name { return true; }
+        i = i + 1u64;
+    }
+    false
 }
 
 // `i64_to_string` shares `int_to_string`'s runtime symbol, so the catalogue does
-// not list it; the alias stays a one-line hand-written arm next to the lookup.
-fn check_i64_to_string_alias() -> i64 {
-    if catalogue_builtin_to_extern(String::from("i64_to_string")) != String::from("") { return 500; }
-    if builtin_to_extern(String::from("i64_to_string")) != String::from("__vow_string_from_i64") { return 501; }
-    if builtin_ret_ty(String::from("i64_to_string")) != ITY_PTR() { return 502; }
-    if builtin_result_tag(String::from("i64_to_string")) != BRT_STRING() { return 503; }
+// not list it (it is an `excluded` entry); the alias stays a hand-written arm
+// next to the lookups, with the same symbol and type as `int_to_string`.
+fn check_i64_to_string_alias() -> i32 {
+    if any_fact_named(op_facts_all(), String::from("i64_to_string")) { return 40; }
+    if catalogue_builtin_to_extern(String::from("i64_to_string")) != String::from("") { return 41; }
+    if catalogue_builtin_ret_ty(String::from("i64_to_string")) != -1 { return 42; }
+    if builtin_to_extern(String::from("i64_to_string")) != String::from("__vow_string_from_i64") { return 43; }
+    if builtin_ret_ty(String::from("i64_to_string")) != ITY_PTR() { return 44; }
     0
 }
 
-// Result tags the catalogue derives from each entry's documented return type.
-fn check_query_utility_result_tags() -> i64 {
-    let mut r: i64 = 0;
-    if r == 0 && catalogue_builtin_result_tag(String::from("string_split")) != BRT_VEC() { r = 600; }
-    if r == 0 && builtin_result_tag(String::from("string_split")) != BRT_VEC() { r = 700; }
-    if r == 0 && catalogue_builtin_result_tag(String::from("vec_sort")) != BRT_VEC() { r = 601; }
-    if r == 0 && builtin_result_tag(String::from("vec_sort")) != BRT_VEC() { r = 701; }
-    if r == 0 && catalogue_builtin_result_tag(String::from("hex_decode")) != BRT_VEC() { r = 602; }
-    if r == 0 && builtin_result_tag(String::from("hex_decode")) != BRT_VEC() { r = 702; }
-    if r == 0 && catalogue_builtin_result_tag(String::from("hex_encode")) != BRT_STRING() { r = 603; }
-    if r == 0 && builtin_result_tag(String::from("hex_encode")) != BRT_STRING() { r = 703; }
-    if r == 0 && catalogue_builtin_result_tag(String::from("string_substr")) != BRT_STRING() { r = 604; }
-    if r == 0 && builtin_result_tag(String::from("string_substr")) != BRT_STRING() { r = 704; }
-    if r == 0 && catalogue_builtin_result_tag(String::from("proc_sample")) != BRT_STRING() { r = 605; }
-    if r == 0 && builtin_result_tag(String::from("proc_sample")) != BRT_STRING() { r = 705; }
-    if r == 0 && catalogue_builtin_result_tag(String::from("int128_to_string")) != BRT_STRING() { r = 606; }
-    if r == 0 && builtin_result_tag(String::from("int128_to_string")) != BRT_STRING() { r = 706; }
-    if r == 0 && catalogue_builtin_result_tag(String::from("parse_i64")) != ITY_I64() { r = 607; }
-    if r == 0 && builtin_result_tag(String::from("parse_i64")) != ITY_I64() { r = 707; }
-    if r == 0 && catalogue_builtin_result_tag(String::from("parse_i8")) != ITY_I8() { r = 608; }
-    if r == 0 && builtin_result_tag(String::from("parse_i8")) != ITY_I8() { r = 708; }
-    if r == 0 && catalogue_builtin_result_tag(String::from("parse_i16")) != ITY_I16() { r = 609; }
-    if r == 0 && builtin_result_tag(String::from("parse_i16")) != ITY_I16() { r = 709; }
-    if r == 0 && catalogue_builtin_result_tag(String::from("parse_i32")) != ITY_I32() { r = 610; }
-    if r == 0 && builtin_result_tag(String::from("parse_i32")) != ITY_I32() { r = 710; }
-    if r == 0 && catalogue_builtin_result_tag(String::from("parse_i128")) != ITY_I128() { r = 611; }
-    if r == 0 && builtin_result_tag(String::from("parse_i128")) != ITY_I128() { r = 711; }
-    if r == 0 && catalogue_builtin_result_tag(String::from("parse_u8")) != ITY_U8() { r = 612; }
-    if r == 0 && builtin_result_tag(String::from("parse_u8")) != ITY_U8() { r = 712; }
-    if r == 0 && catalogue_builtin_result_tag(String::from("parse_u16")) != ITY_U16() { r = 613; }
-    if r == 0 && builtin_result_tag(String::from("parse_u16")) != ITY_U16() { r = 713; }
-    if r == 0 && catalogue_builtin_result_tag(String::from("parse_u32")) != ITY_U32() { r = 614; }
-    if r == 0 && builtin_result_tag(String::from("parse_u32")) != ITY_U32() { r = 714; }
-    if r == 0 && catalogue_builtin_result_tag(String::from("parse_u128")) != ITY_U128() { r = 615; }
-    if r == 0 && builtin_result_tag(String::from("parse_u128")) != ITY_U128() { r = 715; }
-    if r == 0 && catalogue_builtin_result_tag(String::from("parse_f64_bits")) != BRT_NONE() { r = 616; }
-    if r == 0 && builtin_result_tag(String::from("parse_f64_bits")) != BRT_NONE() { r = 716; }
-    if r == 0 && catalogue_builtin_result_tag(String::from("string_starts_with")) != BRT_NONE() { r = 617; }
-    if r == 0 && builtin_result_tag(String::from("string_starts_with")) != BRT_NONE() { r = 717; }
-    if r == 0 && catalogue_builtin_result_tag(String::from("string_ends_with")) != BRT_NONE() { r = 618; }
-    if r == 0 && builtin_result_tag(String::from("string_ends_with")) != BRT_NONE() { r = 718; }
-    if r == 0 && catalogue_builtin_result_tag(String::from("time_micros")) != BRT_NONE() { r = 619; }
-    if r == 0 && builtin_result_tag(String::from("time_micros")) != BRT_NONE() { r = 719; }
-    if r == 0 && catalogue_builtin_result_tag(String::from("num_cpus")) != BRT_NONE() { r = 620; }
-    if r == 0 && builtin_result_tag(String::from("num_cpus")) != BRT_NONE() { r = 720; }
-    if r == 0 && catalogue_builtin_result_tag(String::from("gzip_write_file")) != BRT_NONE() { r = 621; }
-    if r == 0 && builtin_result_tag(String::from("gzip_write_file")) != BRT_NONE() { r = 721; }
-    if r == 0 && catalogue_builtin_result_tag(String::from("memory_peak_bytes")) != BRT_NONE() { r = 622; }
-    if r == 0 && builtin_result_tag(String::from("memory_peak_bytes")) != BRT_NONE() { r = 722; }
-    r
-}
-
-fn main() -> i32 {
-    let mut r: i64 = check_print_ops();
-    if r == 0 { r = check_process_externs(); }
-    if r == 0 { r = check_process_ret_tys(); }
-    if r == 0 { r = check_process_result_tags(); }
-    if r == 0 { r = check_hash_ops(); }
-    if r == 0 { r = check_env_ops(); }
-    if r == 0 { r = check_query_utility_rows_0(); }
-    if r == 0 { r = check_query_utility_rows_1(); }
-    if r == 0 { r = check_query_utility_rows_2(); }
-    if r == 0 { r = check_query_utility_rows_3(); }
+fn main() -> i32 [io] {
+    let mut r: i32 = check_every_catalogue_op_lowers_as_catalogued();
+    if r == 0 { r = check_a_drifted_symbol_names_the_op(); }
+    if r == 0 { r = check_a_drifted_return_type_names_the_op(); }
+    if r == 0 { r = check_an_unlowered_row_names_the_op(); }
     if r == 0 { r = check_i64_to_string_alias(); }
-    if r == 0 { r = check_query_utility_result_tags(); }
-    i64_to_i32_wrap(r)
+    r
 }

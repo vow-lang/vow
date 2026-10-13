@@ -297,7 +297,7 @@ fn check_a_dropped_row_names_the_op() -> i32 {
 fn check_an_unregistered_catalogue_row_names_the_op() -> i32 {
     let e: CheckEnv = fresh_env();
     let facts: Vec<OpFact> = op_facts_all();
-    facts.push(op_fact(String::from("brand_new_builtin"), String::from("[]"), String::from(""), String::from("i64"), String::from(""), String::from("i64")));
+    facts.push(op_fact(String::from("brand_new_builtin"), String::from("[]"), String::from(""), String::from("i64"), String::from(""), String::from("i64"), String::from("__vow_brand_new_builtin"), String::from("none")));
     let problems: Vec<String> = all_problems(e, facts, op_facts_excluded());
     if problems.len() != 1u64 { return 60; }
     if !problems_mention(problems, String::from("'brand_new_builtin': catalogued op is not registered")) { return 61; }

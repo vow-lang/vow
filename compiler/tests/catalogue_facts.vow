@@ -9,7 +9,8 @@ module CatalogueFacts
 
 // `params` is the comma-joined parameter tokens ("" for none); `ret` the return
 // token; `doc_params` the `|`-joined parameter types and `doc_ret` the return
-// type, both as the docs spell them.
+// type, both as the docs spell them. `symbol` is the runtime symbol and
+// `result_tag` is `none`, `string`, `vec` or `option:<elem>`.
 struct OpFact {
     name: String,
     effects: String,
@@ -17,6 +18,8 @@ struct OpFact {
     ret: String,
     doc_params: String,
     doc_ret: String,
+    symbol: String,
+    result_tag: String,
 }
 
 // `value` is the comma-joined names (OPX_NAMES), the prefix (OPX_PREFIX) or the
@@ -31,8 +34,8 @@ fn OPX_NAMES() -> i64 { 0 }
 fn OPX_PREFIX() -> i64 { 1 }
 fn OPX_CONTAINS() -> i64 { 2 }
 
-fn op_fact(name: String, effects: String, params: String, ret: String, doc_params: String, doc_ret: String) -> OpFact {
-    OpFact { name: name, effects: effects, params: params, ret: ret, doc_params: doc_params, doc_ret: doc_ret }
+fn op_fact(name: String, effects: String, params: String, ret: String, doc_params: String, doc_ret: String, symbol: String, result_tag: String) -> OpFact {
+    OpFact { name: name, effects: effects, params: params, ret: ret, doc_params: doc_params, doc_ret: doc_ret, symbol: symbol, result_tag: result_tag }
 }
 
 fn op_excluded(kind: i64, value: String, suffixes: String) -> OpExcluded {
@@ -42,89 +45,89 @@ fn op_excluded(kind: i64, value: String, suffixes: String) -> OpExcluded {
 // GENERATE:OPERATION_FACTS:START
 fn op_facts_all() -> Vec<OpFact> {
     let v: Vec<OpFact> = Vec::new();
-    v.push(op_fact(String::from("print_str"), String::from("[io]"), String::from("ptr"), String::from("unit"), String::from("String"), String::from("()")));
-    v.push(op_fact(String::from("print_i64"), String::from("[io]"), String::from("i64"), String::from("unit"), String::from("i64"), String::from("()")));
-    v.push(op_fact(String::from("print_u64"), String::from("[io]"), String::from("u64"), String::from("unit"), String::from("u64"), String::from("()")));
-    v.push(op_fact(String::from("fs_read"), String::from("[read]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("String")));
-    v.push(op_fact(String::from("fs_open"), String::from("[read]"), String::from("ptr"), String::from("i64"), String::from("String"), String::from("i64")));
-    v.push(op_fact(String::from("fs_read_line"), String::from("[read]"), String::from("i64"), String::from("ptr"), String::from("i64"), String::from("String")));
-    v.push(op_fact(String::from("fs_status"), String::from("[read]"), String::from("i64"), String::from("i64"), String::from("i64"), String::from("i64")));
-    v.push(op_fact(String::from("fs_close"), String::from("[read]"), String::from("i64"), String::from("i64"), String::from("i64"), String::from("i64")));
-    v.push(op_fact(String::from("fs_write"), String::from("[write]"), String::from("ptr,ptr"), String::from("i64"), String::from("String|String"), String::from("i64")));
-    v.push(op_fact(String::from("fs_exists"), String::from("[read]"), String::from("ptr"), String::from("i64"), String::from("String"), String::from("i64")));
-    v.push(op_fact(String::from("fs_mkdir"), String::from("[io]"), String::from("ptr"), String::from("i64"), String::from("String"), String::from("i64")));
-    v.push(op_fact(String::from("fs_listdir"), String::from("[read]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("Vec<String>")));
-    v.push(op_fact(String::from("fs_remove"), String::from("[io]"), String::from("ptr"), String::from("i64"), String::from("String"), String::from("i64")));
-    v.push(op_fact(String::from("fs_remove_dir"), String::from("[io]"), String::from("ptr"), String::from("i64"), String::from("String"), String::from("i64")));
-    v.push(op_fact(String::from("fs_remove_dir_all"), String::from("[io]"), String::from("ptr"), String::from("i64"), String::from("String"), String::from("i64")));
-    v.push(op_fact(String::from("fs_is_dir"), String::from("[read]"), String::from("ptr"), String::from("i64"), String::from("String"), String::from("i64")));
-    v.push(op_fact(String::from("fs_is_symlink"), String::from("[read]"), String::from("ptr"), String::from("i64"), String::from("String"), String::from("i64")));
-    v.push(op_fact(String::from("fs_rename"), String::from("[io]"), String::from("ptr,ptr"), String::from("i64"), String::from("String|String"), String::from("i64")));
-    v.push(op_fact(String::from("args"), String::from("[read]"), String::from(""), String::from("ptr"), String::from(""), String::from("Vec<String>")));
-    v.push(op_fact(String::from("stdin_read"), String::from("[read]"), String::from(""), String::from("ptr"), String::from(""), String::from("String")));
-    v.push(op_fact(String::from("stdin_read_line"), String::from("[read]"), String::from(""), String::from("ptr"), String::from(""), String::from("String")));
-    v.push(op_fact(String::from("stdin_ready"), String::from("[read]"), String::from(""), String::from("bool"), String::from(""), String::from("bool")));
-    v.push(op_fact(String::from("eprintln_str"), String::from("[io]"), String::from("ptr"), String::from("unit"), String::from("String"), String::from("()")));
-    v.push(op_fact(String::from("try_eprintln_str"), String::from("[io]"), String::from("ptr"), String::from("i64"), String::from("String"), String::from("i64")));
-    v.push(op_fact(String::from("process_exit"), String::from("[io]"), String::from("i64"), String::from("unit"), String::from("i64"), String::from("!")));
-    v.push(op_fact(String::from("process_run"), String::from("[io]"), String::from("ptr,ptr"), String::from("i64"), String::from("String|Vec<String>"), String::from("i64")));
-    v.push(op_fact(String::from("process_get_stdout"), String::from("[io]"), String::from(""), String::from("ptr"), String::from(""), String::from("String")));
-    v.push(op_fact(String::from("process_get_stderr"), String::from("[io]"), String::from(""), String::from("ptr"), String::from(""), String::from("String")));
-    v.push(op_fact(String::from("process_start"), String::from("[io]"), String::from("ptr,ptr"), String::from("i64"), String::from("String|Vec<String>"), String::from("i64")));
-    v.push(op_fact(String::from("process_start_capped"), String::from("[io]"), String::from("ptr,ptr,i64"), String::from("i64"), String::from("String|Vec<String>|i64"), String::from("i64")));
-    v.push(op_fact(String::from("process_wait"), String::from("[io]"), String::from("i64"), String::from("i64"), String::from("i64"), String::from("i64")));
-    v.push(op_fact(String::from("process_wait_timeout"), String::from("[io]"), String::from("i64,i64"), String::from("i64"), String::from("i64|i64"), String::from("i64")));
-    v.push(op_fact(String::from("process_poll_wait"), String::from("[io]"), String::from("i64,i64"), String::from("i64"), String::from("i64|i64"), String::from("i64")));
-    v.push(op_fact(String::from("process_kill"), String::from("[io]"), String::from("i64"), String::from("i64"), String::from("i64"), String::from("i64")));
-    v.push(op_fact(String::from("process_stdout_for"), String::from("[io]"), String::from("i64"), String::from("ptr"), String::from("i64"), String::from("String")));
-    v.push(op_fact(String::from("process_stderr_for"), String::from("[io]"), String::from("i64"), String::from("ptr"), String::from("i64"), String::from("String")));
-    v.push(op_fact(String::from("process_start_piped"), String::from("[io]"), String::from("ptr,ptr"), String::from("i64"), String::from("String|Vec<String>"), String::from("i64")));
-    v.push(op_fact(String::from("process_write_stdin"), String::from("[io]"), String::from("i64,ptr"), String::from("i64"), String::from("i64|String"), String::from("i64")));
-    v.push(op_fact(String::from("process_close_stdin"), String::from("[io]"), String::from("i64"), String::from("i64"), String::from("i64"), String::from("i64")));
-    v.push(op_fact(String::from("process_read_line"), String::from("[io]"), String::from("i64,i64"), String::from("ptr"), String::from("i64|i64"), String::from("String")));
-    v.push(op_fact(String::from("process_read_status"), String::from("[io]"), String::from("i64"), String::from("i64"), String::from("i64"), String::from("i64")));
-    v.push(op_fact(String::from("hash_u64"), String::from("[]"), String::from("u64"), String::from("u64"), String::from("u64"), String::from("u64")));
-    v.push(op_fact(String::from("hash_str"), String::from("[]"), String::from("ptr"), String::from("u64"), String::from("String"), String::from("u64")));
-    v.push(op_fact(String::from("fs_read_status"), String::from("[read]"), String::from(""), String::from("i64"), String::from(""), String::from("i64")));
-    v.push(op_fact(String::from("getenv"), String::from("[read]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("String")));
-    v.push(op_fact(String::from("path_lookup"), String::from("[read]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("String")));
-    v.push(op_fact(String::from("mktemp_dir"), String::from("[io]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("String")));
-    v.push(op_fact(String::from("memory_root_arena_bytes"), String::from("[io]"), String::from(""), String::from("u64"), String::from(""), String::from("u64")));
-    v.push(op_fact(String::from("memory_peak_bytes"), String::from("[io]"), String::from(""), String::from("u64"), String::from(""), String::from("u64")));
-    v.push(op_fact(String::from("memory_alloc_count_since_start"), String::from("[io]"), String::from(""), String::from("u64"), String::from(""), String::from("u64")));
-    v.push(op_fact(String::from("time_unix"), String::from("[io]"), String::from(""), String::from("i64"), String::from(""), String::from("i64")));
-    v.push(op_fact(String::from("time_unix_ms"), String::from("[io]"), String::from(""), String::from("i64"), String::from(""), String::from("i64")));
-    v.push(op_fact(String::from("time_micros"), String::from("[io]"), String::from(""), String::from("i64"), String::from(""), String::from("i64")));
-    v.push(op_fact(String::from("num_cpus"), String::from("[io]"), String::from(""), String::from("i64"), String::from(""), String::from("i64")));
-    v.push(op_fact(String::from("proc_sample"), String::from("[io]"), String::from(""), String::from("ptr"), String::from(""), String::from("String")));
-    v.push(op_fact(String::from("gzip_write_file"), String::from("[io]"), String::from("ptr,ptr"), String::from("i64"), String::from("String|String"), String::from("i64")));
-    v.push(op_fact(String::from("hex_encode"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("Vec<u8>"), String::from("String")));
-    v.push(op_fact(String::from("hex_decode"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("Vec<u8>")));
-    v.push(op_fact(String::from("parse_i64"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("Option<i64>")));
-    v.push(op_fact(String::from("parse_i8"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("Option<i8>")));
-    v.push(op_fact(String::from("parse_i16"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("Option<i16>")));
-    v.push(op_fact(String::from("parse_i32"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("Option<i32>")));
-    v.push(op_fact(String::from("parse_i128"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("Option<i128>")));
-    v.push(op_fact(String::from("parse_u8"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("Option<u8>")));
-    v.push(op_fact(String::from("parse_u16"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("Option<u16>")));
-    v.push(op_fact(String::from("parse_u32"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("Option<u32>")));
-    v.push(op_fact(String::from("parse_u128"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("Option<u128>")));
-    v.push(op_fact(String::from("parse_f64_bits"), String::from("[]"), String::from("ptr"), String::from("u64"), String::from("String"), String::from("u64")));
-    v.push(op_fact(String::from("format_f64_bits"), String::from("[]"), String::from("u64"), String::from("ptr"), String::from("u64"), String::from("String")));
-    v.push(op_fact(String::from("int_to_string"), String::from("[]"), String::from("i64"), String::from("ptr"), String::from("i64"), String::from("String")));
-    v.push(op_fact(String::from("uint_to_string"), String::from("[]"), String::from("u64"), String::from("ptr"), String::from("u64"), String::from("String")));
-    v.push(op_fact(String::from("int128_to_string"), String::from("[]"), String::from("i128"), String::from("ptr"), String::from("i128"), String::from("String")));
-    v.push(op_fact(String::from("uint128_to_string"), String::from("[]"), String::from("u128"), String::from("ptr"), String::from("u128"), String::from("String")));
-    v.push(op_fact(String::from("string_substr"), String::from("[]"), String::from("ptr,u64,u64"), String::from("ptr"), String::from("String|u64|u64"), String::from("String")));
-    v.push(op_fact(String::from("string_split"), String::from("[]"), String::from("ptr,ptr"), String::from("ptr"), String::from("String|String"), String::from("Vec<String>")));
-    v.push(op_fact(String::from("string_starts_with"), String::from("[]"), String::from("ptr,ptr"), String::from("i64"), String::from("String|String"), String::from("i64")));
-    v.push(op_fact(String::from("string_ends_with"), String::from("[]"), String::from("ptr,ptr"), String::from("i64"), String::from("String|String"), String::from("i64")));
-    v.push(op_fact(String::from("string_trim"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("String")));
-    v.push(op_fact(String::from("string_to_upper"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("String")));
-    v.push(op_fact(String::from("string_to_lower"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("String")));
-    v.push(op_fact(String::from("string_replace"), String::from("[]"), String::from("ptr,ptr,ptr"), String::from("ptr"), String::from("String|String|String"), String::from("String")));
-    v.push(op_fact(String::from("string_join"), String::from("[]"), String::from("ptr,ptr"), String::from("ptr"), String::from("Vec<String>|String"), String::from("String")));
-    v.push(op_fact(String::from("vec_sort"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("Vec<i64>"), String::from("Vec<i64>")));
+    v.push(op_fact(String::from("print_str"), String::from("[io]"), String::from("ptr"), String::from("unit"), String::from("String"), String::from("()"), String::from("__vow_string_print"), String::from("none")));
+    v.push(op_fact(String::from("print_i64"), String::from("[io]"), String::from("i64"), String::from("unit"), String::from("i64"), String::from("()"), String::from("__vow_print_i64"), String::from("none")));
+    v.push(op_fact(String::from("print_u64"), String::from("[io]"), String::from("u64"), String::from("unit"), String::from("u64"), String::from("()"), String::from("__vow_print_u64"), String::from("none")));
+    v.push(op_fact(String::from("fs_read"), String::from("[read]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("String"), String::from("__vow_fs_read"), String::from("string")));
+    v.push(op_fact(String::from("fs_open"), String::from("[read]"), String::from("ptr"), String::from("i64"), String::from("String"), String::from("i64"), String::from("__vow_fs_open"), String::from("none")));
+    v.push(op_fact(String::from("fs_read_line"), String::from("[read]"), String::from("i64"), String::from("ptr"), String::from("i64"), String::from("String"), String::from("__vow_fs_read_line"), String::from("string")));
+    v.push(op_fact(String::from("fs_status"), String::from("[read]"), String::from("i64"), String::from("i64"), String::from("i64"), String::from("i64"), String::from("__vow_fs_status"), String::from("none")));
+    v.push(op_fact(String::from("fs_close"), String::from("[read]"), String::from("i64"), String::from("i64"), String::from("i64"), String::from("i64"), String::from("__vow_fs_close"), String::from("none")));
+    v.push(op_fact(String::from("fs_write"), String::from("[write]"), String::from("ptr,ptr"), String::from("i64"), String::from("String|String"), String::from("i64"), String::from("__vow_fs_write"), String::from("none")));
+    v.push(op_fact(String::from("fs_exists"), String::from("[read]"), String::from("ptr"), String::from("i64"), String::from("String"), String::from("i64"), String::from("__vow_fs_exists"), String::from("none")));
+    v.push(op_fact(String::from("fs_mkdir"), String::from("[io]"), String::from("ptr"), String::from("i64"), String::from("String"), String::from("i64"), String::from("__vow_fs_mkdir"), String::from("none")));
+    v.push(op_fact(String::from("fs_listdir"), String::from("[read]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("Vec<String>"), String::from("__vow_fs_listdir"), String::from("vec")));
+    v.push(op_fact(String::from("fs_remove"), String::from("[io]"), String::from("ptr"), String::from("i64"), String::from("String"), String::from("i64"), String::from("__vow_fs_remove"), String::from("none")));
+    v.push(op_fact(String::from("fs_remove_dir"), String::from("[io]"), String::from("ptr"), String::from("i64"), String::from("String"), String::from("i64"), String::from("__vow_fs_remove_dir"), String::from("none")));
+    v.push(op_fact(String::from("fs_remove_dir_all"), String::from("[io]"), String::from("ptr"), String::from("i64"), String::from("String"), String::from("i64"), String::from("__vow_fs_remove_dir_all"), String::from("none")));
+    v.push(op_fact(String::from("fs_is_dir"), String::from("[read]"), String::from("ptr"), String::from("i64"), String::from("String"), String::from("i64"), String::from("__vow_fs_is_dir"), String::from("none")));
+    v.push(op_fact(String::from("fs_is_symlink"), String::from("[read]"), String::from("ptr"), String::from("i64"), String::from("String"), String::from("i64"), String::from("__vow_fs_is_symlink"), String::from("none")));
+    v.push(op_fact(String::from("fs_rename"), String::from("[io]"), String::from("ptr,ptr"), String::from("i64"), String::from("String|String"), String::from("i64"), String::from("__vow_fs_rename"), String::from("none")));
+    v.push(op_fact(String::from("args"), String::from("[read]"), String::from(""), String::from("ptr"), String::from(""), String::from("Vec<String>"), String::from("__vow_args"), String::from("vec")));
+    v.push(op_fact(String::from("stdin_read"), String::from("[read]"), String::from(""), String::from("ptr"), String::from(""), String::from("String"), String::from("__vow_stdin_read"), String::from("string")));
+    v.push(op_fact(String::from("stdin_read_line"), String::from("[read]"), String::from(""), String::from("ptr"), String::from(""), String::from("String"), String::from("__vow_stdin_read_line"), String::from("string")));
+    v.push(op_fact(String::from("stdin_ready"), String::from("[read]"), String::from(""), String::from("bool"), String::from(""), String::from("bool"), String::from("__vow_stdin_ready"), String::from("none")));
+    v.push(op_fact(String::from("eprintln_str"), String::from("[io]"), String::from("ptr"), String::from("unit"), String::from("String"), String::from("()"), String::from("__vow_eprintln_str"), String::from("none")));
+    v.push(op_fact(String::from("try_eprintln_str"), String::from("[io]"), String::from("ptr"), String::from("i64"), String::from("String"), String::from("i64"), String::from("__vow_try_eprintln_str"), String::from("none")));
+    v.push(op_fact(String::from("process_exit"), String::from("[io]"), String::from("i64"), String::from("unit"), String::from("i64"), String::from("!"), String::from("__vow_process_exit"), String::from("none")));
+    v.push(op_fact(String::from("process_run"), String::from("[io]"), String::from("ptr,ptr"), String::from("i64"), String::from("String|Vec<String>"), String::from("i64"), String::from("__vow_process_run"), String::from("none")));
+    v.push(op_fact(String::from("process_get_stdout"), String::from("[io]"), String::from(""), String::from("ptr"), String::from(""), String::from("String"), String::from("__vow_process_get_stdout"), String::from("string")));
+    v.push(op_fact(String::from("process_get_stderr"), String::from("[io]"), String::from(""), String::from("ptr"), String::from(""), String::from("String"), String::from("__vow_process_get_stderr"), String::from("string")));
+    v.push(op_fact(String::from("process_start"), String::from("[io]"), String::from("ptr,ptr"), String::from("i64"), String::from("String|Vec<String>"), String::from("i64"), String::from("__vow_process_start"), String::from("none")));
+    v.push(op_fact(String::from("process_start_capped"), String::from("[io]"), String::from("ptr,ptr,i64"), String::from("i64"), String::from("String|Vec<String>|i64"), String::from("i64"), String::from("__vow_process_start_capped"), String::from("none")));
+    v.push(op_fact(String::from("process_wait"), String::from("[io]"), String::from("i64"), String::from("i64"), String::from("i64"), String::from("i64"), String::from("__vow_process_wait"), String::from("none")));
+    v.push(op_fact(String::from("process_wait_timeout"), String::from("[io]"), String::from("i64,i64"), String::from("i64"), String::from("i64|i64"), String::from("i64"), String::from("__vow_process_wait_timeout"), String::from("none")));
+    v.push(op_fact(String::from("process_poll_wait"), String::from("[io]"), String::from("i64,i64"), String::from("i64"), String::from("i64|i64"), String::from("i64"), String::from("__vow_process_poll_wait"), String::from("none")));
+    v.push(op_fact(String::from("process_kill"), String::from("[io]"), String::from("i64"), String::from("i64"), String::from("i64"), String::from("i64"), String::from("__vow_process_kill"), String::from("none")));
+    v.push(op_fact(String::from("process_stdout_for"), String::from("[io]"), String::from("i64"), String::from("ptr"), String::from("i64"), String::from("String"), String::from("__vow_process_stdout_for"), String::from("string")));
+    v.push(op_fact(String::from("process_stderr_for"), String::from("[io]"), String::from("i64"), String::from("ptr"), String::from("i64"), String::from("String"), String::from("__vow_process_stderr_for"), String::from("string")));
+    v.push(op_fact(String::from("process_start_piped"), String::from("[io]"), String::from("ptr,ptr"), String::from("i64"), String::from("String|Vec<String>"), String::from("i64"), String::from("__vow_process_start_piped"), String::from("none")));
+    v.push(op_fact(String::from("process_write_stdin"), String::from("[io]"), String::from("i64,ptr"), String::from("i64"), String::from("i64|String"), String::from("i64"), String::from("__vow_process_write_stdin"), String::from("none")));
+    v.push(op_fact(String::from("process_close_stdin"), String::from("[io]"), String::from("i64"), String::from("i64"), String::from("i64"), String::from("i64"), String::from("__vow_process_close_stdin"), String::from("none")));
+    v.push(op_fact(String::from("process_read_line"), String::from("[io]"), String::from("i64,i64"), String::from("ptr"), String::from("i64|i64"), String::from("String"), String::from("__vow_process_read_line"), String::from("string")));
+    v.push(op_fact(String::from("process_read_status"), String::from("[io]"), String::from("i64"), String::from("i64"), String::from("i64"), String::from("i64"), String::from("__vow_process_read_status"), String::from("none")));
+    v.push(op_fact(String::from("hash_u64"), String::from("[]"), String::from("u64"), String::from("u64"), String::from("u64"), String::from("u64"), String::from("__vow_hash_u64"), String::from("none")));
+    v.push(op_fact(String::from("hash_str"), String::from("[]"), String::from("ptr"), String::from("u64"), String::from("String"), String::from("u64"), String::from("__vow_hash_str"), String::from("none")));
+    v.push(op_fact(String::from("fs_read_status"), String::from("[read]"), String::from(""), String::from("i64"), String::from(""), String::from("i64"), String::from("__vow_fs_read_status"), String::from("none")));
+    v.push(op_fact(String::from("getenv"), String::from("[read]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("String"), String::from("__vow_getenv"), String::from("string")));
+    v.push(op_fact(String::from("path_lookup"), String::from("[read]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("String"), String::from("__vow_path_lookup"), String::from("string")));
+    v.push(op_fact(String::from("mktemp_dir"), String::from("[io]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("String"), String::from("__vow_mktemp_dir"), String::from("string")));
+    v.push(op_fact(String::from("memory_root_arena_bytes"), String::from("[io]"), String::from(""), String::from("u64"), String::from(""), String::from("u64"), String::from("__vow_memory_root_arena_bytes"), String::from("none")));
+    v.push(op_fact(String::from("memory_peak_bytes"), String::from("[io]"), String::from(""), String::from("u64"), String::from(""), String::from("u64"), String::from("__vow_memory_peak_bytes"), String::from("none")));
+    v.push(op_fact(String::from("memory_alloc_count_since_start"), String::from("[io]"), String::from(""), String::from("u64"), String::from(""), String::from("u64"), String::from("__vow_memory_alloc_count_since_start"), String::from("none")));
+    v.push(op_fact(String::from("time_unix"), String::from("[io]"), String::from(""), String::from("i64"), String::from(""), String::from("i64"), String::from("__vow_time_unix"), String::from("none")));
+    v.push(op_fact(String::from("time_unix_ms"), String::from("[io]"), String::from(""), String::from("i64"), String::from(""), String::from("i64"), String::from("__vow_time_unix_ms"), String::from("none")));
+    v.push(op_fact(String::from("time_micros"), String::from("[io]"), String::from(""), String::from("i64"), String::from(""), String::from("i64"), String::from("__vow_time_micros"), String::from("none")));
+    v.push(op_fact(String::from("num_cpus"), String::from("[io]"), String::from(""), String::from("i64"), String::from(""), String::from("i64"), String::from("__vow_num_cpus"), String::from("none")));
+    v.push(op_fact(String::from("proc_sample"), String::from("[io]"), String::from(""), String::from("ptr"), String::from(""), String::from("String"), String::from("__vow_proc_sample"), String::from("string")));
+    v.push(op_fact(String::from("gzip_write_file"), String::from("[io]"), String::from("ptr,ptr"), String::from("i64"), String::from("String|String"), String::from("i64"), String::from("__vow_gzip_write_file"), String::from("none")));
+    v.push(op_fact(String::from("hex_encode"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("Vec<u8>"), String::from("String"), String::from("__vow_hex_encode"), String::from("string")));
+    v.push(op_fact(String::from("hex_decode"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("Vec<u8>"), String::from("__vow_hex_decode"), String::from("vec")));
+    v.push(op_fact(String::from("parse_i64"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("Option<i64>"), String::from("__vow_string_parse_i64_opt"), String::from("option:i64")));
+    v.push(op_fact(String::from("parse_i8"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("Option<i8>"), String::from("__vow_string_parse_i8_opt"), String::from("option:i8")));
+    v.push(op_fact(String::from("parse_i16"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("Option<i16>"), String::from("__vow_string_parse_i16_opt"), String::from("option:i16")));
+    v.push(op_fact(String::from("parse_i32"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("Option<i32>"), String::from("__vow_string_parse_i32_opt"), String::from("option:i32")));
+    v.push(op_fact(String::from("parse_i128"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("Option<i128>"), String::from("__vow_string_parse_i128_opt"), String::from("option:i128")));
+    v.push(op_fact(String::from("parse_u8"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("Option<u8>"), String::from("__vow_string_parse_u8_opt"), String::from("option:u8")));
+    v.push(op_fact(String::from("parse_u16"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("Option<u16>"), String::from("__vow_string_parse_u16_opt"), String::from("option:u16")));
+    v.push(op_fact(String::from("parse_u32"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("Option<u32>"), String::from("__vow_string_parse_u32_opt"), String::from("option:u32")));
+    v.push(op_fact(String::from("parse_u128"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("Option<u128>"), String::from("__vow_string_parse_u128_opt"), String::from("option:u128")));
+    v.push(op_fact(String::from("parse_f64_bits"), String::from("[]"), String::from("ptr"), String::from("u64"), String::from("String"), String::from("u64"), String::from("__vow_parse_f64_bits"), String::from("none")));
+    v.push(op_fact(String::from("format_f64_bits"), String::from("[]"), String::from("u64"), String::from("ptr"), String::from("u64"), String::from("String"), String::from("__vow_format_f64_bits"), String::from("string")));
+    v.push(op_fact(String::from("int_to_string"), String::from("[]"), String::from("i64"), String::from("ptr"), String::from("i64"), String::from("String"), String::from("__vow_string_from_i64"), String::from("string")));
+    v.push(op_fact(String::from("uint_to_string"), String::from("[]"), String::from("u64"), String::from("ptr"), String::from("u64"), String::from("String"), String::from("__vow_string_from_u64"), String::from("string")));
+    v.push(op_fact(String::from("int128_to_string"), String::from("[]"), String::from("i128"), String::from("ptr"), String::from("i128"), String::from("String"), String::from("__vow_string_from_i128"), String::from("string")));
+    v.push(op_fact(String::from("uint128_to_string"), String::from("[]"), String::from("u128"), String::from("ptr"), String::from("u128"), String::from("String"), String::from("__vow_string_from_u128"), String::from("string")));
+    v.push(op_fact(String::from("string_substr"), String::from("[]"), String::from("ptr,u64,u64"), String::from("ptr"), String::from("String|u64|u64"), String::from("String"), String::from("__vow_string_substr"), String::from("string")));
+    v.push(op_fact(String::from("string_split"), String::from("[]"), String::from("ptr,ptr"), String::from("ptr"), String::from("String|String"), String::from("Vec<String>"), String::from("__vow_string_split"), String::from("vec")));
+    v.push(op_fact(String::from("string_starts_with"), String::from("[]"), String::from("ptr,ptr"), String::from("i64"), String::from("String|String"), String::from("i64"), String::from("__vow_string_starts_with"), String::from("none")));
+    v.push(op_fact(String::from("string_ends_with"), String::from("[]"), String::from("ptr,ptr"), String::from("i64"), String::from("String|String"), String::from("i64"), String::from("__vow_string_ends_with"), String::from("none")));
+    v.push(op_fact(String::from("string_trim"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("String"), String::from("__vow_string_trim"), String::from("string")));
+    v.push(op_fact(String::from("string_to_upper"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("String"), String::from("__vow_string_to_upper"), String::from("string")));
+    v.push(op_fact(String::from("string_to_lower"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("String"), String::from("String"), String::from("__vow_string_to_lower"), String::from("string")));
+    v.push(op_fact(String::from("string_replace"), String::from("[]"), String::from("ptr,ptr,ptr"), String::from("ptr"), String::from("String|String|String"), String::from("String"), String::from("__vow_string_replace"), String::from("string")));
+    v.push(op_fact(String::from("string_join"), String::from("[]"), String::from("ptr,ptr"), String::from("ptr"), String::from("Vec<String>|String"), String::from("String"), String::from("__vow_string_join"), String::from("string")));
+    v.push(op_fact(String::from("vec_sort"), String::from("[]"), String::from("ptr"), String::from("ptr"), String::from("Vec<i64>"), String::from("Vec<i64>"), String::from("__vow_vec_sort"), String::from("vec")));
     v
 }
 
