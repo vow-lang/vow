@@ -78,59 +78,40 @@ fn fact_arity(f: OpFact) -> i64 {
     string_split(params, String::from(",")).len() as i64
 }
 
-fn problem(out: Vec<String>, name: String, what: String) {
-    let line: String = String::from("'");
-    line.push_str(name);
-    line.push_str(String::from("': "));
-    line.push_str(what);
-    out.push(line);
-}
-
 fn fact_problems(e: CheckEnv, f: OpFact, out: Vec<String>) {
     let name: String = f.name;
     let fidx: i64 = env_lookup_fn(e, name);
     if fidx < 0 {
-        problem(out, name, String::from("catalogued op is not registered in the env"));
+        fact_problem(out, name, String::from("catalogued op is not registered in the env"));
     } else {
         let ts: TyStore = e.ts;
         let effects: String = effects_catalogue_string(e.fn_effects[fidx as u64]);
         let want_effects: String = f.effects;
         if effects != want_effects {
-            problem(out, name, String::from("effects differ from the catalogue"));
+            fact_problem(out, name, String::from("effects differ from the catalogue"));
         }
         if e.fn_param_count[fidx as u64] != fact_arity(f) {
-            problem(out, name, String::from("arity differs from the catalogue"));
+            fact_problem(out, name, String::from("arity differs from the catalogue"));
         } else {
             let want_params: String = f.params;
             if param_tokens(e, fidx) != want_params {
-                problem(out, name, String::from("parameter tokens differ from the catalogue"));
+                fact_problem(out, name, String::from("parameter tokens differ from the catalogue"));
             }
             let want_doc_params: String = f.doc_params;
             if param_doc_types(e, fidx) != want_doc_params {
-                problem(out, name, String::from("parameter type spelling differs from the catalogue"));
+                fact_problem(out, name, String::from("parameter type spelling differs from the catalogue"));
             }
         }
         let ret_tid: i64 = e.fn_ret_tids[fidx as u64];
         let want_ret: String = f.ret;
         if tid_token(ts, ret_tid) != want_ret {
-            problem(out, name, String::from("return token differs from the catalogue"));
+            fact_problem(out, name, String::from("return token differs from the catalogue"));
         }
         let want_doc_ret: String = f.doc_ret;
         if ty_full_display_name(ts, ret_tid) != want_doc_ret {
-            problem(out, name, String::from("return type spelling differs from the catalogue"));
+            fact_problem(out, name, String::from("return type spelling differs from the catalogue"));
         }
     }
-}
-
-fn any_fact_named(facts: Vec<OpFact>, name: String) -> bool {
-    let mut i: u64 = 0u64;
-    while i < facts.len() {
-        let f: OpFact = facts[i];
-        let fname: String = f.name;
-        if fname == name { return true; }
-        i = i + 1u64;
-    }
-    false
 }
 
 fn first_excluding(excl: Vec<OpExcluded>, name: String) -> i64 {
@@ -152,10 +133,10 @@ fn coverage_problems(e: CheckEnv, facts: Vec<OpFact>, excl: Vec<OpExcluded>, out
         let catalogued: bool = any_fact_named(facts, name);
         let excluded_by: i64 = first_excluding(excl, name);
         if !catalogued && excluded_by < 0 {
-            problem(out, name, String::from("env entry is neither catalogued nor excluded"));
+            fact_problem(out, name, String::from("env entry is neither catalogued nor excluded"));
         }
         if catalogued && excluded_by >= 0 {
-            problem(out, name, String::from("name is both catalogued and excluded"));
+            fact_problem(out, name, String::from("name is both catalogued and excluded"));
         }
         i = i + 1u64;
     }
@@ -169,7 +150,7 @@ fn coverage_problems(e: CheckEnv, facts: Vec<OpFact>, excl: Vec<OpExcluded>, out
             k = k + 1u64;
         }
         if !hit {
-            problem(out, op_excluded_describe(x), String::from("matches no env entry (dead exclusion)"));
+            fact_problem(out, op_excluded_describe(x), String::from("matches no env entry (dead exclusion)"));
         }
         j = j + 1u64;
     }
@@ -186,27 +167,12 @@ fn all_problems(e: CheckEnv, facts: Vec<OpFact>, excl: Vec<OpExcluded>) -> Vec<S
     out
 }
 
-fn problems_mention(problems: Vec<String>, needle: String) -> bool {
-    let mut i: u64 = 0u64;
-    while i < problems.len() {
-        if facts_str_contains(problems[i], needle) { return true; }
-        i = i + 1u64;
-    }
-    false
-}
-
 fn check_env_agrees_with_catalogue() -> i32 [io] {
     let facts: Vec<OpFact> = op_facts_all();
     let excl: Vec<OpExcluded> = op_facts_excluded();
     if facts.len() == 0u64 { return 1; }
     if excl.len() == 0u64 { return 2; }
-    let problems: Vec<String> = all_problems(fresh_env(), facts, excl);
-    let mut i: u64 = 0u64;
-    while i < problems.len() {
-        eprintln_str(problems[i]);
-        i = i + 1u64;
-    }
-    if problems.len() != 0u64 { return 3; }
+    if report_problems(all_problems(fresh_env(), facts, excl)) != 0u64 { return 3; }
     0
 }
 
@@ -297,7 +263,7 @@ fn check_a_dropped_row_names_the_op() -> i32 {
 fn check_an_unregistered_catalogue_row_names_the_op() -> i32 {
     let e: CheckEnv = fresh_env();
     let facts: Vec<OpFact> = op_facts_all();
-    facts.push(op_fact(String::from("brand_new_builtin"), String::from("[]"), String::from(""), String::from("i64"), String::from(""), String::from("i64")));
+    facts.push(op_fact(String::from("brand_new_builtin"), String::from("[]"), String::from(""), String::from("i64"), String::from(""), String::from("i64"), String::from("__vow_brand_new_builtin"), String::from("none")));
     let problems: Vec<String> = all_problems(e, facts, op_facts_excluded());
     if problems.len() != 1u64 { return 60; }
     if !problems_mention(problems, String::from("'brand_new_builtin': catalogued op is not registered")) { return 61; }

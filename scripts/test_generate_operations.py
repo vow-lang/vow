@@ -11,6 +11,7 @@ plus the real docs/spec/operations.json catalogue for the end-to-end cases.
 import contextlib
 import io
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -2737,6 +2738,10 @@ FACT_FIXTURES = [
         "    // GENERATE:OPERATION_FACTS:START\n    // GENERATE:OPERATION_FACTS:END\n",
     ),
     (
+        "vow-ir/src/lower/mod.rs",
+        "    // GENERATE:OPERATION_FACTS:START\n    // GENERATE:OPERATION_FACTS:END\n",
+    ),
+    (
         "compiler/tests/catalogue_facts.vow",
         "// GENERATE:OPERATION_FACTS:START\n// GENERATE:OPERATION_FACTS:END\n",
     ),
@@ -2747,20 +2752,24 @@ def _write_fact_fixtures(tmp: Path) -> None:
     for rel, body in FACT_FIXTURES:
         path = tmp / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f"before\n{body}after\n")
+        existing = path.read_text() if path.exists() else "before\n"
+        if "OPERATION_FACTS:START" in existing:
+            continue
+        path.write_text(f"{existing}{body}after\n")
 
 
 class OperationFactTablesTest(unittest.TestCase):
     def test_fact_targets_use_their_own_marker_pair(self):
         self.assertEqual(
             {str(p) for p, _ in go.FACT_TARGET_FILES},
-            {"vow-types/src/env.rs", "compiler/tests/catalogue_facts.vow"},
+            {
+                "vow-types/src/env.rs",
+                "vow-ir/src/lower/mod.rs",
+                "compiler/tests/catalogue_facts.vow",
+            },
         )
         self.assertNotEqual(go.FACTS_MARKER_START, go.MARKER_START)
         self.assertNotEqual(go.FACTS_MARKER_END, go.MARKER_END)
-        self.assertFalse(
-            {str(p) for p, _ in go.FACT_TARGET_FILES} & {"vow-ir/src/lower/mod.rs"}
-        )
 
     def test_generators_are_deterministic(self):
         for rel_path, gen_fn in go.FACT_TARGET_FILES:
@@ -2795,7 +2804,8 @@ class OperationFactTablesTest(unittest.TestCase):
         self.assertIn(
             'v.push(op_fact(String::from("print_str"), String::from("[io]"), '
             'String::from("ptr"), String::from("unit"), String::from("String"), '
-            'String::from("()")));',
+            'String::from("()"), String::from("__vow_string_print"), '
+            'String::from("none")));',
             block,
         )
         self.assertIn(
@@ -2872,10 +2882,12 @@ class OperationFactTablesTest(unittest.TestCase):
         self.assertTrue(any("catalogue_facts.vow" in m for m in mismatches))
 
     def test_check_goes_stale_when_an_op_changes(self):
-        for field, value in [
-            ("effects", "[read]"),
-            ("params", ["i64"]),
-            ("name", "print_renamed"),
+        # The lowering table carries only name, symbol, return and tag, so an
+        # effects/params edit leaves vow-ir/src/lower/mod.rs fresh.
+        for field, value, stale_files in [
+            ("effects", "[read]", 2),
+            ("params", ["i64"], 2),
+            ("name", "print_renamed", 3),
         ]:
             with tempfile.TemporaryDirectory() as d:
                 tmp = Path(d)
@@ -2884,7 +2896,7 @@ class OperationFactTablesTest(unittest.TestCase):
                 edited = [dict(op) for op in PRINT_OPS]
                 edited[0][field] = value
                 mismatches = go.check_fact_tables(edited, tmp, EXCLUDED)
-            self.assertEqual(len(mismatches), 2, field)
+            self.assertEqual(len(mismatches), stale_files, field)
 
     def test_hand_edited_fact_table_is_flagged(self):
         with tempfile.TemporaryDirectory() as d:
@@ -2918,6 +2930,65 @@ class OperationFactTablesTest(unittest.TestCase):
         self.assertIn(f"{go.MARKER_START}\nops\n{go.MARKER_END}", spliced)
         self.assertIn("new", spliced)
         self.assertNotIn("old", spliced)
+
+    def test_result_tag_token_follows_the_documented_return_type(self):
+        cases = {
+            "fn(s: String) -> String": "string",
+            "fn(s: String) -> Vec<String>": "vec",
+            "fn(s: String) -> Option<u8>": "option:u8",
+            "fn(s: String) -> i64": "none",
+            "fn(s: String) -> ()": "none",
+        }
+        for signature, token in cases.items():
+            op = dict(PRINT_OPS[0], doc_signature=signature)
+            self.assertEqual(go.result_tag_token(op), token, signature)
+
+    def test_lowering_block_carries_symbol_return_and_tag_for_every_op(self):
+        listing = dict(
+            PRINT_OPS[0],
+            name="listing",
+            runtime_symbol="__vow_listing",
+            doc_signature="fn(s: String) -> Vec<String>",
+        )
+        listing["return"] = "ptr"
+        block = go.gen_rust_lowering_facts_block(PRINT_OPS + [listing], EXCLUDED)
+        self.assertIn(
+            'LoweringFact { name: "print_str", symbol: "__vow_string_print", '
+            'ret: "unit", tag: "none" },',
+            block,
+        )
+        self.assertIn(
+            'LoweringFact { name: "listing", symbol: "__vow_listing", '
+            'ret: "ptr", tag: "vec" },',
+            block,
+        )
+        self.assertIn("#[rustfmt::skip]", block)
+        lines = block.splitlines()
+        self.assertFalse(lines[0].startswith(" "))
+        self.assertTrue(all(ln.startswith("    ") or not ln for ln in lines[1:]))
+
+    def test_rust_and_self_hosted_lowering_facts_are_identical_for_every_op(self):
+        rust_rows = re.findall(
+            r'LoweringFact \{ name: "([^"]+)", symbol: "([^"]+)", '
+            r'ret: "([^"]+)", tag: "([^"]+)" \}',
+            (REPO_ROOT / "vow-ir/src/lower/mod.rs").read_text(),
+        )
+        vow_rows = re.findall(
+            r'op_fact\(String::from\("([^"]+)"\), String::from\("[^"]*"\), '
+            r'String::from\("[^"]*"\), String::from\("([^"]+)"\), '
+            r'String::from\("[^"]*"\), String::from\("[^"]*"\), '
+            r'String::from\("([^"]+)"\), String::from\("([^"]+)"\)\)\)',
+            (REPO_ROOT / "compiler/tests/catalogue_facts.vow").read_text(),
+        )
+        ops = go.load_catalogue(REPO_ROOT)
+        want = [
+            (op["name"], op["runtime_symbol"], op["return"], go.result_tag_token(op))
+            for op in ops
+        ]
+        self.assertEqual(rust_rows, want)
+        self.assertEqual(
+            [(name, symbol, ret, tag) for name, ret, symbol, tag in vow_rows], want
+        )
 
     def test_real_repo_fact_tables_are_fresh(self):
         ops = go.load_catalogue(REPO_ROOT)

@@ -1,0 +1,119 @@
+module TestLowerCatalogueResultTags
+
+use ast
+use ir
+use lower
+use tests.catalogue_facts
+
+// Result tags for the whole Operation Catalogue: for every catalogued op,
+// catalogue_builtin_result_tag and builtin_result_tag must return the tag
+// derived from docs/spec/operations.json (via the generated
+// compiler/tests/catalogue_facts.vow). Extern symbols and return types are
+// covered by test_op_catalogue.vow; the Rust twin is
+// `every_catalogue_op_lowers_to_its_runtime_symbol_return_type_and_result_tag`
+// in vow-ir/src/lower/mod.rs.
+
+// BRT_* / ITY code of a result-tag token (`none`, `string`, `vec`,
+// `option:<elem>`), -9 for an unknown token. Option tags are the element's
+// ITY code, as in builtin_result_tag.
+fn tag_token_code(token: String) -> i64 {
+    if token == String::from("none") { return BRT_NONE(); }
+    if token == String::from("string") { return BRT_STRING(); }
+    if token == String::from("vec") { return BRT_VEC(); }
+    if token == String::from("option:i8") { return ITY_I8(); }
+    if token == String::from("option:u8") { return ITY_U8(); }
+    if token == String::from("option:i16") { return ITY_I16(); }
+    if token == String::from("option:u16") { return ITY_U16(); }
+    if token == String::from("option:i32") { return ITY_I32(); }
+    if token == String::from("option:u32") { return ITY_U32(); }
+    if token == String::from("option:i64") { return ITY_I64(); }
+    if token == String::from("option:i128") { return ITY_I128(); }
+    if token == String::from("option:u128") { return ITY_U128(); }
+    -9
+}
+
+fn fact_tag_problems(f: OpFact, out: Vec<String>) {
+    let name: String = f.name;
+    let want: i64 = tag_token_code(f.result_tag);
+    if want == -9 { fact_problem(out, name, String::from("unknown result tag in the fact table")); }
+    if catalogue_builtin_result_tag(name) != want {
+        fact_problem(out, name, String::from("catalogue_builtin_result_tag differs from the catalogue result tag"));
+    }
+    if builtin_result_tag(name) != want {
+        fact_problem(out, name, String::from("builtin_result_tag differs from the catalogue result tag"));
+    }
+}
+
+fn tag_problems(facts: Vec<OpFact>) -> Vec<String> {
+    let out: Vec<String> = Vec::new();
+    let mut i: u64 = 0u64;
+    while i < facts.len() {
+        fact_tag_problems(facts[i], out);
+        i = i + 1u64;
+    }
+    out
+}
+
+fn check_every_catalogue_op_carries_its_tag() -> i32 [io] {
+    let facts: Vec<OpFact> = op_facts_all();
+    if facts.len() == 0u64 { return 1; }
+    if report_problems(tag_problems(facts)) != 0u64 { return 2; }
+    0
+}
+
+// Controls: a drifted tag in any fact row must be reported against that op
+// alone, whichever tag family it belongs to.
+fn with_tag(name: String, tag: String) -> Vec<OpFact> {
+    let facts: Vec<OpFact> = op_facts_all();
+    let f: OpFact = fact_named(facts, name);
+    facts_with(facts, name, f.symbol, f.ret, tag)
+}
+
+fn check_a_drifted_container_tag_names_the_op() -> i32 {
+    let mutated: Vec<OpFact> = with_tag(String::from("string_split"), String::from("string"));
+    let problems: Vec<String> = tag_problems(mutated);
+    if problems.len() != 2u64 { return 10; }
+    if !problems_mention(problems, String::from("'string_split': catalogue_builtin_result_tag")) { return 11; }
+    if !problems_mention(problems, String::from("'string_split': builtin_result_tag")) { return 12; }
+    0
+}
+
+fn check_a_drifted_option_element_names_the_op() -> i32 {
+    let mutated: Vec<OpFact> = with_tag(String::from("parse_u8"), String::from("option:u16"));
+    let problems: Vec<String> = tag_problems(mutated);
+    if problems.len() != 2u64 { return 20; }
+    if !problems_mention(problems, String::from("'parse_u8': builtin_result_tag")) { return 21; }
+    0
+}
+
+fn check_a_dropped_tag_names_the_op() -> i32 {
+    let mutated: Vec<OpFact> = with_tag(String::from("fs_read"), String::from("none"));
+    let problems: Vec<String> = tag_problems(mutated);
+    if problems.len() != 2u64 { return 30; }
+    if !problems_mention(problems, String::from("'fs_read': catalogue_builtin_result_tag")) { return 31; }
+    0
+}
+
+fn check_an_invented_tag_is_reported() -> i32 {
+    let mutated: Vec<OpFact> = with_tag(String::from("hash_str"), String::from("vec"));
+    if !problems_mention(tag_problems(mutated), String::from("'hash_str': builtin_result_tag")) { return 40; }
+    0
+}
+
+// `i64_to_string` shares `int_to_string`'s runtime symbol, so the catalogue
+// does not list it; its StringHeap tag stays a hand-written arm.
+fn check_i64_to_string_alias_tag() -> i32 {
+    if catalogue_builtin_result_tag(String::from("i64_to_string")) != BRT_NONE() { return 50; }
+    if builtin_result_tag(String::from("i64_to_string")) != BRT_STRING() { return 51; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let mut r: i32 = check_every_catalogue_op_carries_its_tag();
+    if r == 0 { r = check_a_drifted_container_tag_names_the_op(); }
+    if r == 0 { r = check_a_drifted_option_element_names_the_op(); }
+    if r == 0 { r = check_a_dropped_tag_names_the_op(); }
+    if r == 0 { r = check_an_invented_tag_is_reported(); }
+    if r == 0 { r = check_i64_to_string_alias_tag(); }
+    r
+}

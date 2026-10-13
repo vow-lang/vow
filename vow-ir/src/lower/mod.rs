@@ -6024,6 +6024,138 @@ mod tests {
         Span::new(0, 1)
     }
 
+    /// One Operation Catalogue row (docs/spec/operations.json), reduced to what
+    /// the lowering lookups must agree with. `ret` is the catalogue return
+    /// token; `tag` is `none`, `string`, `vec` or `option:<elem>`.
+    #[derive(Clone, Copy)]
+    struct LoweringFact {
+        name: &'static str,
+        symbol: &'static str,
+        ret: &'static str,
+        tag: &'static str,
+    }
+
+    fn fact_ty(token: &str) -> Ty {
+        match token {
+            "unit" => Ty::Unit,
+            "i8" => Ty::I8,
+            "u8" => Ty::U8,
+            "i16" => Ty::I16,
+            "u16" => Ty::U16,
+            "i32" => Ty::I32,
+            "u32" => Ty::U32,
+            "i64" => Ty::I64,
+            "u64" => Ty::U64,
+            "i128" => Ty::I128,
+            "u128" => Ty::U128,
+            "ptr" => Ty::Ptr,
+            "bool" => Ty::Bool,
+            other => panic!("unknown catalogue type token '{other}'"),
+        }
+    }
+
+    fn fact_tag(token: &str) -> Option<BuiltinResultTag> {
+        match token {
+            "none" => None,
+            "string" => Some(BuiltinResultTag::StringHeap),
+            "vec" => Some(BuiltinResultTag::VecHeap),
+            other => match other.strip_prefix("option:") {
+                Some(elem) => Some(BuiltinResultTag::OptionOf(fact_ty(elem))),
+                None => panic!("unknown catalogue result tag '{other}'"),
+            },
+        }
+    }
+
+    // Generated from docs/spec/operations.json by scripts/generate_operations.py.
+    // GENERATE:OPERATION_FACTS:START
+    #[rustfmt::skip]
+    const LOWERING_FACTS: &[LoweringFact] = &[
+        LoweringFact { name: "print_str", symbol: "__vow_string_print", ret: "unit", tag: "none" },
+        LoweringFact { name: "print_i64", symbol: "__vow_print_i64", ret: "unit", tag: "none" },
+        LoweringFact { name: "print_u64", symbol: "__vow_print_u64", ret: "unit", tag: "none" },
+        LoweringFact { name: "fs_read", symbol: "__vow_fs_read", ret: "ptr", tag: "string" },
+        LoweringFact { name: "fs_open", symbol: "__vow_fs_open", ret: "i64", tag: "none" },
+        LoweringFact { name: "fs_read_line", symbol: "__vow_fs_read_line", ret: "ptr", tag: "string" },
+        LoweringFact { name: "fs_status", symbol: "__vow_fs_status", ret: "i64", tag: "none" },
+        LoweringFact { name: "fs_close", symbol: "__vow_fs_close", ret: "i64", tag: "none" },
+        LoweringFact { name: "fs_write", symbol: "__vow_fs_write", ret: "i64", tag: "none" },
+        LoweringFact { name: "fs_exists", symbol: "__vow_fs_exists", ret: "i64", tag: "none" },
+        LoweringFact { name: "fs_mkdir", symbol: "__vow_fs_mkdir", ret: "i64", tag: "none" },
+        LoweringFact { name: "fs_listdir", symbol: "__vow_fs_listdir", ret: "ptr", tag: "vec" },
+        LoweringFact { name: "fs_remove", symbol: "__vow_fs_remove", ret: "i64", tag: "none" },
+        LoweringFact { name: "fs_remove_dir", symbol: "__vow_fs_remove_dir", ret: "i64", tag: "none" },
+        LoweringFact { name: "fs_remove_dir_all", symbol: "__vow_fs_remove_dir_all", ret: "i64", tag: "none" },
+        LoweringFact { name: "fs_is_dir", symbol: "__vow_fs_is_dir", ret: "i64", tag: "none" },
+        LoweringFact { name: "fs_is_symlink", symbol: "__vow_fs_is_symlink", ret: "i64", tag: "none" },
+        LoweringFact { name: "fs_rename", symbol: "__vow_fs_rename", ret: "i64", tag: "none" },
+        LoweringFact { name: "args", symbol: "__vow_args", ret: "ptr", tag: "vec" },
+        LoweringFact { name: "stdin_read", symbol: "__vow_stdin_read", ret: "ptr", tag: "string" },
+        LoweringFact { name: "stdin_read_line", symbol: "__vow_stdin_read_line", ret: "ptr", tag: "string" },
+        LoweringFact { name: "stdin_ready", symbol: "__vow_stdin_ready", ret: "bool", tag: "none" },
+        LoweringFact { name: "eprintln_str", symbol: "__vow_eprintln_str", ret: "unit", tag: "none" },
+        LoweringFact { name: "try_eprintln_str", symbol: "__vow_try_eprintln_str", ret: "i64", tag: "none" },
+        LoweringFact { name: "process_exit", symbol: "__vow_process_exit", ret: "unit", tag: "none" },
+        LoweringFact { name: "process_run", symbol: "__vow_process_run", ret: "i64", tag: "none" },
+        LoweringFact { name: "process_get_stdout", symbol: "__vow_process_get_stdout", ret: "ptr", tag: "string" },
+        LoweringFact { name: "process_get_stderr", symbol: "__vow_process_get_stderr", ret: "ptr", tag: "string" },
+        LoweringFact { name: "process_start", symbol: "__vow_process_start", ret: "i64", tag: "none" },
+        LoweringFact { name: "process_start_capped", symbol: "__vow_process_start_capped", ret: "i64", tag: "none" },
+        LoweringFact { name: "process_wait", symbol: "__vow_process_wait", ret: "i64", tag: "none" },
+        LoweringFact { name: "process_wait_timeout", symbol: "__vow_process_wait_timeout", ret: "i64", tag: "none" },
+        LoweringFact { name: "process_poll_wait", symbol: "__vow_process_poll_wait", ret: "i64", tag: "none" },
+        LoweringFact { name: "process_kill", symbol: "__vow_process_kill", ret: "i64", tag: "none" },
+        LoweringFact { name: "process_stdout_for", symbol: "__vow_process_stdout_for", ret: "ptr", tag: "string" },
+        LoweringFact { name: "process_stderr_for", symbol: "__vow_process_stderr_for", ret: "ptr", tag: "string" },
+        LoweringFact { name: "process_start_piped", symbol: "__vow_process_start_piped", ret: "i64", tag: "none" },
+        LoweringFact { name: "process_write_stdin", symbol: "__vow_process_write_stdin", ret: "i64", tag: "none" },
+        LoweringFact { name: "process_close_stdin", symbol: "__vow_process_close_stdin", ret: "i64", tag: "none" },
+        LoweringFact { name: "process_read_line", symbol: "__vow_process_read_line", ret: "ptr", tag: "string" },
+        LoweringFact { name: "process_read_status", symbol: "__vow_process_read_status", ret: "i64", tag: "none" },
+        LoweringFact { name: "hash_u64", symbol: "__vow_hash_u64", ret: "u64", tag: "none" },
+        LoweringFact { name: "hash_str", symbol: "__vow_hash_str", ret: "u64", tag: "none" },
+        LoweringFact { name: "fs_read_status", symbol: "__vow_fs_read_status", ret: "i64", tag: "none" },
+        LoweringFact { name: "getenv", symbol: "__vow_getenv", ret: "ptr", tag: "string" },
+        LoweringFact { name: "path_lookup", symbol: "__vow_path_lookup", ret: "ptr", tag: "string" },
+        LoweringFact { name: "mktemp_dir", symbol: "__vow_mktemp_dir", ret: "ptr", tag: "string" },
+        LoweringFact { name: "memory_root_arena_bytes", symbol: "__vow_memory_root_arena_bytes", ret: "u64", tag: "none" },
+        LoweringFact { name: "memory_peak_bytes", symbol: "__vow_memory_peak_bytes", ret: "u64", tag: "none" },
+        LoweringFact { name: "memory_alloc_count_since_start", symbol: "__vow_memory_alloc_count_since_start", ret: "u64", tag: "none" },
+        LoweringFact { name: "time_unix", symbol: "__vow_time_unix", ret: "i64", tag: "none" },
+        LoweringFact { name: "time_unix_ms", symbol: "__vow_time_unix_ms", ret: "i64", tag: "none" },
+        LoweringFact { name: "time_micros", symbol: "__vow_time_micros", ret: "i64", tag: "none" },
+        LoweringFact { name: "num_cpus", symbol: "__vow_num_cpus", ret: "i64", tag: "none" },
+        LoweringFact { name: "proc_sample", symbol: "__vow_proc_sample", ret: "ptr", tag: "string" },
+        LoweringFact { name: "gzip_write_file", symbol: "__vow_gzip_write_file", ret: "i64", tag: "none" },
+        LoweringFact { name: "hex_encode", symbol: "__vow_hex_encode", ret: "ptr", tag: "string" },
+        LoweringFact { name: "hex_decode", symbol: "__vow_hex_decode", ret: "ptr", tag: "vec" },
+        LoweringFact { name: "parse_i64", symbol: "__vow_string_parse_i64_opt", ret: "ptr", tag: "option:i64" },
+        LoweringFact { name: "parse_i8", symbol: "__vow_string_parse_i8_opt", ret: "ptr", tag: "option:i8" },
+        LoweringFact { name: "parse_i16", symbol: "__vow_string_parse_i16_opt", ret: "ptr", tag: "option:i16" },
+        LoweringFact { name: "parse_i32", symbol: "__vow_string_parse_i32_opt", ret: "ptr", tag: "option:i32" },
+        LoweringFact { name: "parse_i128", symbol: "__vow_string_parse_i128_opt", ret: "ptr", tag: "option:i128" },
+        LoweringFact { name: "parse_u8", symbol: "__vow_string_parse_u8_opt", ret: "ptr", tag: "option:u8" },
+        LoweringFact { name: "parse_u16", symbol: "__vow_string_parse_u16_opt", ret: "ptr", tag: "option:u16" },
+        LoweringFact { name: "parse_u32", symbol: "__vow_string_parse_u32_opt", ret: "ptr", tag: "option:u32" },
+        LoweringFact { name: "parse_u128", symbol: "__vow_string_parse_u128_opt", ret: "ptr", tag: "option:u128" },
+        LoweringFact { name: "parse_f64_bits", symbol: "__vow_parse_f64_bits", ret: "u64", tag: "none" },
+        LoweringFact { name: "format_f64_bits", symbol: "__vow_format_f64_bits", ret: "ptr", tag: "string" },
+        LoweringFact { name: "int_to_string", symbol: "__vow_string_from_i64", ret: "ptr", tag: "string" },
+        LoweringFact { name: "uint_to_string", symbol: "__vow_string_from_u64", ret: "ptr", tag: "string" },
+        LoweringFact { name: "int128_to_string", symbol: "__vow_string_from_i128", ret: "ptr", tag: "string" },
+        LoweringFact { name: "uint128_to_string", symbol: "__vow_string_from_u128", ret: "ptr", tag: "string" },
+        LoweringFact { name: "string_substr", symbol: "__vow_string_substr", ret: "ptr", tag: "string" },
+        LoweringFact { name: "string_split", symbol: "__vow_string_split", ret: "ptr", tag: "vec" },
+        LoweringFact { name: "string_starts_with", symbol: "__vow_string_starts_with", ret: "i64", tag: "none" },
+        LoweringFact { name: "string_ends_with", symbol: "__vow_string_ends_with", ret: "i64", tag: "none" },
+        LoweringFact { name: "string_trim", symbol: "__vow_string_trim", ret: "ptr", tag: "string" },
+        LoweringFact { name: "string_to_upper", symbol: "__vow_string_to_upper", ret: "ptr", tag: "string" },
+        LoweringFact { name: "string_to_lower", symbol: "__vow_string_to_lower", ret: "ptr", tag: "string" },
+        LoweringFact { name: "string_replace", symbol: "__vow_string_replace", ret: "ptr", tag: "string" },
+        LoweringFact { name: "string_join", symbol: "__vow_string_join", ret: "ptr", tag: "string" },
+        LoweringFact { name: "vec_sort", symbol: "__vow_vec_sort", ret: "ptr", tag: "vec" },
+    ];
+    // GENERATE:OPERATION_FACTS:END
+
     #[test]
     fn builtin_method_spec_tables_the_uniform_arms() {
         use MethodArg::{Absent, Consumed};
@@ -6602,103 +6734,106 @@ type PairView = PairAlias;
         );
     }
 
+    /// Every disagreement between the lowering lookups and `facts`, each
+    /// naming the op, so a drifted catalogue column is reported per operation.
+    fn lowering_problems(facts: &[LoweringFact]) -> Vec<String> {
+        let mut problems = Vec::new();
+        for fact in facts {
+            let name = fact.name;
+            let want = (fact.symbol, fact_ty(fact.ret));
+            if catalogue_builtin_to_runtime(name) != Some(want) {
+                problems.push(format!(
+                    "'{name}': catalogue_builtin_to_runtime differs from the catalogue"
+                ));
+            }
+            if vow_builtin_to_runtime(name) != Some((want.0.to_string(), want.1)) {
+                problems.push(format!(
+                    "'{name}': vow_builtin_to_runtime differs from the catalogue"
+                ));
+            }
+            let tag = fact_tag(fact.tag);
+            if catalogue_builtin_result_tag(name) != tag {
+                problems.push(format!(
+                    "'{name}': catalogue_builtin_result_tag differs from the catalogue"
+                ));
+            }
+            if builtin_result_tag(name) != tag {
+                problems.push(format!(
+                    "'{name}': builtin_result_tag differs from the catalogue"
+                ));
+            }
+        }
+        problems
+    }
+
+    fn fact_with(name: &str, edit: fn(&mut LoweringFact)) -> Vec<LoweringFact> {
+        let mut facts = LOWERING_FACTS.to_vec();
+        let fact = facts
+            .iter_mut()
+            .find(|fact| fact.name == name)
+            .unwrap_or_else(|| panic!("{name} is not catalogued"));
+        edit(fact);
+        facts
+    }
+
     #[test]
-    fn builtins_lower_to_runtime_symbols_and_return_types() {
-        // Keep this table in lockstep with every arm of vow_builtin_to_runtime
-        // (including the catalogue-sourced print_* entries generated into this
-        // file from docs/spec/operations.json -- see catalogue_builtin_to_runtime).
+    fn every_catalogue_op_lowers_to_its_runtime_symbol_return_type_and_result_tag() {
+        assert!(!LOWERING_FACTS.is_empty());
+        assert_eq!(lowering_problems(LOWERING_FACTS), Vec::<String>::new());
+        assert_eq!(catalogue_builtin_to_runtime("missing_builtin"), None);
+        assert_eq!(vow_builtin_to_runtime("missing_builtin"), None);
+        assert_eq!(catalogue_builtin_result_tag("missing_builtin"), None);
+    }
+
+    #[test]
+    fn a_drifted_catalogue_column_names_the_op() {
+        type Edit = fn(&mut LoweringFact);
+        let drifts: [(&str, Edit); 5] = [
+            ("fs_status", |f| f.symbol = "__vow_fs_status_x"),
+            ("fs_status", |f| f.ret = "u64"),
+            ("string_split", |f| f.tag = "string"),
+            ("parse_u8", |f| f.tag = "option:u16"),
+            ("fs_read", |f| f.tag = "none"),
+        ];
+        for (name, edit) in drifts {
+            let problems = lowering_problems(&fact_with(name, edit));
+            assert_eq!(problems.len(), 2, "{problems:?}");
+            let prefix = format!("'{name}':");
+            assert!(
+                problems.iter().all(|p| p.starts_with(&prefix)),
+                "{problems:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unlowered_catalogue_row_names_the_op() {
+        let mut facts = LOWERING_FACTS.to_vec();
+        facts.push(LoweringFact {
+            name: "brand_new_builtin",
+            symbol: "__vow_brand_new_builtin",
+            ret: "i64",
+            tag: "none",
+        });
+        let problems = lowering_problems(&facts);
+        assert!(
+            problems
+                .iter()
+                .all(|p| p.starts_with("'brand_new_builtin':")),
+            "{problems:?}"
+        );
+        assert!(!problems.is_empty());
+    }
+
+    // Arms the catalogue does not list (see its `excluded` section) stay a hand
+    // table; a name that becomes catalogued must leave it.
+    #[test]
+    fn non_catalogued_builtins_lower_to_runtime_symbols_and_return_types() {
         let cases = [
-            ("print_str", "__vow_string_print", Ty::Unit),
-            ("print_i64", "__vow_print_i64", Ty::Unit),
-            ("print_u64", "__vow_print_u64", Ty::Unit),
-            ("eprintln_str", "__vow_eprintln_str", Ty::Unit),
-            ("try_eprintln_str", "__vow_try_eprintln_str", Ty::I64),
-            ("fs_read", "__vow_fs_read", Ty::Ptr),
-            ("fs_open", "__vow_fs_open", Ty::I64),
-            ("fs_read_line", "__vow_fs_read_line", Ty::Ptr),
-            ("fs_status", "__vow_fs_status", Ty::I64),
-            ("fs_close", "__vow_fs_close", Ty::I64),
-            ("fs_write", "__vow_fs_write", Ty::I64),
-            ("fs_exists", "__vow_fs_exists", Ty::I64),
-            ("fs_mkdir", "__vow_fs_mkdir", Ty::I64),
-            ("fs_listdir", "__vow_fs_listdir", Ty::Ptr),
-            ("fs_remove", "__vow_fs_remove", Ty::I64),
-            ("fs_remove_dir", "__vow_fs_remove_dir", Ty::I64),
-            ("fs_is_dir", "__vow_fs_is_dir", Ty::I64),
-            ("fs_is_symlink", "__vow_fs_is_symlink", Ty::I64),
-            ("fs_rename", "__vow_fs_rename", Ty::I64),
-            ("string_substr", "__vow_string_substr", Ty::Ptr),
-            ("string_split", "__vow_string_split", Ty::Ptr),
-            ("string_starts_with", "__vow_string_starts_with", Ty::I64),
-            ("string_ends_with", "__vow_string_ends_with", Ty::I64),
-            ("string_trim", "__vow_string_trim", Ty::Ptr),
-            ("string_to_upper", "__vow_string_to_upper", Ty::Ptr),
-            ("string_to_lower", "__vow_string_to_lower", Ty::Ptr),
-            ("string_replace", "__vow_string_replace", Ty::Ptr),
-            ("string_join", "__vow_string_join", Ty::Ptr),
-            ("parse_i64", "__vow_string_parse_i64_opt", Ty::Ptr),
-            ("int_to_string", "__vow_string_from_i64", Ty::Ptr),
-            ("uint_to_string", "__vow_string_from_u64", Ty::Ptr),
             ("i64_to_string", "__vow_string_from_i64", Ty::Ptr),
-            ("int128_to_string", "__vow_string_from_i128", Ty::Ptr),
-            ("uint128_to_string", "__vow_string_from_u128", Ty::Ptr),
-            ("vec_sort", "__vow_vec_sort", Ty::Ptr),
-            ("time_unix", "__vow_time_unix", Ty::I64),
-            ("time_unix_ms", "__vow_time_unix_ms", Ty::I64),
-            ("num_cpus", "__vow_num_cpus", Ty::I64),
-            (
-                "memory_root_arena_bytes",
-                "__vow_memory_root_arena_bytes",
-                Ty::U64,
-            ),
-            ("memory_peak_bytes", "__vow_memory_peak_bytes", Ty::U64),
-            (
-                "memory_alloc_count_since_start",
-                "__vow_memory_alloc_count_since_start",
-                Ty::U64,
-            ),
-            ("time_micros", "__vow_time_micros", Ty::I64),
-            ("proc_sample", "__vow_proc_sample", Ty::Ptr),
-            ("gzip_write_file", "__vow_gzip_write_file", Ty::I64),
-            ("hex_encode", "__vow_hex_encode", Ty::Ptr),
-            ("hex_decode", "__vow_hex_decode", Ty::Ptr),
-            ("parse_f64_bits", "__vow_parse_f64_bits", Ty::U64),
-            ("format_f64_bits", "__vow_format_f64_bits", Ty::Ptr),
-            ("hash_u64", "__vow_hash_u64", Ty::U64),
-            ("hash_str", "__vow_hash_str", Ty::U64),
-            ("args", "__vow_args", Ty::Ptr),
-            ("stdin_read", "__vow_stdin_read", Ty::Ptr),
-            ("stdin_read_line", "__vow_stdin_read_line", Ty::Ptr),
-            ("stdin_ready", "__vow_stdin_ready", Ty::Bool),
-            ("process_exit", "__vow_process_exit", Ty::Unit),
-            ("process_run", "__vow_process_run", Ty::I64),
-            ("process_get_stdout", "__vow_process_get_stdout", Ty::Ptr),
-            ("process_get_stderr", "__vow_process_get_stderr", Ty::Ptr),
-            ("process_start", "__vow_process_start", Ty::I64),
-            (
-                "process_start_capped",
-                "__vow_process_start_capped",
-                Ty::I64,
-            ),
-            ("process_wait", "__vow_process_wait", Ty::I64),
-            (
-                "process_wait_timeout",
-                "__vow_process_wait_timeout",
-                Ty::I64,
-            ),
-            ("process_poll_wait", "__vow_process_poll_wait", Ty::I64),
-            ("process_kill", "__vow_process_kill", Ty::I64),
-            ("process_stdout_for", "__vow_process_stdout_for", Ty::Ptr),
-            ("process_stderr_for", "__vow_process_stderr_for", Ty::Ptr),
-            ("fs_read_status", "__vow_fs_read_status", Ty::I64),
-            ("getenv", "__vow_getenv", Ty::Ptr),
-            ("path_lookup", "__vow_path_lookup", Ty::Ptr),
-            ("mktemp_dir", "__vow_mktemp_dir", Ty::Ptr),
-            ("process_start_piped", "__vow_process_start_piped", Ty::I64),
-            ("process_write_stdin", "__vow_process_write_stdin", Ty::I64),
-            ("process_close_stdin", "__vow_process_close_stdin", Ty::I64),
-            ("process_read_line", "__vow_process_read_line", Ty::Ptr),
-            ("process_read_status", "__vow_process_read_status", Ty::I64),
+            ("add_sat_u8", "__vow_add_sat_u8", Ty::U8),
+            ("sub_sat_u8", "__vow_sub_sat_u8", Ty::U8),
+            ("mul_sat_u8", "__vow_mul_sat_u8", Ty::U8),
             ("__vow_clif_create", "__vow_clif_create", Ty::I64),
             ("__vow_clif_add_string", "__vow_clif_add_string", Ty::Unit),
             (
@@ -6721,138 +6856,31 @@ type PairView = PairAlias;
             ("__vow_clif_destroy", "__vow_clif_destroy", Ty::Unit),
         ];
         for (name, symbol, ty) in cases {
-            assert_eq!(vow_builtin_to_runtime(name), Some((symbol.to_string(), ty)));
-        }
-        assert_eq!(vow_builtin_to_runtime("missing_builtin"), None);
-    }
-
-    #[test]
-    fn query_utility_builtins_resolve_through_the_catalogue() {
-        let cases = [
-            (
-                "memory_root_arena_bytes",
-                "__vow_memory_root_arena_bytes",
-                Ty::U64,
-            ),
-            ("memory_peak_bytes", "__vow_memory_peak_bytes", Ty::U64),
-            (
-                "memory_alloc_count_since_start",
-                "__vow_memory_alloc_count_since_start",
-                Ty::U64,
-            ),
-            ("time_unix", "__vow_time_unix", Ty::I64),
-            ("time_unix_ms", "__vow_time_unix_ms", Ty::I64),
-            ("time_micros", "__vow_time_micros", Ty::I64),
-            ("num_cpus", "__vow_num_cpus", Ty::I64),
-            ("proc_sample", "__vow_proc_sample", Ty::Ptr),
-            ("gzip_write_file", "__vow_gzip_write_file", Ty::I64),
-            ("hex_encode", "__vow_hex_encode", Ty::Ptr),
-            ("hex_decode", "__vow_hex_decode", Ty::Ptr),
-            ("parse_i64", "__vow_string_parse_i64_opt", Ty::Ptr),
-            ("parse_i8", "__vow_string_parse_i8_opt", Ty::Ptr),
-            ("parse_i16", "__vow_string_parse_i16_opt", Ty::Ptr),
-            ("parse_i32", "__vow_string_parse_i32_opt", Ty::Ptr),
-            ("parse_i128", "__vow_string_parse_i128_opt", Ty::Ptr),
-            ("parse_u8", "__vow_string_parse_u8_opt", Ty::Ptr),
-            ("parse_u16", "__vow_string_parse_u16_opt", Ty::Ptr),
-            ("parse_u32", "__vow_string_parse_u32_opt", Ty::Ptr),
-            ("parse_u128", "__vow_string_parse_u128_opt", Ty::Ptr),
-            ("parse_f64_bits", "__vow_parse_f64_bits", Ty::U64),
-            ("format_f64_bits", "__vow_format_f64_bits", Ty::Ptr),
-            ("int_to_string", "__vow_string_from_i64", Ty::Ptr),
-            ("uint_to_string", "__vow_string_from_u64", Ty::Ptr),
-            ("int128_to_string", "__vow_string_from_i128", Ty::Ptr),
-            ("uint128_to_string", "__vow_string_from_u128", Ty::Ptr),
-            ("string_substr", "__vow_string_substr", Ty::Ptr),
-            ("string_split", "__vow_string_split", Ty::Ptr),
-            ("string_starts_with", "__vow_string_starts_with", Ty::I64),
-            ("string_ends_with", "__vow_string_ends_with", Ty::I64),
-            ("string_trim", "__vow_string_trim", Ty::Ptr),
-            ("string_to_upper", "__vow_string_to_upper", Ty::Ptr),
-            ("string_to_lower", "__vow_string_to_lower", Ty::Ptr),
-            ("string_replace", "__vow_string_replace", Ty::Ptr),
-            ("string_join", "__vow_string_join", Ty::Ptr),
-            ("vec_sort", "__vow_vec_sort", Ty::Ptr),
-        ];
-        for (name, symbol, ty) in cases {
-            assert_eq!(
-                catalogue_builtin_to_runtime(name),
-                Some((symbol, ty)),
-                "{name} is not in the catalogue projection"
+            assert!(
+                LOWERING_FACTS.iter().all(|fact| fact.name != name),
+                "{name} is catalogued; drop it from this hand table"
             );
+            assert_eq!(catalogue_builtin_to_runtime(name), None, "{name}");
             assert_eq!(
                 vow_builtin_to_runtime(name),
                 Some((symbol.to_string(), ty)),
                 "{name}"
             );
         }
-        // `i64_to_string` is a hand-written alias of `int_to_string`: it shares
-        // that entry's runtime symbol, so the catalogue (keyed by symbol too)
-        // does not list it twice.
-        assert_eq!(catalogue_builtin_to_runtime("i64_to_string"), None);
-        assert_eq!(
-            vow_builtin_to_runtime("i64_to_string"),
-            Some(("__vow_string_from_i64".to_string(), Ty::Ptr))
-        );
-    }
-
-    #[test]
-    fn catalogue_result_tags_cover_every_heap_returning_catalogue_entry() {
-        use BuiltinResultTag::{OptionOf, StringHeap, VecHeap};
-
-        let tagged = [
-            ("hex_encode", StringHeap),
-            ("proc_sample", StringHeap),
-            ("format_f64_bits", StringHeap),
-            ("int_to_string", StringHeap),
-            ("uint_to_string", StringHeap),
-            ("int128_to_string", StringHeap),
-            ("uint128_to_string", StringHeap),
-            ("string_substr", StringHeap),
-            ("string_trim", StringHeap),
-            ("string_to_upper", StringHeap),
-            ("string_to_lower", StringHeap),
-            ("string_replace", StringHeap),
-            ("string_join", StringHeap),
-            ("fs_read", StringHeap),
-            ("fs_read_line", StringHeap),
-            ("stdin_read", StringHeap),
-            ("stdin_read_line", StringHeap),
-            ("hex_decode", VecHeap),
-            ("string_split", VecHeap),
-            ("vec_sort", VecHeap),
-            ("args", VecHeap),
-            ("fs_listdir", VecHeap),
-            ("parse_i8", OptionOf(Ty::I8)),
-            ("parse_i16", OptionOf(Ty::I16)),
-            ("parse_i32", OptionOf(Ty::I32)),
-            ("parse_i64", OptionOf(Ty::I64)),
-            ("parse_i128", OptionOf(Ty::I128)),
-            ("parse_u8", OptionOf(Ty::U8)),
-            ("parse_u16", OptionOf(Ty::U16)),
-            ("parse_u32", OptionOf(Ty::U32)),
-            ("parse_u128", OptionOf(Ty::U128)),
-        ];
-        for (name, tag) in tagged {
-            assert_eq!(catalogue_builtin_result_tag(name), Some(tag), "{name}");
-            assert_eq!(builtin_result_tag(name), Some(tag), "{name}");
-        }
-        for name in [
-            "parse_f64_bits",
-            "string_starts_with",
-            "string_ends_with",
-            "time_unix",
-            "time_micros",
-            "num_cpus",
-            "gzip_write_file",
-            "memory_peak_bytes",
+        for (name, symbol, ty) in [
+            ("debug_str", "__vow_debug_str", Ty::Unit),
+            ("debug_i64", "__vow_debug_i64", Ty::Unit),
+            ("debug_u64", "__vow_debug_u64", Ty::Unit),
         ] {
-            assert_eq!(catalogue_builtin_result_tag(name), None, "{name}");
-            assert_eq!(builtin_result_tag(name), None, "{name}");
+            assert!(LOWERING_FACTS.iter().all(|fact| fact.name != name));
+            assert_eq!(vow_debug_builtin_to_runtime(name), Some((symbol, ty)));
         }
-        // The hand-written alias keeps its tag next to the catalogue.
+        // The hand-written alias shares int_to_string's symbol and tag.
         assert_eq!(catalogue_builtin_result_tag("i64_to_string"), None);
-        assert_eq!(builtin_result_tag("i64_to_string"), Some(StringHeap));
+        assert_eq!(
+            builtin_result_tag("i64_to_string"),
+            Some(BuiltinResultTag::StringHeap)
+        );
     }
 
     #[test]
