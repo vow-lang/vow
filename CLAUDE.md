@@ -191,7 +191,8 @@ The staleness detector `scripts/check_help_coverage.py` (run in `full_test.sh`) 
 
 `docs/spec/operations.json` is the Operation Catalogue: the single checked, hand-edited source of
 runtime-symbol, ABI, return-shape, and doc facts for a growing set of Builtin Operations (the print,
-filesystem, stdin/args/stderr, process, hash, environment and query/utility builtins; epic #375). It is deliberately narrower than
+filesystem, stdin/args/stderr, process, hash, environment and query/utility builtins; epic #375).
+It is deliberately narrower than
 `vow-types/src/env.rs::builtin_free_fn_signatures()` — that table (and its self-hosted counterpart in
 `compiler/env.vow`) remains the single source for signature/effects and is never read or replaced by
 this catalogue.
@@ -242,8 +243,8 @@ per-parameter/return types matching `params`/`return` (`String`/`Vec<...>` both 
 `verifier_model` (`known`/`unmodeled`; `main()` rejects an entry without one), the optional
 `arena_routing` (`none`/`heap_fresh`) and `c_model` (`unmodeled`/`base`/`base_and_arena`; `main()` rejects
 a pure entry without one) fields, when present, must be in their closed sets; an `Option<T>` return type
-needs a `T` the generator can tag; and any field
-name not in the recognized set (required or optional) is rejected outright, so a misspelled field can never silently defeat its own check. All
+needs a `T` the generator can tag; and any field name not in the recognized set (required or optional)
+is rejected outright, so a misspelled field can never silently defeat its own check. All
 violations across all entries are collected and reported together, not just the first. `main()` never
 lets a bad catalogue surface as a raw Python traceback — a malformed `operations.json` or a rejected
 entry prints a clean message to stderr and exits 1. `scripts/full_test.sh` runs
