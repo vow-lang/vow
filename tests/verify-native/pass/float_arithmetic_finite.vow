@@ -1,0 +1,47 @@
+// TEST: category float
+module FloatArithmeticFinite
+
+fn add_commutes(a: f64, b: f64) -> f64 vow {
+  requires: a - a == a - a,
+  requires: b - b == b - b,
+  ensures: result == b + a
+} {
+  a + b
+}
+
+fn sub_is_add_of_difference_from_zero(a: f64, b: f64) -> f64 vow {
+  requires: a - a == a - a,
+  requires: b - b == b - b,
+  ensures: result == a + (0.0 - b)
+} {
+  a - b
+}
+
+fn clamp_unit(x: f64) -> f64 vow {
+  requires: x == x,
+  ensures: result >= 0.0,
+  ensures: result <= 1.0
+} {
+  if x < 0.0 {
+    return 0.0;
+  }
+  if x > 1.0 {
+    return 1.0;
+  }
+  x
+}
+
+fn max_of(a: f64, b: f64) -> f64 vow {
+  requires: a == a,
+  requires: b == b,
+  ensures: result >= a,
+  ensures: result >= b,
+  ensures: result == a || result == b
+} {
+  if a > b { a } else { b }
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

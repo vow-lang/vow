@@ -5,6 +5,7 @@ use vc_ops
 use vc_term
 use vc_smt
 use vc_int
+use vc_fp
 use vc_gate
 use vc_flow
 use vc_agg
@@ -341,6 +342,7 @@ fn vc_exec_value(w: VcWalk, inst: IrInst, pc: i64) -> i64 {
         return vc_int_const(ar, inst.ty, inst.dv, hi);
     }
     if op == IOP_CONST_BOOL() { return vc_tm_bool_const(ar, inst.dv != 0); }
+    if vc_fp_is_const(op) { return vc_fp_const(ar, inst.ty, inst.dv); }
     if op == IOP_GET_ARG() { return vc_tm_var(ar, vc_param_name(inst.dv)); }
     if op == IOP_NOT() { return vc_tm_app1(ar, VC_OP_NOT(), w.var_of[inst.args[0] as u64]); }
     if op == IOP_INT_CAST() { return vc_cast(ar, inst.dv, inst.ty, w.var_of[inst.args[0] as u64]); }
@@ -351,6 +353,8 @@ fn vc_exec_value(w: VcWalk, inst: IrInst, pc: i64) -> i64 {
         vc_guard(cs, VC_CLAIM_SHIFT_COUNT(), VC_LABEL_SHIFT_COUNT(), pc, vc_shift_count_ok(ar, inst.ty, count_ty, rhs), inst);
         return vc_shift(ar, op, inst.ty, count_ty, lhs, rhs);
     }
+    if vc_fp_is_arith(op) { return vc_tm_app2(ar, vc_fp_arith_smt(op), lhs, rhs); }
+    if vc_fp_is_cmp(op) { return vc_fp_cmp(ar, op, lhs, rhs); }
     if op == IOP_AND() { return vc_tm_app2(ar, VC_OP_AND(), lhs, rhs); }
     if op == IOP_OR() { return vc_tm_app2(ar, VC_OP_OR(), lhs, rhs); }
     if vc_is_cmp_op(op) {
@@ -603,6 +607,33 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
     }
 }
 
+// True when a parameter or a value of the function is a float: its query needs
+// the floating-point theory.
+fn vc_function_has_float(f: IrFunction, tys: Vec<i64>) -> bool {
+    let mut i: u64 = 0;
+    while i < f.params.len() {
+        if vc_ty_is_float(f.params[i]) { return true; }
+        i = i + 1;
+    }
+    let mut k: u64 = 0;
+    while k < tys.len() {
+        if vc_ty_is_float(tys[k]) { return true; }
+        k = k + 1;
+    }
+    false
+}
+
+// The SMT-LIB logic of a query: bit-vectors, plus arrays when a `Vec` is
+// modelled, plus floating point when a float is.
+fn vc_logic_name(has_array: bool, has_float: bool, quantified: bool) -> String {
+    if quantified && has_float { return String::from("ABVFP"); }
+    if quantified { return String::from("ABV"); }
+    if has_array && has_float { return String::from("QF_ABVFP"); }
+    if has_array { return String::from("QF_ABV"); }
+    if has_float { return String::from("QF_BVFP"); }
+    String::from("QF_BV")
+}
+
 // Obligations for a function inside the native subset, in walk order.
 fn vc_claims(f: IrFunction) -> VcClaims {
     vc_claims_mode(f, vc_frames_new(), false)
@@ -652,14 +683,14 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
     vc_script_set_option(hdr, String::from(":produce-models"), String::from("true"));
     let mut pi: u64 = 0;
     while pi < f.params.len() {
-        if vc_ty_is_int(f.params[pi]) {
+        if vc_ty_is_int(f.params[pi]) || vc_ty_is_float(f.params[pi]) {
             cs.model_hdr.push(hdr.kinds.len() as i64);
             cs.model_slots.push(-1);
             vc_script_declare_const(hdr, vc_param_name(pi as i64), vc_ty_sort(f.params[pi]));
             cs.model_names.push(vc_param_name(pi as i64));
             cs.model_params.push(pi as i64);
             cs.model_tys.push(f.params[pi]);
-            cs.model_widths.push(vc_ty_bits(f.params[pi]));
+            cs.model_widths.push(vc_ty_sort(f.params[pi]));
         }
         pi = pi + 1;
     }
@@ -706,10 +737,6 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         oi = oi + 1;
     }
     vc_claims_harvest_fields(cs, w.ag);
-    if w.vv.quantified {
-        vc_script_replace_logic(hdr, String::from("ABV"));
-    } else if vc_vec_count(w.vv) > 0 {
-        vc_script_replace_logic(hdr, String::from("QF_ABV"));
-    }
+    vc_script_replace_logic(hdr, vc_logic_name(vc_vec_count(w.vv) > 0, vc_function_has_float(f, tys), w.vv.quantified));
     cs
 }

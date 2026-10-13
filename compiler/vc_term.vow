@@ -17,7 +17,10 @@ use ir_dominance
 // assumption, never in a goal.
 //
 // A sort code is the bit-vector width (8, 16, 32, 64, 128), or 0 for Bool, or
-// `VC_SORT_ARRAY64` for an array from 64-bit indices to 64-bit elements.
+// `VC_SORT_ARRAY64` for an array from 64-bit indices to 64-bit elements, or
+// `VC_SORT_F32`/`VC_SORT_F64` for the IEEE-754 `FloatingPoint` sorts. A float
+// constant is the `to_fp` application of its bit pattern (a bit-vector
+// constant), so the simplifier never folds a float operation.
 // A bit-vector constant holds its width in `a` and its low and high 64-bit
 // limbs in `aux` and `b`. Up to 64 bits the constant is canonical: `aux` is
 // masked to the width and `b` is 0, so equal constants are one id. At 128 bits
@@ -26,6 +29,8 @@ use ir_dominance
 
 fn VC_SORT_BOOL() -> i64 { 0 }
 fn VC_SORT_ARRAY64() -> i64 { 1000 }
+fn VC_SORT_F32() -> i64 { 1032 }
+fn VC_SORT_F64() -> i64 { 1064 }
 
 fn VC_T_VAR() -> i64 { 0 }
 fn VC_T_BV() -> i64 { 1 }
@@ -73,6 +78,17 @@ fn VC_OP_BVSMULO() -> i64 { 31 }
 fn VC_OP_BVUMULO() -> i64 { 32 }
 fn VC_OP_SELECT() -> i64 { 33 }
 fn VC_OP_STORE() -> i64 { 34 }
+fn VC_OP_FPADD() -> i64 { 35 }
+fn VC_OP_FPSUB() -> i64 { 36 }
+fn VC_OP_FPMUL() -> i64 { 37 }
+fn VC_OP_FPDIV() -> i64 { 38 }
+fn VC_OP_FPEQ() -> i64 { 39 }
+fn VC_OP_FPLT() -> i64 { 40 }
+fn VC_OP_FPLE() -> i64 { 41 }
+fn VC_OP_FPGT() -> i64 { 42 }
+fn VC_OP_FPGE() -> i64 { 43 }
+fn VC_OP_TOFP32() -> i64 { 44 }
+fn VC_OP_TOFP64() -> i64 { 45 }
 
 // `hashes` caches each term's node hash; `slots` is an open-addressing table
 // (power-of-two length, linear probing, -1 empty) over the interned term ids, so

@@ -1,0 +1,27 @@
+// TEST: category float
+// TEST: counterexample-fn "pick"
+// TEST: counterexample-value e.1:f64 1
+// TEST: counterexample-value e.1:64 0
+// TEST: replay-skipped float parameters are not rebuilt by the replay harness
+// A payload slot read as an f64 in one variant and an i64 in another is named
+// with the sort of each view: `e.1:f64` and `e.1:64`, never a raw sort code.
+module FloatSlotTwoSorts
+
+enum Reading {
+  Gauge(f64),
+  Count(i64),
+}
+
+fn pick(e: Reading) -> i64 vow {
+  ensures: result >= 0
+} {
+  match e {
+    Reading::Gauge(x) => { if x > 1.0 { 1 } else { 0 - 1 } },
+    Reading::Count(n) => n,
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

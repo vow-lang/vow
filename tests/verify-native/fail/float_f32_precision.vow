@@ -1,0 +1,17 @@
+// TEST: category float
+// TEST: counterexample-fn "add_nonzero"
+// TEST: counterexample-vow-id 3
+// TEST: counterexample-blame Callee
+// TEST: replay-skipped float parameters are not rebuilt by the replay harness
+// An `f32` has a 24-bit significand: adding a nonzero finite value to a much
+// larger one can leave it unchanged, so the sum can equal the first operand.
+module FloatF32Precision
+
+fn add_nonzero(a: f32, b: f32) -> f32 vow {
+  requires: a - a == a - a,
+  requires: b - b == b - b,
+  requires: b != b - b,
+  ensures: result != a
+} {
+  a + b
+}

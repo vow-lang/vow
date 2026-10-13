@@ -1,6 +1,7 @@
 module VcSolver
 
 use verifier
+use vc_term
 
 // Bitwuzla verdict and model parsing for the native verifier, followed by the
 // child-process driver (`vc_solver_check`). The parsers are pure. Anything that
@@ -139,9 +140,41 @@ fn vc_parse_bool_at(out: String, i: u64) -> VcParsed {
     vc_parsed_bad()
 }
 
+// The three fields of a float at `i`: `(fp #b<sign> #b<exponent> #b<fraction>)`,
+// for a sort of the format `sort` (`f32`: 8 and 23 bits, `f64`: 11 and 52). The
+// value is the float's IEEE bit pattern, which every NaN has one of in a model.
+fn vc_parse_fp_at(out: String, i: u64, sort: i64) -> VcParsed {
+    let eb: i64 = { if sort == VC_SORT_F32() { 8 } else { 11 } };
+    let mb: i64 = { if sort == VC_SORT_F32() { 23 } else { 52 } };
+    let n: u64 = out.len();
+    let open: String = String::from("(fp #b");
+    let sep: String = String::from(" #b");
+    if i + open.len() > n || out.substring(i, i + open.len()) != open {
+        return vc_parsed_bad();
+    }
+    let sign: VcParsed = vc_parse_radix_value(out, i + open.len(), 1, 1);
+    let at_exp: u64 = i + open.len() + 1;
+    if sign.ok == 0 || at_exp + sep.len() > n || out.substring(at_exp, at_exp + sep.len()) != sep {
+        return vc_parsed_bad();
+    }
+    let exp: VcParsed = vc_parse_radix_value(out, at_exp + sep.len(), 1, eb as u64);
+    let at_frac: u64 = at_exp + sep.len() + eb as u64;
+    if exp.ok == 0 || at_frac + sep.len() > n || out.substring(at_frac, at_frac + sep.len()) != sep {
+        return vc_parsed_bad();
+    }
+    let frac: VcParsed = vc_parse_radix_value(out, at_frac + sep.len(), 1, mb as u64);
+    let at_close: u64 = at_frac + sep.len() + mb as u64;
+    if frac.ok == 0 || at_close >= n || out.byte_at(at_close) != 41 {
+        return vc_parsed_bad();
+    }
+    let bits: i64 = (sign.value << (eb + mb)) | (exp.value << mb) | frac.value;
+    VcParsed { ok: 1, value: bits, high: 0 }
+}
+
 // A `width`-bit bit-vector literal at `pos` (after optional whitespace):
 // `#b` with `width` digits, `#x` with `width / 4` digits, or `(_ bvN width)`
-// for widths up to 64; for width 0 (a Bool symbol), `true` or `false`.
+// for widths up to 64; for width 0 (a Bool symbol), `true` or `false`; for a
+// float sort code (`VC_SORT_F32`, `VC_SORT_F64`), the `(fp ...)` literal.
 // Anything else, including a literal of another width, is not ok.
 fn vc_parse_value_at(out: String, pos: u64, width: i64) -> VcParsed {
     let n: u64 = out.len();
@@ -151,6 +184,9 @@ fn vc_parse_value_at(out: String, pos: u64, width: i64) -> VcParsed {
     }
     if width == 0 {
         return vc_parse_bool_at(out, i);
+    }
+    if width == VC_SORT_F32() || width == VC_SORT_F64() {
+        return vc_parse_fp_at(out, i, width);
     }
     if i + 2 < n && out.byte_at(i) == 35 {
         let kind: i64 = out.byte_at(i + 1);

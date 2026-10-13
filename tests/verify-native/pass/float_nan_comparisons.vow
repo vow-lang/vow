@@ -1,0 +1,34 @@
+// TEST: category float
+// Comparisons are IEEE: a NaN is unequal to everything, itself included, and
+// unordered with everything.
+module FloatNanComparisons
+
+fn is_nan(x: f64) -> bool vow {
+  ensures: result == (x != x)
+} {
+  x != x
+}
+
+fn never_less_than_itself(x: f64) -> bool vow {
+  ensures: !result
+} {
+  x < x
+}
+
+fn nan_breaks_every_order(x: f64, y: f64) -> bool vow {
+  requires: x != x,
+  ensures: !result
+} {
+  (x < y) || (x <= y) || (x > y) || (x >= y) || (x == y)
+}
+
+fn le_is_lt_or_eq(x: f64, y: f64) -> bool vow {
+  ensures: result == ((x < y) || (x == y))
+} {
+  x <= y
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

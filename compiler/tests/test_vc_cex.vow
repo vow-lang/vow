@@ -254,6 +254,18 @@ fn check_aggregate_fields() -> i64 {
     let r2: VerifyResult = vc_claim_result(f, amb, 0, ans);
     if r2.var_names[1] != String::from("o.1:64") { return 67; }
     if r2.var_names[2] != String::from("o.1:bool") { return 68; }
+    let fl: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
+    fl.model_names.pop();
+    fl.model_params.pop();
+    fl.model_tys.pop();
+    fl.model_widths.pop();
+    fl.model_slots.pop();
+    fl.model_ambig.pop();
+    push_field(fl, 1, 1, ITY_F64(), VC_SORT_F64(), 1);
+    push_field(fl, 1, 1, ITY_F32(), VC_SORT_F32(), 1);
+    let r4: VerifyResult = vc_claim_result(f, fl, 0, ans);
+    if r4.var_names[1] != String::from("o.1:f64") { return 71; }
+    if r4.var_names[2] != String::from("o.1:f32") { return 72; }
     // The answer of an earlier claim carries only the symbols it declared.
     let short_values: Vec<i64> = Vec::new();
     short_values.push(9);
