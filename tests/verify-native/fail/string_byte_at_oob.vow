@@ -1,0 +1,18 @@
+// TEST: replay-skipped the abort is a bounds check, which the replay harness does not reproduce
+// TEST: counterexample-fn "unguarded"
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-blame None
+// `byte_at` past the end is an out-of-bounds claim in the verifier (the runtime
+// returns -1, which is almost always an agent bug).
+module StringByteAtOob
+
+fn unguarded(s: String, i: u64) -> i64 vow {
+  ensures: result == result
+} {
+  s.byte_at(i)
+}
+
+fn main() -> i32 [io] {
+  print_i64(unguarded(String::from("a"), 0));
+  0
+}

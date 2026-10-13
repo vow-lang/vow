@@ -1,0 +1,87 @@
+module StringBuildAndRead
+
+// Construction, push, append, clear and byte reads over strings of any length.
+fn append_length(a: String, b: String) -> u64 vow {
+  ensures: result == a.len() + b.len()
+} {
+  let c: String = String::from(a);
+  c.push_str(b);
+  c.len()
+}
+
+fn append_keeps_prefix(a: String, b: String, i: u64) -> bool vow {
+  requires: i < a.len()
+  ensures: result == true
+} {
+  let c: String = String::from(a);
+  c.push_str(b);
+  c.byte_at(i) == a.byte_at(i)
+}
+
+fn append_shifts_suffix(a: String, b: String, j: u64) -> bool vow {
+  requires: j < b.len()
+  ensures: result == true
+} {
+  let c: String = String::from(a);
+  c.push_str(b);
+  c.byte_at(a.len() + j) == b.byte_at(j)
+}
+
+fn push_byte_reads_back(a: String, b: u8) -> bool vow {
+  ensures: result == true
+} {
+  let c: String = String::from(a);
+  c.push_byte(b);
+  c.byte_at(c.len() - 1) == b as i64
+}
+
+fn clone_is_independent(a: String) -> bool vow {
+  ensures: result == true
+} {
+  let c: String = String::from(a);
+  c.push_byte(65u8);
+  c.len() == a.len() + 1
+}
+
+fn clone_is_equal(a: String) -> bool vow {
+  ensures: result == true
+} {
+  let c: String = String::from(a);
+  a.eq(c)
+}
+
+fn appended_clone_differs(a: String) -> bool vow {
+  ensures: result == false
+} {
+  let c: String = String::from(a);
+  c.push_byte(65u8);
+  a.eq(c)
+}
+
+fn cleared_is_empty(a: String) -> bool vow {
+  ensures: result == true
+} {
+  let c: String = String::from(a);
+  c.clear();
+  c.len() == 0 && c.eq(String::new())
+}
+
+fn byte_is_a_byte(a: String, i: u64) -> i64 vow {
+  requires: i < a.len()
+  ensures: result >= 0
+  ensures: result <= 255
+} {
+  a.byte_at(i)
+}
+
+fn literal_append_exact() -> bool vow {
+  ensures: result == true
+} {
+  let c: String = String::from("hi");
+  c.push_str(String::from(" there"));
+  c.eq(String::from("hi there")) && c.byte_at(2) == 32
+}
+
+fn main() -> i32 {
+  0
+}

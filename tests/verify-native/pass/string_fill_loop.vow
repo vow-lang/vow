@@ -1,0 +1,32 @@
+module StringFillLoop
+
+// A string written in a loop is unrolled with its length and contents as the
+// executor's own state, never a header Phi, so what the loop wrote is what the
+// postcondition sees.
+fn five_as() -> bool vow {
+  ensures: result == true
+} {
+  let s: String = String::new();
+  let mut i: u64 = 0;
+  while i < 5 {
+    s.push_byte(65u8);
+    i = i + 1;
+  }
+  s.len() == 5 && s.byte_at(0) == 65 && s.byte_at(4) == 65 && s.eq(String::from("AAAAA"))
+}
+
+fn copy_with_bang(a: String) -> bool vow {
+  ensures: result == true
+} {
+  let c: String = String::from(a);
+  let mut i: u64 = 0;
+  while i < 3 {
+    c.push_str(String::from("!"));
+    i = i + 1;
+  }
+  c.len() == a.len() + 3 && c.byte_at(a.len() + 2) == 33
+}
+
+fn main() -> i32 {
+  0
+}

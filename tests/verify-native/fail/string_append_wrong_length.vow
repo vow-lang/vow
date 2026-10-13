@@ -1,0 +1,18 @@
+// TEST: replay-skipped the counterexample's string contents are not rebuilt by the replay harness
+// TEST: counterexample-fn "grow"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+module StringAppendWrongLength
+
+fn grow(a: String, b: String) -> u64 vow {
+  ensures: result == a.len() + b.len() + 1
+} {
+  let c: String = String::from(a);
+  c.push_str(b);
+  c.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(grow(String::from("a"), String::from("b")));
+  0
+}
