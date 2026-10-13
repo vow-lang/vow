@@ -615,6 +615,35 @@ all_dead "$BW_DIR/pids" "session solver"
 all_dead "$BW_DIR/grandchild_pids" "session solver child"
 no_leftovers "session hang"
 
+# Workers that never take a task: one that exits at once (here, as a worker
+# does when the program is not the one the parent planned) fails the run closed
+# after a second try, and one that cannot be started fails it too, never a hang.
+FAKE_VOWC="$TMP_ROOT/fake_vowc"
+cat > "$FAKE_VOWC" <<'SHIM'
+#!/usr/bin/env bash
+if [ "$1" = verify-worker ]; then echo "worker refused" >&2; exit 3; fi
+exec -a "$0" "$REAL_VOWC" "$@"
+SHIM
+chmod +x "$FAKE_VOWC"
+BW_DIR=$(mktemp -d "$TMP_ROOT/bw.XXXXXX")
+RUN_RC=0
+RUN_OUT=$(REAL_VOWC="$VOWC_BIN" PATH="$FAKE_DIR:$PATH" TMPDIR="$SCRATCH" FAKE_BW_MODE=unsat FAKE_BW_DIR="$BW_DIR" \
+    "$FAKE_VOWC" verify --no-cache --backend native --verify-jobs 1 "$MANY" 2>/dev/null) || RUN_RC=$?
+expect "refusing worker verify_status" "$(field "$RUN_OUT" verify_status)" "panicked"
+expect "refusing worker exit" "$RUN_RC" "1"
+case "$(field "$RUN_OUT" verify_message)" in
+    *"exit status 3"*"worker refused"*) ;;
+    *) fail "refusing worker: message is '$(field "$RUN_OUT" verify_message)'" ;;
+esac
+expect "refusing worker: no queries" "$(queries)" "0"
+no_leftovers "refusing worker"
+RUN_RC=0
+RUN_OUT=$(REAL_VOWC="$VOWC_BIN" PATH="$FAKE_DIR:$PATH" TMPDIR="$SCRATCH" FAKE_BW_MODE=unsat FAKE_BW_DIR="$BW_DIR" \
+    bash -c 'exec -a /nonexistent/vowc "$REAL_VOWC" verify --no-cache --backend native "$1"' _ "$MANY" 2>/dev/null) || RUN_RC=$?
+expect "unstartable worker verify_status" "$(field "$RUN_OUT" verify_status)" "panicked"
+expect "unstartable worker message" "$(field "$RUN_OUT" verify_message)" "cannot start the verification worker"
+no_leftovers "unstartable worker"
+
 # real Bitwuzla, real memory pressure: a straight-line function whose query is
 # too large for the worker's address-space cap is `unknown` with a memory reason
 # and the compiler survives. The cap is lowered with the test-only
