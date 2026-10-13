@@ -1210,6 +1210,22 @@ class MainCliTest(unittest.TestCase):
             self.assertEqual(ctx.exception.code, 1)
             self.assertIn("frobnicate", stderr.getvalue())
 
+    def test_effectful_known_op_is_rejected_naming_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            self._write_minimal_catalogue(
+                tmp, [dict(PRINT_OPS[2], verifier_model="known")]
+            )
+            stderr = io.StringIO()
+            with (
+                self.assertRaises(SystemExit) as ctx,
+                contextlib.redirect_stderr(stderr),
+            ):
+                self._run_main(["--check", "--repo-root", str(tmp)])
+            self.assertEqual(ctx.exception.code, 1)
+            self.assertIn("'print_u64'", stderr.getvalue())
+            self.assertIn("verifier_model", stderr.getvalue())
+
     def test_repo_root_flag_defaults_to_real_repo(self):
         # No --repo-root: main() must still validate the real, checked-in
         # catalogue exactly as the CI/local `--check` invocation does.
@@ -2101,11 +2117,6 @@ class VerifierModelDriftTest(unittest.TestCase):
                 self.assertIn(name, by_name)
                 self.assertNotEqual(by_name[name]["effects"], "[]")
                 self.assertEqual(by_name[name]["verifier_model"], "unmodeled")
-        prefixed = [n for n in by_name if n.startswith(("fs_", "process_"))]
-        self.assertTrue(prefixed)
-        for name in prefixed:
-            with self.subTest(op=name):
-                self.assertNotEqual(by_name[name].get("verifier_model"), "known")
 
     def test_real_pure_hash_builtins_are_unmodeled(self):
         by_name = {op["name"]: op for op in go.load_catalogue(REPO_ROOT)}
@@ -2113,26 +2124,6 @@ class VerifierModelDriftTest(unittest.TestCase):
             with self.subTest(op=name):
                 self.assertEqual(by_name[name]["effects"], "[]")
                 self.assertEqual(by_name[name]["verifier_model"], "unmodeled")
-
-    def test_main_rejects_an_effectful_known_op_naming_it(self):
-        with tempfile.TemporaryDirectory() as d:
-            tmp = Path(d)
-            _write_catalogue(tmp, [dict(PRINT_OPS[2], verifier_model="known")])
-            stdout, stderr = io.StringIO(), io.StringIO()
-            old_argv = sys.argv
-            sys.argv = ["generate_operations.py", "--check", "--repo-root", str(tmp)]
-            try:
-                with (
-                    self.assertRaises(SystemExit) as ctx,
-                    contextlib.redirect_stdout(stdout),
-                    contextlib.redirect_stderr(stderr),
-                ):
-                    go.main()
-            finally:
-                sys.argv = old_argv
-        self.assertEqual(ctx.exception.code, 1)
-        self.assertIn("'print_u64'", stderr.getvalue())
-        self.assertIn("verifier_model", stderr.getvalue())
 
     def test_synthetic_pure_known_op_is_the_only_symbol_generated(self):
         pure = {
