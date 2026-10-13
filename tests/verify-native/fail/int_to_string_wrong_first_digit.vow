@@ -1,0 +1,18 @@
+// TEST: counterexample-fn "leading_digit"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The first byte is the leading digit only up to one digit: from 10 on the byte is
+// `1`, not `48 + n`. The model gives the bytes, so the claim is refuted and the
+// replay confirms the counterexample.
+module IntToStringWrongFirstDigit
+
+fn leading_digit(n: u64) -> bool vow {
+  requires: n < 100
+  ensures: result == true
+} {
+  int_to_string(n as i64).byte_at(0) == 48 + (n as i64)
+}
+
+fn main() -> i32 [io] {
+  if leading_digit(5u64) { 0 } else { 1 }
+}

@@ -7,6 +7,7 @@ use vc_smt
 use vc_exec
 use vc_gate
 use vc_numeric
+use vc_strops
 use verifier
 use tests.builders
 
@@ -120,11 +121,177 @@ fn check_gate_types() -> i64 {
     0
 }
 
+fn mk_u64(id: i64, v: i64) -> IrInst {
+    ir_inst_new(id, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_I64(), v, 0, String::from(""))
+}
+
+fn mk_u8(id: i64, v: i64) -> IrInst {
+    ir_inst_new(id, IOP_CONST_U8(), ITY_U8(), Vec::new(), IDATA_CONST_I64(), v, 0, String::from(""))
+}
+
+fn mk_str_len(id: i64, s: i64) -> IrInst {
+    mk_inst_call_extern(id, ITY_U64(), args1(s), String::from("__vow_string_len"))
+}
+
+fn mk_byte_at(id: i64, s: i64, i: i64) -> IrInst {
+    mk_inst_call_extern(id, ITY_I64(), args2(s, i), String::from("__vow_string_byte_at"))
+}
+
+// fn f(n: <ty>) -> bool { let s = <sym>(n); s.len() == 1 (or s.byte_at(0) == 7 when `bytes`) } with `ensures: result`.
+fn format_then(sym: String, ty: i64, bytes: bool) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ty, 0));
+    insts.push(mk_inst_call_extern(1, ITY_PTR(), args1(0), sym));
+    insts.push(mk_u64(2, 1));
+    let mut probe: i64 = 3;
+    if bytes {
+        insts.push(mk_u64(4, 0));
+        insts.push(mk_byte_at(3, 1, 4));
+        insts.push(mk_inst_const_i64(5, 7));
+        insts.push(mk_eq(6, 3, 5));
+        probe = 6;
+    } else {
+        insts.push(mk_str_len(3, 1));
+        insts.push(mk_eq(4, 3, 2));
+        probe = 4;
+    }
+    insts.push(mk_ens(10, probe, 0));
+    insts.push(mk_inst_return(11, probe));
+    let p: Vec<i64> = Vec::new();
+    p.push(ty);
+    one_block(p, ITY_BOOL(), insts)
+}
+
+fn check_decimal_op_table() -> i64 {
+    if vc_vec_op_kind(String::from("__vow_string_from_i64")) != VC_STR_FROM_I64() { return 50; }
+    if vc_vec_op_kind(String::from("__vow_string_from_u64")) != VC_STR_FROM_U64() { return 51; }
+    if !vc_str_kind_is_string_op(VC_STR_FROM_I64()) || !vc_str_kind_is_string_op(VC_STR_FROM_U64()) { return 52; }
+    if !vc_str_kind_creates(VC_STR_FROM_I64()) || !vc_str_kind_creates(VC_STR_FROM_U64()) { return 53; }
+    if !vc_str_kind_no_object_operand(VC_STR_FROM_I64()) || !vc_str_kind_no_object_operand(VC_STR_FROM_U64()) { return 54; }
+    if vc_str_kind_reads_bytes(VC_STR_FROM_I64()) || vc_str_kind_reads_bytes(VC_STR_FROM_U64()) { return 55; }
+    if vc_vec_kind_mutates(VC_STR_FROM_I64()) || vc_vec_kind_mutates(VC_STR_FROM_U64()) { return 56; }
+    if vc_str_unmodeled_reason(String::from("__vow_string_from_u64")).len() != 0 { return 57; }
+    if !catalogue_verifier_known(String::from("__vow_string_from_i64")) { return 58; }
+    if !catalogue_verifier_known(String::from("__vow_string_from_u64")) { return 59; }
+    if !catalogue_verifier_known(String::from("__vow_string_from_i128")) { return 60; }
+    if !catalogue_verifier_known(String::from("__vow_string_from_u128")) { return 61; }
+    if vc_vec_op_kind(String::from("__vow_string_from_i128")) != VC_STR_FROM_I128() { return 62; }
+    if vc_vec_op_kind(String::from("__vow_string_from_u128")) != VC_STR_FROM_U128() { return 63; }
+    if !vc_str_kind_formats_int(VC_STR_FROM_U128()) || vc_str_kind_formats_int(VC_STR_FORMAT_F64()) { return 64; }
+    if vc_str_kind_int_bits(VC_STR_FROM_U128()) != 128 || vc_str_kind_int_bits(VC_STR_FROM_I64()) != 64 { return 65; }
+    if !vc_str_kind_int_signed(VC_STR_FROM_I128()) || vc_str_kind_int_signed(VC_STR_FROM_U64()) { return 66; }
+    if !vc_str_kind_is_string_op(VC_STR_FROM_U128()) || !vc_str_kind_creates(VC_STR_FROM_I128()) { return 67; }
+    if !vc_str_kind_no_object_operand(VC_STR_FROM_U128()) { return 68; }
+    0
+}
+
+// A formatter takes a 64-bit integer and gives a string; anything else is skipped.
+fn check_decimal_gate() -> i64 {
+    if vc_skip_reason(format_then(String::from("__vow_string_from_u64"), ITY_U64(), false)).len() != 0 { return 70; }
+    if vc_skip_reason(format_then(String::from("__vow_string_from_i64"), ITY_I64(), false)).len() != 0 { return 71; }
+    if vc_skip_reason(format_then(String::from("__vow_string_from_u64"), ITY_U8(), false)).len() == 0 { return 72; }
+    if vc_skip_reason(format_then(String::from("__vow_string_from_u128"), ITY_U128(), false)).len() != 0 { return 73; }
+    if vc_skip_reason(format_then(String::from("__vow_string_from_i128"), ITY_I128(), false)).len() != 0 { return 74; }
+    if vc_skip_reason(format_then(String::from("__vow_string_from_u128"), ITY_U64(), false)).len() == 0 { return 75; }
+    if vc_skip_reason(format_then(String::from("__vow_string_from_u64"), ITY_U128(), false)).len() == 0 { return 76; }
+    0
+}
+
+// The length is a term of the operand (comparisons against powers of ten), so a claim about it needs no byte fact: no division, no
+// axiom, no array select, no binder. A function that reads a byte gets one fact per
+// digit position and one for the sign (and the bounds fact of the read itself).
+fn check_decimal_length_needs_no_bytes() -> i64 {
+    let f: IrFunction = format_then(String::from("__vow_string_from_u64"), ITY_U64(), false);
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 80; }
+    if cs.assumed.len() != 0 { return 81; }
+    let q: String = vc_smt_render(cs.arena, vc_claim_script(cs, 0));
+    if contains(q, String::from("select")) { return 82; }
+    if contains(q, String::from("forall")) { return 83; }
+    if contains(q, String::from("bvudiv")) { return 84; }
+    if !contains(q, String::from("bvuge")) { return 85; }
+    0
+}
+
+fn check_decimal_bytes() -> i64 {
+    let f: IrFunction = format_then(String::from("__vow_string_from_i64"), ITY_I64(), true);
+    if vc_skip_reason(f).len() != 0 { return 90; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 2 { return 91; }
+    if cs.assumed.len() != 22 { return 92; }
+    let q: String = vc_smt_render(cs.arena, vc_claim_script(cs, 0));
+    if !contains(q, String::from("(select sd0_varr")) { return 93; }
+    if !contains(q, String::from("bvudiv")) { return 95; }
+    if contains(q, String::from("forall")) { return 94; }
+    0
+}
+
+// Two calls on one operand are one string (same array, same length), so
+// comparing them needs no equality binder.
+fn check_decimal_calls_share_one_string() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_U64(), 0));
+    insts.push(mk_inst_call_extern(1, ITY_PTR(), args1(0), String::from("__vow_string_from_u64")));
+    insts.push(mk_inst_call_extern(2, ITY_PTR(), args1(0), String::from("__vow_string_from_u64")));
+    insts.push(mk_inst_call_extern(3, ITY_BOOL(), args2(1, 2), String::from("__vow_string_eq")));
+    insts.push(mk_ens(4, 3, 0));
+    insts.push(mk_inst_return(5, 3));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_U64());
+    let cs: VcClaims = vc_claims(one_block(p, ITY_BOOL(), insts));
+    if cs.kinds.len() != 0 { return 100; }
+    if cs.assumed.len() != 20 { return 101; }
+    0
+}
+
+// A 128-bit operand has 39 digit positions: 38 comparisons against constants of the
+// operand's own width, and one fact per position when a byte is read.
+fn check_decimal_wide() -> i64 {
+    let f: IrFunction = format_then(String::from("__vow_string_from_u128"), ITY_U128(), false);
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 120; }
+    if cs.assumed.len() != 0 { return 121; }
+    let q: String = vc_smt_render(cs.arena, vc_claim_script(cs, 0));
+    if !contains(q, String::from("(declare-const p0 (_ BitVec 128))")) { return 122; }
+    if contains(q, String::from("bvudiv")) { return 123; }
+    if !contains(q, String::from("bvuge")) { return 124; }
+    let g: VcClaims = vc_claims(format_then(String::from("__vow_string_from_u128"), ITY_U128(), true));
+    if g.assumed.len() != 40 { return 125; }
+    let h: VcClaims = vc_claims(format_then(String::from("__vow_string_from_i128"), ITY_I128(), true));
+    if h.assumed.len() != 41 { return 126; }
+    0
+}
+
+// A signed and an unsigned call on one operand are different strings: 20 digit facts and
+// 21 for the signed one, and the two halves of the equality binder between them.
+fn check_decimal_signedness_is_part_of_the_key() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_I64(), 0));
+    insts.push(mk_inst_call_extern(1, ITY_PTR(), args1(0), String::from("__vow_string_from_u64")));
+    insts.push(mk_inst_call_extern(2, ITY_PTR(), args1(0), String::from("__vow_string_from_i64")));
+    insts.push(mk_inst_call_extern(3, ITY_BOOL(), args2(1, 2), String::from("__vow_string_eq")));
+    insts.push(mk_ens(4, 3, 0));
+    insts.push(mk_inst_return(5, 3));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    let cs: VcClaims = vc_claims(one_block(p, ITY_BOOL(), insts));
+    if cs.kinds.len() != 1 { return 110; }
+    if cs.assumed.len() != 43 { return 111; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_op_table();
     if r == 0 { r = check_same_operand_is_one_term(); }
     if r == 0 { r = check_distinct_operands_are_two_terms(); }
     if r == 0 { r = check_literal_folds(); }
     if r == 0 { r = check_gate_types(); }
+    if r == 0 { r = check_decimal_op_table(); }
+    if r == 0 { r = check_decimal_gate(); }
+    if r == 0 { r = check_decimal_length_needs_no_bytes(); }
+    if r == 0 { r = check_decimal_bytes(); }
+    if r == 0 { r = check_decimal_calls_share_one_string(); }
+    if r == 0 { r = check_decimal_signedness_is_part_of_the_key(); }
+    if r == 0 { r = check_decimal_wide(); }
     i64_to_i32_wrap(r)
 }

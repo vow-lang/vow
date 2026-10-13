@@ -749,3 +749,19 @@ their parity are unchanged.
   and `compiler/tests/test_vc_numeric.vow`), and a counterexample is a real run (replay
   confirms it). The term is a call of the executor on a scalar: it has no object operand
   and takes no part in the `String` kinds (`vc_inst_scalar_kind`).
+- **`int_to_string`, `uint_to_string`, `int128_to_string`, `uint128_to_string`** are the exact
+  decimal text of the operand (`vc_num_decimal`). The operand's magnitude is `v`, or `0 - v` for a
+  negative signed `v` (the minimum is its own magnitude, read unsigned). The text has one digit
+  and one more for each power of ten the magnitude reaches (`bvuge` against a constant, at most
+  20 digits for 64 bits and 39 for 128), plus a `-` for a negative operand, so its length is a
+  closed term of the operand and a claim about the length alone costs no division and no
+  assumption. The bytes are the fresh array `sd<N>`, asserted only in a function that reads the
+  bytes of some string (the `vv.content` rule of #1426): digit `k` from the right sits at the
+  symbolic index `len - 1 - k` and is `0x30 + q[k] - 10 * q[k + 1]`, where `q[k]` is the magnitude
+  divided by ten `k` times (constant divisors), guarded by "the magnitude reaches `10^k`"; a `-`
+  sits at index 0 of a negative operand. The axioms only define a fresh array from the operand,
+  so they cannot make a query unsatisfiable. Calls on one operand term share one string (the
+  memo of #1426), so `uint_to_string(a).eq(uint_to_string(a))` needs no binder; a relation between
+  the texts of two different operands is the quantified equality of #1426 (`unknown` or
+  `timeout` when the solver cannot close it, never a proof). This is exact, not a cap: no
+  operand is excluded.

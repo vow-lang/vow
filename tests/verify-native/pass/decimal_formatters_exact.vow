@@ -1,0 +1,89 @@
+module DecimalFormattersExact
+
+// `int_to_string` and `uint_to_string` are exact: the length of the text is a term of
+// the operand (one digit per power of ten the magnitude reaches, plus a `-` for a
+// negative `i64`) and, for a function that reads the bytes of a string, so is every
+// byte. `i64::MIN` is its own two's-complement magnitude, 2^63.
+fn unsigned_length_range(n: u64) -> u64 vow {
+  ensures: result >= 1 && result <= 20
+} {
+  uint_to_string(n).len()
+}
+
+fn signed_length_range(n: i64) -> u64 vow {
+  ensures: result >= 1 && result <= 20
+} {
+  int_to_string(n).len()
+}
+
+fn one_digit(n: u64) -> u64 vow {
+  requires: n < 10
+  ensures: result == 1
+} {
+  uint_to_string(n).len()
+}
+
+fn below_a_thousand(n: u64) -> u64 vow {
+  requires: n < 1000
+  ensures: result <= 3
+} {
+  uint_to_string(n).len()
+}
+
+fn zero_text() -> bool vow {
+  ensures: result == true
+} {
+  uint_to_string(0u64).eq("0")
+}
+
+fn negative_text() -> bool vow {
+  ensures: result == true
+} {
+  int_to_string(-5).eq("-5")
+}
+
+fn min_i64_text() -> bool vow {
+  ensures: result == true
+} {
+  int_to_string(-9223372036854775807 - 1).eq("-9223372036854775808")
+}
+
+fn max_u64_text() -> bool vow {
+  ensures: result == true
+} {
+  uint_to_string(18446744073709551615u64).eq("18446744073709551615")
+}
+
+fn first_digit(n: u64) -> bool vow {
+  requires: n < 10
+  ensures: result == true
+} {
+  uint_to_string(n).byte_at(0) == 48 + (n as i64)
+}
+
+fn negative_sign(n: i64) -> bool vow {
+  requires: n < 0
+  ensures: result == true
+} {
+  int_to_string(n).byte_at(0) == 45
+}
+
+fn same_operand_same_text(a: u64, b: u64) -> bool vow {
+  requires: a == b
+  ensures: result == true
+} {
+  uint_to_string(a).eq(uint_to_string(b))
+}
+
+fn labelled_length(n: u64) -> u64 vow {
+  ensures: result >= 4
+} {
+  let s: String = String::from("id=");
+  s.push_str(uint_to_string(n));
+  s.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(one_digit(7u64));
+  0
+}

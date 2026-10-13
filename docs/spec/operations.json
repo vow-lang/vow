@@ -684,8 +684,7 @@
       "doc_signature": "fn(v: i64) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "Formatting is opaque to the native verifier: the decimal expansion (length and digits) is not encoded, so a caller is skipped instead of given an unconstrained string.",
+      "verifier_model": "known",
       "c_model": "base_and_arena"
     },
     {
@@ -696,8 +695,7 @@
       "doc_signature": "fn(v: u64) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "Formatting is opaque to the native verifier: the decimal expansion (length and digits) is not encoded, so a caller is skipped instead of given an unconstrained string.",
+      "verifier_model": "known",
       "c_model": "base_and_arena"
     },
     {
@@ -708,8 +706,7 @@
       "doc_signature": "fn(v: i128) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "Formatting is opaque to the native verifier: the decimal expansion (length and digits) is not encoded, so a caller is skipped instead of given an unconstrained string.",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -720,8 +717,7 @@
       "doc_signature": "fn(v: u128) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "Formatting is opaque to the native verifier: the decimal expansion (length and digits) is not encoded, so a caller is skipped instead of given an unconstrained string.",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {

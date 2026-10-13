@@ -784,6 +784,10 @@ VERIFIER_KNOWN_NAMES = {
     "parse_f64_bits",
     "format_f64_bits",
     "hash_u64",
+    "int_to_string",
+    "uint_to_string",
+    "int128_to_string",
+    "uint128_to_string",
 }
 
 

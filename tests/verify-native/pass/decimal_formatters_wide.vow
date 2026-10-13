@@ -1,0 +1,53 @@
+module DecimalFormattersWide
+
+// `int128_to_string` and `uint128_to_string` are exact like their 64-bit forms: up to
+// 39 digits (40 with a `-`), the length a closed term of the operand, the bytes asserted
+// only in a function that reads one. `u128::MAX` and `i128::MIN` are written in full.
+fn unsigned_length_range(n: u128) -> u64 vow {
+  ensures: result >= 1 && result <= 39
+} {
+  uint128_to_string(n).len()
+}
+
+fn signed_length_range(n: i128) -> u64 vow {
+  ensures: result >= 1 && result <= 40
+} {
+  int128_to_string(n).len()
+}
+
+fn one_digit(n: u128) -> u64 vow {
+  requires: n < 10u128
+  ensures: result == 1
+} {
+  uint128_to_string(n).len()
+}
+
+fn past_the_u64_range(n: u128) -> u64 vow {
+  requires: n >= 100000000000000000000u128
+  ensures: result >= 21
+} {
+  uint128_to_string(n).len()
+}
+
+fn max_u128_text() -> bool vow {
+  ensures: result == true
+} {
+  uint128_to_string(340282366920938463463374607431768211455u128).eq("340282366920938463463374607431768211455")
+}
+
+fn min_i128_text() -> bool vow {
+  ensures: result == true
+} {
+  int128_to_string(-170141183460469231731687303715884105727i128 - 1i128).eq("-170141183460469231731687303715884105728")
+}
+
+fn seven() -> bool vow {
+  ensures: result == true
+} {
+  uint128_to_string(7u128).byte_at(0) == 55
+}
+
+fn main() -> i32 [io] {
+  print_u64(one_digit(7u128));
+  0
+}

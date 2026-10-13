@@ -1,6 +1,10 @@
 module VcNumeric
 
 use vc_term
+use vc_smt
+use vc_agg
+use vc_vec
+use vc_str
 
 // Exact models of the numeric builtins of the native verifier (ADR-2026-10-08-1422,
 // #1654 addendum): the `hash_u64` mixer, a closed 64-bit term, and the decimal
@@ -19,4 +23,82 @@ fn vc_num_hash_mix(ar: VcArena, x: i64) -> i64 {
     z = vc_tm_app2(ar, VC_OP_BVMUL(), vc_tm_app2(ar, VC_OP_BVXOR(), z, vc_tm_app2(ar, VC_OP_BVLSHR(), z, vc_num_c64(ar, 30))), vc_num_c64(ar, -4658895280553007687));
     z = vc_tm_app2(ar, VC_OP_BVMUL(), vc_tm_app2(ar, VC_OP_BVXOR(), z, vc_tm_app2(ar, VC_OP_BVLSHR(), z, vc_num_c64(ar, 27))), vc_num_c64(ar, -7723592293110705685));
     vc_tm_app2(ar, VC_OP_BVXOR(), z, vc_tm_app2(ar, VC_OP_BVLSHR(), z, vc_num_c64(ar, 31)))
+}
+
+// The most digits of a magnitude of `bits` bits: `u64::MAX` is 18446744073709551615 (20
+// digits) and `u128::MAX` has 39.
+fn vc_num_max_digits(bits: i64) -> i64 {
+    if bits == 128 { return 39; }
+    20
+}
+
+// The decimal expansion `int_to_string` (`signed`) or `uint_to_string` of the `bits`-bit
+// vector `v` (64 or 128) returns, as the `(array, length)` of a string pushed on `out`.
+//
+// The magnitude is `v`, or `0 - v` for a negative signed `v` (so the minimum is its own
+// two's-complement magnitude, 2^(bits-1), read unsigned). The string has one digit, and
+// one more for every power of ten the magnitude reaches (a comparison against a
+// constant), and a `-` in front of a negative one: its length is a closed 64-bit term,
+// exact for every operand. The digits are bytes of a fresh array, placed from the right
+// at the symbolic index `len - 1 - k`, where digit `k` is `q[k] - 10 * q[k + 1]` with
+// `q[k]` the magnitude divided by ten `k` times; they are asserted only when some
+// instruction of the function reads the bytes of a string (`vv.content`), as for a
+// literal, so a claim about the length alone costs no division. Calls on one operand
+// share one string.
+fn vc_num_decimal(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, v: i64, bits: i64, signed: bool, out: Vec<i64>) {
+    let flag: i64 = if signed { 1 } else { 0 };
+    let known: i64 = vc_str_memo_find(vv, v, flag, -7, -7);
+    if known >= 0 {
+        out.push(known);
+        out.push(vc_str_memo_find(vv, v, flag, -8, -8));
+        return;
+    }
+    let max_digits: i64 = vc_num_max_digits(bits);
+    let zero: i64 = vc_num_c64(ar, 0);
+    let one: i64 = vc_num_c64(ar, 1);
+    let wzero: i64 = vc_tm_bv(ar, bits, 0, 0);
+    let wten: i64 = vc_tm_bv(ar, bits, 10, 0);
+    let mut neg: i64 = vc_tm_bool_const(ar, false);
+    let mut mag: i64 = v;
+    if signed {
+        neg = vc_tm_app2(ar, VC_OP_BVSLT(), v, wzero);
+        mag = vc_tm_app3(ar, VC_OP_ITE(), neg, vc_tm_app2(ar, VC_OP_BVSUB(), wzero, v), v);
+    }
+    let mut digits: i64 = one;
+    let reaches: Vec<i64> = Vec::new();
+    let mut pow: i64 = vc_tm_bv(ar, bits, 1, 0);
+    let mut k: i64 = 1;
+    while k < max_digits {
+        pow = vc_tm_app2(ar, VC_OP_BVMUL(), pow, wten);
+        let r: i64 = vc_tm_app2(ar, VC_OP_BVUGE(), mag, pow);
+        reaches.push(r);
+        digits = vc_tm_app2(ar, VC_OP_BVADD(), digits, vc_tm_app3(ar, VC_OP_ITE(), r, one, zero));
+        k = k + 1;
+    }
+    let sign: i64 = vc_tm_app3(ar, VC_OP_ITE(), neg, one, zero);
+    let len: i64 = vc_tm_app2(ar, VC_OP_BVADD(), digits, sign);
+    let arr: i64 = vc_str_fresh_array(vv, ar, hdr, String::from("sd"));
+    if vv.content {
+        let mut quot: i64 = mag;
+        k = 0;
+        while k < max_digits {
+            let next: i64 = vc_tm_app2(ar, VC_OP_BVUDIV(), quot, wten);
+            let mut digit: i64 = vc_tm_app2(ar, VC_OP_BVSUB(), quot, vc_tm_app2(ar, VC_OP_BVMUL(), next, wten));
+            if bits == 128 { digit = vc_tm_ext(ar, VC_EXT_LOW(), 64, digit); }
+            let at: i64 = vc_tm_app2(ar, VC_OP_BVSUB(), vc_tm_app2(ar, VC_OP_BVSUB(), len, one), vc_num_c64(ar, k));
+            let want: i64 = vc_tm_app2(ar, VC_OP_BVADD(), vc_num_c64(ar, 48), digit);
+            let fact: i64 = vc_tm_app2(ar, VC_OP_EQ(), vc_str_byte(ar, arr, at), want);
+            let mut present: i64 = vc_tm_bool_const(ar, true);
+            if k > 0 { present = reaches[(k - 1) as u64]; }
+            vc_str_axiom(ar, assumed, vc_tm_implies(ar, present, fact));
+            quot = next;
+            k = k + 1;
+        }
+        let minus: i64 = vc_tm_app2(ar, VC_OP_EQ(), vc_str_byte(ar, arr, zero), vc_num_c64(ar, 45));
+        vc_str_axiom(ar, assumed, vc_tm_implies(ar, neg, minus));
+    }
+    vc_str_memo_add(vv, v, flag, -7, -7, arr);
+    vc_str_memo_add(vv, v, flag, -8, -8, len);
+    out.push(arr);
+    out.push(len);
 }
