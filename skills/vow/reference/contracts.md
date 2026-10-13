@@ -53,7 +53,7 @@ The native verifier executes the IR symbolically and encodes integers as fixed-w
 
 ### Collection Models for Verification
 
-**Native backend.** A `Vec<T>` whose element `T` is `bool` or an integer of up to 64 bits (`new`, `push`, `pop`, `len`, indexing, indexed assignment) is an array plus a 64-bit symbolic length. There is no capacity: a property over every length is proven for every length, an index at or past the length is its own obligation (`index out of bounds`), and no `ModelCapacityAssumed` note is ever emitted. `String`, the maps, wide (`i128`/`u128`) or pointer elements and the mutating operations `clear`, `truncate`, `reserve`, `sort`, `from_raw_parts_copy` and `pin_to_root` are `Skipped` (see `docs/spec/cli.md` → "Native backend", "Collections"). The rest of this section describes the ESBMC backend.
+**Native backend.** A `Vec<T>` whose element `T` is `bool` or an integer of up to 64 bits (`new`, `push`, `pop`, `len`, indexing, indexed assignment) is an array plus a 64-bit symbolic length. There is no capacity: a property over every length is proven for every length, an index at or past the length is its own obligation (`index out of bounds`), and no `ModelCapacityAssumed` note is ever emitted. `String` is modelled the same way (see `docs/spec/cli.md` → "Native backend", "Strings"). The maps, wide (`i128`/`u128`) or pointer elements and the mutating `Vec` operations `clear`, `truncate`, `reserve`, `sort`, `from_raw_parts_copy` and `pin_to_root` are `Skipped` (see `docs/spec/cli.md` → "Native backend", "Collections"). The rest of this section describes the ESBMC backend.
 
 **ESBMC backend.** ESBMC is a *bounded* model checker, so it models collection types as
 fixed-size arrays and reasons about them up to a finite capacity. These
