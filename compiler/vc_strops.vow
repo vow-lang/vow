@@ -25,13 +25,19 @@ fn VC_STR_SUBSTR() -> i64 { 17 }
 fn VC_STR_STARTS_WITH() -> i64 { 18 }
 fn VC_STR_ENDS_WITH() -> i64 { 19 }
 fn VC_STR_FROM_RAW_PARTS() -> i64 { 20 }
+fn VC_STR_PARSE_F64() -> i64 { 21 }
+fn VC_STR_FORMAT_F64() -> i64 { 22 }
 
 fn VC_STR_PREFIX() -> String { String::from("__vow_string_") }
 
 // The kind of a `String` runtime symbol, or `VC_STR_NONE`.
 fn vc_str_op_kind(sym: String) -> i64 {
     let pre: String = VC_STR_PREFIX();
-    if sym.len() <= pre.len() || string_starts_with(sym, pre) != 1 { return VC_STR_NONE(); }
+    if sym.len() <= pre.len() || string_starts_with(sym, pre) != 1 {
+        if sym == String::from("__vow_parse_f64_bits") { return VC_STR_PARSE_F64(); }
+        if sym == String::from("__vow_format_f64_bits") { return VC_STR_FORMAT_F64(); }
+        return VC_STR_NONE();
+    }
     if sym == String::from("__vow_string_len") { return VC_STR_LEN(); }
     if sym == String::from("__vow_string_new") { return VC_STR_NEW(); }
     if sym == String::from("__vow_string_literal") { return VC_STR_LITERAL(); }
@@ -54,12 +60,13 @@ fn vc_str_op_kind(sym: String) -> i64 {
 fn vc_str_kind_creates(k: i64) -> bool {
     k == VC_STR_NEW() || k == VC_STR_LITERAL() || k == VC_STR_CLONE()
         || k == VC_STR_SUBSTRING() || k == VC_STR_SUBSTR() || k == VC_STR_FROM_RAW_PARTS()
+        || k == VC_STR_FORMAT_F64()
 }
 
 // A creating kind none of whose operands is a string object: integers (`new`,
-// `from_raw_parts_copy`) or the static bytes of a literal.
+// `from_raw_parts_copy`, `format_f64_bits`) or the static bytes of a literal.
 fn vc_str_kind_no_object_operand(k: i64) -> bool {
-    k == VC_STR_NEW() || k == VC_STR_LITERAL() || k == VC_STR_FROM_RAW_PARTS()
+    k == VC_STR_NEW() || k == VC_STR_LITERAL() || k == VC_STR_FROM_RAW_PARTS() || k == VC_STR_FORMAT_F64()
 }
 
 // A kind that changes the string its first operand names.
@@ -74,10 +81,11 @@ fn vc_str_kind_two_strings(k: i64) -> bool {
 
 // A kind that reads the bytes of a string, not only its length: when no
 // instruction of a function is one, the contents of its strings cannot matter and
-// the model leaves them unconstrained (no byte facts, no quantifier).
+// the model leaves them unconstrained (no byte facts, no quantifier). `parse_f64_bits`
+// is one: its result is a function of the bytes, which only equal contents make equal.
 fn vc_str_kind_reads_bytes(k: i64) -> bool {
     k == VC_STR_BYTE_AT() || k == VC_STR_EQ() || k == VC_STR_MATCHES_LITERAL_AT()
-        || k == VC_STR_STARTS_WITH() || k == VC_STR_ENDS_WITH()
+        || k == VC_STR_STARTS_WITH() || k == VC_STR_ENDS_WITH() || k == VC_STR_PARSE_F64()
 }
 
 // Why a `String` runtime symbol that is not a catalogue entry has no model, or ""
@@ -108,7 +116,7 @@ fn vc_str_unmodeled_reason(sym: String) -> String {
 // A kind of this module (`VC_VEC_LEN`, which `__vow_string_len` shares with the
 // `Vec` length, is not one).
 fn vc_str_kind_is_string_op(k: i64) -> bool {
-    k >= VC_STR_NEW() && k <= VC_STR_FROM_RAW_PARTS()
+    k >= VC_STR_NEW() && k <= VC_STR_FORMAT_F64()
 }
 
 // The `dv2` of a `ConstStr` whose bytes the verifier has read from the module's

@@ -187,6 +187,63 @@ fn vc_check_claim(cache: VcCache, bin: String, cs: VcClaims, sx: VcSlicer, ss: V
     vc_check_claim_oneshot(cache, bin, cs, sx, slicing, k, left_ms, scratch)
 }
 
+// True when the cone of claim `k` reaches a constant a float-text hook declared
+// (`vc_hooks`): the claim's query then depends on a value the model leaves free.
+fn vc_claim_reaches_hook(cs: VcClaims, sx: VcSlicer, k: u64) -> bool {
+    if cs.hook_vars.len() == 0 { return false; }
+    vc_slice_claim(sx, cs, k);
+    let mut i: u64 = 0;
+    while i < cs.hook_vars.len() {
+        if sx.tmark[cs.hook_vars[i] as u64] == sx.epoch { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// Asserts that each scalar the counterexample `ans` gives a value is that value.
+// A float is left free, which only makes the query that follows weaker.
+fn vc_pin_model(cs: VcClaims, ans: VcSolverAnswer, s: SmtScript) {
+    let ar: VcArena = cs.arena;
+    let mut j: u64 = 0;
+    while j < ans.values.len() {
+        let w: i64 = cs.model_widths[j];
+        if w < VC_SORT_ARRAY64() {
+            let sym: i64 = vc_tm_var(ar, cs.model_names[j]);
+            if w == VC_SORT_BOOL() {
+                if ans.values[j] != 0 { vc_script_assert(s, sym); } else { vc_script_assert(s, vc_tm_app1(ar, VC_OP_NOT(), sym)); }
+            } else {
+                vc_script_assert(s, vc_tm_app2(ar, VC_OP_EQ(), sym, vc_tm_bv(ar, w, ans.values[j], ans.highs[j])));
+            }
+        }
+        j = j + 1;
+    }
+}
+
+// A `sat` on a hard claim whose cone reaches a float-text hook is a real failure
+// only if it does not depend on the hook's value: the model gives the hook an
+// arbitrary result, where the runtime computes one. The check pins the scalar
+// inputs of the counterexample, leaves every string and hook free, and asks
+// whether the claim can hold: `unsat` says it fails for every result of the hook
+// (and every string), so the counterexample stands. A timeout, memory limit or
+// solver error is passed on as such; any other answer, a `sat` included, leaves
+// the claim neither proven nor refuted: `unknown`.
+fn vc_hook_recheck(cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: VcSolverAnswer, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+    let ar: VcArena = cs.arena;
+    let s: SmtScript = vc_script_prefix(cs.header, cs.header_lens[k] as u64);
+    let mut i: u64 = 0;
+    while i < cs.assumed_lens[k] as u64 {
+        vc_script_assert(s, cs.assumed[i]);
+        i = i + 1;
+    }
+    vc_pin_model(cs, ans, s);
+    vc_script_assert(s, vc_tm_app1(ar, VC_OP_NOT(), cs.negated_goals[k]));
+    vc_script_check_sat(s);
+    let again: VcSolverAnswer = vc_solver_check_cached(cache, bin, vc_smt_render(ar, s), Vec::new(), Vec::new(), budget_ms, scratch);
+    if again.verdict == VC_ANS_UNSAT() { return ans; }
+    if vc_answer_halts(again.verdict) { return again; }
+    vc_answer_plain(VC_ANS_UNKNOWN(), vc_opaque_hook_reason())
+}
+
 // Every unrolled copy of a checked operator repeats one source site.
 fn vc_has_site(sites: Vec<ParsedArithSite>, site: ParsedArithSite) -> bool {
     let mut i: u64 = 0;
@@ -322,7 +379,10 @@ fn vc_run_claims(f: IrFunction, fr: VcFrames, cs: VcClaims, ss: VcSession, sites
                 return vc_round(nf, true, false, -1, true, false);
             }
             let spent_ms: i64 = (time_micros() - started) / 1000;
-            let ans: VcSolverAnswer = vc_check_claim(cache, bin, cs, sx, ss, slicing, k, timeout_ms - spent_ms, scratch);
+            let mut ans: VcSolverAnswer = vc_check_claim(cache, bin, cs, sx, ss, slicing, k, timeout_ms - spent_ms, scratch);
+            if ans.verdict == VC_ANS_SAT() && !vc_claim_is_soft(cs, k) && vc_claim_reaches_hook(cs, sx, k) {
+                ans = vc_hook_recheck(cache, bin, cs, k, ans, timeout_ms - (time_micros() - started) / 1000, scratch);
+            }
             if ans.verdict == VC_ANS_UNSAT() {
                 vc_note_clause(acc, cs, k, VC_CLAUSE_UNSAT());
             } else if vc_claim_is_soft(cs, k) && ans.verdict == VC_ANS_SAT() {

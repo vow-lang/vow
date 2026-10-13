@@ -12,6 +12,7 @@ use vc_agg
 use vc_vec
 use vc_strops
 use vc_str
+use vc_hooks
 use ir_dominance
 
 // Symbolic execution of an acyclic integer/Bool function (one that
@@ -110,6 +111,7 @@ struct VcClaims {
     model_slots: Vec<i64>,
     model_hdr: Vec<i64>,
     model_ambig: Vec<i64>,
+    hook_vars: Vec<i64>,
 }
 
 fn vc_value_name(id: i64) -> String {
@@ -434,7 +436,9 @@ fn vc_walk_str(w: VcWalk, bi: u64, inst: IrInst, pc: i64, kind: i64, s: i64) {
     let b: i64 = bi as i64;
     let arr: i64 = vc_vec_cur_arr(vv, s, b);
     let len: i64 = vc_vec_cur_len(vv, s, b);
-    if kind == VC_STR_BYTE_AT() {
+    if kind == VC_STR_PARSE_F64() {
+        vc_define(w, inst, vc_hook_parse(vv, ar, hdr, cs.assumed, arr, len));
+    } else if kind == VC_STR_BYTE_AT() {
         let idx: i64 = w.var_of[inst.args[1] as u64];
         vc_guard(cs, VC_CLAIM_VEC_BOUNDS(), VC_LABEL_STRING_BOUNDS(), pc, vc_vec_in_bounds(ar, idx, len), inst);
         vc_define(w, inst, vc_str_byte(ar, arr, idx));
@@ -500,6 +504,12 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
     if kind == VC_VEC_NEW() || kind == VC_STR_NEW() {
         let obj: i64 = vc_walk_new_obj(w, bi, inst);
         vc_vec_create(vv, w.ag, ar, hdr, obj, b);
+        return true;
+    }
+    if kind == VC_STR_FORMAT_F64() {
+        let obj: i64 = vc_walk_new_obj(w, bi, inst);
+        let j: u64 = vc_hook_format(vv, ar, hdr, cs.assumed, w.var_of[inst.args[0] as u64]);
+        vc_vec_create_with(vv, ar, hdr, obj, b, vv.fk_arr[j], vv.fk_len[j]);
         return true;
     }
     if kind == VC_STR_FROM_RAW_PARTS() {
@@ -680,6 +690,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         model_slots: Vec::new(),
         model_hdr: Vec::new(),
         model_ambig: Vec::new(),
+        hook_vars: Vec::new(),
     };
     vc_script_set_logic(hdr, String::from("QF_BV"));
     vc_script_set_option(hdr, String::from(":produce-models"), String::from("true"));
@@ -739,6 +750,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         oi = oi + 1;
     }
     vc_claims_harvest_fields(cs, w.ag);
+    cs.hook_vars = w.vv.hk_vars;
     vc_script_replace_logic(hdr, vc_logic_name(vc_vec_count(w.vv) > 0, vc_function_has_float(f, tys), w.vv.quantified));
     cs
 }

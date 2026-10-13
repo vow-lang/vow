@@ -74,6 +74,8 @@ fn check_builtin_model() -> i64 {
     if !catalogue_verifier_known(String::from("__vow_string_starts_with")) { return 730; }
     if !catalogue_verifier_known(String::from("__vow_string_ends_with")) { return 731; }
     if !catalogue_verifier_known(String::from("__vow_string_substr")) { return 732; }
+    if !catalogue_verifier_known(String::from("__vow_parse_f64_bits")) { return 735; }
+    if !catalogue_verifier_known(String::from("__vow_format_f64_bits")) { return 736; }
     if catalogue_verifier_known(String::from("__vow_string_trim")) { return 733; }
     if catalogue_verifier_known(String::from("__vow_string_split")) { return 734; }
     0

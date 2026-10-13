@@ -774,9 +774,16 @@ def _pure_c_model(op):
 
 
 # The native verifier models the String slice builtins by runtime symbol
-# (`vc_str`, #1426) and none of the others yet. The two pure hash builtins still
-# say whether the ESBMC C model knows them.
-VERIFIER_KNOWN_NAMES = {"string_substr", "string_starts_with", "string_ends_with"}
+# (`vc_str`, #1426) and the float text hooks (`vc_hooks`, #1646), and none of the
+# others yet. The two pure hash builtins still say whether the ESBMC C model knows
+# them.
+VERIFIER_KNOWN_NAMES = {
+    "string_substr",
+    "string_starts_with",
+    "string_ends_with",
+    "parse_f64_bits",
+    "format_f64_bits",
+}
 
 
 def _reasoned(op):

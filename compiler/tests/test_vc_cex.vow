@@ -34,6 +34,7 @@ fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
         model_slots: Vec::new(),
         model_hdr: Vec::new(),
         model_ambig: Vec::new(),
+        hook_vars: Vec::new(),
     };
     cs.kinds.push(kind);
     cs.frames.push(-1);

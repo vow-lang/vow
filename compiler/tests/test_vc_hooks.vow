@@ -1,0 +1,295 @@
+module TestVcHooks
+
+use ir
+use vc_ops
+use vc_strops
+use vc_term
+use vc_smt
+use vc_exec
+use vc_str
+use vc_vec
+use vc_slice
+use vc_native
+use vc_cex
+use vc_solver
+use verifier
+use tests.builders
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn args2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = args1(a);
+    v.push(b);
+    v
+}
+
+fn params2(t: i64) -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(t);
+    p.push(t);
+    p
+}
+
+fn one_block(params: Vec<i64>, ret: i64, insts: Vec<IrInst>) -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(1, String::from("f"), params, ret, blocks)
+}
+
+fn contains(hay: String, needle: String) -> bool {
+    str_find_str(hay, needle) >= 0
+}
+
+fn query(cs: VcClaims, k: u64) -> String {
+    vc_smt_render(cs.arena, vc_claim_script(cs, k))
+}
+
+fn mk_ens(id: i64, pred: i64, vow_id: i64) -> IrInst {
+    ir_inst_new(id, IOP_VOW_ENS(), ITY_UNIT(), args1(pred), IDATA_VOW_ID(), vow_id, 0, String::from(""))
+}
+
+fn mk_eq(id: i64, a: i64, b: i64) -> IrInst {
+    ir_inst_new(id, IOP_EQ(), ITY_BOOL(), args2(a, b), IDATA_NONE(), 0, 0, String::from(""))
+}
+
+fn parse(id: i64, s: i64) -> IrInst {
+    mk_inst_call_extern(id, ITY_U64(), args1(s), String::from("__vow_parse_f64_bits"))
+}
+
+fn format(id: i64, bits: i64) -> IrInst {
+    mk_inst_call_extern(id, ITY_PTR(), args1(bits), String::from("__vow_format_f64_bits"))
+}
+
+fn string_eq(id: i64, a: i64, b: i64) -> IrInst {
+    mk_inst_call_extern(id, ITY_BOOL(), args2(a, b), String::from("__vow_string_eq"))
+}
+
+// fn f(s: String, t: String) -> bool { let a = parse(s); let b = parse(<second>); a == b } with `ensures: result`.
+fn parse_pair(second: i64) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_PTR(), 1));
+    insts.push(parse(2, 0));
+    insts.push(parse(3, second));
+    insts.push(mk_eq(4, 2, 3));
+    insts.push(mk_ens(5, 4, 0));
+    insts.push(mk_inst_return(6, 4));
+    one_block(params2(ITY_PTR()), ITY_BOOL(), insts)
+}
+
+// fn f(a: u64, b: u64) -> bool { let x = format(a); let y = format(<second>); x.eq(y) } with `ensures: result`.
+fn format_pair(second: i64) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_U64(), 0));
+    insts.push(mk_inst_arg(1, ITY_U64(), 1));
+    insts.push(format(2, 0));
+    insts.push(format(3, second));
+    insts.push(string_eq(4, 2, 3));
+    insts.push(mk_ens(5, 4, 0));
+    insts.push(mk_inst_return(6, 4));
+    one_block(params2(ITY_U64()), ITY_BOOL(), insts)
+}
+
+fn check_op_table() -> i64 {
+    if vc_vec_op_kind(String::from("__vow_parse_f64_bits")) != VC_STR_PARSE_F64() { return 1; }
+    if vc_vec_op_kind(String::from("__vow_format_f64_bits")) != VC_STR_FORMAT_F64() { return 2; }
+    if !vc_str_kind_is_string_op(VC_STR_PARSE_F64()) || !vc_str_kind_is_string_op(VC_STR_FORMAT_F64()) { return 3; }
+    if !vc_str_kind_creates(VC_STR_FORMAT_F64()) || vc_str_kind_creates(VC_STR_PARSE_F64()) { return 4; }
+    if !vc_str_kind_no_object_operand(VC_STR_FORMAT_F64()) || vc_str_kind_no_object_operand(VC_STR_PARSE_F64()) { return 5; }
+    if !vc_str_kind_reads_bytes(VC_STR_PARSE_F64()) || vc_str_kind_reads_bytes(VC_STR_FORMAT_F64()) { return 6; }
+    if vc_vec_kind_mutates(VC_STR_PARSE_F64()) || vc_vec_kind_mutates(VC_STR_FORMAT_F64()) { return 7; }
+    if vc_str_unmodeled_reason(String::from("__vow_parse_f64_bits")).len() != 0 { return 8; }
+    if !vc_str_reads_bytes(parse_pair(0)) { return 9; }
+    0
+}
+
+// Parsing one operand twice is one function application: both results are the same
+// constant, so `a == b` needs no solver and no axiom.
+fn check_parse_same_operand_is_one_term() -> i64 {
+    let f: IrFunction = parse_pair(0);
+    if vc_skip_reason(f).len() != 0 { return 20; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 0 { return 21; }
+    if cs.hook_vars.len() != 1 { return 22; }
+    if cs.assumed.len() != 1 { return 23; }
+    0
+}
+
+// Two parameter strings give two results and the one axiom between them: equal
+// contents (the exact `vc_str_eq`) give equal results. The result is an exact
+// 64-bit vector, declared as such.
+fn check_parse_distinct_operands_tie_results() -> i64 {
+    let f: IrFunction = parse_pair(1);
+    if vc_skip_reason(f).len() != 0 { return 30; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 31; }
+    if cs.hook_vars.len() != 2 { return 32; }
+    let q: String = query(cs, 0);
+    if !contains(q, String::from("(declare-const hkp0 (_ BitVec 64))")) { return 33; }
+    if !contains(q, String::from("(declare-const hkp1 (_ BitVec 64))")) { return 34; }
+    if !contains(q, String::from("(= hkp1 hkp0)")) { return 35; }
+    if !contains(q, String::from("(forall ((vq_i (_ BitVec 64)))")) { return 36; }
+    0
+}
+
+// A third string adds one axiom against each earlier call and none for itself.
+fn check_parse_axioms_are_pairwise() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_PTR(), 1));
+    insts.push(mk_inst_arg(2, ITY_PTR(), 2));
+    insts.push(parse(3, 0));
+    insts.push(parse(4, 1));
+    insts.push(parse(5, 2));
+    insts.push(mk_eq(6, 3, 5));
+    insts.push(mk_ens(7, 6, 0));
+    insts.push(mk_inst_return(8, 6));
+    let p: Vec<i64> = params2(ITY_PTR());
+    p.push(ITY_PTR());
+    let f: IrFunction = one_block(p, ITY_BOOL(), insts);
+    let cs: VcClaims = vc_claims(f);
+    let q: String = query(cs, 0);
+    if !contains(q, String::from("(= hkp1 hkp0)")) { return 40; }
+    if !contains(q, String::from("(= hkp4 hkp0)")) { return 41; }
+    if !contains(q, String::from("(= hkp4 hkp1)")) { return 42; }
+    if cs.hook_vars.len() != 3 { return 43; }
+    0
+}
+
+// A clone has the same array and length terms as its source, so it parses to the
+// same constant.
+fn check_parse_of_clone() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_call_extern(1, ITY_PTR(), args1(0), String::from("__vow_string_clone")));
+    insts.push(parse(2, 0));
+    insts.push(parse(3, 1));
+    insts.push(mk_eq(4, 2, 3));
+    insts.push(mk_ens(5, 4, 0));
+    insts.push(mk_inst_return(6, 4));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    let f: IrFunction = one_block(p, ITY_BOOL(), insts);
+    if vc_skip_reason(f).len() != 0 { return 50; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 0 { return 51; }
+    if cs.hook_vars.len() != 1 { return 52; }
+    0
+}
+
+// Formatting the same bits twice is one string; the `u64` operand is the 64-bit
+// parameter itself, not a cast of it.
+fn check_format_same_bits_is_one_string() -> i64 {
+    let f: IrFunction = format_pair(0);
+    if vc_skip_reason(f).len() != 0 { return 60; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 0 { return 61; }
+    if cs.hook_vars.len() != 2 { return 62; }
+    0
+}
+
+// Different bits give two fresh strings and the axiom that equal bits give equal
+// strings; each length keeps the runtime's capacity bound.
+fn check_format_pair_axiom() -> i64 {
+    let f: IrFunction = format_pair(1);
+    if vc_skip_reason(f).len() != 0 { return 70; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 71; }
+    if cs.hook_vars.len() != 4 { return 72; }
+    let q: String = query(cs, 0);
+    if !contains(q, String::from("(declare-const hkl1 (_ BitVec 64))")) { return 73; }
+    if !contains(q, String::from("(bvult hkl1 #x7fffffffffffffff)")) { return 74; }
+    if !contains(q, String::from("(bvult hkl3 #x7fffffffffffffff)")) { return 75; }
+    if !contains(q, String::from("(or (not (= p1 p0)) se4)")) { return 76; }
+    0
+}
+
+// fn f(x: u64, s: String) -> u64 { let h = parse(s); x + 1 } with `ensures: result == x + 2` (`mix`
+// adds the hook result to the returned value as well).
+fn unused_hook(mix: bool) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_U64(), 0));
+    insts.push(mk_inst_arg(1, ITY_PTR(), 1));
+    insts.push(parse(2, 1));
+    insts.push(ir_inst_new(3, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_I64(), 1, 0, String::from("")));
+    insts.push(ir_inst_new(4, IOP_WADD(), ITY_U64(), args2(0, 3), IDATA_NONE(), 0, 0, String::from("")));
+    let mut res: i64 = 4;
+    if mix {
+        insts.push(ir_inst_new(5, IOP_WADD(), ITY_U64(), args2(4, 2), IDATA_NONE(), 0, 0, String::from("")));
+        res = 5;
+    }
+    insts.push(ir_inst_new(6, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_I64(), 2, 0, String::from("")));
+    insts.push(ir_inst_new(7, IOP_WADD(), ITY_U64(), args2(0, 6), IDATA_NONE(), 0, 0, String::from("")));
+    insts.push(mk_eq(8, res, 7));
+    insts.push(mk_ens(9, 8, 0));
+    insts.push(mk_inst_return(10, res));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_U64());
+    p.push(ITY_PTR());
+    one_block(p, ITY_U64(), insts)
+}
+
+// A claim reaches a hook only through its cone: one that never mentions the hook
+// result, or a string the hook reads, is decided without it.
+fn check_cone_reaches_hook() -> i64 {
+    let a: VcClaims = vc_claims(unused_hook(false));
+    if a.kinds.len() != 1 { return 80; }
+    if vc_claim_reaches_hook(a, vc_slicer_new(a), 0) { return 81; }
+    let b: VcClaims = vc_claims(unused_hook(true));
+    if b.kinds.len() != 1 { return 82; }
+    if !vc_claim_reaches_hook(b, vc_slicer_new(b), 0) { return 83; }
+    let c: VcClaims = vc_claims(parse_pair(1));
+    if !vc_claim_reaches_hook(c, vc_slicer_new(c), 0) { return 84; }
+    0
+}
+
+// The scalars of a counterexample are pinned by value, a bit-vector by equality; a
+// float has no pin.
+fn check_pin_model() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_U64(), 0));
+    insts.push(mk_inst_arg(1, ITY_F64(), 1));
+    insts.push(mk_inst_return(2, 0));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_U64());
+    p.push(ITY_F64());
+    let cs: VcClaims = vc_claims(one_block(p, ITY_U64(), insts));
+    if cs.model_names.len() != 2 { return 90; }
+    let vals: Vec<i64> = Vec::new();
+    vals.push(5);
+    vals.push(0);
+    let highs: Vec<i64> = Vec::new();
+    highs.push(0);
+    highs.push(0);
+    let s: SmtScript = vc_script_new();
+    vc_pin_model(cs, vc_answer(VC_ANS_SAT(), vals, highs, String::from("")), s);
+    let q: String = vc_smt_render(cs.arena, s);
+    if !contains(q, String::from("(assert (= p0 #x0000000000000005))")) { return 91; }
+    if contains(q, String::from("p1")) { return 92; }
+    0
+}
+
+// The reason an opaque result carries is the label the driver tells it apart by.
+fn check_opaque_reason_label() -> i64 {
+    if !vc_output_has_opaque_hook(vc_opaque_hook_reason()) { return 100; }
+    if vc_output_has_opaque_hook(vc_unwinding_reason(8)) { return 101; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_op_table();
+    if r == 0 { r = check_parse_same_operand_is_one_term(); }
+    if r == 0 { r = check_parse_distinct_operands_tie_results(); }
+    if r == 0 { r = check_parse_axioms_are_pairwise(); }
+    if r == 0 { r = check_parse_of_clone(); }
+    if r == 0 { r = check_format_same_bits_is_one_string(); }
+    if r == 0 { r = check_format_pair_axiom(); }
+    if r == 0 { r = check_cone_reaches_hook(); }
+    if r == 0 { r = check_pin_model(); }
+    if r == 0 { r = check_opaque_reason_label(); }
+    i64_to_i32_wrap(r)
+}

@@ -111,6 +111,17 @@ fn vc_claim_result(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnswer) -> 
     vc_verify_result(VERIFY_ERROR(), -1, Vec::new(), Vec::new(), ans.raw)
 }
 
+// A counterexample depends on the value `parse_f64_bits` or the text
+// `format_f64_bits` returns, which the model leaves unconstrained: it may not be a
+// run, so the claim is neither proven nor refuted.
+fn vc_opaque_hook_label() -> String { String::from("opaque builtin result") }
+
+fn vc_opaque_hook_reason() -> String {
+    let out: String = vc_opaque_hook_label();
+    out.push_str(String::from(": the counterexample depends on the value of parse_f64_bits or the text of format_f64_bits, which the native verifier does not model"));
+    out
+}
+
 // The unwinding assertion could not be discharged at the largest bound: some
 // run may need more iterations than the verifier unrolls, so nothing is proven.
 // The text travels in `raw_output` through the worker wire format.
@@ -144,6 +155,10 @@ fn vc_inline_budget_reason(cap: i64) -> String {
 
 fn vc_output_has_unwinding(raw: String) -> bool {
     str_find_str(raw, VC_LABEL_UNWIND()) >= 0
+}
+
+fn vc_output_has_opaque_hook(raw: String) -> bool {
+    str_find_str(raw, vc_opaque_hook_label()) >= 0
 }
 
 fn vc_output_has_inline_budget(raw: String) -> bool {
