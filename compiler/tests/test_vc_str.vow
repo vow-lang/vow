@@ -9,6 +9,7 @@ use vc_gate
 use vc_exec
 use vc_inline
 use vc_str
+use vc_strdeep
 use vc_vec
 use verifier
 use tests.builders
@@ -687,6 +688,123 @@ fn check_binder_text() -> i64 {
     0
 }
 
+// The text of `q` from the first `needle` to the end of its line.
+fn line_from(q: String, needle: String) -> String {
+    let i: i64 = str_find_str(q, needle);
+    if i < 0 { return String::from(""); }
+    let rest: String = q.substring(i as u64, q.len());
+    let j: i64 = str_find_str(rest, String::from("\n"));
+    if j < 0 { return rest; }
+    rest.substring(0, j as u64)
+}
+
+fn count_of(hay: String, needle: String) -> i64 {
+    let mut n: i64 = 0;
+    let mut from: u64 = 0;
+    while from < hay.len() {
+        let rest: String = hay.substring(from, hay.len());
+        let i: i64 = str_find_str(rest, needle);
+        if i < 0 { return n; }
+        n = n + 1;
+        from = from + i as u64 + needle.len();
+    }
+    n
+}
+
+// fn assoc(a, b, c) -> bool { (a + b) + c == a + (b + c) }, the builds #1653 reported
+// as a timeout.
+fn assoc_function() -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_PTR(), 1));
+    insts.push(mk_inst_arg(2, ITY_PTR(), 2));
+    insts.push(call(3, ITY_PTR(), args1(0), String::from("__vow_string_clone")));
+    insts.push(call(4, ITY_UNIT(), args2(3, 1), String::from("__vow_string_push_str")));
+    insts.push(call(5, ITY_UNIT(), args2(3, 2), String::from("__vow_string_push_str")));
+    insts.push(call(6, ITY_PTR(), args1(1), String::from("__vow_string_clone")));
+    insts.push(call(7, ITY_UNIT(), args2(6, 2), String::from("__vow_string_push_str")));
+    insts.push(call(8, ITY_PTR(), args1(0), String::from("__vow_string_clone")));
+    insts.push(call(9, ITY_UNIT(), args2(8, 6), String::from("__vow_string_push_str")));
+    insts.push(call(10, ITY_BOOL(), args2(3, 8), String::from("__vow_string_eq")));
+    insts.push(mk_ens(11, 10, 0));
+    insts.push(mk_inst_return(12, 10));
+    one_block(ptr_params(3), ITY_BOOL(), insts)
+}
+
+// The witness of two differently built equal strings reads the differing byte through
+// the builds: no select of a built array and no binder in its assumption, and both
+// nestings read the third operand at the same canonical offset. The defining axioms
+// stay in the query.
+fn check_assoc_witness_is_ground() -> i64 {
+    let f: IrFunction = assoc_function();
+    if vc_skip_reason(f).len() != 0 { return 300; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 301; }
+    let q: String = query(cs, 0);
+    let w: String = line_from(q, String::from("(assert (or se"));
+    if w.len() == 0 { return 302; }
+    let d: String = line_from(w, String::from("(distinct"));
+    if contains(d, String::from("(select sa")) { return 303; }
+    if contains(d, String::from("forall")) { return 304; }
+    if count_of(d, String::from("(select p2_varr (bvsub sk")) != 2 { return 305; }
+    if count_of(d, String::from(" (bvadd p0_vlen p1_vlen))) #x00000000000000ff)")) != 2 { return 306; }
+    if !contains(q, String::from("(forall ((vq_i (_ BitVec 64))) (=> (bvult vq_i p0_vlen)")) { return 307; }
+    0
+}
+
+// The canonical offset: every nesting and order of the same operands is one term,
+// constants fold, and a variable bound to a sum is looked through.
+fn check_canonical_offsets() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let la: i64 = vc_tm_var(ar, String::from("la"));
+    let lb: i64 = vc_tm_var(ar, String::from("lb"));
+    let lc: i64 = vc_tm_var(ar, String::from("lc"));
+    let zero: i64 = vc_str_off_empty(ar);
+    if vc_str_off_add(ar, zero, la) != la { return 310; }
+    let left: i64 = vc_str_off_add(ar, vc_str_off_add(ar, zero, la), lb);
+    let sum_lc: i64 = vc_str_off_add(ar, left, lc);
+    let right: i64 = vc_str_off_add(ar, la, vc_str_off_add(ar, lb, lc));
+    if sum_lc != right { return 311; }
+    if vc_str_off_add(ar, lc, vc_str_off_add(ar, lb, la)) != right { return 312; }
+    if vc_str_off_add(ar, vc_str_off_add(ar, la, vc_tm_bv(ar, 64, 3, 0)), vc_tm_bv(ar, 64, 4, 0)) != vc_str_off_add(ar, la, vc_tm_bv(ar, 64, 7, 0)) { return 313; }
+    if vc_str_off_add(ar, vc_tm_bv(ar, 64, 3, 0), vc_tm_bv(ar, 64, 4, 0)) != vc_tm_bv(ar, 64, 7, 0) { return 314; }
+    let named: i64 = vc_tm_bind(ar, vc_tm_app2(ar, VC_OP_BVADD(), la, lb), String::from("g0"));
+    if vc_str_off_add(ar, named, lc) != right { return 315; }
+    if vc_str_off_add(ar, la, la) == la { return 316; }
+    0
+}
+
+// fn f(a, p) -> bool { let x = a; x += x' (ten times, `x'` a clone of x); x == p }: the
+// build doubles at every step, so its unfolded read would have 2^10 nodes. The read
+// stays the array's `select` (the axioms define it exactly) and the query stays small.
+fn check_expansion_budget() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_PTR(), 1));
+    insts.push(call(2, ITY_PTR(), args1(0), String::from("__vow_string_clone")));
+    let mut id: i64 = 3;
+    let mut round: i64 = 0;
+    while round < 10 {
+        insts.push(call(id, ITY_PTR(), args1(2), String::from("__vow_string_clone")));
+        insts.push(call(id + 1, ITY_UNIT(), args2(2, id), String::from("__vow_string_push_str")));
+        id = id + 2;
+        round = round + 1;
+    }
+    insts.push(call(id, ITY_BOOL(), args2(2, 1), String::from("__vow_string_eq")));
+    insts.push(mk_ens(id + 1, id, 0));
+    insts.push(mk_inst_return(id + 2, id));
+    let f: IrFunction = one_block(ptr_params(2), ITY_BOOL(), insts);
+    if vc_skip_reason(f).len() != 0 { return 320; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 321; }
+    let q: String = query(cs, 0);
+    if q.len() > 40000 { return 322; }
+    let d: String = line_from(line_from(q, String::from("(assert (or se")), String::from("(distinct"));
+    if d.len() == 0 { return 323; }
+    if !contains(d, String::from("(select sa")) { return 324; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_op_table();
     if r == 0 { r = check_byte_at(); }
@@ -707,5 +825,8 @@ fn main() -> i32 {
     if r == 0 { r = check_gate_types(); }
     if r == 0 { r = check_frame_of_byte_at(); }
     if r == 0 { r = check_binder_text(); }
+    if r == 0 { r = check_assoc_witness_is_ground(); }
+    if r == 0 { r = check_canonical_offsets(); }
+    if r == 0 { r = check_expansion_budget(); }
     i64_to_i32_wrap(r)
 }
