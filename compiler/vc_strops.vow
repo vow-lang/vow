@@ -122,13 +122,13 @@ fn vc_str_kind_reads_bytes(k: i64) -> bool {
 fn vc_str_unmodeled_reason(sym: String) -> String {
     if vc_str_op_kind(sym) != VC_STR_NONE() { return String::from(""); }
     if sym == String::from("__vow_string_contains") {
-        return String::from("substring search needs an existential over the match position");
+        return String::from("the false direction is a for-all over every match position of an exists over the bytes of the needle, an alternation the single equality binder of the model cannot state");
     }
     if sym == String::from("__vow_string_from_cstr") {
-        return String::from("reads memory behind a C string, whose length the model does not hold");
+        return String::from("reads memory behind a C string up to its NUL, whose length and bytes the model does not hold");
     }
     if sym == String::from("__vow_string_parse_u64_opt") {
-        return String::from("parsing is opaque: no model of the digit grammar");
+        return String::from("parsing needs a fold over the digits after a Unicode trim, and an Option built by the call; see the parse_* entries of docs/spec/operations.json");
     }
     if string_ends_with(sym, String::from("_in_arena")) == 1 {
         return String::from("arena variant: the model has no arena identity");

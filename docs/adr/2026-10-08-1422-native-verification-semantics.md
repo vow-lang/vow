@@ -769,3 +769,16 @@ their parity are unchanged.
   never returns its argument (`__vow_string_pin_to_root`), so the model gives it the kind of
   `String::from` (`VC_STR_CLONE`): the same `(array, length)` in a fresh object. The arena
   placement it exists for has no value-level effect.
+- **Skipped with a stated reason** (each in `verifier_skip_reason` of `docs/spec/operations.json`, or
+  `vc_str_unmodeled_reason` for a runtime symbol the catalogue lacks): `string_trim`,
+  `string_to_upper`, `string_to_lower` (Rust's Unicode `str` methods: the length can change,
+  invalid UTF-8 gives the empty string; a byte-wise map would be unsound), `string_replace`,
+  `parse_*` (a fold over the digits after a Unicode trim and an `Option` built by the call),
+  `hash_str` (FNV-1a fold), `hex_encode`/`hex_decode` (a per-index map between two arrays),
+  `string_split`/`string_join` (`Vec<String>` elements are pointers), `String::contains` (the
+  false direction is a for-all/exists alternation the single binder cannot state),
+  `String::from_cstr` (memory behind a C string) and the arena variants (no arena identity). A
+  nondeterministic or opaque result is not an option for these: it would let a counterexample
+  depend on a value the runtime computes, which `--replay-cex` reports as a `VerifierBug`. The
+  opaque-result route of #1646 needs the `u64`/text split of the float hooks and an ADR decision
+  of its own; it is left to a follow-up.
