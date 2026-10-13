@@ -2199,6 +2199,16 @@ if uv run python scripts/generate_operations.py --check >"$ops_catalogue_drift_l
 else
     fail "ops/catalogue-drift" "$(cat "$ops_catalogue_drift_log"); run 'uv run python scripts/generate_operations.py'"
 fi
+
+# ops/catalogue-generator-tests: the generator's own unit tests (loader
+# validation, projection and fact-table determinism). ci.yml runs them too; the
+# local harness must not let a generator regression pass here.
+ops_catalogue_tests_log="$TMPDIR/ops_catalogue_generator_tests.log"
+if uv run python scripts/test_generate_operations.py >"$ops_catalogue_tests_log" 2>&1; then
+    pass "ops/catalogue-generator-tests"
+else
+    fail "ops/catalogue-generator-tests" "$(tail -40 "$ops_catalogue_tests_log")"
+fi
 echo ""
 
 # ─── Section 8a: Memory Bounds ─────────────────────────────────────

@@ -15,6 +15,13 @@ Builtin Operations) and splices generated lookup functions into:
   - compiler/c_emitter.vow            (catalogue_c_model_known)
 between `// GENERATE:OPERATIONS:START` / `// GENERATE:OPERATIONS:END` markers.
 
+It also splices test-only fact tables between `// GENERATE:OPERATION_FACTS:START` /
+`:END` markers (FACT_TARGET_FILES): every op's name, effects and ABI tokens plus the
+catalogue's `excluded` section, which the type-checker tests read to tie
+docs/spec/operations.json to both builtin signature tables.
+  - vow-types/src/env.rs              (CATALOGUE_FACTS, EXCLUDED_FACTS; #[cfg(test)])
+  - compiler/tests/catalogue_facts.vow (op_facts_all, op_facts_excluded)
+
 Usage:
     python3 scripts/generate_operations.py          # from repo root
     python3 scripts/generate_operations.py --check  # validate without writing
@@ -847,6 +854,259 @@ def check_c_models(ops: list[dict], routes: list[str]) -> list[str]:
     return problems
 
 
+EXCLUDED_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+EXCLUDED_FRAGMENT_RE = re.compile(r"^[A-Za-z0-9_]+$")
+EXCLUDED_MATCHERS = ("names", "prefix", "contains")
+EXCLUDED_FIELDS = {"reason", "suffixes", *EXCLUDED_MATCHERS}
+
+
+def excluded_label(index: int, entry: dict) -> str:
+    """How a violation names an excluded entry: its position and its matcher."""
+    for key in EXCLUDED_MATCHERS:
+        if key in entry:
+            return f"excluded entry #{index} ({key} {json.dumps(entry[key])})"
+    return f"excluded entry #{index}"
+
+
+def excluded_matches(entry: dict, name: str) -> bool:
+    """Whether a validated `excluded` entry covers a builtin name. The matcher
+    vocabulary is deliberately closed (explicit names, a prefix, or a substring
+    plus a suffix set; no regex) so the Rust and Vow tests evaluate it
+    identically."""
+    if "names" in entry:
+        return name in entry["names"]
+    if "prefix" in entry:
+        return name.startswith(entry["prefix"])
+    return entry["contains"] in name and name.endswith(tuple(entry["suffixes"]))
+
+
+def _check_excluded_matcher(label: str, entry: dict, errors: list[str]) -> None:
+    present = [k for k in EXCLUDED_MATCHERS if k in entry]
+    if len(present) != 1:
+        errors.append(
+            f"{label} must have exactly one matcher of {list(EXCLUDED_MATCHERS)}, "
+            f"has {present}"
+        )
+        return
+    kind = present[0]
+    if kind != "contains" and "suffixes" in entry:
+        errors.append(f"{label} has 'suffixes' but its matcher is '{kind}'")
+    value = entry[kind]
+    if kind == "names":
+        if not isinstance(value, list) or not value:
+            errors.append(f"{label} must list at least one name")
+            return
+        for name in value:
+            if not isinstance(name, str) or not EXCLUDED_NAME_RE.match(name):
+                errors.append(f"{label} has malformed name {name!r}")
+        if len(set(map(str, value))) != len(value):
+            errors.append(f"{label} lists a name more than once")
+        return
+    if not isinstance(value, str) or not EXCLUDED_FRAGMENT_RE.match(value):
+        errors.append(f"{label} has malformed {kind} {value!r}")
+    if kind == "contains":
+        suffixes = entry.get("suffixes")
+        if not isinstance(suffixes, list) or not suffixes:
+            errors.append(f"{label} needs a non-empty 'suffixes' list with 'contains'")
+        else:
+            for suffix in suffixes:
+                if not isinstance(suffix, str) or not EXCLUDED_FRAGMENT_RE.match(
+                    suffix
+                ):
+                    errors.append(f"{label} has malformed suffix {suffix!r}")
+
+
+def load_excluded(repo_root: Path, ops: list[dict]) -> list[dict]:
+    """Read and validate the catalogue's `excluded` section: the builtin names
+    the type-checker signature tables hold that the catalogue deliberately does
+    not list, each with the reason. A catalogue without the section excludes
+    nothing.
+
+    Collects every violation before raising a ValueError, like load_catalogue:
+    a missing reason, a malformed or ambiguous matcher, a name listed twice, and
+    a name that is both catalogued and excluded.
+    """
+    catalogue_path = repo_root / "docs" / "spec" / "operations.json"
+    entries = json.loads(catalogue_path.read_text()).get("excluded", [])
+    if not isinstance(entries, list):
+        raise ValueError(f"{catalogue_path}: 'excluded' key must be a list")
+
+    errors: list[str] = []
+    valid: list[tuple[int, dict]] = []
+    seen_names: dict[str, int] = {}
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            errors.append(f"excluded entry #{index} must be an object")
+            continue
+        label = excluded_label(index, entry)
+        before = len(errors)
+        unknown = set(entry) - EXCLUDED_FIELDS
+        if unknown:
+            errors.append(
+                f"{label} has unknown field(s) {sorted(unknown)} "
+                f"(allowed: {sorted(EXCLUDED_FIELDS)})"
+            )
+        reason = entry.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            errors.append(f"{label} has no reason")
+        _check_excluded_matcher(label, entry, errors)
+        if len(errors) != before:
+            continue
+        valid.append((index, entry))
+        for name in entry.get("names", []):
+            if name in seen_names:
+                errors.append(
+                    f"{label} lists '{name}', already excluded by "
+                    f"entry #{seen_names[name]}"
+                )
+            seen_names[name] = index
+
+    for index, entry in valid:
+        for op in ops:
+            if excluded_matches(entry, op["name"]):
+                errors.append(
+                    f"operation '{op['name']}' is both catalogued and excluded by "
+                    f"{excluded_label(index, entry)}"
+                )
+
+    if errors:
+        raise ValueError("\n".join(errors))
+    return [entry for _, entry in valid]
+
+
+FACTS_MARKER_START = "// GENERATE:OPERATION_FACTS:START"
+FACTS_MARKER_END = "// GENERATE:OPERATION_FACTS:END"
+
+
+def _doc_return(op: dict) -> str:
+    return DOC_SIGNATURE_RE.match(op["doc_signature"]).group("ret").strip()
+
+
+def _quoted_list(items: list[str]) -> str:
+    return ", ".join(f'"{item}"' for item in items)
+
+
+def gen_rust_facts_block(ops: list[dict], excluded: list[dict]) -> str:
+    """`CATALOGUE_FACTS` and `EXCLUDED_FACTS` for vow-types' env.rs test module.
+    Marked `#[rustfmt::skip]` so the one-row-per-op layout survives
+    `cargo fmt`; every line after the first carries the module's indentation."""
+    rows = [
+        f'    CatalogueFact {{ name: "{op["name"]}", effects: "{op["effects"]}", '
+        f'params: &[{_quoted_list(op["params"])}], ret: "{op["return"]}", '
+        f'doc_ret: "{_doc_return(op)}" }},'
+        for op in ops
+    ]
+    exclusions = []
+    for entry in excluded:
+        if "names" in entry:
+            exclusions.append(
+                f"    ExcludedFact::Names(&[{_quoted_list(entry['names'])}]),"
+            )
+        elif "prefix" in entry:
+            exclusions.append(f'    ExcludedFact::Prefix("{entry["prefix"]}"),')
+        else:
+            exclusions.append(
+                f'    ExcludedFact::Contains {{ needle: "{entry["contains"]}", '
+                f"suffixes: &[{_quoted_list(entry['suffixes'])}] }},"
+            )
+    lines = (
+        [
+            FACTS_MARKER_START,
+            "#[rustfmt::skip]",
+            "const CATALOGUE_FACTS: &[CatalogueFact] = &[",
+        ]
+        + rows
+        + ["];", "", "#[rustfmt::skip]", "const EXCLUDED_FACTS: &[ExcludedFact] = &["]
+        + exclusions
+        + ["];", FACTS_MARKER_END]
+    )
+    return "\n".join(
+        line if i == 0 or not line else f"    {line}" for i, line in enumerate(lines)
+    )
+
+
+def gen_vow_facts_block(ops: list[dict], excluded: list[dict]) -> str:
+    """`op_facts_all` and `op_facts_excluded` for compiler/tests/catalogue_facts.vow.
+    Parameter tokens and exclusion lists are comma-joined strings, since Vow has
+    no slice literals; the readers split them back."""
+    facts = "\n".join(
+        f'    v.push(op_fact(String::from("{op["name"]}"), '
+        f'String::from("{op["effects"]}"), '
+        f'String::from("{",".join(op["params"])}"), '
+        f'String::from("{op["return"]}"), String::from("{_doc_return(op)}")));'
+        for op in ops
+    )
+    exclusions = []
+    for entry in excluded:
+        if "names" in entry:
+            args = (
+                f'OPX_NAMES(), String::from("{",".join(entry["names"])}"), '
+                'String::from("")'
+            )
+        elif "prefix" in entry:
+            args = f'OPX_PREFIX(), String::from("{entry["prefix"]}"), String::from("")'
+        else:
+            args = (
+                f'OPX_CONTAINS(), String::from("{entry["contains"]}"), '
+                f'String::from("{",".join(entry["suffixes"])}")'
+            )
+        exclusions.append(f"    v.push(op_excluded({args}));")
+    exclusion_rows = "\n".join(exclusions)
+    return (
+        f"{FACTS_MARKER_START}\n"
+        "fn op_facts_all() -> Vec<OpFact> {\n"
+        "    let v: Vec<OpFact> = Vec::new();\n"
+        f"{facts}\n"
+        "    v\n"
+        "}\n"
+        "\n"
+        "fn op_facts_excluded() -> Vec<OpExcluded> {\n"
+        "    let v: Vec<OpExcluded> = Vec::new();\n"
+        f"{exclusion_rows}\n"
+        "    v\n"
+        "}\n"
+        f"{FACTS_MARKER_END}"
+    )
+
+
+# Test-only fact tables, spliced between their own marker pair so the mutants
+# skip-list (`// GENERATE:<NAME>:START`) covers them. They take (ops, excluded)
+# where TARGET_FILES generators take (ops, routes).
+FACT_TARGET_FILES = [
+    (Path("vow-types/src/env.rs"), gen_rust_facts_block),
+    (Path("compiler/tests/catalogue_facts.vow"), gen_vow_facts_block),
+]
+
+
+def write_fact_tables(ops: list[dict], repo_root: Path, excluded: list[dict]) -> None:
+    for rel_path, gen_fn in FACT_TARGET_FILES:
+        path = repo_root / rel_path
+        path.write_text(
+            _replace_between_markers(
+                path.read_text(),
+                FACTS_MARKER_START,
+                FACTS_MARKER_END,
+                gen_fn(ops, excluded),
+            )
+        )
+
+
+def check_fact_tables(
+    ops: list[dict], repo_root: Path, excluded: list[dict]
+) -> list[str]:
+    """Regenerate each fact table in-memory and diff it against the checked-in
+    file; a target missing its marker pair raises rather than reporting clean."""
+    mismatches: list[str] = []
+    for rel_path, gen_fn in FACT_TARGET_FILES:
+        content = (repo_root / rel_path).read_text()
+        expected = _replace_between_markers(
+            content, FACTS_MARKER_START, FACTS_MARKER_END, gen_fn(ops, excluded)
+        )
+        if expected != content:
+            mismatches.append(f"{rel_path}: spliced fact table is stale")
+    return mismatches
+
+
 def check_doc_facts(ops: list[dict], repo_root: Path) -> list[str]:
     """Cross-check each op's doc facts against grammar.md, main.vow and
     skill.rs. Collects every mismatch instead of failing on the first."""
@@ -933,6 +1193,7 @@ def main() -> None:
     try:
         ops = load_catalogue(repo_root)
         routes = load_arena_routes(repo_root, ops)
+        excluded = load_excluded(repo_root, ops)
     except (ValueError, json.JSONDecodeError) as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
@@ -950,6 +1211,7 @@ def main() -> None:
     if check_only:
         mismatches = (
             check_projections(ops, repo_root, routes)
+            + check_fact_tables(ops, repo_root, excluded)
             + check_doc_facts(ops, repo_root)
             + check_runtime_exports(routes, repo_root)
         )
@@ -962,7 +1224,8 @@ def main() -> None:
         return
 
     write_projections(ops, repo_root, routes)
-    for rel_path, _ in TARGET_FILES:
+    write_fact_tables(ops, repo_root, excluded)
+    for rel_path, _ in TARGET_FILES + FACT_TARGET_FILES:
         print(f"Updated {rel_path}")
 
 

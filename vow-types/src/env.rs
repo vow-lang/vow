@@ -874,11 +874,370 @@ impl TypeEnv {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::NominalKind;
     use std::collections::BTreeSet;
     use vow_syntax::span::Span;
 
     fn dummy_span() -> Span {
         Span::new(0, 0)
+    }
+
+    /// One Operation Catalogue row (docs/spec/operations.json), reduced to the
+    /// facts the type-checker signature table must agree with.
+    #[derive(Clone, Copy)]
+    struct CatalogueFact {
+        name: &'static str,
+        effects: &'static str,
+        params: &'static [&'static str],
+        ret: &'static str,
+        doc_ret: &'static str,
+    }
+
+    /// An `excluded` entry of the catalogue: builtins the signature table holds
+    /// that the catalogue deliberately does not list.
+    #[derive(Debug)]
+    enum ExcludedFact {
+        Names(&'static [&'static str]),
+        Prefix(&'static str),
+        Contains {
+            needle: &'static str,
+            suffixes: &'static [&'static str],
+        },
+    }
+
+    impl ExcludedFact {
+        fn matches(&self, name: &str) -> bool {
+            match self {
+                ExcludedFact::Names(names) => names.contains(&name),
+                ExcludedFact::Prefix(prefix) => name.starts_with(prefix),
+                ExcludedFact::Contains { needle, suffixes } => {
+                    name.contains(needle) && suffixes.iter().any(|s| name.ends_with(s))
+                }
+            }
+        }
+    }
+
+    // Generated from docs/spec/operations.json by scripts/generate_operations.py.
+    // GENERATE:OPERATION_FACTS:START
+    #[rustfmt::skip]
+    const CATALOGUE_FACTS: &[CatalogueFact] = &[
+        CatalogueFact { name: "print_str", effects: "[io]", params: &["ptr"], ret: "unit", doc_ret: "()" },
+        CatalogueFact { name: "print_i64", effects: "[io]", params: &["i64"], ret: "unit", doc_ret: "()" },
+        CatalogueFact { name: "print_u64", effects: "[io]", params: &["u64"], ret: "unit", doc_ret: "()" },
+        CatalogueFact { name: "fs_read", effects: "[read]", params: &["ptr"], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "fs_open", effects: "[read]", params: &["ptr"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "fs_read_line", effects: "[read]", params: &["i64"], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "fs_status", effects: "[read]", params: &["i64"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "fs_close", effects: "[read]", params: &["i64"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "fs_write", effects: "[write]", params: &["ptr", "ptr"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "fs_exists", effects: "[read]", params: &["ptr"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "fs_mkdir", effects: "[io]", params: &["ptr"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "fs_listdir", effects: "[read]", params: &["ptr"], ret: "ptr", doc_ret: "Vec<String>" },
+        CatalogueFact { name: "fs_remove", effects: "[io]", params: &["ptr"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "fs_remove_dir", effects: "[io]", params: &["ptr"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "fs_remove_dir_all", effects: "[io]", params: &["ptr"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "fs_is_dir", effects: "[read]", params: &["ptr"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "fs_is_symlink", effects: "[read]", params: &["ptr"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "fs_rename", effects: "[io]", params: &["ptr", "ptr"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "args", effects: "[read]", params: &[], ret: "ptr", doc_ret: "Vec<String>" },
+        CatalogueFact { name: "stdin_read", effects: "[read]", params: &[], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "stdin_read_line", effects: "[read]", params: &[], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "stdin_ready", effects: "[read]", params: &[], ret: "bool", doc_ret: "bool" },
+        CatalogueFact { name: "eprintln_str", effects: "[io]", params: &["ptr"], ret: "unit", doc_ret: "()" },
+        CatalogueFact { name: "try_eprintln_str", effects: "[io]", params: &["ptr"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "process_exit", effects: "[io]", params: &["i64"], ret: "unit", doc_ret: "!" },
+        CatalogueFact { name: "process_run", effects: "[io]", params: &["ptr", "ptr"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "process_get_stdout", effects: "[io]", params: &[], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "process_get_stderr", effects: "[io]", params: &[], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "process_start", effects: "[io]", params: &["ptr", "ptr"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "process_start_capped", effects: "[io]", params: &["ptr", "ptr", "i64"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "process_wait", effects: "[io]", params: &["i64"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "process_wait_timeout", effects: "[io]", params: &["i64", "i64"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "process_poll_wait", effects: "[io]", params: &["i64", "i64"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "process_kill", effects: "[io]", params: &["i64"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "process_stdout_for", effects: "[io]", params: &["i64"], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "process_stderr_for", effects: "[io]", params: &["i64"], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "process_start_piped", effects: "[io]", params: &["ptr", "ptr"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "process_write_stdin", effects: "[io]", params: &["i64", "ptr"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "process_close_stdin", effects: "[io]", params: &["i64"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "process_read_line", effects: "[io]", params: &["i64", "i64"], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "process_read_status", effects: "[io]", params: &["i64"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "hash_u64", effects: "[]", params: &["u64"], ret: "u64", doc_ret: "u64" },
+        CatalogueFact { name: "hash_str", effects: "[]", params: &["ptr"], ret: "u64", doc_ret: "u64" },
+        CatalogueFact { name: "fs_read_status", effects: "[read]", params: &[], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "getenv", effects: "[read]", params: &["ptr"], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "path_lookup", effects: "[read]", params: &["ptr"], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "mktemp_dir", effects: "[io]", params: &["ptr"], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "memory_root_arena_bytes", effects: "[io]", params: &[], ret: "u64", doc_ret: "u64" },
+        CatalogueFact { name: "memory_peak_bytes", effects: "[io]", params: &[], ret: "u64", doc_ret: "u64" },
+        CatalogueFact { name: "memory_alloc_count_since_start", effects: "[io]", params: &[], ret: "u64", doc_ret: "u64" },
+        CatalogueFact { name: "time_unix", effects: "[io]", params: &[], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "time_unix_ms", effects: "[io]", params: &[], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "time_micros", effects: "[io]", params: &[], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "num_cpus", effects: "[io]", params: &[], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "proc_sample", effects: "[io]", params: &[], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "gzip_write_file", effects: "[io]", params: &["ptr", "ptr"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "hex_encode", effects: "[]", params: &["ptr"], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "hex_decode", effects: "[]", params: &["ptr"], ret: "ptr", doc_ret: "Vec<u8>" },
+        CatalogueFact { name: "parse_i64", effects: "[]", params: &["ptr"], ret: "ptr", doc_ret: "Option<i64>" },
+        CatalogueFact { name: "parse_i8", effects: "[]", params: &["ptr"], ret: "ptr", doc_ret: "Option<i8>" },
+        CatalogueFact { name: "parse_i16", effects: "[]", params: &["ptr"], ret: "ptr", doc_ret: "Option<i16>" },
+        CatalogueFact { name: "parse_i32", effects: "[]", params: &["ptr"], ret: "ptr", doc_ret: "Option<i32>" },
+        CatalogueFact { name: "parse_i128", effects: "[]", params: &["ptr"], ret: "ptr", doc_ret: "Option<i128>" },
+        CatalogueFact { name: "parse_u8", effects: "[]", params: &["ptr"], ret: "ptr", doc_ret: "Option<u8>" },
+        CatalogueFact { name: "parse_u16", effects: "[]", params: &["ptr"], ret: "ptr", doc_ret: "Option<u16>" },
+        CatalogueFact { name: "parse_u32", effects: "[]", params: &["ptr"], ret: "ptr", doc_ret: "Option<u32>" },
+        CatalogueFact { name: "parse_u128", effects: "[]", params: &["ptr"], ret: "ptr", doc_ret: "Option<u128>" },
+        CatalogueFact { name: "parse_f64_bits", effects: "[]", params: &["ptr"], ret: "u64", doc_ret: "u64" },
+        CatalogueFact { name: "format_f64_bits", effects: "[]", params: &["u64"], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "int_to_string", effects: "[]", params: &["i64"], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "uint_to_string", effects: "[]", params: &["u64"], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "int128_to_string", effects: "[]", params: &["i128"], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "uint128_to_string", effects: "[]", params: &["u128"], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "string_substr", effects: "[]", params: &["ptr", "u64", "u64"], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "string_split", effects: "[]", params: &["ptr", "ptr"], ret: "ptr", doc_ret: "Vec<String>" },
+        CatalogueFact { name: "string_starts_with", effects: "[]", params: &["ptr", "ptr"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "string_ends_with", effects: "[]", params: &["ptr", "ptr"], ret: "i64", doc_ret: "i64" },
+        CatalogueFact { name: "string_trim", effects: "[]", params: &["ptr"], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "string_to_upper", effects: "[]", params: &["ptr"], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "string_to_lower", effects: "[]", params: &["ptr"], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "string_replace", effects: "[]", params: &["ptr", "ptr", "ptr"], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "string_join", effects: "[]", params: &["ptr", "ptr"], ret: "ptr", doc_ret: "String" },
+        CatalogueFact { name: "vec_sort", effects: "[]", params: &["ptr"], ret: "ptr", doc_ret: "Vec<i64>" },
+    ];
+
+    #[rustfmt::skip]
+    const EXCLUDED_FACTS: &[ExcludedFact] = &[
+        ExcludedFact::Prefix("__vow_clif_"),
+        ExcludedFact::Names(&["debug_str", "debug_i64", "debug_u64"]),
+        ExcludedFact::Names(&["string_matches_literal_at"]),
+        ExcludedFact::Names(&["i64_to_string"]),
+        ExcludedFact::Contains { needle: "_to_", suffixes: &["_try", "_wrap", "_sat"] },
+        ExcludedFact::Names(&["add_sat_u8", "sub_sat_u8", "mul_sat_u8"]),
+    ];
+    // GENERATE:OPERATION_FACTS:END
+
+    /// The catalogue token for a type-checker type: every heap value (`String`,
+    /// `Vec<_>`, `Option<_>`) is a `ptr`, the wide integers keep their own token.
+    fn ty_token(ty: &Ty) -> &'static str {
+        if ty.applied_args(NominalKind::Struct, "Vec").is_some()
+            || ty.applied_args(NominalKind::Enum, "Option").is_some()
+        {
+            return "ptr";
+        }
+        match ty {
+            Ty::Str => "ptr",
+            Ty::I64 => "i64",
+            Ty::U64 => "u64",
+            Ty::I128 => "i128",
+            Ty::U128 => "u128",
+            Ty::Bool => "bool",
+            Ty::Unit | Ty::Never => "unit",
+            _ => "<unmapped>",
+        }
+    }
+
+    /// The effect set spelled as the catalogue does: `[io, read]`, sorted.
+    fn effects_string(effects: &BTreeSet<Effect>) -> String {
+        let mut names: Vec<&str> = effects
+            .iter()
+            .map(|e| match e {
+                Effect::IO => "io",
+                Effect::Panic => "panic",
+                Effect::Read => "read",
+                Effect::Unsafe => "unsafe",
+                Effect::Write => "write",
+            })
+            .collect();
+        names.sort_unstable();
+        format!("[{}]", names.join(", "))
+    }
+
+    /// Every disagreement between the catalogue and a signature table: a
+    /// catalogued op the table lacks or spells differently, a table entry that
+    /// is neither catalogued nor excluded, an excluded entry that matches no
+    /// table entry, and a catalogued name an exclusion also covers.
+    fn catalogue_problems(
+        sigs: &[(String, FnSig)],
+        facts: &[CatalogueFact],
+        excluded: &[ExcludedFact],
+    ) -> Vec<String> {
+        let mut problems = Vec::new();
+        for fact in facts {
+            let Some((_, sig)) = sigs.iter().find(|(name, _)| name == fact.name) else {
+                problems.push(format!("catalogued op '{}' is not in the table", fact.name));
+                continue;
+            };
+            let effects = effects_string(&sig.effects);
+            if effects != fact.effects {
+                problems.push(format!(
+                    "'{}': table effects {effects}, catalogue {}",
+                    fact.name, fact.effects
+                ));
+            }
+            if sig.params.len() != fact.params.len() {
+                problems.push(format!(
+                    "'{}': table arity {}, catalogue {}",
+                    fact.name,
+                    sig.params.len(),
+                    fact.params.len()
+                ));
+            }
+            for (i, (ty, token)) in sig.params.iter().zip(fact.params).enumerate() {
+                if ty_token(ty) != *token {
+                    problems.push(format!(
+                        "'{}': parameter {i} is {ty:?} ({}), catalogue token '{token}'",
+                        fact.name,
+                        ty_token(ty)
+                    ));
+                }
+            }
+            if ty_token(&sig.return_ty) != fact.ret {
+                problems.push(format!(
+                    "'{}': return type {:?} ({}), catalogue token '{}'",
+                    fact.name,
+                    sig.return_ty,
+                    ty_token(&sig.return_ty),
+                    fact.ret
+                ));
+            }
+            if sig.return_ty.user_name() != fact.doc_ret {
+                problems.push(format!(
+                    "'{}': return type spelled '{}', catalogue doc type '{}'",
+                    fact.name,
+                    sig.return_ty.user_name(),
+                    fact.doc_ret
+                ));
+            }
+            if let Some(entry) = excluded.iter().find(|e| e.matches(fact.name)) {
+                problems.push(format!(
+                    "'{}' is both catalogued and excluded by {entry:?}",
+                    fact.name
+                ));
+            }
+        }
+        for (name, _) in sigs {
+            let catalogued = facts.iter().any(|f| f.name == name);
+            if !catalogued && !excluded.iter().any(|e| e.matches(name)) {
+                problems.push(format!(
+                    "table entry '{name}' is neither catalogued nor excluded"
+                ));
+            }
+        }
+        for entry in excluded {
+            if !sigs.iter().any(|(name, _)| entry.matches(name)) {
+                problems.push(format!("excluded entry {entry:?} matches no table entry"));
+            }
+        }
+        problems
+    }
+
+    fn assert_no_problems(problems: Vec<String>) {
+        assert!(
+            problems.is_empty(),
+            "catalogue and signature table disagree:\n{}",
+            problems.join("\n")
+        );
+    }
+
+    #[test]
+    fn operation_catalogue_agrees_with_builtin_signature_table() {
+        assert_no_problems(catalogue_problems(
+            &builtin_free_fn_signatures(),
+            CATALOGUE_FACTS,
+            EXCLUDED_FACTS,
+        ));
+    }
+
+    #[test]
+    fn catalogue_check_names_an_op_whose_effects_drifted() {
+        let mut sigs = builtin_free_fn_signatures();
+        let (_, fs_status) = sigs
+            .iter_mut()
+            .find(|(name, _)| name == "fs_status")
+            .expect("fs_status is a builtin");
+        fs_status.effects = [Effect::IO].into_iter().collect();
+        let problems = catalogue_problems(&sigs, CATALOGUE_FACTS, EXCLUDED_FACTS);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("'fs_status'") && problems[0].contains("effects"));
+    }
+
+    #[test]
+    fn catalogue_check_names_an_op_whose_signature_drifted() {
+        let mut sigs = builtin_free_fn_signatures();
+        let (_, fs_status) = sigs
+            .iter_mut()
+            .find(|(name, _)| name == "fs_status")
+            .expect("fs_status is a builtin");
+        fs_status.params.push(Ty::I64);
+        fs_status.return_ty = Ty::U64;
+        let problems = catalogue_problems(&sigs, CATALOGUE_FACTS, EXCLUDED_FACTS);
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("'fs_status': table arity 2"))
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("'fs_status': return type U64"))
+        );
+    }
+
+    #[test]
+    fn catalogue_check_names_a_table_entry_that_lost_its_row() {
+        let facts: Vec<CatalogueFact> = CATALOGUE_FACTS
+            .iter()
+            .copied()
+            .filter(|f| f.name != "fs_status")
+            .collect();
+        let problems = catalogue_problems(&builtin_free_fn_signatures(), &facts, EXCLUDED_FACTS);
+        assert_eq!(
+            problems,
+            vec!["table entry 'fs_status' is neither catalogued nor excluded".to_string()]
+        );
+    }
+
+    #[test]
+    fn catalogue_check_names_a_catalogued_op_missing_from_the_table() {
+        let sigs: Vec<(String, FnSig)> = builtin_free_fn_signatures()
+            .into_iter()
+            .filter(|(name, _)| name != "fs_status")
+            .collect();
+        let problems = catalogue_problems(&sigs, CATALOGUE_FACTS, EXCLUDED_FACTS);
+        assert_eq!(
+            problems,
+            vec!["catalogued op 'fs_status' is not in the table".to_string()]
+        );
+    }
+
+    #[test]
+    fn catalogue_check_reports_a_dead_exclusion() {
+        let excluded = [
+            ExcludedFact::Names(&["no_such_builtin"]),
+            ExcludedFact::Prefix("__no_such_prefix_"),
+        ];
+        let sigs: Vec<(String, FnSig)> = builtin_free_fn_signatures()
+            .into_iter()
+            .filter(|(name, _)| CATALOGUE_FACTS.iter().any(|f| f.name == name))
+            .collect();
+        let problems = catalogue_problems(&sigs, CATALOGUE_FACTS, &excluded);
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        assert!(problems[0].contains("no_such_builtin"));
+        assert!(problems[1].contains("__no_such_prefix_"));
+    }
+
+    #[test]
+    fn catalogue_check_rejects_a_name_both_catalogued_and_excluded() {
+        let excluded = [ExcludedFact::Names(&["fs_status"])];
+        let problems =
+            catalogue_problems(&builtin_free_fn_signatures(), CATALOGUE_FACTS, &excluded);
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("'fs_status' is both catalogued and excluded")),
+            "{problems:?}"
+        );
     }
 
     fn builtin_signature_snapshot() -> String {

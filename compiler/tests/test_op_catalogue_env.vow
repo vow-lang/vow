@@ -1,0 +1,334 @@
+module TestOpCatalogueEnv
+
+use diag
+use ast
+use types
+use env
+use checker
+use decl_text
+use tests.catalogue_facts
+
+// Ties the Operation Catalogue (docs/spec/operations.json, via the generated
+// compiler/tests/catalogue_facts.vow) to the self-hosted checker's builtin
+// signature table: every catalogued op must be registered in `env_new` with the
+// catalogued effects, arity, parameter tokens and return type, and every
+// registered builtin must be catalogued or matched by an `excluded` entry. The
+// Rust twin is `operation_catalogue_agrees_with_builtin_signature_table` in
+// vow-types/src/env.rs.
+
+fn fresh_env() -> CheckEnv {
+    env_new(diag_ctx_new(), String::from("op_catalogue_env.vow"))
+}
+
+// The catalogue's spelling of an effect mask: `[]`, `[io]`, `[read, write]`, in
+// alphabetical order.
+fn effects_catalogue_string(mask: i64) -> String {
+    let text: String = decl_effects_text(mask);
+    if text.len() == 0u64 { return String::from("[]"); }
+    string_substr(text, 1u64, text.len())
+}
+
+// The catalogue token for a type: every heap value (String, Vec, Option) is a
+// `ptr`; the wide integers keep their own token.
+fn tid_token(ts: TyStore, tid: i64) -> String {
+    let tag: i64 = ty_tag(ts, tid);
+    if tag == CTY_STR() { return String::from("ptr"); }
+    if tag == CTY_I64() { return String::from("i64"); }
+    if tag == CTY_U64() { return String::from("u64"); }
+    if tag == CTY_I128() { return String::from("i128"); }
+    if tag == CTY_U128() { return String::from("u128"); }
+    if tag == CTY_BOOL() { return String::from("bool"); }
+    if tag == CTY_UNIT() || tag == CTY_NEVER() { return String::from("unit"); }
+    if ty_applied_args(ts, tid, -1, String::from("Vec")) != -1 { return String::from("ptr"); }
+    if ty_applied_args(ts, tid, -1, String::from("Option")) != -1 { return String::from("ptr"); }
+    String::from("?")
+}
+
+fn param_tokens(e: CheckEnv, fidx: i64) -> String {
+    let ts: TyStore = e.ts;
+    let lid: i64 = e.fn_param_lids[fidx as u64];
+    let n: i64 = e.fn_param_count[fidx as u64];
+    let out: String = String::from("");
+    let mut i: i64 = 0;
+    while i < n {
+        if i > 0 { out.push_str(String::from(",")); }
+        out.push_str(tid_token(ts, ts_arg_get(ts, lid, i)));
+        i = i + 1;
+    }
+    out
+}
+
+fn fact_arity(f: OpFact) -> i64 {
+    let params: String = f.params;
+    if params.len() == 0u64 { return 0; }
+    string_split(params, String::from(",")).len() as i64
+}
+
+fn problem(out: Vec<String>, name: String, what: String) {
+    let line: String = String::from("'");
+    line.push_str(name);
+    line.push_str(String::from("': "));
+    line.push_str(what);
+    out.push(line);
+}
+
+fn fact_problems(e: CheckEnv, f: OpFact, out: Vec<String>) {
+    let name: String = f.name;
+    let fidx: i64 = env_lookup_fn(e, name);
+    if fidx < 0 {
+        problem(out, name, String::from("catalogued op is not registered in the env"));
+    } else {
+        let ts: TyStore = e.ts;
+        let effects: String = effects_catalogue_string(e.fn_effects[fidx as u64]);
+        let want_effects: String = f.effects;
+        if effects != want_effects {
+            problem(out, name, String::from("effects differ from the catalogue"));
+        }
+        if e.fn_param_count[fidx as u64] != fact_arity(f) {
+            problem(out, name, String::from("arity differs from the catalogue"));
+        } else {
+            let want_params: String = f.params;
+            if param_tokens(e, fidx) != want_params {
+                problem(out, name, String::from("parameter tokens differ from the catalogue"));
+            }
+        }
+        let ret_tid: i64 = e.fn_ret_tids[fidx as u64];
+        let want_ret: String = f.ret;
+        if tid_token(ts, ret_tid) != want_ret {
+            problem(out, name, String::from("return token differs from the catalogue"));
+        }
+        let want_doc_ret: String = f.doc_ret;
+        if ty_full_display_name(ts, ret_tid) != want_doc_ret {
+            problem(out, name, String::from("return type spelling differs from the catalogue"));
+        }
+    }
+}
+
+fn any_fact_named(facts: Vec<OpFact>, name: String) -> bool {
+    let mut i: u64 = 0u64;
+    while i < facts.len() {
+        let f: OpFact = facts[i];
+        let fname: String = f.name;
+        if fname == name { return true; }
+        i = i + 1u64;
+    }
+    false
+}
+
+fn first_excluding(excl: Vec<OpExcluded>, name: String) -> i64 {
+    let mut i: u64 = 0u64;
+    while i < excl.len() {
+        let x: OpExcluded = excl[i];
+        if op_excluded_matches(x, name) { return i as i64; }
+        i = i + 1u64;
+    }
+    -1
+}
+
+// Coverage in both directions: no registered builtin is unaccounted for, no
+// name is both catalogued and excluded, and no exclusion is dead.
+fn coverage_problems(e: CheckEnv, facts: Vec<OpFact>, excl: Vec<OpExcluded>, out: Vec<String>) {
+    let mut i: u64 = 0u64;
+    while i < e.fn_names.len() {
+        let name: String = e.fn_names[i];
+        let catalogued: bool = any_fact_named(facts, name);
+        let excluded_by: i64 = first_excluding(excl, name);
+        if !catalogued && excluded_by < 0 {
+            problem(out, name, String::from("env entry is neither catalogued nor excluded"));
+        }
+        if catalogued && excluded_by >= 0 {
+            problem(out, name, String::from("name is both catalogued and excluded"));
+        }
+        i = i + 1u64;
+    }
+    let mut j: u64 = 0u64;
+    while j < excl.len() {
+        let x: OpExcluded = excl[j];
+        let mut hit: bool = false;
+        let mut k: u64 = 0u64;
+        while k < e.fn_names.len() {
+            if op_excluded_matches(x, e.fn_names[k]) { hit = true; }
+            k = k + 1u64;
+        }
+        if !hit {
+            problem(out, op_excluded_describe(x), String::from("matches no env entry (dead exclusion)"));
+        }
+        j = j + 1u64;
+    }
+}
+
+fn all_problems(e: CheckEnv, facts: Vec<OpFact>, excl: Vec<OpExcluded>) -> Vec<String> {
+    let out: Vec<String> = Vec::new();
+    let mut i: u64 = 0u64;
+    while i < facts.len() {
+        fact_problems(e, facts[i], out);
+        i = i + 1u64;
+    }
+    coverage_problems(e, facts, excl, out);
+    out
+}
+
+fn problems_mention(problems: Vec<String>, needle: String) -> bool {
+    let mut i: u64 = 0u64;
+    while i < problems.len() {
+        if facts_str_contains(problems[i], needle) { return true; }
+        i = i + 1u64;
+    }
+    false
+}
+
+fn check_env_agrees_with_catalogue() -> i32 [io] {
+    let facts: Vec<OpFact> = op_facts_all();
+    let excl: Vec<OpExcluded> = op_facts_excluded();
+    if facts.len() == 0u64 { return 1; }
+    if excl.len() == 0u64 { return 2; }
+    let problems: Vec<String> = all_problems(fresh_env(), facts, excl);
+    let mut i: u64 = 0u64;
+    while i < problems.len() {
+        eprintln_str(problems[i]);
+        i = i + 1u64;
+    }
+    if problems.len() != 0u64 { return 3; }
+    0
+}
+
+fn check_effect_mask_strings() -> i32 {
+    if effects_catalogue_string(0) != String::from("[]") { return 10; }
+    if effects_catalogue_string(EFF_IO()) != String::from("[io]") { return 11; }
+    if effects_catalogue_string(EFF_PANIC()) != String::from("[panic]") { return 12; }
+    if effects_catalogue_string(EFF_READ()) != String::from("[read]") { return 13; }
+    if effects_catalogue_string(EFF_UNSAFE()) != String::from("[unsafe]") { return 14; }
+    if effects_catalogue_string(EFF_WRITE()) != String::from("[write]") { return 15; }
+    if effects_catalogue_string(EFF_READ() + EFF_WRITE()) != String::from("[read, write]") { return 16; }
+    if effects_catalogue_string(EFF_IO() + EFF_READ()) != String::from("[io, read]") { return 17; }
+    if effects_catalogue_string(EFF_IO() + EFF_PANIC() + EFF_READ() + EFF_UNSAFE() + EFF_WRITE()) != String::from("[io, panic, read, unsafe, write]") { return 18; }
+    0
+}
+
+fn check_env_effects_use_the_catalogue_spelling() -> i32 {
+    let e: CheckEnv = fresh_env();
+    let io_idx: i64 = env_lookup_fn(e, String::from("print_str"));
+    if io_idx < 0 { return 20; }
+    if effects_catalogue_string(e.fn_effects[io_idx as u64]) != String::from("[io]") { return 21; }
+    let w_idx: i64 = env_lookup_fn(e, String::from("fs_write"));
+    if w_idx < 0 { return 22; }
+    if effects_catalogue_string(e.fn_effects[w_idx as u64]) != String::from("[write]") { return 23; }
+    let pure_idx: i64 = env_lookup_fn(e, String::from("hash_u64"));
+    if pure_idx < 0 { return 24; }
+    if effects_catalogue_string(e.fn_effects[pure_idx as u64]) != String::from("[]") { return 25; }
+    0
+}
+
+fn facts_without(facts: Vec<OpFact>, name: String) -> Vec<OpFact> {
+    let out: Vec<OpFact> = Vec::new();
+    let mut i: u64 = 0u64;
+    while i < facts.len() {
+        let f: OpFact = facts[i];
+        let fname: String = f.name;
+        if fname != name { out.push(f); }
+        i = i + 1u64;
+    }
+    out
+}
+
+fn check_a_drifted_effect_names_the_op() -> i32 {
+    let e: CheckEnv = fresh_env();
+    let idx: i64 = env_lookup_fn(e, String::from("fs_status"));
+    if idx < 0 { return 30; }
+    e.fn_effects[idx as u64] = EFF_IO();
+    let problems: Vec<String> = all_problems(e, op_facts_all(), op_facts_excluded());
+    if problems.len() != 1u64 { return 31; }
+    if !problems_mention(problems, String::from("'fs_status': effects")) { return 32; }
+    0
+}
+
+fn check_a_drifted_signature_names_the_op() -> i32 {
+    let e: CheckEnv = fresh_env();
+    let idx: i64 = env_lookup_fn(e, String::from("fs_status"));
+    if idx < 0 { return 40; }
+    e.fn_ret_tids[idx as u64] = CTY_U64();
+    let problems: Vec<String> = all_problems(e, op_facts_all(), op_facts_excluded());
+    if !problems_mention(problems, String::from("'fs_status': return token")) { return 41; }
+    let e2: CheckEnv = fresh_env();
+    let idx2: i64 = env_lookup_fn(e2, String::from("fs_status"));
+    e2.fn_param_count[idx2 as u64] = 2;
+    let problems2: Vec<String> = all_problems(e2, op_facts_all(), op_facts_excluded());
+    if !problems_mention(problems2, String::from("'fs_status': arity")) { return 42; }
+    0
+}
+
+fn check_a_dropped_row_names_the_op() -> i32 {
+    let facts: Vec<OpFact> = facts_without(op_facts_all(), String::from("fs_status"));
+    let problems: Vec<String> = all_problems(fresh_env(), facts, op_facts_excluded());
+    if problems.len() != 1u64 { return 50; }
+    if !problems_mention(problems, String::from("'fs_status': env entry is neither catalogued nor excluded")) { return 51; }
+    0
+}
+
+fn check_an_unregistered_catalogue_row_names_the_op() -> i32 {
+    let e: CheckEnv = fresh_env();
+    let facts: Vec<OpFact> = op_facts_all();
+    facts.push(op_fact(String::from("brand_new_builtin"), String::from("[]"), String::from(""), String::from("i64"), String::from("i64")));
+    let problems: Vec<String> = all_problems(e, facts, op_facts_excluded());
+    if problems.len() != 1u64 { return 60; }
+    if !problems_mention(problems, String::from("'brand_new_builtin': catalogued op is not registered")) { return 61; }
+    0
+}
+
+fn check_an_unaccounted_env_entry_names_the_op() -> i32 {
+    let e: CheckEnv = fresh_env();
+    let params: Vec<i64> = Vec::new();
+    env_define_fn(e, String::from("brand_new_builtin"), params, CTY_I64(), 0);
+    let problems: Vec<String> = all_problems(e, op_facts_all(), op_facts_excluded());
+    if problems.len() != 1u64 { return 70; }
+    if !problems_mention(problems, String::from("'brand_new_builtin': env entry is neither")) { return 71; }
+    0
+}
+
+fn check_a_dead_exclusion_is_reported() -> i32 {
+    let excl: Vec<OpExcluded> = op_facts_excluded();
+    excl.push(op_excluded(OPX_PREFIX(), String::from("__no_such_prefix_"), String::from("")));
+    let problems: Vec<String> = all_problems(fresh_env(), op_facts_all(), excl);
+    if problems.len() != 1u64 { return 80; }
+    if !problems_mention(problems, String::from("__no_such_prefix_")) { return 81; }
+    0
+}
+
+fn check_a_name_both_catalogued_and_excluded_is_reported() -> i32 {
+    let excl: Vec<OpExcluded> = op_facts_excluded();
+    excl.push(op_excluded(OPX_NAMES(), String::from("fs_status"), String::from("")));
+    let problems: Vec<String> = all_problems(fresh_env(), op_facts_all(), excl);
+    if !problems_mention(problems, String::from("'fs_status': name is both catalogued and excluded")) { return 90; }
+    0
+}
+
+fn check_matcher_semantics() -> i32 {
+    let names: OpExcluded = op_excluded(OPX_NAMES(), String::from("debug_str,debug_i64"), String::from(""));
+    if !op_excluded_matches(names, String::from("debug_i64")) { return 100; }
+    if op_excluded_matches(names, String::from("debug_u64")) { return 101; }
+    let prefix: OpExcluded = op_excluded(OPX_PREFIX(), String::from("__vow_clif_"), String::from(""));
+    if !op_excluded_matches(prefix, String::from("__vow_clif_create")) { return 102; }
+    if op_excluded_matches(prefix, String::from("print_str")) { return 103; }
+    let contains: OpExcluded = op_excluded(OPX_CONTAINS(), String::from("_to_"), String::from("_try,_wrap,_sat"));
+    if !op_excluded_matches(contains, String::from("i64_to_u8_try")) { return 104; }
+    if !op_excluded_matches(contains, String::from("u128_to_i128_sat")) { return 105; }
+    if op_excluded_matches(contains, String::from("int128_to_string")) { return 106; }
+    if op_excluded_matches(contains, String::from("string_to_upper")) { return 107; }
+    if op_excluded_matches(contains, String::from("i64_to")) { return 108; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let mut r: i32 = check_env_agrees_with_catalogue();
+    if r == 0 { r = check_effect_mask_strings(); }
+    if r == 0 { r = check_env_effects_use_the_catalogue_spelling(); }
+    if r == 0 { r = check_a_drifted_effect_names_the_op(); }
+    if r == 0 { r = check_a_drifted_signature_names_the_op(); }
+    if r == 0 { r = check_a_dropped_row_names_the_op(); }
+    if r == 0 { r = check_an_unregistered_catalogue_row_names_the_op(); }
+    if r == 0 { r = check_an_unaccounted_env_entry_names_the_op(); }
+    if r == 0 { r = check_a_dead_exclusion_is_reported(); }
+    if r == 0 { r = check_a_name_both_catalogued_and_excluded_is_reported(); }
+    if r == 0 { r = check_matcher_semantics(); }
+    r
+}
