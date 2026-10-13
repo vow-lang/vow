@@ -3,7 +3,9 @@
 
 import io
 import json
+import os
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -151,7 +153,176 @@ class CapacityArtifactTest(unittest.TestCase):
             self.assertIsNone(vd.capacity_artifact(path))
             with open(path, "w") as fh:
                 fh.write("// TEST: esbmc-capacity-artifact\n")
-            self.assertIsNone(vd.capacity_artifact(path))
+            with self.assertRaisesRegex(ValueError, "malformed esbmc artifact"):
+                vd.capacity_artifact(path)
+
+
+def skip_diag(fn, severity="warning", code="VerificationSkipped"):
+    return {
+        "error_code": code,
+        "severity": severity,
+        "message": f"skipped verification of `{fn}`: not modelable",
+    }
+
+
+class ModelArtifactTest(unittest.TestCase):
+    KEY = ("eq_transitive", "Callee", 2)
+
+    def cls(self, truth, esbmc_keys, artifacts, esbmc=vd.REFUTED, native=vd.PROVEN):
+        return vd.classify(
+            truth,
+            esbmc,
+            native,
+            frozenset(esbmc_keys),
+            frozenset(),
+            None,
+            None,
+            False,
+            artifacts,
+        )
+
+    def test_declared_model_counterexample_is_an_explained_extra_proof(self):
+        cls, detail = self.cls("Verified", [self.KEY], {self.KEY: "spurious string_eq"})
+        self.assertEqual(vd.MORE_PRECISE, cls)
+        self.assertIn("spurious string_eq", detail)
+
+    def test_an_undeclared_counterexample_stays_a_soundness_finding(self):
+        other = ("other_fn", "Callee", 0)
+        cls, _ = self.cls(
+            "Verified", [self.KEY, other], {self.KEY: "spurious string_eq"}
+        )
+        self.assertEqual(vd.SOUNDNESS, cls)
+
+    def test_no_counterexample_key_is_never_excused(self):
+        cls, _ = self.cls("Verified", [], {self.KEY: "x"})
+        self.assertEqual(vd.SOUNDNESS, cls)
+
+    def test_the_directive_does_not_override_a_corpus_label_of_incorrect(self):
+        cls, _ = self.cls("VerifyFailed", [self.KEY], {self.KEY: "x"})
+        self.assertEqual(vd.SOUNDNESS, cls)
+
+    def test_the_directive_excuses_only_a_native_proof(self):
+        cls, _ = self.cls("Verified", [self.KEY], {self.KEY: "x"}, native=vd.SKIPPED)
+        self.assertEqual(vd.WEAKER, cls)
+
+
+class FootprintTest(unittest.TestCase):
+    def cls(self, esbmc_skipped, native_skipped, verdict=vd.SKIPPED):
+        return vd.classify(
+            "Skipped",
+            verdict,
+            verdict,
+            esbmc_skipped=frozenset(esbmc_skipped),
+            native_skipped=frozenset(native_skipped),
+        )
+
+    def test_same_skipped_functions_match(self):
+        self.assertEqual(vd.MATCH, self.cls({"a", "b"}, {"a", "b"})[0])
+
+    def test_native_analysing_what_esbmc_skips_is_more_precise_not_a_match(self):
+        cls, detail = self.cls({"a", "b", "c"}, {"c"})
+        self.assertEqual(vd.MORE_PRECISE, cls)
+        self.assertIn("['a', 'b']", detail)
+
+    def test_native_skipping_what_esbmc_analyses_is_weaker(self):
+        cls, detail = self.cls({"c"}, {"b", "c"})
+        self.assertEqual(vd.WEAKER, cls)
+        self.assertIn("['b']", detail)
+
+    def test_weaker_wins_when_both_sides_differ(self):
+        self.assertEqual(vd.WEAKER, self.cls({"a"}, {"b"})[0])
+
+    def test_footprint_applies_to_agreeing_refutations_too(self):
+        keys = frozenset({("f", "Callee", 1)})
+        cls, _ = vd.classify(
+            "VerifyFailed",
+            vd.REFUTED,
+            vd.REFUTED,
+            keys,
+            keys,
+            esbmc_skipped=frozenset({"g"}),
+        )
+        self.assertEqual(vd.MORE_PRECISE, cls)
+
+    def test_skipped_functions_reads_warnings_only(self):
+        result = {
+            "diagnostics": [
+                skip_diag("low"),
+                skip_diag("main", severity="note"),
+                skip_diag("other", code="ArithOverflowReachable"),
+                {"error_code": "VerificationSkipped", "severity": "warning"},
+            ]
+        }
+        self.assertEqual(frozenset({"low"}), vd.skipped_functions(result))
+        self.assertEqual(frozenset(), vd.skipped_functions(None))
+
+
+class ClassifyOutcomesTest(unittest.TestCase):
+    def write(self, tmp, text):
+        path = os.path.join(tmp, "f.vow")
+        with open(path, "w") as fh:
+            fh.write(text)
+        return path
+
+    def outcome(self, status, *diags, cexes=()):
+        return vd.summarise(
+            {
+                "status": status,
+                "diagnostics": list(diags),
+                "counterexamples": list(cexes),
+            }
+        )
+
+    def test_wide_enum_payload_shape_is_not_a_match(self):
+        esbmc = self.outcome(
+            "Skipped", *[skip_diag(f) for f in ("low", "second", "ok", "call_ret")]
+        )
+        native = self.outcome("Skipped", skip_diag("call_ret"))
+        cls, _ = vd.classify_outcomes("Skipped", "/nonexistent.vow", esbmc, native)
+        self.assertEqual(vd.MORE_PRECISE, cls)
+
+    def test_directives_of_the_fixture_are_honoured(self):
+        cex = {"function": "f", "blame": "Callee", "vow_id": 2, "violation": "ensures"}
+        esbmc = self.outcome("VerifyFailed", cexes=[cex])
+        native = self.outcome("Verified")
+        with tempfile.TemporaryDirectory() as tmp:
+            bare = self.write(tmp, "// TEST: category x\n")
+            self.assertEqual(
+                vd.SOUNDNESS, vd.classify_outcomes("Verified", bare, esbmc, native)[0]
+            )
+            marked = self.write(
+                tmp,
+                '// TEST: esbmc-model-artifact fn="f" blame=Callee vow_id=2 "why"\n',
+            )
+            self.assertEqual(
+                vd.MORE_PRECISE,
+                vd.classify_outcomes("Verified", marked, esbmc, native)[0],
+            )
+
+
+class NativeCorpusTest(unittest.TestCase):
+    def test_native_directories_are_collected_with_their_truth(self):
+        truths = {}
+        for group, exp in vd.collect_native(None):
+            truths.setdefault(group, set()).add(exp.expected_status)
+        self.assertEqual(
+            {
+                "verify-native/pass": {"Verified"},
+                "verify-native/fail": {"VerifyFailed"},
+                "verify-native/skip": {"Skipped"},
+                "verify-native/unknown": {None},
+            },
+            truths,
+        )
+
+    def test_collect_covers_the_eval_corpus_and_the_native_one(self):
+        groups = {group for group, _ in vd.collect(None)}
+        self.assertTrue({"verify", "verify-fail", "verify-skip"} <= groups)
+        self.assertIn("verify-native/pass", groups)
+
+    def test_filter_applies_to_the_native_fixtures(self):
+        names = [exp.name for _, exp in vd.collect_native("string_eq_exact")]
+        self.assertEqual(["string_eq_exact"], names)
 
 
 class VerdictTest(unittest.TestCase):
@@ -507,9 +678,7 @@ class MainTest(unittest.TestCase):
         out = io.StringIO()
         with (
             mock.patch.object(vd, "preflight", return_value=[]),
-            mock.patch.object(
-                vd.verify_eval, "collect", return_value=[("verify", exp)]
-            ),
+            mock.patch.object(vd, "collect", return_value=[("verify", exp)]),
             mock.patch.object(vd, "function_count", return_value=1),
             mock.patch.object(
                 vd,
@@ -541,7 +710,7 @@ class MainTest(unittest.TestCase):
     def test_empty_selection_is_a_harness_failure(self):
         with (
             mock.patch.object(vd, "preflight", return_value=[]),
-            mock.patch.object(vd.verify_eval, "collect", return_value=[]),
+            mock.patch.object(vd, "collect", return_value=[]),
             mock.patch.object(sys, "stderr", io.StringIO()),
         ):
             self.assertEqual(2, vd.main(["--filter", "typo"]))
@@ -550,9 +719,7 @@ class MainTest(unittest.TestCase):
         exp = vd.verify_eval.Expect("tests/verify/x.vow", "Verified")
         with (
             mock.patch.object(vd, "preflight", return_value=[]),
-            mock.patch.object(
-                vd.verify_eval, "collect", return_value=[("verify", exp)]
-            ),
+            mock.patch.object(vd, "collect", return_value=[("verify", exp)]),
             mock.patch.object(vd, "run_backend", side_effect=PermissionError("denied")),
             mock.patch.object(sys, "stderr", io.StringIO()),
         ):
