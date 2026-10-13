@@ -1,0 +1,26 @@
+// TEST: category callee-blame
+// TEST: counterexample-fn "twice_halved"
+// TEST: counterexample-blame Callee
+// TEST: counterexample-vow-id 1
+// Halving twice never exceeds the argument, so the caller's claim of a strictly
+// smaller result is false for a zero argument, where the inlined float calls return that same zero.
+module FloatInlineCallEnsuresWrong
+
+fn halve(x: f64) -> f64 vow {
+    requires: x >= 0.0,
+    ensures: result <= x
+} {
+    x / 2.0
+}
+
+fn twice_halved(x: f64) -> f64 vow {
+    requires: x >= 0.0,
+    ensures: result < x
+} {
+    halve(halve(x))
+}
+
+fn main() -> i32 [io] {
+    print_i64(0);
+    0
+}

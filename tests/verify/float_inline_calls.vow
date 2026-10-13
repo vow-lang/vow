@@ -1,0 +1,67 @@
+// TEST: category model-drift
+// A call whose argument and result are floats is inlined by the native
+// verifier, and a float stored in a struct field or an enum payload survives
+// the call boundary at its own float sort.
+module FloatInlineCallsVerified
+
+struct Pair {
+    lo: f64,
+    hi: f64,
+}
+
+fn halve(x: f64) -> f64 vow {
+    requires: x >= 0.0,
+    ensures: result >= 0.0,
+    ensures: result <= x
+} {
+    x / 2.0
+}
+
+fn half_twice(x: f64) -> f64 vow {
+    requires: x >= 0.0,
+    ensures: result >= 0.0,
+    ensures: result <= x
+} {
+    halve(halve(x))
+}
+
+fn pair_of_halves(x: f64) -> f64 vow {
+    requires: x >= 0.0,
+    ensures: result >= 0.0,
+    ensures: result <= x
+} {
+    let p: Pair = Pair { lo: halve(x), hi: x };
+    p.lo
+}
+
+fn option_of_half(x: f64) -> f64 vow {
+    requires: x >= 0.0,
+    ensures: result >= 0.0,
+    ensures: result <= x
+} {
+    match Option::Some(halve(x)) {
+        Option::Some(v) => v,
+        Option::None => 0.0,
+    }
+}
+
+fn pick32(c: i64, a: f32, b: f32) -> f32 vow {
+    requires: a == a,
+    requires: b == b,
+    ensures: result == a || result == b
+} {
+    if c > 0 { a } else { b }
+}
+
+fn pick_through_call(c: i64, a: f32, b: f32) -> f32 vow {
+    requires: a == a,
+    requires: b == b,
+    ensures: result == a || result == b
+} {
+    pick32(c, b, a)
+}
+
+fn main() -> i32 [io] {
+    print_i64(0);
+    0
+}
