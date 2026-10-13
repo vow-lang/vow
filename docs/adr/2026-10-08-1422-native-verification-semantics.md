@@ -573,6 +573,7 @@ machinery.
   reads no byte of any string (no `byte_at`, `eq`, prefix, suffix or literal
   match) gets no such assumption: the contents cannot matter, and length
   contracts such as `ensures: result.len() <= s.len()` stay quantifier-free.
+- **Sharing.** The array built from a given set of operand terms is memoised (`memo_key`/`memo_arr`): its bytes are a function of the operands on the range its length covers and unobservable beyond, so two identical appends or substrings share one array and compare equal without the solver relating two quantified definitions. Two differently built equal strings (`(a + b) + c` and `a + (b + c)`) still need the quantified reasoning, which Bitwuzla does not close in a minute; the result is `timeout`, never a proof, and the case is tracked as a follow-up.
 - **Literals.** The bytes live in `IrModule.strings`, which `IrFunction` does not
   carry, so `vc_resolve_str_literals` copies them into the `ds` of each `ConstStr`
   and marks it resolved (`dv2`) when the verifier takes the function through

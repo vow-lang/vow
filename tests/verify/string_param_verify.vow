@@ -2,6 +2,8 @@
 // Each function reads `.len()` of a container parameter. The model must keep
 // a parameter's length non-negative (`result >= 0`) and treat it as one stable
 // value rather than a fresh nondeterministic read (`result == p.len()`).
+// The `HashMap` parameter lives in `map_param_verify.vow`, so this file holds
+// the containers every verifier models.
 module StringParamVerify
 
 fn str_len_stable(s: String) -> i64 vow {
@@ -16,13 +18,6 @@ fn vec_len_stable(v: Vec<i64>) -> i64 vow {
   ensures: result == v.len() as i64
 } {
   v.len() as i64
-}
-
-fn map_len_stable(m: HashMap<i64, i64>) -> i64 vow {
-  ensures: result >= 0,
-  ensures: result == m.len() as i64
-} {
-  m.len() as i64
 }
 
 fn main() -> i32 [io] {

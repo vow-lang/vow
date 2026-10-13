@@ -45,10 +45,14 @@ struct VcVec {
     // `String` model (`vc_str`): `content` is set when some instruction reads the
     // bytes of a string, `quantified` when a `VC_T_QEQ` was built (the query then
     // leaves the quantifier-free logic), `lit_text[s]` is the text of slot `s` when
-    // it is a string literal's static bytes, "" otherwise.
+    // it is a string literal's static bytes, "" otherwise. `memo_*` map the four
+    // operand terms of a built array (an append or a substring) to the array
+    // already built from them: one function never builds the same contents twice.
     content: bool,
     quantified: bool,
     lit_text: Vec<String>,
+    memo_key: Vec<i64>,
+    memo_arr: Vec<i64>,
 }
 
 fn vc_vec_new_state(fl: VcFlow, n_blocks: u64) -> VcVec {
@@ -65,6 +69,8 @@ fn vc_vec_new_state(fl: VcFlow, n_blocks: u64) -> VcVec {
         content: false,
         quantified: false,
         lit_text: Vec::new(),
+        memo_key: Vec::new(),
+        memo_arr: Vec::new(),
     }
 }
 

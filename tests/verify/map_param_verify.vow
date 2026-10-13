@@ -1,0 +1,19 @@
+// TEST: category model-drift
+// A `HashMap` parameter's length must be non-negative and one stable value
+// rather than a fresh nondeterministic read. Split out of
+// `string_param_verify.vow`: the native verifier does not model maps yet, so
+// this function stays `Skipped` there and must not hide the String verdict.
+module MapParamVerify
+
+fn map_len_stable(m: HashMap<i64, i64>) -> i64 vow {
+  ensures: result >= 0,
+  ensures: result == m.len() as i64
+} {
+  m.len() as i64
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<i64, i64> = HashMap::new();
+  print_i64(map_len_stable(m));
+  0
+}

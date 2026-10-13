@@ -137,10 +137,36 @@ fn vc_str_fresh_array(vv: VcVec, ar: VcArena, hdr: SmtScript, prefix: String) ->
     vc_agg_declare(ar, hdr, name, VC_SORT_ARRAY64())
 }
 
+// The array already built from the operand terms `(a, b, c, d)`, or -1. The bytes
+// of a built array are a function of its operands on the range its length covers
+// and unobservable beyond it, so equal operands share one array: two identical
+// appends compare equal without the solver having to relate two quantified
+// definitions.
+fn vc_str_memo_find(vv: VcVec, a: i64, b: i64, c: i64, d: i64) -> i64 {
+    let k: Vec<i64> = vv.memo_key;
+    let mut i: u64 = 0;
+    while i + 3 < k.len() {
+        if k[i] == a && k[i + 1] == b && k[i + 2] == c && k[i + 3] == d { return vv.memo_arr[i / 4]; }
+        i = i + 4;
+    }
+    -1
+}
+
+fn vc_str_memo_add(vv: VcVec, a: i64, b: i64, c: i64, d: i64, arr: i64) {
+    vv.memo_key.push(a);
+    vv.memo_key.push(b);
+    vv.memo_key.push(c);
+    vv.memo_key.push(d);
+    vv.memo_arr.push(arr);
+}
+
 // The array of `s` with `t` appended: `r[i] == s[i]` below `|s|` and
 // `r[|s| + j] == t[j]` below `|t|`.
 fn vc_str_append(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, sa: i64, sl: i64, ta: i64, tl: i64) -> i64 {
+    let known: i64 = vc_str_memo_find(vv, sa, sl, ta, tl);
+    if known >= 0 { return known; }
     let r: i64 = vc_str_fresh_array(vv, ar, hdr, String::from("sa"));
+    vc_str_memo_add(vv, sa, sl, ta, tl, r);
     if vv.content {
         vc_str_axiom(ar, assumed, vc_str_all_eq(vv, ar, r, sa, vc_str_zero(ar), sl));
         vc_str_axiom(ar, assumed, vc_str_all_eq(vv, ar, ta, r, sl, tl));
@@ -150,7 +176,10 @@ fn vc_str_append(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, sa: 
 
 // The array of the `len` bytes of `s` from offset `start`.
 fn vc_str_slice(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, sa: i64, start: i64, len: i64) -> i64 {
+    let known: i64 = vc_str_memo_find(vv, sa, start, len, -1);
+    if known >= 0 { return known; }
     let r: i64 = vc_str_fresh_array(vv, ar, hdr, String::from("ss"));
+    vc_str_memo_add(vv, sa, start, len, -1, r);
     if vv.content {
         vc_str_axiom(ar, assumed, vc_str_all_eq(vv, ar, r, sa, start, len));
     }

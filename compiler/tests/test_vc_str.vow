@@ -302,6 +302,49 @@ fn check_append_defines_contents() -> i64 {
     0
 }
 
+// Two appends of the same operands share one array, so equal builds compare equal
+// without the solver relating two quantified definitions; an append of different
+// operands does not share.
+fn check_identical_appends_share_an_array() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_PTR(), 1));
+    insts.push(call(2, ITY_PTR(), args1(0), String::from("__vow_string_clone")));
+    insts.push(call(3, ITY_UNIT(), args2(2, 1), String::from("__vow_string_push_str")));
+    insts.push(call(4, ITY_PTR(), args1(0), String::from("__vow_string_clone")));
+    insts.push(call(5, ITY_UNIT(), args2(4, 1), String::from("__vow_string_push_str")));
+    insts.push(call(6, ITY_BOOL(), args2(2, 4), String::from("__vow_string_eq")));
+    insts.push(mk_ens(7, 6, 0));
+    insts.push(mk_inst_return(8, 6));
+    let f: IrFunction = one_block(ptr_params(2), ITY_BOOL(), insts);
+    if vc_skip_reason(f).len() != 0 { return 195; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 0 { return 196; }
+    let hdr: SmtScript = cs.header;
+    let mut built: i64 = 0;
+    let mut i: u64 = 0;
+    while i < hdr.names.len() {
+        if hdr.kinds[i] == VC_CMD_DECLARE_CONST() && hdr.names[i].len() > 2 && hdr.names[i].substring(0, 2) == String::from("sa") { built = built + 1; }
+        i = i + 1;
+    }
+    if built != 1 { return 197; }
+
+    let other: Vec<IrInst> = Vec::new();
+    other.push(mk_inst_arg(0, ITY_PTR(), 0));
+    other.push(mk_inst_arg(1, ITY_PTR(), 1));
+    other.push(call(2, ITY_PTR(), args1(0), String::from("__vow_string_clone")));
+    other.push(call(3, ITY_UNIT(), args2(2, 1), String::from("__vow_string_push_str")));
+    other.push(call(4, ITY_PTR(), args1(1), String::from("__vow_string_clone")));
+    other.push(call(5, ITY_UNIT(), args2(4, 0), String::from("__vow_string_push_str")));
+    other.push(call(6, ITY_BOOL(), args2(2, 4), String::from("__vow_string_eq")));
+    other.push(mk_ens(7, 6, 0));
+    other.push(mk_inst_return(8, 6));
+    let g: IrFunction = one_block(ptr_params(2), ITY_BOOL(), other);
+    let cg: VcClaims = vc_claims(g);
+    if cg.kinds.len() != 1 { return 198; }
+    0
+}
+
 // `push_byte` stores the zero-extended byte at the length; `clear` empties the
 // length and keeps the array.
 fn check_push_byte_and_clear() -> i64 {
@@ -545,6 +588,7 @@ fn main() -> i32 {
     if r == 0 { r = check_literal_eq_lengths_differ(); }
     if r == 0 { r = check_append_length_needs_no_contents(); }
     if r == 0 { r = check_append_defines_contents(); }
+    if r == 0 { r = check_identical_appends_share_an_array(); }
     if r == 0 { r = check_push_byte_and_clear(); }
     if r == 0 { r = check_matches_literal_at(); }
     if r == 0 { r = check_substring_length(); }
