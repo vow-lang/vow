@@ -1,0 +1,40 @@
+// TEST: category float
+// A callee with float parameters is inlined, and a float loop variable is a
+// Phi that the invariant is proven over without a bound on `n`.
+module FloatInlineAndLoop
+
+fn halve(x: f64) -> f64 vow {
+  requires: x >= 0.0,
+  ensures: result >= 0.0,
+  ensures: result <= x
+} {
+  x / 2.0
+}
+
+fn quarter(x: f64) -> f64 vow {
+  requires: x >= 0.0,
+  ensures: result >= 0.0,
+  ensures: result <= x
+} {
+  halve(halve(x))
+}
+
+fn count_up(n: i64) -> f64 vow {
+  requires: n >= 0,
+  ensures: result >= 0.0
+} {
+  let mut acc: f64 = 0.0;
+  let mut i: i64 = 0;
+  while i < n vow {
+    invariant: acc >= 0.0
+  } {
+    acc = acc + 1.0;
+    i = i + 1;
+  }
+  acc
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

@@ -1,0 +1,29 @@
+// TEST: category float
+module FloatF32
+
+fn add32(a: f32, b: f32) -> f32 vow {
+  requires: a - a == a - a,
+  requires: b - b == b - b,
+  ensures: result == b + a
+} {
+  a + b
+}
+
+fn is_nan32(x: f32) -> bool vow {
+  ensures: result == (x != x)
+} {
+  x != x
+}
+
+fn pick32(c: i64, a: f32, b: f32) -> f32 vow {
+  requires: a == a,
+  requires: b == b,
+  ensures: result == a || result == b
+} {
+  if c > 0 { a } else { b }
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

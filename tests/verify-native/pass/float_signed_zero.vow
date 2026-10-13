@@ -1,0 +1,25 @@
+// TEST: category float
+// `-0.0` and `0.0` are equal and unordered by `<`: comparison is IEEE, not a
+// comparison of bit patterns.
+module FloatSignedZero
+
+fn negative_zero_equals_zero(x: f64) -> bool vow {
+  requires: x < 0.0,
+  requires: x - x == x - x,
+  ensures: result
+} {
+  0.0 * x == 0.0
+}
+
+fn negative_zero_is_not_less(x: f64) -> bool vow {
+  requires: x < 0.0,
+  requires: x - x == x - x,
+  ensures: !result
+} {
+  0.0 * x < 0.0
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

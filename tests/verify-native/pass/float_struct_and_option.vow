@@ -1,0 +1,33 @@
+// TEST: category float
+// A float field or payload is a slot term of its own float sort: it is not
+// truncated to an integer and is read back at the type it was written.
+module FloatStructAndOption
+
+struct Sample {
+  gain: f64,
+  bias: f32,
+  count: i64,
+}
+
+fn struct_fields(g: f64, b: f32, n: i64) -> f64 vow {
+  requires: g - g == g - g,
+  ensures: result == g
+} {
+  let s: Sample = Sample { gain: g, bias: b, count: n };
+  s.gain
+}
+
+fn option_payload(x: f64) -> f64 vow {
+  requires: x == 2.5,
+  ensures: result == 2.5
+} {
+  match Option::Some(x) {
+    Option::Some(v) => v,
+    Option::None => 0.0,
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}
