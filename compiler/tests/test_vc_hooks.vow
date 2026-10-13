@@ -8,6 +8,8 @@ use vc_smt
 use vc_exec
 use vc_str
 use vc_vec
+use vc_slice
+use vc_native
 use verifier
 use tests.builders
 
@@ -204,6 +206,45 @@ fn check_format_pair_axiom() -> i64 {
     0
 }
 
+// fn f(x: u64, s: String) -> u64 { let h = parse(s); x + 1 } with `ensures: result == x + 2` (`mix`
+// adds the hook result to the returned value as well).
+fn unused_hook(mix: bool) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_U64(), 0));
+    insts.push(mk_inst_arg(1, ITY_PTR(), 1));
+    insts.push(parse(2, 1));
+    insts.push(ir_inst_new(3, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_I64(), 1, 0, String::from("")));
+    insts.push(ir_inst_new(4, IOP_WADD(), ITY_U64(), args2(0, 3), IDATA_NONE(), 0, 0, String::from("")));
+    let mut res: i64 = 4;
+    if mix {
+        insts.push(ir_inst_new(5, IOP_WADD(), ITY_U64(), args2(4, 2), IDATA_NONE(), 0, 0, String::from("")));
+        res = 5;
+    }
+    insts.push(ir_inst_new(6, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_I64(), 2, 0, String::from("")));
+    insts.push(ir_inst_new(7, IOP_WADD(), ITY_U64(), args2(0, 6), IDATA_NONE(), 0, 0, String::from("")));
+    insts.push(mk_eq(8, res, 7));
+    insts.push(mk_ens(9, 8, 0));
+    insts.push(mk_inst_return(10, res));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_U64());
+    p.push(ITY_PTR());
+    one_block(p, ITY_U64(), insts)
+}
+
+// A claim reaches a hook only through its cone: one that never mentions the hook
+// result, or a string the hook reads, is decided without it.
+fn check_cone_reaches_hook() -> i64 {
+    let a: VcClaims = vc_claims(unused_hook(false));
+    if a.kinds.len() != 1 { return 80; }
+    if vc_claim_reaches_hook(a, vc_slicer_new(a), 0) { return 81; }
+    let b: VcClaims = vc_claims(unused_hook(true));
+    if b.kinds.len() != 1 { return 82; }
+    if !vc_claim_reaches_hook(b, vc_slicer_new(b), 0) { return 83; }
+    let c: VcClaims = vc_claims(parse_pair(1));
+    if !vc_claim_reaches_hook(c, vc_slicer_new(c), 0) { return 84; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_op_table();
     if r == 0 { r = check_parse_same_operand_is_one_term(); }
@@ -212,5 +253,6 @@ fn main() -> i32 {
     if r == 0 { r = check_parse_of_clone(); }
     if r == 0 { r = check_format_same_bits_is_one_string(); }
     if r == 0 { r = check_format_pair_axiom(); }
+    if r == 0 { r = check_cone_reaches_hook(); }
     i64_to_i32_wrap(r)
 }

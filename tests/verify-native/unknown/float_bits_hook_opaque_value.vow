@@ -1,0 +1,18 @@
+// TEST: category float
+// TEST: unknown-reason opaque builtin result
+// `parse_f64_bits` is a total function of its string, but the model does not say
+// which: its result is an unconstrained 64-bit constant. A counterexample that
+// needs the constant to be 7 is not a run the program can be shown to have, and
+// the claim holds for most results, so it is inconclusive: unknown, never a
+// proof and never a counterexample.
+module FloatBitsHookOpaqueValue
+
+fn bits_of(s: String) -> u64 vow {
+  ensures: result != 7u64
+} {
+  parse_f64_bits(s)
+}
+
+fn main() -> i32 [io] {
+  0
+}

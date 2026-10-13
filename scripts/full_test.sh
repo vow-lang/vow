@@ -1498,7 +1498,8 @@ echo ""
 # each fixture is asserted against its directory (pass/ -> Verified, fail/ ->
 # VerifyFailed with the `counterexample-*` directives, skip/ -> Skipped, never
 # Verified, unknown/ -> VerifyFailed with `verify_status: "unknown"`, no
-# counterexample and an `unwinding assertion:` message, never Verified; each
+# counterexample and an `unwinding assertion:` message (or the `// TEST: unknown-reason`
+# text), never Verified; each
 # fixture is also run with VOW_VERIFY_NO_SLICE=1 and VOW_VERIFY_NO_INCREMENTAL=1
 # and must report byte-identical JSON). The
 # wiring tier uses a fake Bitwuzla and always runs; the real-solver tier is
@@ -1555,17 +1556,20 @@ sys.exit(0 if skipped and all(': ' + sys.argv[2] + ': ' in m for m in skipped) e
         fi
     fi
     if [ "$native_dir" = "unknown" ]; then
-        # An open unwinding assertion is inconclusive: `unknown`, never a proof
-        # and never a counterexample.
+        # An open unwinding assertion (or, with `// TEST: unknown-reason <text>`,
+        # another named reason such as an opaque builtin result) is inconclusive:
+        # `unknown`, never a proof and never a counterexample.
+        native_unknown_reason=$(sed -n 's|^// TEST: unknown-reason \(.*\)$|\1|p' "$vow_file" | head -1)
+        [ -n "$native_unknown_reason" ] || native_unknown_reason="unwinding assertion"
         if ! python3 -c "
 import json, sys
 j = json.loads(sys.argv[1])
 ok = (j.get('verify_status') == 'unknown'
       and not (j.get('counterexamples') or [])
-      and 'unwinding assertion' in (j.get('verify_message') or ''))
+      and sys.argv[2] in (j.get('verify_message') or ''))
 sys.exit(0 if ok else 1)
-" "$native_json" 2>/dev/null; then
-            native_errors+=("expected verify_status unknown with an 'unwinding assertion' message and no counterexample")
+" "$native_json" "$native_unknown_reason" 2>/dev/null; then
+            native_errors+=("expected verify_status unknown with a '$native_unknown_reason' message and no counterexample")
         fi
     fi
     if [ "$native_dir" = "fail" ]; then

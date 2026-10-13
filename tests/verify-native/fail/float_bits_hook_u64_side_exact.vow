@@ -1,0 +1,19 @@
+// TEST: counterexample-fn "low_bit"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures result == bits"
+// The call's text is unused, so it is outside the claim's cone and the `u64`
+// operand is the exact 64-bit vector the claim reads: `bits & 1` differs from
+// `bits` for every `bits` above 1, and the counterexample is real.
+module FloatBitsHookU64SideExact
+
+fn low_bit(bits: u64) -> u64 vow {
+  ensures: result == bits
+} {
+  let text: String = format_f64_bits(bits);
+  bits & 1u64
+}
+
+fn main() -> i32 [io] {
+  0
+}

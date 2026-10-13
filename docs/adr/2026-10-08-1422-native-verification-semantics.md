@@ -161,7 +161,8 @@ approximate.
 `f32` and `f64` use the SMT-LIB `FloatingPoint` theory (`Float32`, `Float64`)
 with round-to-nearest-even. Comparisons are IEEE: `NaN != NaN`, `NaN < x` is
 false, `-0.0 == 0.0`. Integer/float casts follow the runtime. Bit-level
-conversions (`parse_f64_bits`, `format_f64_bits`) are exact on their `u64` side.
+conversions (`parse_f64_bits`, `format_f64_bits`) are exact on their `u64` side
+and functions of their `String` side (addendum #1646).
 
 SMT-LIB has a single NaN per format, so the verifier has a **single canonical
 NaN**. Float remainder (`RemF32`, `RemF64`) stays `Skipped` with reason
@@ -189,8 +190,9 @@ known limits.
   NaN, and `bits -> f64 -> bits` round trips for NaN payloads, are neither
   provable nor refutable faithfully. Fixtures must not rely on them.
 - **String parse/format opacity.** `parse_f64_bits` and `format_f64_bits` are
-  exact on the `u64` side only; the `String` side is an uninterpreted relation.
-  `format(parse(s)) == s` and decimal-text properties are `unknown`.
+  exact on the `u64` side only; the `String` side is an uninterpreted relation
+  (modelled by the addendum #1646). `format(parse(s)) == s` and decimal-text
+  properties are `unknown`.
 - **Float `%`** is `Skipped` until codegen defines it.
 - **Recursion and effects** are `Skipped`, except `panic`: the abort of
   `.unwrap()` on `None`/`Err` is a verification claim, reported unattributed
@@ -559,11 +561,10 @@ model-parsing modules around it.
   carried as its bit pattern. It is shown as the shortest decimal that reads back
   as the same `f64` (an `f32` is widened exactly; `NaN`, `inf`, `-inf`), so a NaN's
   payload is not shown. `--replay-cex` reports a float parameter as `skipped`.
-- **Hooks.** `parse_f64_bits` and `format_f64_bits` stay `unmodeled-builtin`: the
-  executor encodes no builtin call yet and their other side is a `String`, which
-  needs the model of #1426 (follow-up #1646). Modelling `parse_f64_bits` as an
-  unconstrained `u64` per call would refute `parse(s) == parse(s)` with a
-  counterexample no run reproduces, which is why it waits for the `String` model.
+- **Hooks.** `parse_f64_bits` and `format_f64_bits` were `unmodeled-builtin`
+  here: modelling `parse_f64_bits` as an unconstrained `u64` per call would refute
+  `parse(s) == parse(s)` with a counterexample no run reproduces, so they waited for
+  the `String` model of #1426. They are modelled by the addendum #1646.
 - **Still skipped.** Float `%` (`float-rem-unsupported`), unary minus on a float
   (the lowerer emits an integer subtraction that no backend compiles, #1647) and a
   `Vec` of floats (`unsupported-opcode`; a `Vec` element is a 64-bit vector and
@@ -684,3 +685,48 @@ Refused, so the whole function stays with bounded unwinding: a String receiver a
 a receiver defined in a loop that mutates it (an object
 born in the loop it is havocked by has no state the model could name). The k-induction
 step case (`vc_step_applicable`) is unchanged and still refuses a Vec-written loop.
+
+## Addendum (#1646): `parse_f64_bits` and `format_f64_bits`
+
+Both hooks are `verifier_model: known` and encoded by the executor (`compiler/vc_hooks.vow`).
+Native verifier only: no Rust twin, and `c_model` stays `unmodeled`, so the C emitters and
+their parity are untouched.
+
+- **Encoding.** The `u64` side is a plain 64-bit vector: no cast, no `Float`, so a
+  `u64` that passes through `format_f64_bits` (or is returned next to a `parse_f64_bits`
+  call) is exact. `parse_f64_bits(s)` is a fresh 64-bit constant `hkp<N>`; the first call on a
+  given `(array, length)` pair of terms, and every later call on the same terms, share
+  it. `format_f64_bits(bits)` is a fresh array `hkf<N>` and length `hkl<N>` (below
+  `VOW_CAP_VALUE_MASK`, the runtime's representation invariant), shared by calls on the
+  same `bits` term. Neither result is constrained further: no decimal grammar, no round trip
+  `parse(format(b)) == b` (false for NaN payloads), no length or content of the text.
+- **Determinism.** Both are total functions, so equal operands must give equal results,
+  and a fresh constant per call would refute `parse(s) == parse(s.clone())`. Instead of an
+  SMT uninterpreted function (a `String` array has junk high bits and junk past its length,
+  so array-level congruence would not make equal strings agree), each new call is tied to
+  every earlier one by an Ackermann axiom built on the exact `vc_str_eq`: `s == t => parse(s) == parse(t)`
+  and `a == b => format(a) == format(b)` (as strings). The axioms are global assumptions,
+  sound because a total function satisfies every pairwise one on every path. `parse_f64_bits`
+  reads the bytes of its string (`vc_str_kind_reads_bytes`), so the equality it relies on has byte
+  facts. The cost is quadratic in the number of calls of a query (a hook in an unrolled loop
+  can end `unknown` or `timeout`, never `proven`); there is no cap.
+- **`sat` is not always a failure.** The model gives a hook an arbitrary result where the
+  runtime computes one, so a counterexample that needs a particular result may not be a run.
+  A `sat` on a hard claim whose cone of influence (the slicer's) reaches a constant a hook
+  declared is therefore re-checked (`vc_hook_recheck`): the scalar inputs of the
+  counterexample are pinned, strings and hook constants stay free, and the claim itself
+  (not its negation) is asked. `unsat` means the claim fails for every result of the hook
+  and every string, so the counterexample stands and is reported `failed`. Anything else is
+  `unknown` with `opaque builtin result: ...`, never `proven` and never a counterexample.
+  An `unsat` is never downgraded, and a claim that does not reach a hook is decided as before.
+  A String parameter is left free in the re-check, so a failure that depends on a string's
+  contents but not on any hook still reports `unknown` when the function also calls a hook (a
+  function that did not model these hooks was `Skipped` before). The re-check query is
+  an ordinary query, so the result cache and `--no-cache` rules apply to it unchanged.
+- **Trusted base.** The axioms join the simplifier and the equality binder (#1426).
+  `compiler/tests/test_vc_hooks.vow` pins the rendered axioms and the cone test;
+  `tests/verify-native/pass/float_bits_hook_deterministic.vow` proves determinism over equal,
+  cloned and equally built strings and equal bits, `fail/float_bits_hook_*` keep the refuting
+  direction, and `unknown/float_bits_hook_opaque_*` pin the claims about a value or a text.
+- **Verdict impact.** Strictly more than before: these calls were `Skipped` as
+  `unmodeled-builtin`, which `skip/unmodeled_builtin_skipped.vow` still pins for other builtins.
