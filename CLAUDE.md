@@ -190,9 +190,9 @@ The staleness detector `scripts/check_help_coverage.py` (run in `full_test.sh`) 
 ## Operation Catalogue
 
 `docs/spec/operations.json` is the Operation Catalogue: the single checked, hand-edited source of
-runtime-symbol, ABI, return-shape, and doc facts for 83 Builtin Operations (the print, filesystem,
-stdin/args/stderr, process, hash, environment and query/utility builtins; epic #375), plus the
-top-level `arena_routes` list. It is deliberately narrower than
+runtime-symbol, ABI, return-shape, and doc facts for the Builtin Operations in its `operations` array
+(the print, filesystem, stdin/args/stderr, process, hash, environment and query/utility builtins; epic
+#375), plus the top-level `arena_routes` list. It is deliberately narrower than
 `vow-types/src/env.rs::builtin_free_fn_signatures()` — that table (and its self-hosted counterpart in
 `compiler/env.vow`) remains the single source for signature/effects and is never read or replaced by
 this catalogue; the entry's `doc_signature`/`effects` are copies checked against `grammar.md` and the
@@ -242,16 +242,13 @@ lowers specially) and the narrowing intrinsics stay hand-written.
 `--check` fails if any drift (`check_doc_facts` compares each entry's signature and effects with the
 grammar.md row and with the `skill.rs` and `main.vow` help lines).
 
-The fact tables are the `operations` array (one entry per catalogued builtin) and the `arena_routes`
-list; `c_model` (ESBMC C model, parity until epic #1398 P6) and `verifier_model` (native verifier,
-exempt from parity) are separate per-entry categories, and only pure entries may be known to either.
-Builtins the catalogue deliberately does not describe (the narrowing-conversion families,
-`__vow_clif_*`, `pin_to_root`, `string_matches_literal_at`, the `debug_*` builtins, the `i64_to_string`
-alias and the internal runtime ops) are listed with a reason in the ADR above; the narrowing families
-include the 128-bit `i128_to_u128_*`/`u128_to_i128_*` sign changes. Those that appear in the
-type-checker tables move into an `excluded` section of `operations.json`, enforced by a coverage gate
-("every type-checker builtin is catalogued or excluded"), in a pending slice of #375; until it lands,
-`--check` does not verify them.
+`c_model` (ESBMC C model, parity until epic #1398 P6) and `verifier_model` (native verifier, exempt
+from parity) are separate per-entry fields, and only pure entries may be known to either.
+Builtins the catalogue deliberately does not describe (narrowing-conversion families, `__vow_clif_*`,
+`pin_to_root`, `string_matches_literal_at`, the `debug_*` builtins, the `i64_to_string` alias and the
+internal runtime ops) are listed with reasons in the ADR above. Those in the type-checker tables will
+move into an `excluded` section of `operations.json`, enforced by a coverage gate, in a pending slice
+of #375; until it lands, `--check` does not verify them.
 
 `load_catalogue` hand-validates every entry beyond the four fields' presence and type: `effects` must
 match `^\[(token(, token)*)?\]$` against the closed vocabulary `{read, write, io, panic, unsafe}`, with
