@@ -46,6 +46,15 @@ DIRECTIVE_KNOWN_GAP = re.compile(r"^// TEST: known-soundness-gap\s*(\S*)", re.M)
 # fixtures); a documented skip, reported and not fatal.
 DIRECTIVE_REPLAY_SKIPPED = re.compile(r"^// TEST: replay-skipped (.+)$", re.M)
 
+# Generated-corpus directives (scripts/gen_verifier_corpus.py, #1473).
+# `gen-class` names the class (`exceeds-bound` or `control`), the shape and the
+# regime; `expect-verified` marks an honest control, which must stay `Verified`
+# and clean; `known-control-gap` tracks a control the verifier cannot yet prove
+# by issue number.
+DIRECTIVE_GEN_CLASS = re.compile(r"^// TEST: gen-class (\S+) (\S+)(?: (\S+))?$", re.M)
+DIRECTIVE_EXPECT_VERIFIED = re.compile(r"^// TEST: expect-verified$", re.M)
+DIRECTIVE_KNOWN_CONTROL_GAP = re.compile(r"^// TEST: known-control-gap (#\d+)$", re.M)
+
 # `replay_reason` fragments for counterexamples that are verifier obligations
 # rather than runtime-observable aborts (cli.md "Counterexample replay"). There
 # is nothing to replay, so a `skipped` with one of these is not a replay gap.
@@ -157,26 +166,8 @@ def _violated_function(vow_file, verifier, vow_id, timeout):
     return None
 
 
-def check_soundness(vow_file, verifier, outdir, timeout, backend=None):
-    """Verified ⇒ no VowViolation at runtime.
-
-    Only programs the verifier actually proved are subjects: a fixture it
-    already rejects cannot produce a false proof.
-    """
-    verify, err = run_json(
-        verifier,
-        ["verify", *_backend_args(backend), "--no-cache", str(vow_file)],
-        timeout,
-    )
-    if verify is None:
-        return {"direction": "soundness", "verdict": "skipped", "detail": err}
-    if verify.get("status") != "Verified":
-        return {
-            "direction": "soundness",
-            "verdict": "not-applicable",
-            "detail": f"status {verify.get('status')}",
-        }
-
+def debug_run(vow_file, verifier, outdir, timeout):
+    """Build `vow_file` with `--mode debug` and run it: `(violation, error)`."""
     exe = outdir / (Path(vow_file).stem + "_dbg")
     build, err = run_json(
         verifier,
@@ -193,15 +184,79 @@ def check_soundness(vow_file, verifier, outdir, timeout, backend=None):
         timeout,
     )
     if build is None or not build.get("executable"):
-        return {
-            "direction": "soundness",
-            "verdict": "skipped",
-            "detail": err or "debug build produced no executable",
-        }
-
+        return None, err or "debug build produced no executable"
     violation, err = run_debug_binary(exe, timeout)
     exe.unlink(missing_ok=True)
     Path(str(exe) + ".o").unlink(missing_ok=True)
+    return violation, err
+
+
+def check_witness(runtime, gen_class):
+    """A generated program's runtime must match the class it was generated as.
+
+    The soundness direction is only as strong as the witness: an `exceeds-bound`
+    program whose `main` never reaches the false contract, or a `control` that
+    violates one, makes a green sweep mean nothing. `runtime` is the
+    `(violation, error)` of the debug run, taken whatever the verifier said, so
+    the corpus is checked against the runtime itself and not against the
+    verifier it is meant to test.
+
+    The violation of an `exceeds-bound` program must blame the Callee: an
+    `ensures` of the generated function. A Caller violation means `main` broke
+    a `requires`, which a Verified result may disclaim (`unverified-call-site`),
+    so it would let a false proof through unmeasured.
+    """
+    violation, err = runtime
+
+    def verdict(ok, detail):
+        return {
+            "direction": "witness",
+            "verdict": "ok" if ok else "WITNESS-BROKEN",
+            "detail": detail,
+        }
+
+    if err:
+        return verdict(False, err)
+    if gen_class == "exceeds-bound":
+        if violation is None:
+            return verdict(False, "the false contract was never violated at runtime")
+        if violation.get("blame") != "Callee":
+            return verdict(
+                False,
+                f"runtime violation blames {violation.get('blame')}, not an `ensures` "
+                f"of the generated function (vow_id={violation.get('vow_id')})",
+            )
+    if gen_class == "control" and violation is not None:
+        return verdict(
+            False, f"the honest control violated vow_id={violation.get('vow_id')}"
+        )
+    return verdict(True, f"{gen_class} as generated")
+
+
+def check_soundness(vow_file, verifier, outdir, timeout, backend=None, runtime=None):
+    """Verified ⇒ no VowViolation at runtime.
+
+    Only programs the verifier actually proved are subjects: a fixture it
+    already rejects cannot produce a false proof. `runtime` is an optional
+    `(violation, error)` of an earlier debug run, reused instead of rebuilding.
+    """
+    verify, err = run_json(
+        verifier,
+        ["verify", *_backend_args(backend), "--no-cache", str(vow_file)],
+        timeout,
+    )
+    if verify is None:
+        return {"direction": "soundness", "verdict": "skipped", "detail": err}
+    if verify.get("status") != "Verified":
+        return {
+            "direction": "soundness",
+            "verdict": "not-applicable",
+            "detail": f"status {verify.get('status')}",
+            "verify_status": verify.get("verify_status"),
+            "counterexamples": len(verify.get("counterexamples") or []),
+        }
+
+    violation, err = runtime or debug_run(vow_file, verifier, outdir, timeout)
     if err:
         # The runtime half never answered, so neither did the gate. `skipped`
         # is the file's existing "no verdict" verdict, which the pair-review
@@ -350,6 +405,65 @@ def check_precision(vow_file, verifier, timeout, backend=None):
     }
 
 
+def apply_generated_expectations(check, text):
+    """Hold a generated program to the class its directives declare.
+
+    `control`: the verifier must prove it and the binary must run clean. Anything
+    else is CONTROL-LOST, unless a `known-control-gap #N` tracks it; a tracked
+    gap that no longer reproduces is STALE-KNOWN-GAP, so the ledger cannot rot.
+
+    `exceeds-bound` needs nothing here: a `Verified` run that violates at runtime
+    is already SOUNDNESS, and `check_witness` separately guarantees that the
+    runtime does violate.
+    """
+    cls = DIRECTIVE_GEN_CLASS.search(text)
+    if check["direction"] != "soundness" or not cls:
+        return check
+    if DIRECTIVE_EXPECT_VERIFIED.search(text):
+        gap = DIRECTIVE_KNOWN_CONTROL_GAP.search(text)
+        lost = check["verdict"] in ("not-applicable", "skipped")
+        # A tracked gap is a completeness `unknown`; a counterexample, a
+        # timeout, an error or a skipped run is something else and stays lost.
+        open_unknown = (
+            check["verdict"] == "not-applicable"
+            and check.get("verify_status") == "unknown"
+            and not check.get("counterexamples")
+        )
+        if open_unknown and gap:
+            return {
+                **check,
+                "verdict": "known-control-gap",
+                "detail": f"{check['detail']} (tracked: {gap.group(1)})",
+            }
+        if lost:
+            return {
+                **check,
+                "verdict": "CONTROL-LOST",
+                "detail": f"honest control not proven: {check['detail']}",
+            }
+        if gap and check["verdict"] == "ok":
+            return {
+                **check,
+                "verdict": "STALE-KNOWN-GAP",
+                "detail": f"{gap.group(1)} no longer reproduces; drop its entry",
+            }
+    return check
+
+
+FAILING_GENERATED = ("CONTROL-LOST", "STALE-KNOWN-GAP", "WITNESS-BROKEN")
+
+
+def generated_outcomes(records):
+    """`class regime: soundness verdict` -> count, for generated programs only."""
+    counts = {}
+    for rec in records:
+        gen = rec.get("generated")
+        if gen:
+            key = f"{gen['class']} {gen['regime']}: {rec['checks'][0]['verdict']}"
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def default_roots(backend=None):
     roots = [REPO_ROOT / "tests" / "verify", REPO_ROOT / "tests" / "verify-fail"]
     if backend == "native":
@@ -438,7 +552,7 @@ def main():
     print()
 
     records, soundness, precision, checked = [], [], [], 0
-    replay_gaps, replay_skipped = [], {}
+    replay_gaps, replay_skipped, generated_failures = [], {}, []
     for i, f in enumerate(corpus, 1):
         rel = relative_to_repo(f)
         text = f.read_text(errors="replace")
@@ -456,12 +570,25 @@ def main():
         known_gap = DIRECTIVE_KNOWN_GAP.search(text)
         replay_skipped_note = DIRECTIVE_REPLAY_SKIPPED.search(text)
 
+        gen = DIRECTIVE_GEN_CLASS.search(text)
+        runtime = debug_run(f, verifier, outdir, args.timeout) if gen else None
         checks = [
-            check_soundness(f, verifier, outdir, args.timeout, args.backend),
+            apply_generated_expectations(
+                check_soundness(
+                    f, verifier, outdir, args.timeout, args.backend, runtime
+                ),
+                text,
+            ),
             check_precision(f, verifier, args.timeout, args.backend),
         ]
+        if gen:
+            checks.append(check_witness(runtime, gen.group(1)))
         for c in checks:
-            if c["verdict"] == "SOUNDNESS":
+            if c["verdict"] in FAILING_GENERATED:
+                generated_failures.append((rel, c))
+                print(f"  {c['verdict']} {rel}")
+                print(f"            {c['detail']}")
+            elif c["verdict"] == "SOUNDNESS":
                 # A documented gap is reported loudly but is not news.
                 if known_gap:
                     c["verdict"] = "known-gap"
@@ -486,9 +613,16 @@ def main():
             for reason in c.get("replay_skipped", []):
                 key = reason[:60]
                 replay_skipped[key] = replay_skipped.get(key, 0) + 1
-        if any(c["verdict"] == "ok" for c in checks):
+        if any(c["verdict"] == "ok" and c["direction"] != "witness" for c in checks):
             checked += 1
-        records.append({"file": rel, "checks": checks})
+        record = {"file": rel, "checks": checks}
+        if gen:
+            record["generated"] = {
+                "class": gen.group(1),
+                "shape": gen.group(2),
+                "regime": gen.group(3),
+            }
+        records.append(record)
         if i % 20 == 0:
             print(f"  ... {i}/{len(corpus)}")
 
@@ -501,6 +635,8 @@ def main():
         "soundness_failures": [f for f, _ in soundness],
         "precision_failures": [f for f, _ in precision],
         "replay_gaps": [f for f, _ in replay_gaps],
+        "generated_failures": [f for f, _ in generated_failures],
+        "generated_outcomes": generated_outcomes(records),
         "replay_skipped_by_reason": replay_skipped,
         "records": records,
     }
@@ -535,6 +671,14 @@ def main():
         print("  no verdict:")
         for reason, count in sorted(reasons.items(), key=lambda kv: -kv[1])[:8]:
             print(f"    {count:5d}  {reason}")
+    outcomes = generated_outcomes(records)
+    if outcomes:
+        print(
+            f"  GENERATED     : {len(generated_failures)} failing "
+            "(CONTROL-LOST / STALE-KNOWN-GAP / WITNESS-BROKEN)"
+        )
+        for key, count in sorted(outcomes.items()):
+            print(f"    {count:5d}  {key}")
     print(f"  results       : {outdir / 'results.json'}")
 
     if checked < args.min_checked:
@@ -544,7 +688,8 @@ def main():
             file=sys.stderr,
         )
         return 2
-    return 1 if (soundness or precision or replay_gaps) else 0
+    failing = soundness or precision or replay_gaps or generated_failures
+    return 1 if failing else 0
 
 
 if __name__ == "__main__":
