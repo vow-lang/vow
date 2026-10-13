@@ -176,7 +176,7 @@ fn vc_str_op_kind(sym: String) -> i64 {
 
 // The reason a `__vow_string_*` helper is not modelled, "" for a modelled one and
 // for any symbol that is not a string helper. The table is closed over the
-// runtime's string symbols: `test_vc_ops` lists them all and fails when one is
+// runtime's string symbols: `test_vc_str` lists them all and fails when one is
 // neither modelled (`vc_str_op_kind`) nor given a reason here.
 fn vc_str_unmodeled_reason(sym: String) -> String {
     if string_starts_with(sym, String::from("__vow_string_")) != 1 { return String::from(""); }

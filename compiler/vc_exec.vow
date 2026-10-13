@@ -717,7 +717,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         tys: tys,
         lits: vc_literal_table(f, tys),
         dvs: dom_fill(tys.len(), 0),
-        cstr: vc_str_empty_table(tys.len()),
+        cstr: vc_str_empty_table(f, tys.len()),
         cstr_ok: dom_fill(tys.len(), 0),
     };
     let id_to_idx: Vec<i64> = dom_block_id_table(f);

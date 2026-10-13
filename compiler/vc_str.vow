@@ -265,8 +265,11 @@ fn vc_str_shape_detail(f: IrFunction, n_ids: u64) -> String {
     String::from("")
 }
 
-fn vc_str_empty_table(n: u64) -> Vec<String> {
+// One empty entry per value id, only for a function that holds a `ConstStr`: the
+// executor writes and reads the table at `ConstStr` ids alone.
+fn vc_str_empty_table(f: IrFunction, n: u64) -> Vec<String> {
     let out: Vec<String> = Vec::new();
+    if !vc_str_has_const(f) { return out; }
     let mut i: u64 = 0;
     while i < n {
         out.push(String::from(""));
