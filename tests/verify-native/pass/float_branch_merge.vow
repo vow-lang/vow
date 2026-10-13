@@ -1,0 +1,11 @@
+module FloatBranchMerge
+
+fn clamp_nonneg(x: f64) -> f64 vow {
+  ensures: result >= 0.0
+} {
+  if x > 0.0 { x } else { 0.0 }
+}
+
+fn main() -> i32 [io] {
+  0
+}

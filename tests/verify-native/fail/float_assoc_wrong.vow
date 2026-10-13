@@ -1,0 +1,15 @@
+// TEST: replay-skipped f64 parameter
+// TEST: counterexample-fn "assoc"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+module FloatAssocWrong
+
+fn assoc(a: f64, b: f64, c: f64) -> f64 vow {
+  ensures: result == a + (b + c)
+} {
+  (a + b) + c
+}
+
+fn main() -> i32 [io] {
+  0
+}

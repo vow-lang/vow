@@ -1,0 +1,11 @@
+module FloatRoundingLiterals
+
+fn sum_misses_literal() -> bool vow {
+  ensures: result
+} {
+  0.1 + 0.2 != 0.3
+}
+
+fn main() -> i32 [io] {
+  0
+}

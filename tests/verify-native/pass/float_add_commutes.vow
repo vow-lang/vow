@@ -1,0 +1,11 @@
+module FloatAddCommutes
+
+fn add2(a: f64, b: f64) -> f64 vow {
+  ensures: result == b + a || result != result
+} {
+  a + b
+}
+
+fn main() -> i32 [io] {
+  0
+}

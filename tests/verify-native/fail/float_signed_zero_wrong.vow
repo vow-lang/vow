@@ -1,0 +1,18 @@
+// TEST: replay-skipped f64 parameter
+// TEST: counterexample-fn "recip"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures result > 0.0"
+// TEST: counterexample-value x -0
+module FloatSignedZeroWrong
+
+fn recip(x: f64) -> f64 vow {
+  requires: x == 0.0
+  ensures: result > 0.0
+} {
+  1.0 / x
+}
+
+fn main() -> i32 [io] {
+  0
+}

@@ -1,0 +1,18 @@
+module FloatF32Ops
+
+fn mul2(a: f32, b: f32) -> f32 vow {
+  ensures: result == b * a || result != result
+} {
+  a * b
+}
+
+fn smaller(a: f32, b: f32) -> bool vow {
+  requires: a < b
+  ensures: result && !(b <= a)
+} {
+  a != b
+}
+
+fn main() -> i32 [io] {
+  0
+}

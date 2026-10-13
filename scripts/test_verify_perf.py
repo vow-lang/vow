@@ -194,7 +194,9 @@ class CorpusTest(unittest.TestCase):
         for want in (
             "verify/float_arithmetic",
             "verify-fail/float_enum_payload_wrong",
-            "verify-native/skip/float_skipped",
+            "verify-native/pass/float_add_commutes",
+            "verify-native/fail/float_signed_zero_wrong",
+            "verify-native/skip/float_rem_skipped",
             "verify-fail-multi/stub_requires_violation",
         ):
             self.assertIn(want, names)
@@ -205,7 +207,12 @@ class CorpusTest(unittest.TestCase):
         self.assertEqual(
             "VerifyFailed", by_name["verify-native/fail/add_wrong_post"].truth
         )
-        self.assertEqual("Skipped", by_name["verify-native/skip/float_skipped"].truth)
+        self.assertEqual(
+            "Verified", by_name["verify-native/pass/float_add_commutes"].truth
+        )
+        self.assertEqual(
+            "Skipped", by_name["verify-native/skip/float_rem_skipped"].truth
+        )
         self.assertIsNone(by_name["verify-native/unknown/loop_bug_beyond_bound"].truth)
         multi = by_name["verify-fail-multi/stub_requires_violation"]
         self.assertEqual("VerifyFailed", multi.truth)

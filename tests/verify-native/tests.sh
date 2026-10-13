@@ -209,10 +209,10 @@ SKIPPED_ONLY="$TMP_ROOT/skipped.vow"
 cat > "$SKIPPED_ONLY" <<'SRC'
 module Skipped
 
-fn half(x: f64) -> f64 vow {
+fn rem(x: f64, y: f64) -> f64 vow {
   ensures: result == result
 } {
-  x / 2.0
+  x % y
 }
 
 fn main() -> i32 [io] {

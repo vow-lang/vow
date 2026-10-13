@@ -1,0 +1,11 @@
+module FloatNanNotEqualItself
+
+fn is_nan(x: f64) -> bool vow {
+  ensures: result == !(x == x)
+} {
+  x != x
+}
+
+fn main() -> i32 [io] {
+  0
+}
