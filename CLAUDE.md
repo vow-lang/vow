@@ -190,12 +190,17 @@ The staleness detector `scripts/check_help_coverage.py` (run in `full_test.sh`) 
 ## Operation Catalogue
 
 `docs/spec/operations.json` is the Operation Catalogue: the single checked, hand-edited source of
-runtime-symbol, ABI, return-shape, and doc facts for a growing set of Builtin Operations (the print,
-filesystem, stdin/args/stderr, process, hash, environment and query/utility builtins; epic #375).
-It is deliberately narrower than
+runtime-symbol, ABI, return-shape, and doc facts for 83 Builtin Operations (the print, filesystem,
+stdin/args/stderr, process, hash, environment and query/utility builtins; epic #375), plus the
+top-level `arena_routes` list. It is deliberately narrower than
 `vow-types/src/env.rs::builtin_free_fn_signatures()` — that table (and its self-hosted counterpart in
 `compiler/env.vow`) remains the single source for signature/effects and is never read or replaced by
-this catalogue.
+this catalogue; the entry's `doc_signature`/`effects` are checked copies, not a second source.
+
+Where the shipped catalogue departs from the epic's PRD (docs checked rather than generated, lookup
+functions rather than typed Rust records, the `c_model`/`verifier_model` split, the exclusion list),
+[ADR-2026-10-13-1048](docs/adr/2026-10-13-1048-operation-catalogue-prd-amendments.md) records the
+amendment and the check that enforces its replacement.
 
 `scripts/generate_operations.py` regenerates and validates the catalogue's projections:
 
@@ -233,7 +238,17 @@ lowers specially) and the narrowing intrinsics stay hand-written.
 
 `docs/spec/grammar.md`'s Builtin Function Signatures table and the generated help-JSON in
 `compiler/main.vow`/`vow/src/skill.rs` are **checked against** the catalogue (not generated from it) —
-`--check` fails if any drift.
+`--check` fails if any drift (`check_doc_facts` compares each entry's signature and effects with the
+grammar.md row and with the `skill.rs` and `main.vow` help lines).
+
+The fact tables are the `operations` array (one entry per catalogued builtin) and the `arena_routes`
+list; `c_model` (ESBMC C model, parity until epic #1398 P6) and `verifier_model` (native verifier,
+exempt from parity) are separate per-entry categories, and only pure entries may be known to either.
+Builtins the catalogue deliberately does not describe (the narrowing-conversion families,
+`__vow_clif_*`, `pin_to_root`, `string_matches_literal_at`, the `debug_*` builtins, the `i64_to_string`
+alias and the internal runtime ops) are listed with a reason in the ADR above. They move into an
+`excluded` section of `operations.json`, enforced by a coverage gate ("every type-checker builtin is
+catalogued or excluded"), in a pending slice of #375; until it lands, `--check` does not verify them.
 
 `load_catalogue` hand-validates every entry beyond the four fields' presence and type: `effects` must
 match `^\[(token(, token)*)?\]$` against the closed vocabulary `{read, write, io, panic, unsafe}`, with
@@ -249,10 +264,12 @@ violations across all entries are collected and reported together, not just the 
 lets a bad catalogue surface as a raw Python traceback — a malformed `operations.json` or a rejected
 entry prints a clean message to stderr and exits 1. `scripts/full_test.sh` runs
 `generate_operations.py --check` as its `ops/catalogue-drift` gate (Section 8), alongside CI's
-`ci.yml` step, so staleness is caught locally too, not only on push.
+`ci.yml` step, so staleness is caught locally too, not only on push. The generator's own unit tests
+(`scripts/test_generate_operations.py`) run in `ci.yml`; `full_test.sh` does not run them yet.
 
-Follow-up issues (#1271–#1275) extend this same catalogue with more operation groups; they should add
-entries and target files to the existing generator rather than inventing a new mechanism.
+The operation-group slices (#1270–#1273, #1275) have all merged. Further work on the catalogue (#1274
+and the remaining epic #375 items) should add entries, fields and target files to the existing
+generator rather than inventing a new mechanism.
 
 ## Architecture
 
