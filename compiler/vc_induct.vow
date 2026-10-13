@@ -249,9 +249,9 @@ fn vc_induct_has(v: Vec<i64>, x: i64) -> bool {
 // `(array, length)` pair, not a header Phi, so the cut havocs it at the top of
 // the header proper of every loop whose body (nested loops included) mutates
 // it: `recv[j]` lists the receivers of loop `j`, in instruction order. Not `ok`
-// (the function is not cut) when a mutated receiver is a String, comes out of a
-// Phi, or is defined inside a loop that mutates it: the model has no state for
-// an object that is born in the loop it is havoced by.
+// (the function is not cut) when a mutated receiver is a String or is defined
+// inside a loop that mutates it: the model has no state for an object that is
+// born in the loop it is havoced by.
 fn vc_induct_vec_havocs(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, n_ids: u64) -> VcVecHavocs {
     let out: VcVecHavocs = VcVecHavocs { ok: false, recv: Vec::new() };
     let mut j: i64 = 0;
@@ -629,8 +629,11 @@ fn vc_induct_cut(f: IrFunction) -> VcInduct {
         return vc_induct_status(f, VC_INDUCT_NA());
     }
     let rg: VcRegions = vc_induct_regions(f, li, succ, rpo);
+    if !rg.ok {
+        return vc_induct_status(f, VC_INDUCT_NA());
+    }
     let hv: VcVecHavocs = vc_induct_vec_havocs(f, li, rpo, n_ids);
-    if !rg.ok || !hv.ok {
+    if !hv.ok {
         return vc_induct_status(f, VC_INDUCT_NA());
     }
     let n_loops: u64 = li.n_loops as u64;

@@ -438,8 +438,7 @@ of this change and stay `Skipped`.
   each Vec the loop writes at the top of the header proper, which gives it an
   arbitrary array and an arbitrary length below the capacity mask, as a header Phi
   gets an arbitrary value (see the addendum below). A function is still not cut
-  when a mutated receiver is a String, comes out of a Phi, or is defined inside a
-  loop that mutates it; bounded unwinding decides such a function alone, and
+  when a mutated receiver is a String or is defined inside a loop that mutates it; bounded unwinding decides such a function alone, and
   `vc_step_applicable` (k-induction) still refuses a Vec-written loop. A loop that
   only reads a Vec is cut with no marker.
 - **Aliasing.** Two `Vec` parameters are distinct objects, as they are for
@@ -636,7 +635,7 @@ machinery.
   string literal that is mutated (`clear`, a push: the runtime traps on it) is
   outside the model, and a `String` in a struct field, across a call or merged by a
   Phi is skipped like the `Vec` cases. A loop that writes a String is never cut by
-  induction (`vc_induct_vec_havocs`, a follow-up to #1645).
+  induction (`vc_induct_vec_havocs` refuses it).
 - **Trusted base.** The binder joins the simplifier of ADR-2026-10-10-2041 in the
   trusted base. The guards: `compiler/tests/test_vc_str.vow` pins the rendered text
   of the binder and of each encoding; `tests/verify-native/pass/string_eq_exact.vow`
@@ -681,7 +680,7 @@ bounded verdict stands, so a false contract never becomes `Verified`. The array 
 havocked too, so a fact about contents holds only if the invariant states it
 (`tests/verify-native/unknown/vec_loop_contents_not_in_invariant.vow`).
 
-Refused, so the whole function stays with bounded unwinding: a String receiver, a
-receiver that is a Phi, and a receiver defined in a loop that mutates it (an object
+Refused, so the whole function stays with bounded unwinding: a String receiver and
+a receiver defined in a loop that mutates it (an object
 born in the loop it is havocked by has no state the model could name). The k-induction
 step case (`vc_step_applicable`) is unchanged and still refuses a Vec-written loop.
