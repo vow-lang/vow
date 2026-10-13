@@ -63,6 +63,10 @@ struct VcVec {
     fk_arr: Vec<i64>,
     fk_len: Vec<i64>,
     hk_vars: Vec<i64>,
+    // `app_at[r]` is the offset in `app_ops` of the `(sa, sl, ta, tl)` operands of the
+    // append that built array term `r`, -1 when it was not built by one (`vc_strdeep`).
+    app_at: Vec<i64>,
+    app_ops: Vec<i64>,
 }
 
 fn vc_vec_new_state(fl: VcFlow, n_blocks: u64) -> VcVec {
@@ -88,6 +92,8 @@ fn vc_vec_new_state(fl: VcFlow, n_blocks: u64) -> VcVec {
         fk_arr: Vec::new(),
         fk_len: Vec::new(),
         hk_vars: Vec::new(),
+        app_at: Vec::new(),
+        app_ops: Vec::new(),
     }
 }
 

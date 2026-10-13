@@ -8,6 +8,7 @@ use vc_term
 use vc_smt
 use vc_agg
 use vc_vec
+use vc_strdeep
 
 // Terms of the native verifier's `String` model (ADR-2026-10-08-1422, rule 3 and its
 // #1426 addendum). A `String` is the `(array, length)` slot of `vc_vec`, with the
@@ -25,19 +26,15 @@ use vc_vec
 // append, a substring) is a fresh array with such a defining assumption: a conservative
 // extension, which cannot make a query unsatisfiable by itself.
 //
+// The byte read at the witness index goes through the appends that built an array
+// (`vc_strdeep`), so differently built equal strings need no quantifier instantiation.
+// Every range operation guards its range with the lengths, so a read never lands past
+// a built string's length, where that unfolded read and the axioms could differ.
+//
 // None of this is a bound: the unfolding below `VC_STR_UNFOLD` is an encoding choice,
 // the quantified form is exact for every length.
 
 fn VC_STR_UNFOLD() -> i64 { 256 }
-
-fn vc_str_byte_mask(ar: VcArena) -> i64 {
-    vc_tm_bv(ar, 64, 255, 0)
-}
-
-// Byte `idx` of the string held in array `arr`.
-fn vc_str_byte(ar: VcArena, arr: i64, idx: i64) -> i64 {
-    vc_tm_app2(ar, VC_OP_BVAND(), vc_tm_app2(ar, VC_OP_SELECT(), arr, idx), vc_str_byte_mask(ar))
-}
 
 fn vc_str_axiom(ar: VcArena, assumed: Vec<i64>, fact: i64) {
     if vc_tm_is_true(ar, fact) { return; }
@@ -80,7 +77,7 @@ fn vc_str_range_eq(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, pr
     let e: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("se")), VC_SORT_BOOL());
     let w: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("sk")), 64);
     vc_str_axiom(ar, assumed, vc_tm_or(ar, vc_tm_app1(ar, VC_OP_NOT(), e), vc_tm_and(ar, pre, body)));
-    let differs: i64 = vc_tm_app2(ar, VC_OP_DISTINCT(), vc_str_byte(ar, a, w), vc_str_byte(ar, b, vc_tm_app2(ar, VC_OP_BVADD(), k, w)));
+    let differs: i64 = vc_tm_app2(ar, VC_OP_DISTINCT(), vc_str_ground_byte(vv, ar, a, w), vc_str_ground_byte(vv, ar, b, vc_tm_app2(ar, VC_OP_BVADD(), k, w)));
     let witness: i64 = vc_tm_and(ar, vc_tm_app2(ar, VC_OP_BVULT(), w, n), differs);
     vc_str_axiom(ar, assumed, vc_tm_or(ar, e, vc_tm_or(ar, vc_tm_app1(ar, VC_OP_NOT(), pre), witness)));
     e
@@ -174,6 +171,7 @@ fn vc_str_append(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, sa: 
     if known >= 0 { return known; }
     let r: i64 = vc_str_fresh_array(vv, ar, hdr, String::from("sa"));
     vc_str_memo_add(vv, sa, sl, ta, tl, r);
+    vc_str_app_register(vv, r, sa, sl, ta, tl);
     if vv.content {
         vc_str_axiom(ar, assumed, vc_str_all_eq(vv, ar, r, sa, vc_str_zero(ar), sl));
         vc_str_axiom(ar, assumed, vc_str_all_eq(vv, ar, ta, r, sl, tl));
