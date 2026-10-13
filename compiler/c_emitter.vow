@@ -503,6 +503,7 @@ fn MCI_NONSCALAR_EXTERN() -> i64 { 4 }
 fn MCI_STRUCTURED_TARGET() -> i64 { 5 }
 fn MCI_TARGET() -> i64 { 6 }
 fn MCI_BAD_CALL() -> i64 { 7 }
+fn MCI_STRUCTURED_RESULT() -> i64 { 8 }
 
 // The modelability gate and the skip diagnostic share this instruction policy.
 // Strings are rendered only for an issue, never on the successful scan path.
@@ -550,6 +551,10 @@ fn modelability_issue(inst: IrInst, facts: ModelFacts, m: IrModule, const_fn_ind
             if passes_structured_arg(inst, facts.vec_vars, facts.string_vars, facts.hashmap_vars,
                                      facts.btreemap_vars, facts.option_vars) {
                 return MCI_STRUCTURED_TARGET();
+            }
+            if is_structured_value_id(inst.id, facts.vec_vars, facts.string_vars, facts.hashmap_vars,
+                                      facts.btreemap_vars, facts.option_vars) {
+                return MCI_STRUCTURED_RESULT();
             }
             let target_fi: i64 = inst.dv;
             if vec_contains_i64(const_fn_indices, target_fi) { return MCI_OK(); }
@@ -659,6 +664,9 @@ fn model_issue_name(issue: i64, inst: IrInst, m: IrModule) -> String {
     }
     if issue == MCI_STRUCTURED_TARGET() {
         return String::from("Call target with a collection argument");
+    }
+    if issue == MCI_STRUCTURED_RESULT() {
+        return String::from("Call target with a collection result");
     }
     if issue == MCI_TARGET() {
         let fns: Vec<IrFunction> = m.functions;

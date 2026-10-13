@@ -892,6 +892,7 @@ enum ModelIssue<'a> {
     UnknownExtern(&'a str),
     NonScalarExtern(&'a str),
     StructuredTarget,
+    StructuredResult,
     NonModelableTarget(FuncId),
     InvalidCall,
 }
@@ -993,6 +994,15 @@ fn modelability_issue<'a>(
                     &facts.option_vars,
                 ) {
                     Some(ModelIssue::StructuredTarget)
+                } else if is_structured_value_id(
+                    inst.id.0,
+                    &facts.vec_vars,
+                    &facts.string_vars,
+                    &facts.hashmap_vars,
+                    &facts.btreemap_vars,
+                    &facts.option_vars,
+                ) {
+                    Some(ModelIssue::StructuredResult)
                 } else if const_fns.contains_key(fid)
                     || module
                         .functions
@@ -1107,6 +1117,9 @@ fn first_unsupported_opcode(
                     }
                     ModelIssue::StructuredTarget => {
                         "Call target with a collection argument".to_string()
+                    }
+                    ModelIssue::StructuredResult => {
+                        "Call target with a collection result".to_string()
                     }
                     ModelIssue::NonModelableTarget(fid) => {
                         let target = module
@@ -4049,6 +4062,84 @@ mod tests {
         assert!(
             structured.contains("Call target with a collection argument"),
             "{structured}"
+        );
+    }
+
+    // A user function returns a collection as an `int64_t` handle, so a caller
+    // that treats the result as a String/Vec would assign `int64_t` to a
+    // collection type in the emitted C. Such calls must fail closed.
+    #[test]
+    fn collection_result_from_user_fn_is_not_modelable() {
+        fn call_result_module(use_as_string: bool) -> (Function, Module) {
+            let (mut callee, _) = one_block_func_module(
+                "callee",
+                Ty::Ptr,
+                vec![
+                    inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            );
+            callee.id = FuncId(1);
+            let user = if use_as_string {
+                inst(
+                    2,
+                    Opcode::Call,
+                    Ty::Bool,
+                    vec![1, 1],
+                    InstData::CallExtern("__vow_string_eq".into()),
+                )
+            } else {
+                inst(2, Opcode::WrappingAdd, Ty::I64, vec![1, 1], InstData::None)
+            };
+            let (caller, mut m) = one_block_func_module(
+                "caller",
+                Ty::I64,
+                vec![
+                    inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(
+                        1,
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![],
+                        InstData::CallTarget(FuncId(1)),
+                    ),
+                    user,
+                    inst(3, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            );
+            m.functions.push(callee);
+            (caller, m)
+        }
+
+        let (f, m) = call_result_module(true);
+        let facts = ModelFacts::new(&f);
+        assert_eq!(
+            modelability_issue(
+                &f.blocks[0].insts[1],
+                &facts,
+                &m,
+                &HashMap::new(),
+                &mut HashMap::new()
+            ),
+            Some(ModelIssue::StructuredResult)
+        );
+        let reason = non_modelable_reason(&f, &m, &HashMap::new()).expect("must be non-modelable");
+        assert!(
+            reason.contains("Call target with a collection result"),
+            "{reason}"
+        );
+
+        let (f, m) = call_result_module(false);
+        let facts = ModelFacts::new(&f);
+        assert_eq!(
+            modelability_issue(
+                &f.blocks[0].insts[1],
+                &facts,
+                &m,
+                &HashMap::new(),
+                &mut HashMap::new()
+            ),
+            None
         );
     }
 
