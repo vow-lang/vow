@@ -50,8 +50,9 @@ fn check_known_classes() -> i64 {
     0
 }
 
-// Nothing is modelled yet: catalogued (unmodeled, pure or effectful) and symbols the
-// catalogue lacks alike. An effectful builtin can never become known; the generator
+// Only substr, starts_with and ends_with are known by catalogue symbol (the String
+// model, `vc_str`); every other catalogued builtin (pure or effectful) and every symbol
+// the catalogue lacks is not. An effectful builtin can never become known; the generator
 // rejects it (scripts/test_generate_operations.py).
 fn check_builtin_model() -> i64 {
     if catalogue_verifier_known(String::from("__vow_fs_exists")) { return 700; }
@@ -66,6 +67,11 @@ fn check_builtin_model() -> i64 {
     if catalogue_verifier_known(String::from("__vow_getenv")) { return 709; }
     if catalogue_verifier_known(String::from("__vow_mktemp_dir")) { return 710; }
     if catalogue_verifier_known(String::from("__vow_path_lookup")) { return 711; }
+    if !catalogue_verifier_known(String::from("__vow_string_starts_with")) { return 730; }
+    if !catalogue_verifier_known(String::from("__vow_string_ends_with")) { return 731; }
+    if !catalogue_verifier_known(String::from("__vow_string_substr")) { return 732; }
+    if catalogue_verifier_known(String::from("__vow_string_trim")) { return 733; }
+    if catalogue_verifier_known(String::from("__vow_string_split")) { return 734; }
     0
 }
 

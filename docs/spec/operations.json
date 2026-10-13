@@ -389,6 +389,7 @@
       "doc_signature": "fn(x: u64) -> u64",
       "effects": "[]",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "SplitMix64 is expressible over 64-bit vectors but no executor encoding of catalogue calls exists yet; a caller is skipped, never approximated.",
       "c_model": "unmodeled"
     },
     {
@@ -399,6 +400,7 @@
       "doc_signature": "fn(s: String) -> u64",
       "effects": "[]",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "FNV-1a is a fold over every byte of a string of unbounded length, which the array model has no closed form for; hash values are unspecified for the verifier.",
       "c_model": "unmodeled"
     },
     {
@@ -532,6 +534,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "A byte-wise table lookup over a Vec of unbounded length: the result needs a fold the array model cannot express.",
       "c_model": "unmodeled"
     },
     {
@@ -543,6 +546,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "A byte-pair decode over a string of unbounded length with a validity check: the result needs a fold the array model cannot express.",
       "c_model": "unmodeled"
     },
     {
@@ -554,6 +558,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "Parsing is opaque to the native verifier: the digit grammar and range checks over an unbounded string are not encoded, and a nondeterministic Option would turn a spurious model into a counterexample, so a caller is skipped instead.",
       "c_model": "base_and_arena"
     },
     {
@@ -565,6 +570,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "Parsing is opaque to the native verifier: the digit grammar and range checks over an unbounded string are not encoded, and a nondeterministic Option would turn a spurious model into a counterexample, so a caller is skipped instead.",
       "c_model": "base"
     },
     {
@@ -576,6 +582,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "Parsing is opaque to the native verifier: the digit grammar and range checks over an unbounded string are not encoded, and a nondeterministic Option would turn a spurious model into a counterexample, so a caller is skipped instead.",
       "c_model": "base"
     },
     {
@@ -587,6 +594,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "Parsing is opaque to the native verifier: the digit grammar and range checks over an unbounded string are not encoded, and a nondeterministic Option would turn a spurious model into a counterexample, so a caller is skipped instead.",
       "c_model": "base"
     },
     {
@@ -598,6 +606,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "Parsing is opaque to the native verifier: the digit grammar and range checks over an unbounded string are not encoded, and a nondeterministic Option would turn a spurious model into a counterexample, so a caller is skipped instead.",
       "c_model": "unmodeled"
     },
     {
@@ -609,6 +618,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "Parsing is opaque to the native verifier: the digit grammar and range checks over an unbounded string are not encoded, and a nondeterministic Option would turn a spurious model into a counterexample, so a caller is skipped instead.",
       "c_model": "base"
     },
     {
@@ -620,6 +630,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "Parsing is opaque to the native verifier: the digit grammar and range checks over an unbounded string are not encoded, and a nondeterministic Option would turn a spurious model into a counterexample, so a caller is skipped instead.",
       "c_model": "base"
     },
     {
@@ -631,6 +642,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "Parsing is opaque to the native verifier: the digit grammar and range checks over an unbounded string are not encoded, and a nondeterministic Option would turn a spurious model into a counterexample, so a caller is skipped instead.",
       "c_model": "base"
     },
     {
@@ -642,6 +654,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "Parsing is opaque to the native verifier: the digit grammar and range checks over an unbounded string are not encoded, and a nondeterministic Option would turn a spurious model into a counterexample, so a caller is skipped instead.",
       "c_model": "unmodeled"
     },
     {
@@ -652,6 +665,7 @@
       "doc_signature": "fn(s: String) -> u64",
       "effects": "[]",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "Float text conversion is not modelled; floating point is outside the native verifier.",
       "c_model": "unmodeled"
     },
     {
@@ -663,6 +677,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "Float text conversion is not modelled; floating point is outside the native verifier.",
       "c_model": "unmodeled"
     },
     {
@@ -674,6 +689,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "Formatting is opaque to the native verifier: the decimal expansion (length and digits) is not encoded, so a caller is skipped instead of given an unconstrained string.",
       "c_model": "base_and_arena"
     },
     {
@@ -685,6 +701,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "Formatting is opaque to the native verifier: the decimal expansion (length and digits) is not encoded, so a caller is skipped instead of given an unconstrained string.",
       "c_model": "base_and_arena"
     },
     {
@@ -696,6 +713,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "Formatting is opaque to the native verifier: the decimal expansion (length and digits) is not encoded, so a caller is skipped instead of given an unconstrained string.",
       "c_model": "unmodeled"
     },
     {
@@ -707,6 +725,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "Formatting is opaque to the native verifier: the decimal expansion (length and digits) is not encoded, so a caller is skipped instead of given an unconstrained string.",
       "c_model": "unmodeled"
     },
     {
@@ -717,7 +736,7 @@
       "doc_signature": "fn(s: String, start: u64, len: u64) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base_and_arena"
     },
     {
@@ -729,6 +748,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "Scans a string of unbounded length for a delimiter or class: needs an existential over match positions or a byte-wise fold that the array model has no encoding for.",
       "c_model": "unmodeled"
     },
     {
@@ -738,7 +758,7 @@
       "return": "i64",
       "doc_signature": "fn(s: String, prefix: String) -> i64",
       "effects": "[]",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -748,7 +768,7 @@
       "return": "i64",
       "doc_signature": "fn(s: String, suffix: String) -> i64",
       "effects": "[]",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -760,6 +780,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "A byte-wise map or scan over a string of unbounded length: the result needs a fold over the bytes that the array model has no encoding for.",
       "c_model": "base_and_arena"
     },
     {
@@ -771,6 +792,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "A byte-wise map or scan over a string of unbounded length: the result needs a fold over the bytes that the array model has no encoding for.",
       "c_model": "base_and_arena"
     },
     {
@@ -782,6 +804,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "A byte-wise map or scan over a string of unbounded length: the result needs a fold over the bytes that the array model has no encoding for.",
       "c_model": "base_and_arena"
     },
     {
@@ -793,6 +816,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "Scans a string of unbounded length for a delimiter or class: needs an existential over match positions or a byte-wise fold that the array model has no encoding for.",
       "c_model": "unmodeled"
     },
     {
@@ -804,6 +828,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "Concatenates a Vec<String> of unbounded length with a separator: a fold over the parts the array model has no encoding for.",
       "c_model": "unmodeled"
     },
     {
@@ -815,6 +840,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
+      "verifier_skip_reason": "Sortedness plus permutation of an unbounded Vec needs quantifiers over index pairs and a multiset equality; not encoded.",
       "c_model": "unmodeled"
     }
   ],

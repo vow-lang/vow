@@ -1,0 +1,109 @@
+module VcStrops
+
+// The native verifier's `String` op table, keyed by runtime symbol (ADR-2026-10-08-1422,
+// rule 3 and its #1426 addendum). A `String` is the same `(array, length)` slot the
+// `Vec` model keeps (`vc_vec`), so these kinds share the numbering of `VC_VEC_*` in
+// `vc_ops`: 0 is "not a string operation", 5 is `VC_VEC_LEN`, which `__vow_string_len`
+// also maps to, and 7 onwards belong to this module. A symbol that is neither listed
+// here nor in the catalogue is an unmodelled builtin; every `String` runtime symbol the
+// lowerer can emit is either a kind below or has a reason in `vc_str_unmodeled_reason`
+// (`compiler/tests/test_vc_ops.vow` walks the whole list).
+
+fn VC_STR_NONE() -> i64 { 0 }
+fn VC_STR_LEN() -> i64 { 5 }
+fn VC_STR_NEW() -> i64 { 7 }
+fn VC_STR_LITERAL() -> i64 { 8 }
+fn VC_STR_CLONE() -> i64 { 9 }
+fn VC_STR_PUSH_STR() -> i64 { 10 }
+fn VC_STR_PUSH_BYTE() -> i64 { 11 }
+fn VC_STR_CLEAR() -> i64 { 12 }
+fn VC_STR_BYTE_AT() -> i64 { 13 }
+fn VC_STR_EQ() -> i64 { 14 }
+fn VC_STR_MATCHES_LITERAL_AT() -> i64 { 15 }
+fn VC_STR_SUBSTRING() -> i64 { 16 }
+fn VC_STR_SUBSTR() -> i64 { 17 }
+fn VC_STR_STARTS_WITH() -> i64 { 18 }
+fn VC_STR_ENDS_WITH() -> i64 { 19 }
+
+fn VC_STR_PREFIX() -> String { String::from("__vow_string_") }
+
+// The kind of a `String` runtime symbol, or `VC_STR_NONE`.
+fn vc_str_op_kind(sym: String) -> i64 {
+    let pre: String = VC_STR_PREFIX();
+    if sym.len() <= pre.len() || string_starts_with(sym, pre) != 1 { return VC_STR_NONE(); }
+    if sym == String::from("__vow_string_len") { return VC_STR_LEN(); }
+    if sym == String::from("__vow_string_new") { return VC_STR_NEW(); }
+    if sym == String::from("__vow_string_literal") { return VC_STR_LITERAL(); }
+    if sym == String::from("__vow_string_clone") { return VC_STR_CLONE(); }
+    if sym == String::from("__vow_string_push_str") { return VC_STR_PUSH_STR(); }
+    if sym == String::from("__vow_string_push_byte") { return VC_STR_PUSH_BYTE(); }
+    if sym == String::from("__vow_string_clear") { return VC_STR_CLEAR(); }
+    if sym == String::from("__vow_string_byte_at") { return VC_STR_BYTE_AT(); }
+    if sym == String::from("__vow_string_eq") { return VC_STR_EQ(); }
+    if sym == String::from("__vow_string_matches_literal_at") { return VC_STR_MATCHES_LITERAL_AT(); }
+    if sym == String::from("__vow_string_substring") { return VC_STR_SUBSTRING(); }
+    if sym == String::from("__vow_string_substr") { return VC_STR_SUBSTR(); }
+    if sym == String::from("__vow_string_starts_with") { return VC_STR_STARTS_WITH(); }
+    if sym == String::from("__vow_string_ends_with") { return VC_STR_ENDS_WITH(); }
+    VC_STR_NONE()
+}
+
+// A kind that creates a new string object (its result is the object).
+fn vc_str_kind_creates(k: i64) -> bool {
+    k == VC_STR_NEW() || k == VC_STR_LITERAL() || k == VC_STR_CLONE()
+        || k == VC_STR_SUBSTRING() || k == VC_STR_SUBSTR()
+}
+
+// A kind that changes the string its first operand names.
+fn vc_str_kind_mutates(k: i64) -> bool {
+    k == VC_STR_PUSH_STR() || k == VC_STR_PUSH_BYTE() || k == VC_STR_CLEAR()
+}
+
+// A kind whose second operand is a string as well.
+fn vc_str_kind_two_strings(k: i64) -> bool {
+    k == VC_STR_PUSH_STR() || k == VC_STR_EQ() || k == VC_STR_STARTS_WITH() || k == VC_STR_ENDS_WITH()
+}
+
+// A kind that reads the bytes of a string, not only its length: when no
+// instruction of a function is one, the contents of its strings cannot matter and
+// the model leaves them unconstrained (no byte facts, no quantifier).
+fn vc_str_kind_reads_bytes(k: i64) -> bool {
+    k == VC_STR_BYTE_AT() || k == VC_STR_EQ() || k == VC_STR_MATCHES_LITERAL_AT()
+        || k == VC_STR_STARTS_WITH() || k == VC_STR_ENDS_WITH()
+}
+
+// Why a `String` runtime symbol that is not a catalogue entry has no model, or ""
+// when it is modelled (or has none to give). The catalogue entries (`parse_i64`,
+// `int_to_string`, `string_trim`, ...) carry their reason as `verifier_skip_reason`
+// in `docs/spec/operations.json`. Each reason names the semantics that would have to
+// be encoded; none is a bound or a cap.
+fn vc_str_unmodeled_reason(sym: String) -> String {
+    if vc_str_op_kind(sym) != VC_STR_NONE() { return String::from(""); }
+    if sym == String::from("__vow_string_contains") {
+        return String::from("substring search needs an existential over the match position");
+    }
+    if sym == String::from("__vow_string_pin_to_root") {
+        return String::from("copies a string between arenas; the model has no arena identity");
+    }
+    if sym == String::from("__vow_string_from_raw_parts_copy") || sym == String::from("__vow_string_from_cstr") {
+        return String::from("reads memory behind a raw pointer, which the model does not hold");
+    }
+    if sym == String::from("__vow_string_parse_u64_opt") {
+        return String::from("parsing is opaque: no model of the digit grammar");
+    }
+    if string_ends_with(sym, String::from("_in_arena")) == 1 {
+        return String::from("arena variant: the model has no arena identity");
+    }
+    String::from("")
+}
+
+// A kind of this module (`VC_VEC_LEN`, which `__vow_string_len` shares with the
+// `Vec` length, is not one).
+fn vc_str_kind_is_string_op(k: i64) -> bool {
+    k >= VC_STR_NEW() && k <= VC_STR_ENDS_WITH()
+}
+
+// The `dv2` of a `ConstStr` whose bytes the verifier has read from the module's
+// string pool into `ds` (`vc_resolve_str_literals`). A literal without it is not
+// modelled: the executor must never invent bytes.
+fn VC_STR_RESOLVED() -> i64 { 1 }

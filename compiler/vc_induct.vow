@@ -227,7 +227,8 @@ fn vc_induct_ptr_phi(f: IrFunction, li: VcLoopInfo) -> bool {
     false
 }
 
-// True when a loop body writes a Vec (`push`, `set`, `pop`). A Vec's state
+// True when a loop body writes a Vec (`push`, `set`, `pop`) or a String
+// (`push_str`, `push_byte`, `clear`). A Vec's state
 // is the executor's own flow-sensitive `(array, length)` pair, not a header Phi,
 // so the havoc copy of the header would keep the length and contents the loop was
 // entered with and an invariant-based proof would be about the wrong state. Such
@@ -240,7 +241,7 @@ fn vc_induct_vec_written_in_loop(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>) -
             let mut i: u64 = 0;
             while i < blk.insts.len() {
                 let k: i64 = vc_inst_vec_kind(blk.insts[i]);
-                if k == VC_VEC_PUSH() || k == VC_VEC_SET() || k == VC_VEC_POP() {
+                if vc_vec_kind_mutates(k) {
                     return true;
                 }
                 i = i + 1;

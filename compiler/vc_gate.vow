@@ -9,6 +9,8 @@ use vc_cfg
 use vc_loops
 use vc_agg
 use vc_vec
+use vc_strops
+use vc_str
 use ast
 
 // Fail-closed subset gate for the native verifier. `vc_skip_reason` returns ""
@@ -214,10 +216,11 @@ fn vc_vec_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
     let n: u64 = inst.args.len();
     let t0: i64 = vc_arg_ty(tys, inst, 0);
     let t1: i64 = vc_arg_ty(tys, inst, 1);
-    if kind == VC_VEC_NEW() {
+    if kind == VC_VEC_NEW() || kind == VC_STR_NEW() {
         return n == 2 && inst.ty == ITY_PTR() && vc_ty_is_int(t0) && vc_ty_is_int(t1);
     }
     if t0 != ITY_PTR() { return false; }
+    if vc_str_kind_is_string_op(kind) { return vc_str_call_ok(inst, tys, kind); }
     if kind == VC_VEC_PUSH() { return n == 2 && inst.ty == ITY_UNIT() && vc_vec_elem_ok(t1); }
     if kind == VC_VEC_GET() { return n == 2 && inst.ty == ITY_I64() && vc_vec_index_ok(t1); }
     if kind == VC_VEC_SET() {
@@ -225,6 +228,31 @@ fn vc_vec_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
     }
     if kind == VC_VEC_LEN() { return n == 1 && inst.ty == ITY_U64(); }
     if kind == VC_VEC_POP() { return n == 1 && inst.ty == ITY_UNIT(); }
+    false
+}
+
+// Operand and result types of a `String` call whose first operand is a string
+// pointer (`vc_str`). Offsets and lengths are 64-bit integers (the checker types
+// them `u64`; an unsuffixed literal reaches the IR as `i64`), a byte is `u8`.
+fn vc_str_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
+    let n: u64 = inst.args.len();
+    let t1: i64 = vc_arg_ty(tys, inst, 1);
+    let t2: i64 = vc_arg_ty(tys, inst, 2);
+    if kind == VC_STR_LITERAL() || kind == VC_STR_CLONE() { return n == 1 && inst.ty == ITY_PTR(); }
+    if kind == VC_STR_CLEAR() { return n == 1 && inst.ty == ITY_UNIT(); }
+    if kind == VC_STR_PUSH_STR() { return n == 2 && inst.ty == ITY_UNIT() && t1 == ITY_PTR(); }
+    if kind == VC_STR_PUSH_BYTE() { return n == 2 && inst.ty == ITY_UNIT() && t1 == ITY_U8(); }
+    if kind == VC_STR_BYTE_AT() { return n == 2 && inst.ty == ITY_I64() && vc_vec_index_ok(t1); }
+    if kind == VC_STR_EQ() { return n == 2 && inst.ty == ITY_BOOL() && t1 == ITY_PTR(); }
+    if kind == VC_STR_STARTS_WITH() || kind == VC_STR_ENDS_WITH() {
+        return n == 2 && inst.ty == ITY_I64() && t1 == ITY_PTR();
+    }
+    if kind == VC_STR_MATCHES_LITERAL_AT() {
+        return n == 4 && inst.ty == ITY_I64() && vc_vec_index_ok(t1) && t2 == ITY_PTR() && vc_ty_is_int(vc_arg_ty(tys, inst, 3));
+    }
+    if kind == VC_STR_SUBSTRING() || kind == VC_STR_SUBSTR() {
+        return n == 3 && inst.ty == ITY_PTR() && vc_vec_index_ok(t1) && vc_vec_index_ok(t2);
+    }
     false
 }
 
@@ -253,6 +281,9 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
         return inst.ty == ITY_PTR() && n == 0 && inst.dk == IDATA_ALLOC_SIZE() && inst.dv >= 8;
     }
     if op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE() { return n == 0; }
+    if op == IOP_CONST_STR() {
+        return inst.ty == ITY_PTR() && n == 0 && inst.dk == IDATA_CONST_STR() && inst.dv2 == VC_STR_RESOLVED();
+    }
     if op == IOP_FIELD_GET() {
         return n == 1 && t0 == ITY_PTR() && inst.dv >= 0 && vc_field_access_ok(inst.dk, inst.ty);
     }
@@ -401,6 +432,10 @@ fn vc_skip_reason_with(src: IrFunction, calls: bool) -> String {
         let vec_shape: String = vc_vec_shape_detail(f, tys.len());
         if vec_shape.len() > 0 {
             return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), vec_shape);
+        }
+        let str_shape: String = vc_str_shape_detail(f, tys.len());
+        if str_shape.len() > 0 {
+            return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), str_shape);
         }
     }
     let cfg: String = vc_cfg_detail(f, tys);
