@@ -77,6 +77,7 @@ KNOWN_DISAGREEMENTS = {
         "vec_len_cap",
         "vec_last_element",
         "vec_pop_all",
+        "vec_nested_fill",
     )
 }
 
