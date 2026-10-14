@@ -359,7 +359,7 @@ fn vc_vec_any_arg(inst: IrInst, is_vec: Vec<i64>) -> bool {
 // merge Vec pointers only when every `Upsilon` feeding it supplies the same
 // value; a differing merge would be two model objects for one runtime Vec. ""
 // when the shape is fine, else the detail of an `unsupported-opcode` skip.
-fn vc_vec_shape_detail(f: IrFunction, n_ids: u64) -> String {
+fn vc_vec_shape_detail(f: IrFunction, n_ids: u64, calls: bool) -> String {
     let is_vec: Vec<i64> = dom_fill(n_ids, 0);
     let mut any: bool = false;
     let mut bi: u64 = 0;
@@ -432,7 +432,7 @@ fn vc_vec_shape_detail(f: IrFunction, n_ids: u64) -> String {
                 }
             }
             if inst.op == IOP_CALL() && vc_vec_any_arg(inst, is_vec) {
-                if inst.dk == IDATA_CALL_TARGET() { return String::from("Vec passed to a call"); }
+                if inst.dk == IDATA_CALL_TARGET() && !calls { return String::from("Vec passed to a call"); }
                 if inst.dk == IDATA_CALL_EXTERN() && vc_inst_vec_kind(inst) == VC_VEC_NONE() {
                     return String::from("Vec passed to an unmodelled builtin");
                 }

@@ -133,6 +133,31 @@ fn check_phi_input_missing() -> i64 {
     0
 }
 
+// `diamond`'s join block with `lead` inserted before its Phi.
+fn diamond_with_lead(lead: IrInst) -> IrFunction {
+    let f: IrFunction = diamond(true);
+    let m: IrBlock = f.blocks[3];
+    let moved: Vec<IrInst> = Vec::new();
+    moved.push(lead);
+    let mut k: u64 = 0;
+    while k < m.insts.len() {
+        moved.push(m.insts[k]);
+        k = k + 1;
+    }
+    m.insts = moved;
+    f
+}
+
+// A region marker defines no value, so a Phi may follow it; any other instruction
+// ends the head of the block.
+fn check_phi_head_after_region_open() -> i64 {
+    let open: IrInst = mk_inst(9, IOP_REGION_OPEN(), ITY_UNIT(), Vec::new());
+    if vc_skip_reason(diamond_with_lead(open)).len() != 0 { return 22; }
+    let r: String = vc_skip_reason(diamond_with_lead(mk_inst_const_i64(9, 1)));
+    if r != String::from("unsupported-opcode: Phi after the head of its block") { return 23; }
+    0
+}
+
 fn check_entry_loop_rejected() -> i64 {
     let a: Vec<IrInst> = Vec::new();
     a.push(mk_inst_arg(0, ITY_I64(), 0));
@@ -551,7 +576,7 @@ fn check_reason_codes() -> i64 {
 }
 
 // A call of a user function is accepted only when its arguments and result are
-// scalar, and only by the check that inlines it afterwards.
+// scalars or objects (pointers), and only by the check that inlines it afterwards.
 fn check_scalar_calls() -> i64 {
     let ok: Vec<IrInst> = Vec::new();
     ok.push(mk_inst_arg(0, ITY_I64(), 0));
@@ -573,13 +598,15 @@ fn check_scalar_calls() -> i64 {
     agg.push(mk_inst_alloc(0, 16));
     agg.push(mk_inst_call_target(1, ITY_I64(), args1(0), 7));
     agg.push(mk_inst_return(2, 1));
-    if vc_skip_reason_calls(one_block(String::from("a"), Vec::new(), ITY_I64(), agg)).len() == 0 { return 4; }
+    if vc_skip_reason(one_block(String::from("a"), Vec::new(), ITY_I64(), agg)).len() == 0 { return 4; }
+    if vc_skip_reason_calls(one_block(String::from("a"), Vec::new(), ITY_I64(), agg)).len() != 0 { return 7; }
 
     let ptr_result: Vec<IrInst> = Vec::new();
     ptr_result.push(mk_inst_arg(0, ITY_I64(), 0));
     ptr_result.push(mk_inst_call_target(1, ITY_PTR(), args1(0), 7));
     ptr_result.push(mk_inst_return(2, 0));
-    if vc_skip_reason_calls(one_block(String::from("r"), p, ITY_I64(), ptr_result)).len() == 0 { return 5; }
+    if vc_skip_reason(one_block(String::from("r"), p, ITY_I64(), ptr_result)).len() == 0 { return 5; }
+    if vc_skip_reason_calls(one_block(String::from("r"), p, ITY_I64(), ptr_result)).len() != 0 { return 8; }
 
     let ext: Vec<IrInst> = Vec::new();
     ext.push(mk_inst_arg(0, ITY_I64(), 0));
@@ -697,6 +724,7 @@ fn main() -> i32 {
     if r == 0 { r = check_branches_accepted(); }
     if r == 0 { r = check_phi_input_missing(); }
     if r == 0 { r = check_phi_after_region_markers(); }
+    if r == 0 { r = check_phi_head_after_region_open(); }
     if r == 0 { r = check_entry_loop_rejected(); }
     if r == 0 { r = check_loop_accepted(); }
     if r == 0 { r = check_loop_value_escape_closed(); }

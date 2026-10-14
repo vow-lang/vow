@@ -1,0 +1,25 @@
+// TEST: counterexample-fn "twice"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// The callee increments the caller's struct twice, so a claim of eight is refuted.
+module InlineStructArgMutateWrong
+
+struct Counter { n: i64 }
+
+fn bump(c: Counter) {
+  c.n = c.n + 1;
+}
+
+fn twice(c: Counter) -> i64 vow {
+  requires: c.n == 5
+  ensures: result == 8
+} {
+  bump(c);
+  bump(c);
+  c.n
+}
+
+fn main() -> i32 [io] {
+  print_i64(twice(Counter { n: 5 }));
+  0
+}

@@ -284,13 +284,18 @@ The "callee inlining" decision is implemented in `compiler/vc_inline.vow`. The
 call graph below a verify target is flattened before symbolic execution; the
 executor still sees one acyclic function.
 
-- A call of a user function with integer, `Bool` or `Unit` arguments and result
-  is replaced by a copy of the callee: the call's block ends with a jump into
-  the copy, each `Return` becomes an Upsilon into the call's Phi (a Unit
-  result has a constant instead) and a jump to the continuation block. Every
-  copy gets fresh value and block ids, so a callee spliced twice shares
-  nothing. Aggregates do not cross a call yet; such a call is `Skipped` as
-  `unsupported-opcode`. Callees may build and use aggregates internally.
+- A call of a user function with scalar or object (struct, enum, `Option`,
+  `Vec`, `String`) arguments and result is replaced by a copy of the callee:
+  the call's block ends with a jump into the copy, each `Return` becomes an
+  Upsilon into the call's Phi (a Unit result has a constant instead) and a jump
+  to the continuation block. Every copy gets fresh value and block ids, so a
+  callee spliced twice shares nothing. An object argument replaces the callee's
+  parameter read by the caller's own value, so the callee acts on the caller's
+  object and one object passed twice stays one object; a returned object is
+  the Phi of the callee's returns, which the object model merges like any
+  other Phi (a Vec Phi only when every return supplies the same value, #1677).
+  Before #1677 an aggregate did not cross a call and such a call was `Skipped`
+  as `unsupported-opcode`.
 - Clauses and abort-bearing instructions of a copy carry the frame they came
   from in `IrInst.ds`. Inside a frame a `requires` is a claim blamed on the
   caller, an `ensures` or loop `invariant` a claim blamed on the callee, and
@@ -434,7 +439,9 @@ of this change and stay `Skipped`.
   `Bool` or an integer of up to 64 bits, and an index that is not 64-bit, is
   `unsupported-opcode`. The shape rule (`vc_vec_shape_detail`) rejects, as
   `unsupported-opcode`, a Vec used as a struct (`FieldGet`/`FieldSet`), a Vec
-  passed to a call, and a Vec merged by a Phi whose `Upsilon`s supply different
+  passed to a call that is not inlined (the check of a callee before the
+  splice leaves a call to the check of the flattened function), and a Vec
+  merged by a Phi whose `Upsilon`s supply different
   values (two model objects for one runtime Vec would diverge); a Phi that
   always supplies the same value is a no-op. Only the length of a
   `Vec<Vec<_>>`/`Vec<String>` is modelled (its elements are never read).

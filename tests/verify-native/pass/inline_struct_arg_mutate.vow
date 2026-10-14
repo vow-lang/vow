@@ -1,0 +1,21 @@
+module InlineStructArgMutate
+
+struct Counter { n: i64 }
+
+fn bump(c: Counter) {
+  c.n = c.n + 1;
+}
+
+fn twice(c: Counter) -> i64 vow {
+  requires: c.n == 5
+  ensures: result == 7
+} {
+  bump(c);
+  bump(c);
+  c.n
+}
+
+fn main() -> i32 [io] {
+  print_i64(twice(Counter { n: 5 }));
+  0
+}
