@@ -1,0 +1,21 @@
+// A linear struct is an ordinary aggregate for the verifier: consuming it with
+// `drop` changes nothing about the data flow, so the contract is decided by the
+// fields alone.
+module LinearParamConsumed
+
+linear struct Handle {
+    fd: i64,
+    flags: i64,
+}
+
+fn open_flags(h: Handle) -> i64 vow {
+    ensures: result == h.flags
+} {
+    let flags: i64 = h.flags;
+    drop(h);
+    flags
+}
+
+fn main() -> i32 {
+    0
+}

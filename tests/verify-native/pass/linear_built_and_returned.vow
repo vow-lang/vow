@@ -1,0 +1,23 @@
+// A linear value built in the function and handed back to the caller (a
+// `linear_ptr` result and region allocation) keeps the fields it was built with.
+module LinearBuiltAndReturned
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn make(fd: i64) -> Handle vow {
+    ensures: result.fd == fd
+} {
+    Handle { fd: fd }
+}
+
+fn pass_through(h: Handle) -> Handle vow {
+    ensures: result.fd == h.fd
+} {
+    h
+}
+
+fn main() -> i32 {
+    0
+}
