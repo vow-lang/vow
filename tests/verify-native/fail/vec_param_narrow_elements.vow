@@ -1,0 +1,28 @@
+// TEST: counterexample-fn "mix"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value a[0] -5
+// TEST: counterexample-value b[0] 200
+// TEST: counterexample-value c[0] true
+// TEST: counterexample-value c[1] false
+// Each element is listed in its own type: a negative `i32`, a `u8` above 127, a `bool`.
+module VecParamNarrowElements
+
+fn mix(a: Vec<i32>, b: Vec<u8>, c: Vec<bool>) -> i64 vow {
+  requires: a.len() == 1 && b.len() == 1 && c.len() == 2 && a[0] == -5 && b[0] == 200u8 && c[0] && !c[1]
+  ensures: result > 0
+} {
+  a[0] as i64
+}
+
+fn main() -> i32 [io] {
+  let a: Vec<i32> = Vec::new();
+  let b: Vec<u8> = Vec::new();
+  let c: Vec<bool> = Vec::new();
+  a.push(1);
+  b.push(1u8);
+  c.push(true);
+  c.push(false);
+  print_i64(mix(a, b, c));
+  0
+}

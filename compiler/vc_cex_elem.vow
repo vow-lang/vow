@@ -1,0 +1,106 @@
+module VcCexElem
+
+use ast
+use replay_main
+
+// Typed display of the elements of `Vec` and `String` parameters in a native
+// counterexample. The model keeps an element as the raw 8-byte slot the runtime
+// stores, and `vc_cex` can only print the slot (an unsigned 64-bit value): the IR
+// carries no element type for a `Vec` parameter. The driver has the source
+// declaration, so it rewrites each `<param>[<i>]` entry to the value the program
+// reads back: a narrow integer is the slot's low bits (the verifier truncates on
+// read), a signed one is sign-extended, a `bool` is `true` for any nonzero slot (how
+// the lowerer reads it) and a `String` byte is the slot's low 8 bits. An entry of
+// a type this does not know (a wide element is already printed in its own type)
+// keeps the slot.
+
+// Display text of slot `slot` read as element type `ty`.
+fn vc_cex_elem_text(ty: String, slot: u64) -> String {
+    if ty == String::from("bool") {
+        if slot == 0u64 { return String::from("false"); }
+        return String::from("true");
+    }
+    let bits: i64 = replay_int_bits(ty);
+    if bits == 0 { return uint_to_string(slot); }
+    if !replay_int_signed(ty) {
+        if bits == 64 { return uint_to_string(slot); }
+        return uint_to_string(slot & ((1u64 << (bits as u64)) - 1u64));
+    }
+    if bits == 64 { return i64_to_string(slot as i64); }
+    let low: i64 = (slot & ((1u64 << (bits as u64)) - 1u64)) as i64;
+    if (low >> (bits - 1)) & 1 == 1 { return i64_to_string(low - (1 << bits)); }
+    i64_to_string(low)
+}
+
+// Element type name of a parameter of AST type `tid`: `u8` for a `String`, `T`
+// for `Vec<T>` with a named `T`, "" for any other type.
+fn vc_cex_type_elem_name(a: AstArena, tid: i64) -> String {
+    let tag: i64 = type_tag(a, tid);
+    if tag == TY_NAMED() && arena_str(a, type_a(a, tid)) == String::from("String") {
+        return String::from("u8");
+    }
+    if tag == TY_GENERIC() && arena_str(a, type_a(a, tid)) == String::from("Vec") {
+        let args_lid: i64 = type_b(a, tid);
+        if list_len(a, args_lid) == 1 {
+            let et: i64 = list_get(a, args_lid, 0);
+            if type_tag(a, et) == TY_NAMED() { return arena_str(a, type_a(a, et)); }
+        }
+    }
+    String::from("")
+}
+
+// Element type name of parameter `pname` of the function `fn_name` declared in
+// `m`, or "" when there is no such function or parameter.
+fn vc_cex_param_elem_type(m: Module, fn_name: String, pname: String) -> String {
+    let a: AstArena = m.arena;
+    let fid: i64 = replay_find_fn_item(m, fn_name);
+    if fid < 0 { return String::from(""); }
+    let lid: i64 = fn_params_lid(a, fid);
+    let n: i64 = list_len(a, lid) / 4;
+    let mut pi: i64 = 0;
+    while pi < n {
+        if arena_str(a, list_get(a, lid, pi * 4)) == pname {
+            return vc_cex_type_elem_name(a, list_get(a, lid, pi * 4 + 1));
+        }
+        pi = pi + 1;
+    }
+    String::from("")
+}
+
+// Position of the `[` of an entry named `<param>[<digits>]`, or -1.
+fn vc_cex_elem_open(key: String) -> i64 {
+    let n: u64 = key.len();
+    if n < 4u64 || key.byte_at(n - 1u64) != 93 { return -1; }
+    let mut i: u64 = n - 2u64;
+    while i > 0u64 && key.byte_at(i) >= 48 && key.byte_at(i) <= 57 {
+        i = i - 1u64;
+    }
+    if i == 0u64 || i == n - 2u64 || key.byte_at(i) != 91 { return -1; }
+    i as i64
+}
+
+// Rewrites, in place, every `<param>[<i>]` value of `vals` whose parameter of
+// `fn_name` is a `Vec` or `String` to its typed text. `names` and `vals` are the
+// parallel entries of one counterexample.
+fn vc_cex_retype_elements(m: Module, fn_name: String, names: Vec<String>, vals: Vec<String>) {
+    let mut last_base: String = String::from("");
+    let mut last_ty: String = String::from("");
+    let mut j: u64 = 0u64;
+    while j < names.len() && j < vals.len() {
+        let open: i64 = vc_cex_elem_open(names[j]);
+        if open > 0 {
+            let base: String = names[j].substring(0u64, open as u64);
+            if base != last_base {
+                last_ty = vc_cex_param_elem_type(m, fn_name, base);
+                last_base = base;
+            }
+            if last_ty.len() > 0 {
+                match vals[j].parse_u64() {
+                    Option::Some(slot) => { vals[j] = vc_cex_elem_text(last_ty, slot); },
+                    Option::None => {},
+                }
+            }
+        }
+        j = j + 1u64;
+    }
+}
