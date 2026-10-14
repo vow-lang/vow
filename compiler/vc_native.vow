@@ -309,20 +309,22 @@ fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, hyp: Vec<i64>, sites
     if cs.kinds.len() == 0 {
         return vc_round(vc_proven_result(), false, false, -1, false, false);
     }
-    let ss: VcSession = vc_session_new(vc_session_wanted(cs));
+    let binder_at: i64 = vc_claims_first_binder(cs);
+    let ss: VcSession = vc_session_new(vc_session_wanted(cs, binder_at), binder_at);
     let r: VcRound = vc_run_claims(f, fr, cs, ss, sites, started, timeout_ms, scratch, cache, slicing, all_claims, acc);
     vc_session_close(ss);
     r
 }
 
 // Whether the claims of a round share one solver process: only when at least
-// two of them need a solver, and the test-only switch is not set.
-fn vc_session_wanted(cs: VcClaims) -> bool [read] {
+// two of them need a solver and a session may ask them (`vc_session_admits`),
+// and the test-only switch is not set.
+fn vc_session_wanted(cs: VcClaims, binder_at: i64) -> bool [read] {
     if !vc_incremental_enabled() { return false; }
     let mut needed: i64 = 0;
     let mut k: u64 = 0;
     while k < cs.kinds.len() {
-        if !vc_claim_is_static_sat(cs, k) { needed = needed + 1; }
+        if !vc_claim_is_static_sat(cs, k) && vc_session_admits(binder_at, cs, k) { needed = needed + 1; }
         k = k + 1;
     }
     needed >= 2
