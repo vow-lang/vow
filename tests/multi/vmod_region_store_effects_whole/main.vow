@@ -1,9 +1,8 @@
 // TEST: stdout "0"
-// The flat store-effect list of a region summary is read through one total reading of a record:
-// a record is whole when every slot it names is in the list, both the count prefix and the writer
-// stop at the first record that is not, and a kind is its low two bits. They therefore agree on a
-// truncated, overlong or out-of-range list, where they used to disagree or index out of bounds.
-// Whole lists keep their bytes (`vmod_region_roundtrip`).
+// Whole store-effect lists keep their bytes, and a kind is read as its low two bits by the count
+// prefix and the writer alike: kind 4 is a two-slot FRESH_IN_CALLER record in both, where the
+// count used to take it for an alias list and advance `3 + n`. A list that is not a sequence of
+// whole records aborts (`vmod_rejects_store_effect_truncated`, `vmod_rejects_store_effect_alias_count`).
 module Main
 
 use ir
@@ -75,58 +74,44 @@ fn push_all(v: Vec<i64>, more: Vec<i64>) {
     }
 }
 
-// [7]: a lone target is not a whole record.
-fn lone_target() -> i64 {
-    expect_bytes(summary_of(flat1(7)), head(0))
-}
-
-// [7, ALIAS_OF]: the aux slot is missing.
-fn missing_aux() -> i64 {
-    expect_bytes(summary_of(flat2(7, RSUM_KIND_ALIAS_OF())), head(0))
-}
-
-// [7, ALIAS_OF_ANY, 5, 9, 8]: five aliases are stated and two follow.
-fn overlong_alias_count() -> i64 {
-    let flat: Vec<i64> = flat2(7, RSUM_KIND_ALIAS_OF_ANY());
-    push_all(flat, flat2(5, 9));
-    flat.push(8);
-    expect_bytes(summary_of(flat), head(0))
-}
-
-// [7, ALIAS_OF_ANY, -1, 3]: a negative count is as long as no list.
-fn negative_alias_count() -> i64 {
-    let flat: Vec<i64> = flat2(7, RSUM_KIND_ALIAS_OF_ANY());
-    push_all(flat, flat2(0 - 1, 3));
-    expect_bytes(summary_of(flat), head(0))
-}
-
-// [7, ALIAS_OF_ANY]: the count slot is missing.
-fn missing_alias_count() -> i64 {
-    expect_bytes(summary_of(flat2(7, RSUM_KIND_ALIAS_OF_ANY())), head(0))
-}
-
-// [7, FRESH_IN_CALLER, 8]: the whole record is written, the lone target after it is not.
-fn whole_then_truncated() -> i64 {
+// A whole list of every record shape, in one list.
+fn all_shapes() -> i64 {
     let flat: Vec<i64> = flat2(7, RSUM_KIND_FRESH_IN_CALLER());
-    flat.push(8);
-    let want: Vec<i64> = head(1);
+    push_all(flat, flat2(8, RSUM_KIND_ALIAS_OF()));
+    flat.push(5);
+    push_all(flat, flat2(9, RSUM_KIND_ALIAS_OF_ANY()));
+    push_all(flat, flat2(2, 11));
+    flat.push(12);
+    push_all(flat, flat2(10, RSUM_KIND_CONSTANT_GLOBAL()));
+    let want: Vec<i64> = head(4);
     push_u32(want, 7);
     want.push(RSUM_KIND_FRESH_IN_CALLER());
+    push_u32(want, 8);
+    want.push(RSUM_KIND_ALIAS_OF());
+    push_u32(want, 5);
+    push_u32(want, 9);
+    want.push(RSUM_KIND_ALIAS_OF_ANY());
+    want.push(2);
+    push_u32(want, 11);
+    push_u32(want, 12);
+    push_u32(want, 10);
+    want.push(RSUM_KIND_CONSTANT_GLOBAL());
     expect_bytes(summary_of(flat), want)
 }
 
-// [7, ALIAS_OF_ANY, 2, 9, 8, 6, ALIAS_OF]: a whole alias list, then an ALIAS_OF without its aux.
-fn alias_list_then_truncated() -> i64 {
+// An empty list is a count of 0.
+fn empty_list() -> i64 {
+    expect_bytes(summary_of(Vec::new()), head(0))
+}
+
+// An alias list with no aliases is a record of its own.
+fn empty_alias_list() -> i64 {
     let flat: Vec<i64> = flat2(7, RSUM_KIND_ALIAS_OF_ANY());
-    push_all(flat, flat2(2, 9));
-    push_all(flat, flat2(8, 6));
-    flat.push(RSUM_KIND_ALIAS_OF());
+    flat.push(0);
     let want: Vec<i64> = head(1);
     push_u32(want, 7);
     want.push(RSUM_KIND_ALIAS_OF_ANY());
-    want.push(2);
-    push_u32(want, 9);
-    push_u32(want, 8);
+    want.push(0);
     expect_bytes(summary_of(flat), want)
 }
 
@@ -146,8 +131,7 @@ fn kind_out_of_range() -> i64 {
 }
 
 fn main() -> i32 [io] {
-    let fail: i64 = lone_target() + missing_aux() + overlong_alias_count() + negative_alias_count()
-        + missing_alias_count() + whole_then_truncated() + alias_list_then_truncated() + kind_out_of_range();
+    let fail: i64 = empty_list() + all_shapes() + empty_alias_list() + kind_out_of_range();
     print_i64(fail);
     0
 }

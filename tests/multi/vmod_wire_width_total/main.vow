@@ -1,9 +1,8 @@
 // TEST: stdout "0"
 // The writers are total on the values the wire format has a width for: a value wider than its
-// field is reduced to the field's width (the verifier cannot bound the elements of a `Vec`), and a
-// vow entry with fewer names than ids writes the pairs there are. In-range values keep their
-// bytes (`vmod_region_roundtrip`); a value with no encoding at all still aborts
-// (`vmod_rejects_invalid_instdata_encode`).
+// field is reduced to the field's width (the verifier cannot bound the elements of a `Vec`).
+// In-range values keep their bytes (`vmod_region_roundtrip`); a value with no encoding at all
+// still aborts (`vmod_rejects_invalid_instdata_encode`).
 module Main
 
 use ir
@@ -69,40 +68,8 @@ fn wide_region() -> i64 {
     expect_bytes(out, want)
 }
 
-fn short_names() -> i64 {
-    let ids: Vec<i64> = Vec::new();
-    ids.push(7);
-    ids.push(8);
-    let names: Vec<String> = Vec::new();
-    names.push(String::from("n"));
-    let entry: IrVowEntry = IrVowEntry {
-        id: 5,
-        description: String::from("d"),
-        blame: BLAME_CALLER(),
-        binding_ids: ids,
-        binding_names: names,
-        file: String::from("f"),
-        offset: 4294967305,
-    };
-    let out: Vec<i64> = Vec::new();
-    write_vow_entry(out, entry);
-    let want: Vec<i64> = Vec::new();
-    push_u32(want, 5, 0, 0, 0);
-    want.push(1);
-    want.push(100);
-    want.push(0);
-    want.push(1);
-    want.push(1);
-    want.push(110);
-    push_u32(want, 7, 0, 0, 0);
-    want.push(1);
-    want.push(102);
-    push_u32(want, 9, 0, 0, 0);
-    expect_bytes(out, want)
-}
-
 fn main() -> i32 [io] {
-    let fail: i64 = wide_inst_fields() + wide_region() + short_names();
+    let fail: i64 = wide_inst_fields() + wide_region();
     print_i64(fail);
     0
 }

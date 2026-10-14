@@ -1,0 +1,18 @@
+// TEST: exit 134
+// An alias list that states more aliases than the list holds is malformed: the encoder aborts
+// before writing a count that the records after it could not honour.
+module Main
+
+use ir
+use module_io
+
+fn main() -> i32 {
+    let f: IrFunction = ir_function_new(1, String::from("f"), ITY_UNIT(), 0, String::from("t.vow"));
+    f.rsum_store_effects.push(7);
+    f.rsum_store_effects.push(RSUM_KIND_ALIAS_OF_ANY());
+    f.rsum_store_effects.push(5);
+    f.rsum_store_effects.push(9);
+    let out: Vec<i64> = Vec::new();
+    write_region_summary(out, f);
+    0
+}

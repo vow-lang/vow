@@ -121,6 +121,13 @@ fn reject_encode_u8() -> i64 {
     top +! 1
 }
 
+// The encoder aborts on a malformed `IrFunction` the same way: a store-effect list
+// that is not a sequence of whole records, or a vow entry with fewer names than ids.
+fn reject_malformed_count() -> u64 {
+    let top: u64 = 18446744073709551615;
+    top +! 1
+}
+
 fn decode_error_name(kind: i64) -> String {
     if kind == DEC_BAD_MAGIC() { return String::from("BadMagic"); }
     if kind == DEC_VERSION_MISMATCH() { return String::from("VersionMismatch"); }
@@ -547,19 +554,19 @@ fn region_constraint_decode(r: ModuleReader) -> WireRegionConstraint {
 }
 
 // The flat store-effect list is a sequence of records `[target, kind, (aux | n,
-// alias...)]`. A record is whole when every slot it names is in the list. The
-// count prefix and the writer both go through `store_effect_width` and stop at the
-// first record that is not whole, so they agree on a truncated list as they do on
-// a whole one, and a kind is read as its low two bits in both.
+// alias...)]`, and the encoder aborts on a list that is not one: a record is whole
+// when every slot it names is in the list. `store_effect_width` is the one reading
+// of a record, shared by the count prefix and the writer, so the two can no longer
+// disagree about where a record ends; a kind is read as its low two bits in both.
 fn store_effect_width(flat: Vec<i64>, start: u64) -> u64 {
     let rem: u64 = flat.len() - start;
-    if rem < 2 { return 0; }
+    if rem < 2 { return reject_malformed_count(); }
     let kind: i64 = flat[start + 1] & 3;
     if kind == RSUM_KIND_FRESH_IN_CALLER() || kind == RSUM_KIND_CONSTANT_GLOBAL() { return 2; }
-    if rem < 3 { return 0; }
+    if rem < 3 { return reject_malformed_count(); }
     if kind == RSUM_KIND_ALIAS_OF() { return 3; }
     let n: u64 = flat[start + 2] as u64;
-    if n > rem - 3 { return 0; }
+    if n > rem - 3 { return reject_malformed_count(); }
     3 + n
 }
 
@@ -577,13 +584,8 @@ fn store_effect_count(flat: Vec<i64>) -> u64 {
     while i < n vow {
         invariant: i <= n
     } {
-        let w: u64 = store_effect_width(flat, i);
-        if w == 0 {
-            i = n;
-        } else {
-            i = cursor_advance(i, w, n);
-            count = count + 1;
-        }
+        i = cursor_advance(i, store_effect_width(flat, i), n);
+        count = count + 1;
     }
     count
 }
@@ -610,29 +612,25 @@ fn write_region_summary(out: Vec<i64>, f: IrFunction) {
         invariant: i <= flat.len()
     } {
         let w: u64 = store_effect_width(flat, i);
-        if w == 0 {
-            i = flat.len();
-        } else {
-            let next: u64 = cursor_advance(i, w, flat.len());
-            let target: i64 = flat[i];
-            let kind: i64 = flat[i + 1] & 3;
-            let mut aux: i64 = 0;
-            let aliases: Vec<i64> = Vec::new();
-            if kind == RSUM_KIND_ALIAS_OF() {
-                aux = flat[i + 2] & 4294967295;
-            } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
-                let mut k: u64 = i + 3;
-                while k < next vow {
-                    invariant: k <= next
-                } {
-                    aliases.push(flat[k]);
-                    k = k + 1;
-                }
+        let next: u64 = cursor_advance(i, w, flat.len());
+        let target: i64 = flat[i];
+        let kind: i64 = flat[i + 1] & 3;
+        let mut aux: i64 = 0;
+        let aliases: Vec<i64> = Vec::new();
+        if kind == RSUM_KIND_ALIAS_OF() {
+            aux = flat[i + 2] & 4294967295;
+        } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
+            let mut k: u64 = i + 3;
+            while k < next vow {
+                invariant: k <= next
+            } {
+                aliases.push(flat[k]);
+                k = k + 1;
             }
-            write_u32_wire(out, target);
-            region_constraint_encode(out, kind, aux, aliases);
-            i = next;
         }
+        write_u32_wire(out, target);
+        region_constraint_encode(out, kind, aux, aliases);
+        i = next;
     }
 }
 
@@ -941,8 +939,8 @@ fn write_vow_entry(out: Vec<i64>, entry: IrVowEntry) {
     write_u8(out, blame_disc(entry.blame));
     let ids: Vec<i64> = entry.binding_ids;
     let names: Vec<String> = entry.binding_names;
-    let mut n: u64 = ids.len();
-    if names.len() < n { n = names.len(); }
+    let n: u64 = ids.len();
+    if names.len() < n { let _rejected: u64 = reject_malformed_count(); }
     write_leb(out, n);
     let mut i: u64 = 0;
     while i < n vow {
