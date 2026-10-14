@@ -37,6 +37,7 @@ struct VcClaims {
     model_hdr: Vec<i64>,
     model_ambig: Vec<i64>,
     hook_vars: Vec<i64>,
+    map_vars: Vec<i64>,
     vec_param: Vec<i64>,
     vec_arr: Vec<String>,
     vec_len: Vec<String>,

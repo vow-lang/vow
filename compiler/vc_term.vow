@@ -96,6 +96,8 @@ fn VC_OP_TOFP32() -> i64 { 44 }
 fn VC_OP_TOFP64() -> i64 { 45 }
 fn VC_OP_FPNEG() -> i64 { 46 }
 fn VC_OP_CONCAT() -> i64 { 47 }
+// The array whose every element is the operand: `((as const (Array ..)) x)`.
+fn VC_OP_CONSTARR() -> i64 { 48 }
 
 // `hashes` caches each term's node hash; `slots` is an open-addressing table
 // (power-of-two length, linear probing, -1 empty) over the interned term ids, so

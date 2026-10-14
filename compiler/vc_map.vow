@@ -1,0 +1,531 @@
+module VcMap
+
+use ir
+use ir_dominance
+use vc_term
+use vc_smt
+use vc_int
+use vc_flow
+use vc_agg
+use vc_vec
+use vc_mapops
+
+// Model of `HashMap<K, V>` and `BTreeMap<K, V>` (K a Bool or an integer of at
+// most 64 bits, V a Bool, such an integer or unit) for the native verifier
+// (ADR-2026-10-08-1422, rule 3 and its #1678 addendum). A map is three terms: a
+// presence array from 64-bit keys to 0 or 1, a value array from keys to the
+// 8-byte slot the runtime stores, and a 64-bit symbolic length. There is no
+// capacity: the only length fact is the one a `Vec` has, that a table of that
+// many entries must be addressable, so every length is below `2^63 - 1`, and a
+// returning `insert` leaves it below that.
+//
+// A key or value is the slot the runtime keeps, widened as `vc_vec_elem64` does
+// it, so two keys are equal exactly when their 64-bit slots are. A key is present
+// when its presence word is not 0, a test that holds for every state of a
+// parameter's array and agrees with the 0 and 1 the model itself stores.
+//
+//   new       presence all 0 (a constant array), length 0, values unconstrained
+//   insert    present, value stored; length grows unless the key was present
+//   remove    absent; length shrinks when the key was present
+//   contains  the presence word of the key
+//   get       a fresh `Option`: tag 1 and the value when present, tag 0 and 0 else
+//   len       the length
+//
+// The length of a map built in the function is its key count by construction. A
+// map the function did not build (a parameter, or the state a loop cut havocs)
+// is an arbitrary `(presence, values, length)`, and "length is the number of
+// present keys" is not quantifier-free. Such a state is a superset of the real
+// ones, so a proof over it is sound. What can be stated is assumed: for the keys
+// the function names, the number of distinct present ones is at most the length
+// (`vc_map_count_key`), which keeps `requires: m.len() == 0` from admitting a
+// present key. With 64-bit keys that is also all a real map needs: any model of
+// it extends to a map with that length (there are keys to spare outside the ones
+// named), so a counterexample is a run. A key narrower than 64 bits bounds the
+// length by its domain, and the IR does not say what the key type of a map the
+// function did not build is unless an operand shows it; then the presence array
+// and the length are `vc_map_inexact_vars`, and the driver reports a failure that
+// reaches them only when it holds for every state (`vc_native`). The two maps
+// follow one model because the runtime has no iteration API: neither the order of
+// a `BTreeMap` nor the slot a `HashMap` key hashes to can be observed.
+//
+// Like a `Vec`, a map is a `vc_agg` object, so no pointer is a term, and its state is
+// kept per block and merged on entry from the live in-edges with the `ite` chain a
+// Phi uses (`vc_flow`).
+
+struct VcMap {
+    fl: VcFlow,
+    n_blocks: u64,
+    slot_of: Vec<i64>,
+    kinds: Vec<i64>,
+    base_pres: Vec<i64>,
+    base_vals: Vec<i64>,
+    base_len: Vec<i64>,
+    pres: Vec<i64>,
+    vals: Vec<i64>,
+    len: Vec<i64>,
+    names: i64,
+    // Per slot: the keys the function used on the map, how wide they are (0 not
+    // known, 1 all 64 bits, 2 narrower), and its arbitrary bases (presence array,
+    // length, and the number of distinct keys of `qkeys` present in it).
+    qkeys: Vec<Vec<i64>>,
+    key_wide: Vec<i64>,
+    fb_pres: Vec<Vec<i64>>,
+    fb_len: Vec<Vec<i64>>,
+    fb_acc: Vec<Vec<i64>>,
+}
+
+fn vc_map_new_state(fl: VcFlow, n_blocks: u64) -> VcMap {
+    VcMap {
+        fl: fl,
+        n_blocks: n_blocks,
+        slot_of: Vec::new(),
+        kinds: Vec::new(),
+        base_pres: Vec::new(),
+        base_vals: Vec::new(),
+        base_len: Vec::new(),
+        pres: Vec::new(),
+        vals: Vec::new(),
+        len: Vec::new(),
+        names: 0,
+        qkeys: Vec::new(),
+        key_wide: Vec::new(),
+        fb_pres: Vec::new(),
+        fb_len: Vec::new(),
+        fb_acc: Vec::new(),
+    }
+}
+
+// Number of map objects the function created or read; 0 keeps the query out of
+// the array logic on their account.
+fn vc_map_count(mp: VcMap) -> u64 {
+    mp.kinds.len()
+}
+
+fn vc_map_fresh_name(mp: VcMap, prefix: String) -> String {
+    let name: String = String::from(prefix);
+    name.push_str(i64_to_string(mp.names));
+    mp.names = mp.names + 1;
+    name
+}
+
+fn vc_map_push_slot(mp: VcMap, obj: i64, kind: i64) -> i64 {
+    while mp.slot_of.len() as i64 <= obj {
+        mp.slot_of.push(-1);
+    }
+    let s: i64 = mp.kinds.len() as i64;
+    mp.slot_of[obj as u64] = s;
+    mp.kinds.push(kind);
+    mp.base_pres.push(-1);
+    mp.base_vals.push(-1);
+    mp.base_len.push(-1);
+    let none: Vec<i64> = Vec::new();
+    mp.qkeys.push(none);
+    mp.key_wide.push(0);
+    let none_pres: Vec<i64> = Vec::new();
+    mp.fb_pres.push(none_pres);
+    let none_len: Vec<i64> = Vec::new();
+    mp.fb_len.push(none_len);
+    let none_acc: Vec<i64> = Vec::new();
+    mp.fb_acc.push(none_acc);
+    let mut k: u64 = 0;
+    while k < mp.n_blocks {
+        mp.pres.push(-1);
+        mp.vals.push(-1);
+        mp.len.push(-1);
+        k = k + 1;
+    }
+    s
+}
+
+fn vc_map_pos(mp: VcMap, s: i64, bi: i64) -> u64 {
+    s as u64 * mp.n_blocks + bi as u64
+}
+
+fn vc_map_zero(ar: VcArena) -> i64 {
+    vc_tm_bv(ar, 64, 0, 0)
+}
+
+fn vc_map_cur_pres(mp: VcMap, s: i64, bi: i64) -> i64 {
+    let a: i64 = mp.pres[vc_map_pos(mp, s, bi)];
+    if a >= 0 { return a; }
+    mp.base_pres[s as u64]
+}
+
+fn vc_map_cur_vals(mp: VcMap, s: i64, bi: i64) -> i64 {
+    let a: i64 = mp.vals[vc_map_pos(mp, s, bi)];
+    if a >= 0 { return a; }
+    mp.base_vals[s as u64]
+}
+
+fn vc_map_cur_len(mp: VcMap, s: i64, bi: i64) -> i64 {
+    let l: i64 = mp.len[vc_map_pos(mp, s, bi)];
+    if l >= 0 { return l; }
+    mp.base_len[s as u64]
+}
+
+fn vc_map_write(mp: VcMap, ar: VcArena, hdr: SmtScript, s: i64, bi: i64, pres: i64, vals: i64, len: i64) {
+    let p: u64 = vc_map_pos(mp, s, bi);
+    mp.pres[p] = vc_flow_name(mp.fl, ar, hdr, VC_SORT_ARRAY64(), pres);
+    mp.vals[p] = vc_flow_name(mp.fl, ar, hdr, VC_SORT_ARRAY64(), vals);
+    mp.len[p] = vc_flow_name(mp.fl, ar, hdr, 64, len);
+}
+
+// An arbitrary `(presence, values, length)` named `prefix`, its length below the
+// capacity mask on every path, as a new base of slot `s`. Returns the three terms
+// in `out`.
+fn vc_map_declare_free(mp: VcMap, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, s: i64, prefix: String, out: Vec<i64>) {
+    let p_name: String = String::from(prefix);
+    p_name.push_str(String::from("_mpres"));
+    let v_name: String = String::from(prefix);
+    v_name.push_str(String::from("_mvals"));
+    let l_name: String = String::from(prefix);
+    l_name.push_str(String::from("_mlen"));
+    let pres: i64 = vc_agg_declare(ar, hdr, p_name, VC_SORT_ARRAY64());
+    let vals: i64 = vc_agg_declare(ar, hdr, v_name, VC_SORT_ARRAY64());
+    let len: i64 = vc_agg_declare(ar, hdr, l_name, 64);
+    assumed.push(vc_tm_app2(ar, VC_OP_BVULT(), len, vc_vec_len_mask(ar)));
+    out.push(pres);
+    out.push(vals);
+    out.push(len);
+    let ps: Vec<i64> = mp.fb_pres[s as u64];
+    ps.push(pres);
+    let ls: Vec<i64> = mp.fb_len[s as u64];
+    ls.push(len);
+    let accs: Vec<i64> = mp.fb_acc[s as u64];
+    accs.push(vc_map_zero(ar));
+    let qs: Vec<i64> = mp.qkeys[s as u64];
+    let mut i: u64 = 0;
+    while i < qs.len() {
+        vc_map_count_key(mp, ar, hdr, assumed, s, ps.len() - 1, i);
+        i = i + 1;
+    }
+}
+
+// Adds the `i`-th key of slot `s` to the count of distinct present keys of its
+// arbitrary base `j` and assumes the count is within the base's length. A real
+// map has one entry per present key, so the fact holds of every run.
+fn vc_map_count_key(mp: VcMap, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, s: i64, j: u64, i: u64) {
+    let qs: Vec<i64> = mp.qkeys[s as u64];
+    let key: i64 = qs[i];
+    let mut fresh: i64 = vc_tm_bool_const(ar, true);
+    let mut o: u64 = 0;
+    while o < i {
+        fresh = vc_tm_and(ar, fresh, vc_tm_app2(ar, VC_OP_DISTINCT(), key, qs[o]));
+        o = o + 1;
+    }
+    let ps: Vec<i64> = mp.fb_pres[s as u64];
+    let ls: Vec<i64> = mp.fb_len[s as u64];
+    let accs: Vec<i64> = mp.fb_acc[s as u64];
+    let hit: i64 = vc_tm_and(ar, vc_map_present(ar, ps[j], key), fresh);
+    let total: i64 = vc_tm_app2(ar, VC_OP_BVADD(), accs[j], vc_map_bit(ar, hit));
+    accs[j] = vc_flow_name(mp.fl, ar, hdr, 64, total);
+    assumed.push(vc_tm_app2(ar, VC_OP_BVULE(), accs[j], ls[j]));
+}
+
+// Records that the function uses `key` on the map of slot `s`, so every arbitrary
+// base of the slot counts it. `bits` is the width of the key operand, or -1 for an
+// `i64` literal, whose type says nothing about the map's key type.
+fn vc_map_note_key(mp: VcMap, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, s: i64, key: i64, bits: i64) {
+    if bits >= 0 && bits < 64 {
+        mp.key_wide[s as u64] = 2;
+    } else if bits == 64 && mp.key_wide[s as u64] == 0 {
+        mp.key_wide[s as u64] = 1;
+    }
+    let qs: Vec<i64> = mp.qkeys[s as u64];
+    let mut i: u64 = 0;
+    while i < qs.len() {
+        if qs[i] == key { return; }
+        i = i + 1;
+    }
+    qs.push(key);
+    let bases: Vec<i64> = mp.fb_pres[s as u64];
+    let n: u64 = bases.len();
+    let mut j: u64 = 0;
+    while j < n {
+        vc_map_count_key(mp, ar, hdr, assumed, s, j, qs.len() - 1);
+        j = j + 1;
+    }
+}
+
+// The slot of `obj`, created on first use. A parameter, or an object nothing
+// created (the gate lets none through), starts as an arbitrary map valid in
+// every block.
+fn vc_map_slot(mp: VcMap, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, obj: i64) -> i64 {
+    if (obj as u64) < mp.slot_of.len() && mp.slot_of[obj as u64] >= 0 {
+        return mp.slot_of[obj as u64];
+    }
+    let kind: i64 = ag.kinds[obj as u64];
+    let s: i64 = vc_map_push_slot(mp, obj, kind);
+    let prefix: String = {
+        if kind == VC_OBJ_PARAM() {
+            let p: String = String::from("p");
+            p.push_str(i64_to_string(ag.owners[obj as u64]));
+            p
+        } else {
+            vc_map_fresh_name(mp, String::from("mo"))
+        }
+    };
+    let st: Vec<i64> = Vec::new();
+    vc_map_declare_free(mp, ar, hdr, assumed, s, prefix, st);
+    mp.base_pres[s as u64] = st[0];
+    mp.base_vals[s as u64] = st[1];
+    mp.base_len[s as u64] = st[2];
+    s
+}
+
+// A `new` result: no key present, length 0, values unconstrained (read only
+// behind a presence test that fails for every key).
+fn vc_map_create(mp: VcMap, ar: VcArena, hdr: SmtScript, obj: i64, bi: i64) {
+    let s: i64 = vc_map_push_slot(mp, obj, VC_OBJ_ALLOC());
+    let name: String = vc_map_fresh_name(mp, String::from("mc"));
+    name.push_str(String::from("_mvals"));
+    let vals: i64 = vc_agg_declare(ar, hdr, name, VC_SORT_ARRAY64());
+    let none: i64 = vc_tm_app1(ar, VC_OP_CONSTARR(), vc_map_zero(ar));
+    vc_map_write(mp, ar, hdr, s, bi, none, vals, vc_map_zero(ar));
+}
+
+// Forgets the state of `obj` in block `bi`: an arbitrary map. The loop cut puts
+// this at the top of a header proper for a map the loop writes.
+fn vc_map_havoc(mp: VcMap, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, obj: i64, bi: i64) {
+    let s: i64 = vc_map_slot(mp, ag, ar, hdr, assumed, obj);
+    let st: Vec<i64> = Vec::new();
+    vc_map_declare_free(mp, ar, hdr, assumed, s, vc_map_fresh_name(mp, String::from("mh")), st);
+    vc_map_write(mp, ar, hdr, s, bi, st[0], st[1], st[2]);
+}
+
+// The presence arrays and lengths of the arbitrary bases whose keys are not known
+// to be 64-bit: a counterexample that depends on one may not be a run.
+fn vc_map_inexact_vars(mp: VcMap) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut s: u64 = 0;
+    while s < mp.kinds.len() {
+        if mp.key_wide[s] != 1 {
+            let ps: Vec<i64> = mp.fb_pres[s];
+            let ls: Vec<i64> = mp.fb_len[s];
+            let mut j: u64 = 0;
+            while j < ps.len() {
+                out.push(ps[j]);
+                out.push(ls[j]);
+                j = j + 1;
+            }
+        }
+        s = s + 1;
+    }
+    out
+}
+
+fn vc_map_merge(ar: VcArena, c: i64, t: i64, acc: i64) -> i64 {
+    if t == acc { return acc; }
+    vc_tm_app3(ar, VC_OP_ITE(), c, t, acc)
+}
+
+// Entry state of every slot in block `bi`, from its live in-edges: the same `ite`
+// chain as `vc_vec_enter`. An edge that carries no state for a parameter slot
+// carries its initial state; for an allocation it carries nothing and is skipped.
+fn vc_map_enter(mp: VcMap, ar: VcArena, hdr: SmtScript, bi: u64) {
+    let fl: VcFlow = mp.fl;
+    let n: u64 = mp.kinds.len();
+    let mut s: u64 = 0;
+    while s < n {
+        let mut acc_p: i64 = -1;
+        let mut acc_v: i64 = -1;
+        let mut acc_l: i64 = -1;
+        let mut e: i64 = fl.in_head[bi];
+        while e >= 0 {
+            let src: i64 = fl.e_src[e as u64];
+            let p: u64 = vc_map_pos(mp, s as i64, src);
+            let mut pr: i64 = mp.pres[p];
+            let mut va: i64 = mp.vals[p];
+            let mut ln: i64 = mp.len[p];
+            if pr < 0 && mp.kinds[s] == VC_OBJ_PARAM() {
+                pr = mp.base_pres[s];
+                va = mp.base_vals[s];
+                ln = mp.base_len[s];
+            }
+            if pr >= 0 {
+                if acc_p < 0 {
+                    acc_p = pr;
+                    acc_v = va;
+                    acc_l = ln;
+                } else {
+                    let c: i64 = fl.e_cond[e as u64];
+                    acc_p = vc_map_merge(ar, c, pr, acc_p);
+                    acc_v = vc_map_merge(ar, c, va, acc_v);
+                    acc_l = vc_map_merge(ar, c, ln, acc_l);
+                }
+            }
+            e = fl.e_next[e as u64];
+        }
+        if acc_p >= 0 {
+            vc_map_write(mp, ar, hdr, s as i64, bi as i64, acc_p, acc_v, acc_l);
+        }
+        s = s + 1;
+    }
+}
+
+// A key or value operand as the 8-byte slot the runtime keeps. A unit value
+// carries no term and is stored as 0.
+fn vc_map_slot_word(ar: VcArena, ty: i64, t: i64) -> i64 {
+    if ty == ITY_UNIT() { return vc_map_zero(ar); }
+    vc_vec_elem64(ar, ty, t)
+}
+
+// Holds when `key` is present in the presence array `pres`.
+fn vc_map_present(ar: VcArena, pres: i64, key: i64) -> i64 {
+    let word: i64 = vc_tm_app2(ar, VC_OP_SELECT(), pres, key);
+    vc_tm_app1(ar, VC_OP_NOT(), vc_tm_app2(ar, VC_OP_EQ(), word, vc_map_zero(ar)))
+}
+
+fn vc_map_bit(ar: VcArena, c: i64) -> i64 {
+    vc_tm_app3(ar, VC_OP_ITE(), c, vc_tm_bv(ar, 64, 1, 0), vc_map_zero(ar))
+}
+
+// A returning `insert` leaves the length below the capacity mask: one that would
+// reach it never returns, so the guard is an assumption, not a claim. A key that
+// is already present changes no length.
+fn vc_map_insert_guard(ar: VcArena, present: i64, len: i64) -> i64 {
+    vc_tm_or(ar, present, vc_vec_push_guard(ar, len))
+}
+
+// Binds the key's presence and old value, then replaces the state of slot `s`
+// in block `bi` by the one after `insert(key, val)`.
+fn vc_map_insert(mp: VcMap, ar: VcArena, hdr: SmtScript, s: i64, bi: i64, present: i64, key: i64, val: i64) {
+    let pres: i64 = vc_map_cur_pres(mp, s, bi);
+    let vals: i64 = vc_map_cur_vals(mp, s, bi);
+    let len: i64 = vc_map_cur_len(mp, s, bi);
+    let grown: i64 = vc_tm_app2(ar, VC_OP_BVADD(), len, vc_tm_bv(ar, 64, 1, 0));
+    let next: i64 = vc_tm_app3(ar, VC_OP_ITE(), present, len, grown);
+    vc_map_write(mp, ar, hdr, s, bi, vc_tm_app3(ar, VC_OP_STORE(), pres, key, vc_tm_bv(ar, 64, 1, 0)), vc_tm_app3(ar, VC_OP_STORE(), vals, key, val), next);
+}
+
+// The state after `remove(key)`: absent, one shorter when it was present.
+fn vc_map_remove(mp: VcMap, ar: VcArena, hdr: SmtScript, s: i64, bi: i64, present: i64, key: i64) {
+    let pres: i64 = vc_map_cur_pres(mp, s, bi);
+    let len: i64 = vc_map_cur_len(mp, s, bi);
+    let shorter: i64 = vc_tm_app2(ar, VC_OP_BVSUB(), len, vc_tm_bv(ar, 64, 1, 0));
+    let next: i64 = vc_tm_app3(ar, VC_OP_ITE(), present, shorter, len);
+    vc_map_write(mp, ar, hdr, s, bi, vc_tm_app3(ar, VC_OP_STORE(), pres, key, vc_map_zero(ar)), vc_map_cur_vals(mp, s, bi), next);
+}
+
+// Gives `obj` the fields of the `Option` a `get` or a `BTreeMap` `insert`
+// returns: tag (slot 0) 1 and payload (slot 1) the stored slot when `present`,
+// both 0 otherwise, as `alloc_option_in_arena` writes them. A payload is read at
+// the type the map's value has, so the one word is stored at every width a
+// `FieldGet` can ask for; the views never come from a write, so `vc_agg_store`
+// (which does not clear the other views of a slot) is the right call.
+fn vc_map_fill_option(mp: VcMap, ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, present: i64, word: i64) {
+    let fl: VcFlow = mp.fl;
+    let payload: i64 = vc_flow_name(fl, ar, hdr, 64, vc_tm_app3(ar, VC_OP_ITE(), present, word, vc_map_zero(ar)));
+    vc_agg_store(ag, obj, 0, 64, vc_flow_name(fl, ar, hdr, 64, vc_map_bit(ar, present)));
+    vc_agg_store(ag, obj, 1, 64, payload);
+    vc_agg_store(ag, obj, 1, 32, vc_cast(ar, ITY_U64(), ITY_U32(), payload));
+    vc_agg_store(ag, obj, 1, 16, vc_cast(ar, ITY_U64(), ITY_U16(), payload));
+    vc_agg_store(ag, obj, 1, 8, vc_cast(ar, ITY_U64(), ITY_U8(), payload));
+    vc_agg_store(ag, obj, 1, VC_SORT_BOOL(), vc_tm_app2(ar, VC_OP_DISTINCT(), payload, vc_map_zero(ar)));
+}
+
+fn vc_map_any_arg(inst: IrInst, is_map: Vec<i64>) -> bool {
+    let mut k: u64 = 0;
+    while k < inst.args.len() {
+        if is_map[inst.args[k] as u64] == 1 { return true; }
+        k = k + 1;
+    }
+    false
+}
+
+// Marks every map pointer: the result of `new` and the first operand of every
+// other operation. Returns whether the function has any.
+fn vc_map_mark_values(f: IrFunction, is_map: Vec<i64>) -> bool {
+    let mut any: bool = false;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            let k: i64 = vc_inst_map_kind(inst);
+            if k != VC_MAP_NONE() {
+                any = true;
+                if k == VC_MAP_NEW() {
+                    if inst.id >= 0 { is_map[inst.id as u64] = 1; }
+                } else if inst.args.len() > 0 {
+                    is_map[inst.args[0] as u64] = 1;
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    any
+}
+
+// A Phi that a map pointer feeds supplies one value only (`sup` is that value,
+// -2 once two differ): a differing merge would be two model objects for one
+// runtime map. Iterated, since a Phi can feed another Phi.
+fn vc_map_phi_detail(f: IrFunction, is_map: Vec<i64>, n_ids: u64) -> String {
+    let sup: Vec<i64> = dom_fill(n_ids, -1);
+    let mut changed: bool = true;
+    while changed {
+        changed = false;
+        let mut bi: u64 = 0;
+        while bi < f.blocks.len() {
+            let blk: IrBlock = f.blocks[bi];
+            let mut ii: u64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                if inst.op == IOP_UPSILON() && inst.args.len() == 1 {
+                    let phi: u64 = inst.dv as u64;
+                    let val: u64 = inst.args[0] as u64;
+                    if is_map[phi] == 1 || is_map[val] == 1 {
+                        if sup[phi] == -1 {
+                            sup[phi] = inst.args[0];
+                        } else if sup[phi] != inst.args[0] {
+                            return String::from("map merged by a Phi");
+                        }
+                        if is_map[phi] != 1 || is_map[val] != 1 {
+                            is_map[phi] = 1;
+                            is_map[val] = 1;
+                            changed = true;
+                        }
+                    }
+                }
+                ii = ii + 1;
+            }
+            bi = bi + 1;
+        }
+    }
+    String::from("")
+}
+
+// Gate rule: a map lives only in its own function, as an object no other
+// instruction can alias. A pointer used by a map operation must not also be a
+// struct (`FieldGet`/`FieldSet`) or be passed to a user call or to a builtin the
+// verifier does not model as a map operation, and a Phi may merge map pointers
+// only when every `Upsilon` feeding it supplies the same value. "" when the
+// shape is fine, else the detail of an `unsupported-opcode` skip.
+fn vc_map_shape_detail(f: IrFunction, n_ids: u64) -> String {
+    let is_map: Vec<i64> = dom_fill(n_ids, 0);
+    if !vc_map_mark_values(f, is_map) { return String::from(""); }
+    let phi: String = vc_map_phi_detail(f, is_map, n_ids);
+    if phi.len() > 0 { return phi; }
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if (inst.op == IOP_FIELD_GET() || inst.op == IOP_FIELD_SET()) && is_map[inst.args[0] as u64] == 1 {
+                return String::from("map used as a struct");
+            }
+            if inst.op == IOP_CALL() && vc_map_any_arg(inst, is_map) {
+                if inst.dk == IDATA_CALL_TARGET() { return String::from("map passed to a call"); }
+                if inst.dk == IDATA_CALL_EXTERN() && vc_inst_map_kind(inst) == VC_MAP_NONE() {
+                    return String::from("map passed to an unmodelled builtin");
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    String::from("")
+}

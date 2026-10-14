@@ -3,6 +3,7 @@ module VcInduct
 use ir
 use ir_dominance
 use vc_ops
+use vc_mapops
 use vc_gate
 use vc_cfg
 use vc_loops
@@ -230,9 +231,12 @@ fn vc_induct_ptr_phi(f: IrFunction, li: VcLoopInfo) -> bool {
     false
 }
 
+// `recv[j]` lists the objects loop `j` writes and `maps[j][k]` is 1 when the
+// k-th of them is a map, 0 when it is a `Vec`.
 struct VcVecHavocs {
     ok: bool,
     recv: Vec<Vec<i64>>,
+    maps: Vec<Vec<i64>>,
 }
 
 fn vc_induct_has(v: Vec<i64>, x: i64) -> bool {
@@ -244,19 +248,22 @@ fn vc_induct_has(v: Vec<i64>, x: i64) -> bool {
     false
 }
 
-// The Vecs each loop writes. A Vec's state is the executor's own flow-sensitive
+// The Vecs and maps each loop writes. A Vec's state is the executor's own flow-sensitive
 // `(array, length)` pair, not a header Phi, so the cut havocs it at the top of
 // the header proper of every loop whose body (nested loops included) mutates
 // it: `recv[j]` lists the receivers of loop `j`, in block then instruction order.
 // Not `ok` (the function is not cut) when a mutated receiver is a String or is
 // defined inside a loop that mutates it: the model has no state for an object
-// that is born in the loop it is havoced by.
+// that is born in the loop it is havoced by. A map is the same: the loop cut
+// forgets its key set, values and length.
 fn vc_induct_vec_havocs(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, n_ids: u64) -> VcVecHavocs {
-    let out: VcVecHavocs = VcVecHavocs { ok: false, recv: Vec::new() };
+    let out: VcVecHavocs = VcVecHavocs { ok: false, recv: Vec::new(), maps: Vec::new() };
     let mut j: i64 = 0;
     while j < li.n_loops {
         let none: Vec<i64> = Vec::new();
         out.recv.push(none);
+        let kinds: Vec<i64> = Vec::new();
+        out.maps.push(kinds);
         j = j + 1;
     }
     let defs: VcDefs = vc_def_table(f, rpo, n_ids);
@@ -268,7 +275,8 @@ fn vc_induct_vec_havocs(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, n_ids: u64
             while i < blk.insts.len() {
                 let inst: IrInst = blk.insts[i];
                 let k: i64 = vc_inst_vec_kind(inst);
-                if vc_vec_kind_mutates(k) {
+                let is_map: bool = vc_map_kind_mutates(vc_inst_map_kind(inst));
+                if vc_vec_kind_mutates(k) || is_map {
                     if vc_str_kind_mutates(k) || inst.args.len() == 0 {
                         return out;
                     }
@@ -286,6 +294,7 @@ fn vc_induct_vec_havocs(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, n_ids: u64
                         let list: Vec<i64> = out.recv[lj as u64];
                         if !vc_induct_has(list, r) {
                             list.push(r);
+                            out.maps[lj as u64].push(vc_flag(is_map));
                         }
                         c = c + 1;
                     }
@@ -347,6 +356,7 @@ struct VcCut {
     bad: bool,
     clones: Vec<IrBlock>,
     vec_havocs: Vec<Vec<i64>>,
+    map_havocs: Vec<Vec<i64>>,
 }
 
 // Number of leading instructions of block `b` that loop `j`'s copy keeps.
@@ -578,16 +588,23 @@ fn vc_induct_rebuild_block(st: VcCut, b: u64) -> IrBlock {
     out
 }
 
-// One havoc marker per Vec loop `j` writes, after the header's Phis.
+fn vc_flag(b: bool) -> i64 {
+    if b { return 1; }
+    0
+}
+
+// One havoc marker per Vec or map loop `j` writes, after the header's Phis.
 fn vc_induct_push_vec_havocs(st: VcCut, j: i64, out: IrBlock) {
     let list: Vec<i64> = st.vec_havocs[j as u64];
+    let maps: Vec<i64> = st.map_havocs[j as u64];
     let mut k: u64 = 0;
     while k < list.len() {
         let args: Vec<i64> = Vec::new();
         args.push(list[k]);
         let id: i64 = st.next_inst;
         st.next_inst = st.next_inst + 1;
-        out.insts.push(ir_inst_new(id, IOP_CALL(), ITY_UNIT(), args, IDATA_CALL_EXTERN(), 0, 0, VC_INTERNAL_HAVOC_VEC()));
+        let marker: String = { if maps[k] == 1 { VC_INTERNAL_HAVOC_MAP() } else { VC_INTERNAL_HAVOC_VEC() } };
+        out.insts.push(ir_inst_new(id, IOP_CALL(), ITY_UNIT(), args, IDATA_CALL_EXTERN(), 0, 0, marker));
         k = k + 1;
     }
 }
@@ -656,6 +673,7 @@ fn vc_induct_cut(f: IrFunction) -> VcInduct {
         bad: false,
         clones: Vec::new(),
         vec_havocs: hv.recv,
+        map_havocs: hv.maps,
     };
     let mut j: i64 = 0;
     while j < li.n_loops {

@@ -188,14 +188,16 @@ fn vc_check_claim(cache: VcCache, bin: String, cs: VcClaims, sx: VcSlicer, ss: V
     vc_check_claim_oneshot(cache, bin, cs, sx, slicing, k, left_ms, scratch)
 }
 
-// True when the cone of claim `k` reaches a constant a float-text hook declared
-// (`vc_hooks`): the claim's query then depends on a value the model leaves free.
-fn vc_claim_reaches_hook(cs: VcClaims, sx: VcSlicer, k: u64) -> bool {
-    if cs.hook_vars.len() == 0 { return false; }
+// True when the cone of claim `k` reaches one of the constants `vars`: the claim's
+// query then depends on a value the model leaves free. `cs.hook_vars` are the
+// constants a float-text hook declared (`vc_hooks`), `cs.map_vars` the presence
+// array and length of a map the function did not build (`vc_map`).
+fn vc_claim_reaches(cs: VcClaims, sx: VcSlicer, k: u64, vars: Vec<i64>) -> bool {
+    if vars.len() == 0 { return false; }
     vc_slice_claim(sx, cs, k);
     let mut i: u64 = 0;
-    while i < cs.hook_vars.len() {
-        if sx.tmark[cs.hook_vars[i] as u64] == sx.epoch { return true; }
+    while i < vars.len() {
+        if sx.tmark[vars[i] as u64] == sx.epoch { return true; }
         i = i + 1;
     }
     false
@@ -208,8 +210,11 @@ fn vc_claim_reaches_hook(cs: VcClaims, sx: VcSlicer, k: u64) -> bool {
 // whether the claim can hold: `unsat` says it fails for every result of the hook
 // (and every string), so the counterexample stands. A timeout, memory limit or
 // solver error is passed on as such; any other answer, a `sat` included, leaves
-// the claim neither proven nor refuted: `unknown`.
-fn vc_hook_recheck(cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: VcSolverAnswer, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+// the claim neither proven nor refuted: `unknown` for `reason`. A claim that
+// reaches a map the function did not build is rechecked the same way, with every
+// array and length free: a failure for every state is a failure for the states a
+// run can have.
+fn vc_hook_recheck(cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: VcSolverAnswer, budget_ms: i64, scratch: String, reason: String) -> VcSolverAnswer [io, read, write] {
     let ar: VcArena = cs.arena;
     let s: SmtScript = vc_claim_context_script(cs, k);
     vc_pin_model(cs, ans, s);
@@ -218,7 +223,7 @@ fn vc_hook_recheck(cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: VcSol
     let again: VcSolverAnswer = vc_solver_check_cached(cache, bin, vc_smt_render(ar, s), Vec::new(), Vec::new(), budget_ms, scratch);
     if again.verdict == VC_ANS_UNSAT() { return ans; }
     if vc_answer_halts(again.verdict) { return again; }
-    vc_answer_plain(VC_ANS_UNKNOWN(), vc_opaque_hook_reason())
+    vc_answer_plain(VC_ANS_UNKNOWN(), reason)
 }
 
 // Every unrolled copy of a checked operator repeats one source site.
@@ -357,8 +362,11 @@ fn vc_run_claims(f: IrFunction, fr: VcFrames, cs: VcClaims, ss: VcSession, sites
             }
             let spent_ms: i64 = (time_micros() - started) / 1000;
             let mut ans: VcSolverAnswer = vc_check_claim(cache, bin, cs, sx, ss, slicing, k, timeout_ms - spent_ms, scratch);
-            if ans.verdict == VC_ANS_SAT() && !vc_claim_is_soft(cs, k) && vc_claim_reaches_hook(cs, sx, k) {
-                ans = vc_hook_recheck(cache, bin, cs, k, ans, timeout_ms - (time_micros() - started) / 1000, scratch);
+            if ans.verdict == VC_ANS_SAT() && !vc_claim_is_soft(cs, k) && vc_claim_reaches(cs, sx, k, cs.hook_vars) {
+                ans = vc_hook_recheck(cache, bin, cs, k, ans, timeout_ms - (time_micros() - started) / 1000, scratch, vc_opaque_hook_reason());
+            }
+            if ans.verdict == VC_ANS_SAT() && !vc_claim_is_soft(cs, k) && vc_claim_reaches(cs, sx, k, cs.map_vars) {
+                ans = vc_hook_recheck(cache, bin, cs, k, ans, timeout_ms - (time_micros() - started) / 1000, scratch, vc_map_state_reason());
             }
             if ans.verdict == VC_ANS_SAT() && !vc_claim_is_soft(cs, k) && !cs.step && !failed {
                 let left_ms: i64 = timeout_ms - (time_micros() - started) / 1000;

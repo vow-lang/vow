@@ -37,6 +37,7 @@ fn two_vec_claims() -> VcClaims {
         model_hdr: Vec::new(),
         model_ambig: Vec::new(),
         hook_vars: Vec::new(),
+        map_vars: Vec::new(),
         vec_param: Vec::new(),
         vec_arr: Vec::new(),
         vec_len: Vec::new(),
