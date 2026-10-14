@@ -12,6 +12,7 @@ use vc_flow
 use vc_agg_shape
 use vc_agg
 use vc_vec
+use vc_wide
 use vc_heap
 use vc_strops
 use vc_strdeep
@@ -185,6 +186,7 @@ fn vc_claims_harvest_fields(cs: VcClaims, ag: VcAgg, vv: VcVec) {
     cs.vec_arr = vv.pv_arr;
     cs.vec_len = vv.pv_len;
     cs.vec_hdr = vv.pv_hdr;
+    cs.vec_wide = vv.pv_wide;
     let mut j: u64 = 0;
     while j < cs.model_slots.len() {
         let mut amb: i64 = 0;
@@ -211,6 +213,11 @@ struct VcWalk {
     hp: VcHeap,
     var_of: Vec<i64>,
     obj_of: Vec<i64>,
+    // The element address a wide `Vec` call defined (`vc_wide`): the `Vec`'s slot,
+    // its object and the index term of the element; -1 for every other value.
+    wslot: Vec<i64>,
+    wobj: Vec<i64>,
+    widx: Vec<i64>,
     tys: Vec<i64>,
     lits: Vec<i64>,
     dvs: Vec<i64>,
@@ -306,12 +313,59 @@ fn vc_exec_value(w: VcWalk, inst: IrInst, pc: i64) -> i64 {
     vc_exec_arith(w, inst, pc)
 }
 
+// A wide `Vec` call (`vc_wide`): the element address it defines is remembered, not
+// a term. `push` extends the length by one and leaves the element unconstrained
+// until the write that follows; `get` and `set` are bounds claims like their
+// one-slot twins.
+fn vc_walk_wide_call(w: VcWalk, bi: u64, inst: IrInst, pc: i64, kind: i64, s: i64) {
+    let cs: VcClaims = w.cs;
+    let ar: VcArena = cs.arena;
+    let vv: VcVec = w.vv;
+    let b: i64 = bi as i64;
+    let len: i64 = vc_vec_cur_len(vv, s, b);
+    let mut idx: i64 = len;
+    if kind == VC_VEC_PUSH_WIDE() {
+        vc_assume(cs, pc, vc_vec_push_guard(ar, len));
+        vc_vec_write(vv, ar, cs.header, s, b, vc_vec_cur_arr(vv, s, b), vc_tm_app2(ar, VC_OP_BVADD(), len, vc_tm_bv(ar, 64, 1, 0)));
+    } else {
+        idx = w.var_of[inst.args[1] as u64];
+        vc_guard(cs, VC_CLAIM_VEC_BOUNDS(), VC_LABEL_VEC_BOUNDS(), pc, vc_vec_in_bounds(ar, idx, len), inst);
+    }
+    w.wslot[inst.id as u64] = s;
+    w.wobj[inst.id as u64] = w.obj_of[inst.args[0] as u64];
+    w.widx[inst.id as u64] = idx;
+}
+
+// A `WideSlot` read or write through an element address: the two limbs of the
+// element in the array of the `Vec`, as the current block sees it.
+fn vc_walk_wide_access(w: VcWalk, bi: u64, inst: IrInst) {
+    let cs: VcClaims = w.cs;
+    let ar: VcArena = cs.arena;
+    let vv: VcVec = w.vv;
+    let b: i64 = bi as i64;
+    let r: u64 = inst.args[0] as u64;
+    let s: i64 = w.wslot[r];
+    let arr: i64 = vc_vec_cur_arr(vv, s, b);
+    if inst.op == IOP_FIELD_GET() {
+        vc_vec_mark_wide(vv, w.ag, w.wobj[r], inst.ty);
+        vc_define(w, inst, vc_wide_read(ar, arr, w.widx[r]));
+    } else {
+        let val: i64 = inst.args[1];
+        vc_vec_mark_wide(vv, w.ag, w.wobj[r], w.tys[val as u64]);
+        vc_vec_write(vv, ar, cs.header, s, b, vc_wide_write(ar, arr, w.widx[r], w.var_of[val as u64]), vc_vec_cur_len(vv, s, b));
+    }
+}
+
 // Aggregate instructions: pointers are objects (`obj_of`), never terms; a field
 // read defines a scalar value.
 fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
     let cs: VcClaims = w.cs;
     let ag: VcAgg = w.ag;
     let op: i64 = inst.op;
+    if (op == IOP_FIELD_GET() || op == IOP_FIELD_SET()) && w.wslot[inst.args[0] as u64] >= 0 {
+        vc_walk_wide_access(w, bi, inst);
+        return true;
+    }
     if op == IOP_GET_ARG() && inst.ty == ITY_PTR() {
         w.obj_of[inst.id as u64] = vc_agg_param(ag, inst.dv);
         return true;
@@ -558,6 +612,8 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
         vc_define(w, inst, vc_vec_cur_len(vv, s, b));
     } else if kind == VC_VEC_POP() {
         vc_vec_pop(vv, ar, hdr, s, b);
+    } else if vc_vec_kind_is_wide(kind) {
+        vc_walk_wide_call(w, bi, inst, pc, kind, s);
     } else if kind == VC_VEC_PUSH() {
         let elem: i64 = vc_vec_elem64(ar, w.tys[inst.args[1] as u64], w.var_of[inst.args[1] as u64]);
         vc_assume(cs, pc, vc_vec_push_guard(ar, vc_vec_cur_len(vv, s, b)));
@@ -748,6 +804,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         vec_arr: Vec::new(),
         vec_len: Vec::new(),
         vec_hdr: Vec::new(),
+        vec_wide: Vec::new(),
     };
     vc_script_set_logic(hdr, String::from("QF_BV"));
     vc_script_set_option(hdr, String::from(":produce-models"), String::from("true"));
@@ -776,6 +833,9 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         hp: vc_heap_new(),
         var_of: dom_fill(tys.len(), -1),
         obj_of: dom_fill(tys.len(), -1),
+        wslot: dom_fill(tys.len(), -1),
+        wobj: dom_fill(tys.len(), -1),
+        widx: dom_fill(tys.len(), -1),
         tys: tys,
         lits: vc_literal_table(f, tys),
         dvs: dom_fill(tys.len(), 0),

@@ -173,6 +173,8 @@ fn agg_src() -> String {
     s.push_str(String::from("fn fvu8(v: Vec<u8>) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fvi32(v: Vec<i32>) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fvu64(v: Vec<u64>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fvi128(v: Vec<i128>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fvu128(v: Vec<u128>) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fvs(v: Vec<String>) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fvf(v: Vec<f64>) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fstr(s: String) -> i64 { 0 }\n"));
@@ -378,6 +380,21 @@ fn check_vec_elements_follow_the_element_type() -> i32 [io] {
     0
 }
 
+// A wide element is listed as one decimal value, which replay spells with the
+// literal suffix of its type.
+fn check_wide_vec_elements() -> i32 [io] {
+    if agg(String::from("fvi128"), 0, String::from("v.len=2,v[0]=-5,v[1]=170141183460469231731687303715884105727")).reason.len() != 0 { return 231; }
+    let two: String = vec_lit(String::from("fvi128"), String::from("v.len=2,v[0]=-5,v[1]=170141183460469231731687303715884105727"));
+    let want: String = str2s(vec_head(String::from("Vec<i128>")), String::from(" __replay_v.push(-5i128); __replay_v.push(170141183460469231731687303715884105727i128); __replay_v }"));
+    if two != want { return 232; }
+    let big: String = vec_lit(String::from("fvu128"), String::from("v.len=1,v[0]=340282366920938463463374607431768211455"));
+    let want_big: String = str2s(vec_head(String::from("Vec<u128>")), String::from(" __replay_v.push(340282366920938463463374607431768211455u128); __replay_v }"));
+    if big != want_big { return 233; }
+    if agg(String::from("fvi128"), 0, String::from("v.len=1")).reason.len() == 0 { return 234; }
+    if agg(String::from("fvu128"), 0, String::from("v.len=1,v[0]=-1")).reason.len() == 0 { return 235; }
+    0
+}
+
 fn check_string_arg() -> i32 [io] {
     let head: String = String::from("{ let __replay_s: String = String::from(\"\");");
     if lit_of(String::from("fstr"), String::from("")) != str2s(head, String::from(" __replay_s }")) { return 221; }
@@ -399,6 +416,8 @@ fn main() -> i32 [io] {
     if rf != 0 { return rf; }
     let r16: i32 = check_vec_arg();
     if r16 != 0 { return r16; }
+    let r23: i32 = check_wide_vec_elements();
+    if r23 != 0 { return r23; }
     let r17: i32 = check_vec_elements_follow_the_element_type();
     if r17 != 0 { return r17; }
     let r18: i32 = check_string_arg();

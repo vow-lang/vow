@@ -41,6 +41,7 @@ fn two_vec_claims() -> VcClaims {
         vec_arr: Vec::new(),
         vec_len: Vec::new(),
         vec_hdr: Vec::new(),
+        vec_wide: Vec::new(),
     };
     cs.header_lens.push(10);
     cs.model_names.push(String::from("p0_vlen"));
@@ -59,10 +60,12 @@ fn two_vec_claims() -> VcClaims {
     cs.vec_arr.push(String::from("p0_varr"));
     cs.vec_len.push(String::from("p0_vlen"));
     cs.vec_hdr.push(2);
+    cs.vec_wide.push(-1);
     cs.vec_param.push(3);
     cs.vec_arr.push(String::from("p3_varr"));
     cs.vec_len.push(String::from("p3_vlen"));
     cs.vec_hdr.push(20);
+    cs.vec_wide.push(-1);
     cs
 }
 
@@ -129,6 +132,24 @@ fn check_elements_are_defined_from_the_array() -> i64 {
     0
 }
 
+// An element of a wide `Vec` is one 128-bit entry: the two limbs of the array joined.
+fn check_wide_elements_are_128_bit() -> i64 {
+    let cs: VcClaims = two_vec_claims();
+    cs.vec_wide[0] = ITY_I128();
+    let widths: Vec<i64> = vc_cex_elem_widths(cs, vc_cex_vecs(cs, 0), 3);
+    if widths.len() != 3 || widths[0] != 128 || widths[2] != 128 { return 60; }
+    let s: SmtScript = vc_script_new();
+    vc_cex_define_elems(cs, s, vc_cex_vecs(cs, 0), 2);
+    if s.kinds.len() != 2 { return 61; }
+    let text: String = vc_command_text(cs.arena, s, 1);
+    let want: String = String::from("(define-fun p0_varr_e1 () (_ BitVec 128) (concat (select p0_varr #x0000000000000003) (select p0_varr #x0000000000000002)))");
+    if text != want { return 62; }
+    let narrow: VcClaims = two_vec_claims();
+    let nw: Vec<i64> = vc_cex_elem_widths(narrow, vc_cex_vecs(narrow, 0), 2);
+    if nw[0] != 64 || nw[1] != 64 { return 63; }
+    0
+}
+
 fn check_max_vec_len() -> i64 {
     let cs: VcClaims = two_vec_claims();
     cs.header_lens[0] = 21;
@@ -162,6 +183,7 @@ fn main() -> i32 {
     if r == 0 { r = check_regular_count(); }
     if r == 0 { r = check_bounds_grow(); }
     if r == 0 { r = check_elements_are_defined_from_the_array(); }
+    if r == 0 { r = check_wide_elements_are_128_bit(); }
     if r == 0 { r = check_max_vec_len(); }
     if r == 0 { r = check_pin_leaves_lengths_free(); }
     i64_to_i32_wrap(r)

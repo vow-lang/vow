@@ -41,6 +41,9 @@ struct VcClaims {
     vec_arr: Vec<String>,
     vec_len: Vec<String>,
     vec_hdr: Vec<i64>,
+    // Parallel to `vec_param`: the element type of a parameter whose elements are
+    // 128-bit integers (`ITY_I128`/`ITY_U128`), else -1.
+    vec_wide: Vec<i64>,
 }
 
 // `model_slots` of the length of a `Vec` or `String` parameter; a scalar

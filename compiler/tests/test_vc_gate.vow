@@ -715,6 +715,45 @@ fn check_vec_copy_ops() -> i64 {
     0
 }
 
+// let v = Vec::new(); v.push(x) as two slots; v[0] = x; return v[0], for x: i128 or u128.
+fn wide_vec_fn(ty: i64, tail: Vec<IrInst>, ret: i64) -> IrFunction {
+    let insts: Vec<IrInst> = vec_new_insts();
+    insts.push(mk_inst_arg(3, ty, 0));
+    insts.push(mk_inst_call_extern(4, ITY_PTR(), args1(2), String::from("__vow_vec_push_wide_ptr")));
+    insts.push(mk_inst_field_set_wide(5, 4, 0, 3));
+    insts.push(mk_inst_const_i64(6, 0));
+    insts.push(mk_inst_call_extern(7, ITY_PTR(), args2(2, 6), String::from("__vow_vec_set_wide_ptr")));
+    insts.push(mk_inst_field_set_wide(8, 7, 0, 3));
+    insts.push(mk_inst_call_extern(9, ITY_PTR(), args2(2, 6), String::from("__vow_vec_get_wide_ptr")));
+    insts.push(mk_inst_field_get_wide(10, ty, 9, 0));
+    let mut k: u64 = 0;
+    while k < tail.len() {
+        insts.push(tail[k]);
+        k = k + 1;
+    }
+    let ps: Vec<i64> = Vec::new();
+    ps.push(ty);
+    one_block(String::from("w"), ps, ret, insts)
+}
+
+fn check_wide_vec_ops() -> i64 {
+    let ok_tail: Vec<IrInst> = Vec::new();
+    ok_tail.push(mk_inst_return(11, 10));
+    if vc_skip_reason(wide_vec_fn(ITY_I128(), ok_tail, ITY_I128())).len() != 0 { return 20; }
+    if vc_skip_reason(wide_vec_fn(ITY_U128(), ok_tail, ITY_U128())).len() != 0 { return 21; }
+    // An element address is a target for a `WideSlot` access, not a value.
+    let leak: Vec<IrInst> = Vec::new();
+    leak.push(mk_inst_return(11, 9));
+    let leaked: String = vc_skip_reason(wide_vec_fn(ITY_I128(), leak, ITY_PTR()));
+    if leaked != String::from("unsupported-opcode: wide Vec element address used as a value") { return 22; }
+    // A one-slot access (`dv != 0`) of the address is not the first limb pair.
+    let second: Vec<IrInst> = Vec::new();
+    second.push(mk_inst_field_get_wide(11, ITY_I128(), 9, 1));
+    second.push(mk_inst_return(12, 11));
+    if vc_reason_code(vc_skip_reason(wide_vec_fn(ITY_I128(), second, ITY_I128()))) != VC_SKIP_UNSUPPORTED_OPCODE() { return 23; }
+    0
+}
+
 fn parse_hook_fn(arg_ty: i64, call_ty: i64) -> IrFunction {
     let ps: Vec<i64> = Vec::new();
     ps.push(arg_ty);
@@ -755,6 +794,7 @@ fn main() -> i32 {
     if r == 0 { r = check_vec_ops_rejected(); }
     if r == 0 { r = check_vec_sort(); }
     if r == 0 { r = check_vec_copy_ops(); }
+    if r == 0 { r = check_wide_vec_ops(); }
     if r == 0 { r = check_scalar_calls(); }
     if r == 0 { r = check_effects(); }
     if r == 0 { r = check_branches_accepted(); }
