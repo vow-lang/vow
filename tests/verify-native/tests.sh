@@ -85,6 +85,7 @@ fi
 # `sat` and a model: every scalar parameter symbol (`p<k>`) and aggregate
 # field symbol (`p<k>f<slot>s<sort>`) the query declares gets `$1`, except a
 # slot-0 field (an enum's discriminant), which gets `$2`. A Bool is true unless 0.
+# A float is +0.0.
 emit_model() {
     echo sat
     echo "("
@@ -99,6 +100,10 @@ emit_model() {
         else
             echo "  ($name (_ bv$v $width))"
         fi
+    done
+    grep -oE '^\(declare-const p[0-9]+ \(_ FloatingPoint [0-9]+ [0-9]+\)\)' "$file" \
+        | sed -E 's/^\(declare-const (p[0-9]+) \(_ FloatingPoint ([0-9]+) ([0-9]+)\)\)/\1 \2 \3/' | while read -r name eb sb; do
+        printf '  (%s (fp #b0 #b%s #b%s))\n' "$name" "$(printf '%0*d' "$eb" 0)" "$(printf '%0*d' $((sb - 1)) 0)"
     done
     echo ")"
 }
@@ -812,15 +817,15 @@ expect "replay with main confirmed" "$(field "$RUN_OUT" counterexamples.0.replay
 expect "replay with main has no bug report" "$(field "$RUN_OUT" diagnostics.1.error_code)" ""
 no_leftovers "replay with main"
 
-# a skipped replay never ran, so it is not a verifier bug (an i32 parameter is not replayable).
+# a skipped replay never ran, so it is not a verifier bug (an f32 parameter is not replayable: it has no source literal).
 REPLAY_SKIP_SRC="$TMP_ROOT/replay_skip.vow"
 cat > "$REPLAY_SKIP_SRC" <<'SRC'
 module ReplaySkip
 
-fn quot(a: i32, b: i32) -> i32 vow {
-  ensures: result - a / b == 0
+fn sum(a: f32, b: f32) -> f32 vow {
+  ensures: result != a + b
 } {
-  a / b
+  a + b
 }
 SRC
 run_native sat_zero "$REPLAY_SKIP_SRC" --replay-cex

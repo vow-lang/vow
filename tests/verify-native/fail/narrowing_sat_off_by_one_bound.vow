@@ -1,7 +1,7 @@
 // TEST: counterexample-fn "sat_i16"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
-// TEST: counterexample-violation "x > 32768"
+// TEST: counterexample-violation "ensures x > 32768 && result == 32767 || x <= 32768 && result as u64 == x"
 // The saturation bound is 32767, not 32768: `u64_to_i16_sat(32768)` is 32767, so the
 // second clause of the postcondition is false at `x = 32768`.
 module NarrowingSatOffByOneBound
