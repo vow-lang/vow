@@ -5,10 +5,10 @@ use clif
 use ir
 
 // Twin of vec_float_elements_cross_the_slot_by_bit_reinterpretation in
-// vow-ir/src/lower/mod.rs: a Vec<f32> or Vec<f64> element crosses the runtime's
-// i64 slot through an explicit bit reinterpretation. `push`, an indexed write, an
-// index read and a `for` binding each emit exactly one, and any other element type
-// emits none.
+// vow-codegen/tests/vec_float_lowering.rs: a Vec<f32> or Vec<f64> element crosses the
+// runtime's i64 slot through an explicit bit reinterpretation. `push`, an indexed
+// write, an index read and a `for` binding each emit exactly one, even when the Vec is
+// the unannotated result of a call, and any other element type emits none.
 
 fn lower_layout() -> IrModule [io, read] {
     let lowered: LoweredFrontend = frontend_lower_path_with_root(
@@ -98,6 +98,16 @@ fn main() -> i32 [io, read] {
     let sum32: Vec<IrInst> = insts_of(m, String::from("sum_f32"));
     if count_op(sum32, IOP_BITS_TO_F32()) != 1 { return 17; }
     if count_float_moves(sum32) != 1 { return 18; }
+
+    // the Vec is the unannotated result of a call: the checker still types the read
+    let make: Vec<IrInst> = insts_of(m, String::from("make_f64"));
+    if count_op(make, IOP_F64_TO_BITS()) != 1 { return 21; }
+    let unannotated: Vec<IrInst> = insts_of(m, String::from("read_unannotated"));
+    if count_op(unannotated, IOP_BITS_TO_F64()) != 1 { return 22; }
+    if count_float_moves(unannotated) != 1 { return 23; }
+    let sum_call: Vec<IrInst> = insts_of(m, String::from("sum_call"));
+    if count_op(sum_call, IOP_BITS_TO_F64()) != 1 { return 24; }
+    if count_float_moves(sum_call) != 1 { return 25; }
 
     if count_float_moves(insts_of(m, String::from("read_i64"))) != 0 { return 19; }
     if count_float_moves(insts_of(m, String::from("push_i64"))) != 0 { return 20; }

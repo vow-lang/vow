@@ -1002,6 +1002,13 @@ fn lctx_checked_wide_vec_elem(ctx: LowerCtx, eid: i64) -> i64 {
     if ty == ITY_I128() || ty == ITY_U128() { ty } else { -1 }
 }
 
+// The float element type (`ITY_F32`/`ITY_F64`) of a Vec access (index read or `for`
+// loop), as resolved by the checker for that expression; -1 when it is not a float.
+fn lctx_checked_float_vec_elem(ctx: LowerCtx, eid: i64) -> i64 {
+    let ty: i64 = lctx_get_question_scalar_ty(ctx, eid);
+    if ty == ITY_F32() || ty == ITY_F64() { ty } else { -1 }
+}
+
 // Address of a Vec element through a bounds-checked helper, so the 128-bit
 // value can be read or written with the two-slot WIDE_SLOT access.
 fn lctx_emit_wide_vec_elem_ptr(ctx: LowerCtx, helper: String, args: Vec<i64>, origin: i64) -> i64 {
@@ -2893,15 +2900,12 @@ fn narrow_vec_bool_elem(ctx: LowerCtx, raw: i64, origin: i64) -> i64 {
     lctx_emit(ctx, IOP_NE(), ITY_BOOL(), cmp_args, IDATA_INTEGER(), ITY_I64(), 0, String::from(""), origin)
 }
 
-// The IR type of the declared element of the `Vec` a `for` loop iterates, or -1 when
-// the iterated value carries no `Vec` type. Twin of `foreach_elem_ty` in
-// vow-ir/src/lower/mod.rs.
-fn foreach_elem_ty(ctx: LowerCtx, iter_id: i64) -> i64 {
+// True when the `for` loop iterates a `Vec` whose declared element type is `bool`.
+fn foreach_elem_is_bool(ctx: LowerCtx, iter_id: i64) -> bool {
     let elem_tid: i64 = lctx_generic_ast_arg_tid(
         ctx, lctx_get_declared_ast_tid(ctx, iter_id), String::from("Vec"), 0
     );
-    if elem_tid == -1 { return -1; }
-    lctx_lower_ast_ty(ctx, elem_tid)
+    elem_tid != -1 && lctx_lower_ast_ty(ctx, elem_tid) == ITY_BOOL()
 }
 
 // The `Vec` slot a float element is stored in: the runtime's slots are 8 raw bytes
@@ -4124,11 +4128,11 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             lctx_emit_wide_vec_elem_get(ctx, iter_id, idx_phi, foreach_wide_ty, origin)
         } else {
             let raw_elem: i64 = lctx_emit(ctx, IOP_CALL(), ITY_I64(), get_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_get_val"), origin);
-            let foreach_ty: i64 = foreach_elem_ty(ctx, iter_id);
-            if foreach_ty == ITY_BOOL() {
+            let foreach_float: i64 = lctx_checked_float_vec_elem(ctx, eid);
+            if foreach_float != -1 {
+                lctx_float_from_vec_slot(ctx, raw_elem, foreach_float, origin)
+            } else if foreach_elem_is_bool(ctx, iter_id) {
                 narrow_vec_bool_elem(ctx, raw_elem, origin)
-            } else if foreach_ty == ITY_F32() || foreach_ty == ITY_F64() {
-                lctx_float_from_vec_slot(ctx, raw_elem, foreach_ty, origin)
             } else {
                 raw_elem
             }
@@ -4891,10 +4895,11 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
         call_args.push(idx_id);
         let raw_result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_get_val"), origin);
         let elem_ty: i64 = lctx_lower_ast_ty(ctx, elem_ast_tid);
-        let result: i64 = if elem_ty == ITY_BOOL() {
+        let read_float: i64 = lctx_checked_float_vec_elem(ctx, eid);
+        let result: i64 = if read_float != -1 {
+            lctx_float_from_vec_slot(ctx, raw_result, read_float, origin)
+        } else if elem_ty == ITY_BOOL() {
             narrow_vec_bool_elem(ctx, raw_result, origin)
-        } else if elem_ty == ITY_F32() || elem_ty == ITY_F64() {
-            lctx_float_from_vec_slot(ctx, raw_result, elem_ty, origin)
         } else {
             lower_narrow_literal(ctx, a, eid, raw_result, elem_ty)
         };

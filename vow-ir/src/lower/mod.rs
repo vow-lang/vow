@@ -493,6 +493,13 @@ fn checked_wide_vec_elem(ctx: &LowerCtx, expr: &Expr) -> Option<Ty> {
         .filter(|ty| matches!(ty, Ty::I128 | Ty::U128))
 }
 
+/// The float element type of a `Vec` access (index read or `for` loop), as resolved
+/// by the checker for that expression.
+fn checked_float_vec_elem(ctx: &LowerCtx, expr: &Expr) -> Option<Ty> {
+    checked_payload_ty(ctx, expr as *const Expr as usize)
+        .filter(|ty| matches!(ty, Ty::F32 | Ty::F64))
+}
+
 /// Reads a 128-bit `Vec` element: a bounds-checked element address, then the
 /// two-slot `WideSlot` load. Twin of `lctx_emit_wide_vec_elem_get`.
 fn emit_wide_vec_elem_get(
@@ -2891,12 +2898,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     InstData::CallExtern("__vow_vec_get_val".to_string()),
                     span,
                 );
-                match foreach_elem_ty(ctx, iter_id) {
-                    Some(Ty::Bool) => narrow_vec_bool_elem(ctx, raw_elem, span),
-                    Some(float_ty @ (Ty::F32 | Ty::F64)) => {
-                        float_from_vec_slot(ctx, raw_elem, float_ty, span)
-                    }
-                    _ => raw_elem,
+                if let Some(float_ty) = checked_float_vec_elem(ctx, expr) {
+                    float_from_vec_slot(ctx, raw_elem, float_ty, span)
+                } else if foreach_elem_is_bool(ctx, iter_id) {
+                    narrow_vec_bool_elem(ctx, raw_elem, span)
+                } else {
+                    raw_elem
                 }
             };
             project_vec_index_metadata(ctx, iter_id, elem_id);
@@ -4229,13 +4236,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 InstData::CallExtern("__vow_vec_get_val".to_string()),
                 span,
             );
-            let result = if let Some(ast_type) = elem_ast_type.as_ref() {
+            let result = if let Some(float_ty) = checked_float_vec_elem(ctx, expr) {
+                float_from_vec_slot(ctx, raw_result, float_ty, span)
+            } else if let Some(ast_type) = elem_ast_type.as_ref() {
                 let elem_ty =
                     lower_ty_with_linear(ast_type, &ctx.linear_owner_names, &ctx.type_aliases);
                 if elem_ty == Ty::Bool {
                     narrow_vec_bool_elem(ctx, raw_result, span)
-                } else if matches!(elem_ty, Ty::F32 | Ty::F64) {
-                    float_from_vec_slot(ctx, raw_result, elem_ty, span)
                 } else {
                     lower_narrow_literal(ctx, expr, raw_result, elem_ty)
                 }
@@ -4752,21 +4759,18 @@ fn narrow_vec_bool_elem(ctx: &mut LowerCtx, raw: InstId, span: Span) -> InstId {
     )
 }
 
-/// The declared element type of the `for` loop's iterated `Vec`, lowered to an IR type.
-fn foreach_elem_ty(ctx: &LowerCtx, iter_id: InstId) -> Option<Ty> {
-    let iter_ty = ctx.inst_declared_ast_types.get(&iter_id)?;
-    let AstType::Generic { name, args, .. } = resolve_type_alias(iter_ty, &ctx.type_aliases) else {
-        return None;
+/// True when the `for` loop iterates a `Vec` whose declared element type is `bool`.
+fn foreach_elem_is_bool(ctx: &LowerCtx, iter_id: InstId) -> bool {
+    let Some(iter_ty) = ctx.inst_declared_ast_types.get(&iter_id) else {
+        return false;
     };
-    if name != "Vec" {
-        return None;
-    }
-    let elem = args.first()?;
-    Some(lower_ty_with_linear(
-        elem,
-        &ctx.linear_owner_names,
-        &ctx.type_aliases,
-    ))
+    let AstType::Generic { name, args, .. } = resolve_type_alias(iter_ty, &ctx.type_aliases) else {
+        return false;
+    };
+    name == "Vec"
+        && args.first().is_some_and(|elem| {
+            lower_ty_with_linear(elem, &ctx.linear_owner_names, &ctx.type_aliases) == Ty::Bool
+        })
 }
 
 /// The `Vec` slot a float element is stored in: the runtime's slots are 8 raw bytes
@@ -7568,59 +7572,6 @@ fn unsigned_max() -> u128 {
         assert_eq!(slot_tests("read_flag"), (1, 1));
         assert_eq!(slot_tests("count_set"), (1, 1));
         assert_eq!(slot_tests("read_byte"), (1, 0));
-    }
-
-    /// A `Vec<f32>` or `Vec<f64>` element crosses the runtime's `i64` slot through
-    /// an explicit bit reinterpretation: `push`, an indexed write, an index read and a
-    /// `for` binding each emit exactly one, and every other element type emits none.
-    /// Twin of `compiler/tests/test_lower_vec_float_slots.vow`.
-    #[test]
-    fn vec_float_elements_cross_the_slot_by_bit_reinterpretation() {
-        let fixture = include_str!("../../../tests/fixtures/vec_float_layout.vow");
-        let count = |name: &str, opcode: Opcode| {
-            let func = lowered_function(fixture, name);
-            insts_of(&func)
-                .iter()
-                .filter(|inst| inst.opcode == opcode)
-                .count()
-        };
-        for (name, opcode) in [
-            ("push_f64", Opcode::F64ToBits),
-            ("write_f64", Opcode::F64ToBits),
-            ("read_f64", Opcode::BitsToF64),
-            ("sum_f64", Opcode::BitsToF64),
-            ("push_f32", Opcode::F32ToBits),
-            ("write_f32", Opcode::F32ToBits),
-            ("read_f32", Opcode::BitsToF32),
-            ("sum_f32", Opcode::BitsToF32),
-        ] {
-            assert_eq!(count(name, opcode), 1, "{name}");
-        }
-        for name in ["read_i64", "push_i64"] {
-            for opcode in [
-                Opcode::F32ToBits,
-                Opcode::F64ToBits,
-                Opcode::BitsToF32,
-                Opcode::BitsToF64,
-            ] {
-                assert_eq!(count(name, opcode), 0, "{name} {opcode:?}");
-            }
-        }
-        let read = lowered_function(fixture, "read_f64");
-        let insts = insts_of(&read);
-        let result = insts
-            .iter()
-            .find(|inst| inst.opcode == Opcode::BitsToF64)
-            .expect("BitsToF64");
-        assert_eq!(result.ty, Ty::F64);
-        let slot = insts
-            .iter()
-            .find(|inst| inst.id == result.args[0])
-            .expect("slot read");
-        assert_eq!(
-            slot.data,
-            InstData::CallExtern("__vow_vec_get_val".to_string())
-        );
     }
 
     /// Twin of `compiler/tests/test_lower_phi_aggregate_metadata.vow`; both read

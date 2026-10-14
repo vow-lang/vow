@@ -1,0 +1,60 @@
+// TEST: stdout "1\n"
+// A `Vec<f64>` whose declared type the lowerer cannot see still reads its elements as
+// floats, because the checker records the float element of every index read and `for`
+// loop: an unannotated `let` bound to a call result, a `for` over a call result or a
+// struct field, a `Vec<Vec<f64>>` element, and a push and indexed write through a field
+// (#1681).
+module VecFloatShapes
+
+struct S { xs: Vec<f64> }
+
+fn make(x: f64) -> Vec<f64> {
+  let v: Vec<f64> = Vec::new();
+  v.push(x);
+  v.push(x + x);
+  v
+}
+
+fn from_call(x: f64) -> f64 {
+  let w = make(x);
+  w[1]
+}
+
+fn for_over_call(x: f64) -> f64 {
+  let mut acc: f64 = 0.0;
+  for e in make(x) {
+    acc = acc + e;
+  }
+  acc
+}
+
+fn for_over_field(s: S) -> f64 {
+  let mut acc: f64 = 0.0;
+  for e in s.xs {
+    acc = acc + e;
+  }
+  acc
+}
+
+fn nested(x: f64) -> f64 {
+  let a: Vec<Vec<f64>> = Vec::new();
+  a.push(make(x));
+  a[0][1]
+}
+
+fn field_push(s: S, x: f64) -> () {
+  s.xs.push(x);
+  s.xs[0] = x;
+}
+
+fn main() -> i32 [io] {
+  let s: S = S { xs: make(1.5) };
+  field_push(s, 2.5);
+  let c1: f64 = from_call(1.5);
+  let c2: f64 = for_over_call(1.5);
+  let c3: f64 = for_over_field(s);
+  let c4: f64 = nested(1.5);
+  if c1 == 3.0 && c2 == 4.5 && c3 == 8.0 && c4 == 3.0 { print_i64(1); } else { print_i64(0); }
+  print_str(String::from("\n"));
+  0
+}

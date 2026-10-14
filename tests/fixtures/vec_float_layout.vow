@@ -40,6 +40,25 @@ fn sum_f32(v: Vec<f32>, zero: f32) -> f32 {
     acc
 }
 
+fn make_f64(x: f64) -> Vec<f64> {
+    let v: Vec<f64> = Vec::new();
+    v.push(x);
+    v
+}
+
+fn read_unannotated(x: f64) -> f64 {
+    let w = make_f64(x);
+    w[0]
+}
+
+fn sum_call(x: f64) -> f64 {
+    let mut acc: f64 = 0.0;
+    for e in make_f64(x) {
+        acc = acc + e;
+    }
+    acc
+}
+
 fn read_i64(v: Vec<i64>, i: u64) -> i64 {
     v[i]
 }
