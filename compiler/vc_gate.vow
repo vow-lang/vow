@@ -411,7 +411,7 @@ fn vc_inst_specific_reason(inst: IrInst) -> String {
             return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), String::from("map key or value that is not a Bool, an integer up to 64 bits or unit"));
         }
         if inst.dk == IDATA_CALL_EXTERN() && !vc_is_unwrap_abort(inst) && vc_inst_vec_kind(inst) == VC_VEC_NONE()
-            && vc_inst_map_kind(inst) == VC_MAP_NONE() && !catalogue_verifier_known(inst.ds) && vc_narrow_of(inst).kind == VC_NAR_NONE() {
+            && !catalogue_verifier_known(inst.ds) && vc_narrow_of(inst).kind == VC_NAR_NONE() {
             return vc_reason(VC_SKIP_UNMODELED_BUILTIN(), inst.ds);
         }
         return String::from("");

@@ -39,13 +39,18 @@ fn vc_map_suffix_kind(op: String, btree: bool) -> i64 {
     VC_MAP_NONE()
 }
 
+// Holds when `sym` is `prefix` followed by at least one more byte.
+fn vc_sym_has_prefix(sym: String, prefix: String) -> bool {
+    sym.len() > prefix.len() && string_starts_with(sym, prefix) == 1
+}
+
 fn vc_map_op_kind(sym: String) -> i64 {
     let hp: String = VC_MAP_HASH_PREFIX();
-    if sym.len() > hp.len() && string_starts_with(sym, hp) == 1 {
+    if vc_sym_has_prefix(sym, hp) {
         return vc_map_suffix_kind(sym.substring(hp.len(), sym.len()), false);
     }
     let bp: String = VC_MAP_BTREE_PREFIX();
-    if sym.len() > bp.len() && string_starts_with(sym, bp) == 1 {
+    if vc_sym_has_prefix(sym, bp) {
         return vc_map_suffix_kind(sym.substring(bp.len(), sym.len()), true);
     }
     VC_MAP_NONE()
@@ -59,7 +64,7 @@ fn vc_inst_map_kind(inst: IrInst) -> i64 {
 
 // True for a `BTreeMap` operation, whose key is always `i64`.
 fn vc_inst_is_btree_op(inst: IrInst) -> bool {
-    inst.ds.len() > VC_MAP_BTREE_PREFIX().len() && string_starts_with(inst.ds, VC_MAP_BTREE_PREFIX()) == 1
+    vc_sym_has_prefix(inst.ds, VC_MAP_BTREE_PREFIX())
 }
 
 // An operation that changes the key set or a value of the map its first operand

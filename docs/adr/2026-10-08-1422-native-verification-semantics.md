@@ -1036,6 +1036,10 @@ addendum is that model (`compiler/vc_map.vow`, op table `compiler/vc_mapops.vow`
   are listed in `VcClaims.map_vars`, and a hard `sat` that reaches them goes through the same re-check
   as a float-text hook (`vc_hook_recheck`): it is reported only when the claim fails for every array
   and length, and otherwise is `unknown` with `unconstrained map state: ...`, never a proof.
+  The re-check shows only that the claim fails for every model state that satisfies the
+  `requires`; it cannot show that a real map does. A `requires` no real narrow-key map can meet
+  (a `HashMap<u8, _>` with `m.len() == 300`) is therefore reported as a failure instead of being
+  vacuously true, as ESBMC reports it. Closing it needs the key type of a map parameter in the IR.
   `tests/verify-native/unknown/map_narrow_param_len_bound.vow` pins the case; ESBMC decides it
   only through its 64-entry capacity.
 - **Two map parameters are distinct**, as for `Vec` (the rule of the "Collections" bullet of
