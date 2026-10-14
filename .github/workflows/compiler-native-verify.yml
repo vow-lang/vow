@@ -14,7 +14,7 @@ name: Compiler native verify
 #     (wall-clock and peak RSS) is reported here but only enforced by a local
 #     run on an idle host: shared runners are too noisy to gate a ratio on.
 #
-# Off the pull-request path, like bootstrap.yml and native-oracle.yml: the job
+# Off the pull-request path, like bootstrap.yml: the job
 # is bootstrap-class in runtime. Every push to `main` runs it, so a regression is
 # attributed to one merge; the nightly run is the backstop.
 on:
