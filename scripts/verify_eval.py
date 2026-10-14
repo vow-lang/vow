@@ -86,6 +86,64 @@ OK = "ok"
 
 VALID_REPLAY = {"confirmed", "diverged", "aborted", "skipped"}
 
+# Verdict for a program the native backend proves although the corpus label (or
+# ESBMC) says otherwise, with a written `esbmc-*-artifact` explanation. Reported,
+# non-fatal, only under `--backend native`.
+ARTIFACT = "artifact"
+
+CAPACITY_ARTIFACT = re.compile(r'^esbmc-capacity-artifact\s+"([^"]+)"$')
+MODEL_ARTIFACT = re.compile(
+    r'^esbmc-model-artifact\s+fn="([^"]+)"\s+blame=(\w+)\s+vow_id=(\d+)\s+"([^"]+)"$'
+)
+ARTIFACT_LINE = re.compile(r"^//\s*TEST:\s*(esbmc-.*)$")
+
+
+class Artifacts:
+    """What a fixture's `esbmc-*-artifact` directives say about ESBMC.
+
+    `capacity` is the reason of `// TEST: esbmc-capacity-artifact "<why>"`: ESBMC
+    refutes only through its String/Vec capacity assertion.
+    `model` maps `(fn, blame, vow_id)` of one ESBMC counterexample to the reason
+    given by `// TEST: esbmc-model-artifact fn="<fn>" blame=<B> vow_id=<N> "<why>"`:
+    that counterexample comes from ESBMC's own model, not from the program.
+    """
+
+    def __init__(self):
+        self.capacity = None
+        self.model = {}
+
+
+def parse_artifact(path, body, artifacts):
+    """Add one `esbmc-*-artifact` directive body; fail closed on a malformed one."""
+    cm = CAPACITY_ARTIFACT.match(body)
+    if cm:
+        artifacts.capacity = cm.group(1)
+        return
+    mm = MODEL_ARTIFACT.match(body)
+    if mm:
+        key = (mm.group(1), validate_blame(path, mm.group(2)), int(mm.group(3)))
+        artifacts.model[key] = mm.group(4)
+        return
+    raise ValueError(
+        f"{path}: malformed esbmc artifact directive (expected: "
+        'esbmc-capacity-artifact "<why>" or esbmc-model-artifact '
+        f'fn="<fn>" blame=<Caller|Callee|None> vow_id=<N> "<why>"): {body!r}'
+    )
+
+
+def artifact_directives(path):
+    """The `Artifacts` of one source file; empty when it has no directive."""
+    artifacts = Artifacts()
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for raw in fh:
+                m = ARTIFACT_LINE.match(raw.strip())
+                if m:
+                    parse_artifact(path, m.group(1).strip(), artifacts)
+    except OSError:
+        pass
+    return artifacts
+
 
 class Expect:
     """Ground truth for one program, parsed from its `// TEST:` directives."""
@@ -105,6 +163,7 @@ class Expect:
         # When set ("confirmed"/"diverged"/"skipped"), re-run with --replay-cex
         # and assert every counterexample carries this replay outcome (#335).
         self.replay_expect = None
+        self.artifacts = Artifacts()
 
 
 CEX_KV = re.compile(r'(\w+)\s*=\s*(?:"([^"]*)"|(\S+))')
@@ -150,7 +209,9 @@ def parse_directives(path, default_status):
                 exp.category = body.split(None, 1)[1].strip() if " " in body else None
             elif body.startswith("status"):
                 exp.expected_status = body.split(None, 1)[1].strip()
-            elif body.startswith("skip"):
+            elif body.startswith("esbmc-"):
+                parse_artifact(path, body, exp.artifacts)
+            elif body.split(None, 1)[0] == "skip":
                 sm = re.match(r'skip\s+"(.+)"', body)
                 if not sm:
                     # Fail closed: a malformed skip must not leave skip_reason
@@ -178,7 +239,7 @@ def parse_directives(path, default_status):
                 exp.known_gap = gm.group(1)
                 exp.known_gap_issue = gm.group(2)
             elif body.startswith("counterexample-fn"):
-                fm = re.match(r'counterexample-fn\s+"(.+)"', body)
+                fm = re.match(r'counterexample-fn\s+(?:"(.+)"|(\w+))$', body)
                 if not fm:
                     # Fail closed like the blame/gap directives: a malformed
                     # counterexample-fn (e.g. missing quotes) must not silently
@@ -187,7 +248,7 @@ def parse_directives(path, default_status):
                         f"{path}: malformed counterexample-fn directive "
                         f'(expected: counterexample-fn "<fn>"): {body!r}'
                     )
-                legacy["fn"] = fm.group(1)
+                legacy["fn"] = fm.group(1) or fm.group(2)
             elif body.startswith("counterexample-blame"):
                 parts = body.split(None, 1)
                 if len(parts) < 2:
@@ -335,7 +396,12 @@ def match_cex(want, actuals):
     return "missing", f"no counterexample matched {want}", None
 
 
-def vacuity_check(verifier, path):
+def backend_args(backend):
+    """`--backend X` when a backend was asked for; otherwise the default one."""
+    return ["--backend", backend] if backend else []
+
+
+def vacuity_check(verifier, path, backend=None):
     """Classify the secondary contracts guard for a should-pass program.
 
     Returns (verdict, detail):
@@ -354,7 +420,9 @@ def vacuity_check(verifier, path):
     tests/verify/modulo_safe.vow) even when the program is genuinely Verified.
     Failing those would be a false reject, not a soundness signal.
     """
-    res = run_json(verifier, ["contracts", "--verify", "--no-cache", path])
+    res = run_json(
+        verifier, ["contracts", "--verify", "--no-cache", *backend_args(backend), path]
+    )
     if res is None:
         return HARNESS, (
             "vacuity guard could not run: `contracts --verify` produced no "
@@ -382,8 +450,14 @@ def vacuity_check(verifier, path):
     return OK, None
 
 
-def classify(exp, verify_json, verifier):
-    """Compare actual verifier output against ground truth -> (verdict, detail)."""
+def classify(exp, verify_json, verifier, backend=None):
+    """Compare actual verifier output against ground truth -> (verdict, detail).
+
+    Under `backend == "native"` a program the corpus labels incorrect only
+    because ESBMC refutes it through its own capacity assertion
+    (`esbmc-capacity-artifact`) may be proven: that is ARTIFACT, the verdict
+    scripts/verify_diff.py files as `more_precise`, not a false accept.
+    """
     if verify_json is None:
         return HARNESS, "verifier produced no parseable JSON"
     actual = verify_json.get("status")
@@ -409,13 +483,18 @@ def classify(exp, verify_json, verifier):
         if actual != "Verified":
             kind = PRECISION if actual in ("VerifyFailed", "Skipped") else STATUS
             return kind, f"expected Verified, got {actual}"
-        vstatus, vdetail = vacuity_check(verifier, exp.path)
+        vstatus, vdetail = vacuity_check(verifier, exp.path, backend)
         if vstatus != OK:
             return vstatus, vdetail
         return OK, None
 
     if exp.expected_status == "VerifyFailed":
         if actual == "Verified":
+            if backend == "native" and exp.artifacts.capacity:
+                return ARTIFACT, (
+                    "native proves a program ESBMC refutes only through its "
+                    f"model capacity ({exp.artifacts.capacity})"
+                )
             return SOUNDNESS, "expected a counterexample, verifier proved it"
         if actual != "VerifyFailed":
             return STATUS, f"expected VerifyFailed, got {actual}"
@@ -550,10 +629,12 @@ def sync_docs(check):
     return 0
 
 
-def discover(verifier, filter_name):
+def discover(verifier, filter_name, backend=None):
     """Print actual verifier outcomes to aid directive authoring."""
     for sub, exp in collect(filter_name):
-        vj = run_json(verifier, ["verify", "--no-cache", exp.path])
+        vj = run_json(
+            verifier, ["verify", "--no-cache", *backend_args(backend), exp.path]
+        )
         status = vj.get("status") if vj else "<no-json>"
         cex = actual_cex(vj) if vj else []
         line = f"{sub}/{exp.name}: status={status}"
@@ -569,10 +650,13 @@ def banner(title, rows):
         print(f"  {name}: {detail}")
 
 
-def check_replay(verifier, exp):
+def check_replay(verifier, exp, backend=None):
     """Re-run with `--replay-cex` and assert every counterexample carries the
     expected replay outcome (#335). Returns (verdict, detail): OK or REPLAY."""
-    vj = run_json(verifier, ["verify", "--replay-cex", "--no-cache", exp.path])
+    vj = run_json(
+        verifier,
+        ["verify", "--replay-cex", "--no-cache", *backend_args(backend), exp.path],
+    )
     if vj is None:
         return REPLAY, "replay run produced no parseable JSON"
     ces = vj.get("counterexamples", []) or []
@@ -584,7 +668,7 @@ def check_replay(verifier, exp):
     return OK, None
 
 
-def evaluate(verifier, filter_name, output_dir):
+def evaluate(verifier, filter_name, output_dir, backend=None):
     buckets = {
         SOUNDNESS: [],
         PRECISION: [],
@@ -595,6 +679,7 @@ def evaluate(verifier, filter_name, output_dir):
         REPLAY: [],
     }
     known_gaps = []
+    artifacts = []
     report = []
     passed = 0
     cat_counts = {}
@@ -611,13 +696,15 @@ def evaluate(verifier, filter_name, output_dir):
         else:
             cat_counts[exp.category] = cat_counts.get(exp.category, 0) + 1
 
-        vj = run_json(verifier, ["verify", "--no-cache", exp.path])
-        verdict, detail = classify(exp, vj, verifier)
+        vj = run_json(
+            verifier, ["verify", "--no-cache", *backend_args(backend), exp.path]
+        )
+        verdict, detail = classify(exp, vj, verifier, backend)
         # Replay is a secondary, opt-in differential test (#335): only check it
         # when the fixture declares a `replay` directive and the primary verdict
         # is otherwise OK (a status/blame regression is the more important news).
         if verdict == OK and exp.replay_expect:
-            verdict, detail = check_replay(verifier, exp)
+            verdict, detail = check_replay(verifier, exp, backend)
         report.append(
             {
                 "name": exp.name,
@@ -633,10 +720,17 @@ def evaluate(verifier, filter_name, output_dir):
             passed += 1
         elif verdict == KNOWN_GAP:
             known_gaps.append((f"{sub}/{exp.name}", detail))
+        elif verdict == ARTIFACT:
+            artifacts.append((f"{sub}/{exp.name}", detail))
         else:
             buckets[verdict].append((f"{sub}/{exp.name}", detail))
 
-    total = passed + len(known_gaps) + sum(len(v) for v in buckets.values())
+    total = (
+        passed
+        + len(known_gaps)
+        + len(artifacts)
+        + sum(len(v) for v in buckets.values())
+    )
     print(f"Verifier-evaluation harness: {passed}/{total} programs match ground truth")
 
     print("\nCategory coverage:")
@@ -678,6 +772,8 @@ def evaluate(verifier, filter_name, output_dir):
         banner("HARNESS ERRORS", buckets[HARNESS])
     if known_gaps:
         banner("KNOWN SOUNDNESS GAPS — tracked false-accepts, non-fatal", known_gaps)
+    if artifacts:
+        banner("EXPLAINED EXTRA PROOFS — ESBMC model artefacts, non-fatal", artifacts)
 
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
@@ -687,6 +783,7 @@ def evaluate(verifier, filter_name, output_dir):
                     "passed": passed,
                     "total": total,
                     "known_gaps": len(known_gaps),
+                    "artifacts": len(artifacts),
                     "category_counts": cat_counts,
                     "results": report,
                 },
@@ -725,6 +822,13 @@ def main():
         "--filter", default=None, help="only programs whose name contains this"
     )
     ap.add_argument(
+        "--backend",
+        choices=("esbmc", "native"),
+        default=None,
+        help="pass `--backend` to every verifier run (default: the verifier's own "
+        "default; `native` needs the self-hosted vowc)",
+    )
+    ap.add_argument(
         "--discover",
         action="store_true",
         help="print actual verifier outcomes instead of asserting ground truth",
@@ -756,8 +860,8 @@ def main():
         return 2
 
     if args.discover:
-        return discover(args.verifier, args.filter)
-    return evaluate(args.verifier, args.filter, args.output_dir)
+        return discover(args.verifier, args.filter, args.backend)
+    return evaluate(args.verifier, args.filter, args.output_dir, args.backend)
 
 
 if __name__ == "__main__":

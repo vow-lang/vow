@@ -1,5 +1,7 @@
 module StringFromRawParts
 
+// TEST: esbmc-capacity-artifact "ESBMC fails its String capacity assertion for a huge raw-parts length; the postcondition holds on every returning run"
+
 // `String::from_raw_parts_copy(p, n)` copies nothing for a null source or a zero
 // length and otherwise yields `n` bytes of unknown contents. There is no cap on
 // `n`: a length at the runtime's capacity limit traps, so a returning run is
