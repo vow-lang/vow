@@ -41,6 +41,7 @@ fn two_vec_claims() -> VcClaims {
         vec_arr: Vec::new(),
         vec_len: Vec::new(),
         vec_hdr: Vec::new(),
+        vec_wide: Vec::new(),
     };
     cs.header_lens.push(10);
     cs.model_names.push(String::from("p0_vlen"));
@@ -59,10 +60,12 @@ fn two_vec_claims() -> VcClaims {
     cs.vec_arr.push(String::from("p0_varr"));
     cs.vec_len.push(String::from("p0_vlen"));
     cs.vec_hdr.push(2);
+    cs.vec_wide.push(-1);
     cs.vec_param.push(3);
     cs.vec_arr.push(String::from("p3_varr"));
     cs.vec_len.push(String::from("p3_vlen"));
     cs.vec_hdr.push(20);
+    cs.vec_wide.push(-1);
     cs
 }
 

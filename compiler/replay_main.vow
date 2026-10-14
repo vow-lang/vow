@@ -560,6 +560,27 @@ fn replay_vec_slot(pname: String, i: i64, names: Vec<String>, vals: Vec<String>)
     replay_cex_value(names, vals, key).parse_u64()
 }
 
+// Element `i` of a `Vec<i128>`/`Vec<u128>` parameter: the counterexample lists a
+// wide element as one decimal value, not as two raw slots.
+fn replay_wide_element(pname: String, i: i64, name: String, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
+    let key: String = str3r(pname, String::from("["), str3r(i64_to_string(i), String::from("]"), String::from("")));
+    let raw: String = replay_cex_value(names, vals, key);
+    if raw.len() == 0 {
+        return replay_arg_skip(str3r(String::from("the counterexample does not give element "), i64_to_string(i), str3r(String::from(" of `"), pname, String::from("` (length too large to list)"))));
+    }
+    replay_wide_literal(name, raw)
+}
+
+fn replay_vec_element(pname: String, i: i64, name: String, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
+    if name == String::from("i128") || name == String::from("u128") {
+        return replay_wide_element(pname, i, name, names, vals);
+    }
+    match replay_vec_slot(pname, i, names, vals) {
+        Option::Some(s) => { replay_slot_element(name, s) },
+        Option::None => { replay_arg_skip(str3r(String::from("the counterexample does not give element "), i64_to_string(i), str3r(String::from(" of `"), pname, String::from("` (length too large to list)")))) },
+    }
+}
+
 // The value of element type `name` that reads back from the 8-byte slot `slot`:
 // a narrow integer is the slot's low bits (the verifier truncates on read), and a
 // `bool` is true for any nonzero slot, which is how the lowerer reads it
@@ -599,11 +620,7 @@ fn replay_vec_arg(a: AstArena, tid: i64, pname: String, names: Vec<String>, vals
     lit.push_str(String::from(" = Vec::new();"));
     let mut i: i64 = 0;
     while i < len {
-        let slot: Option<u64> = replay_vec_slot(pname, i, names, vals);
-        let el: ReplayArg = match slot {
-            Option::Some(s) => { replay_slot_element(ename, s) },
-            Option::None => { replay_arg_skip(str3r(String::from("the counterexample does not give element "), i64_to_string(i), str3r(String::from(" of `"), pname, String::from("` (length too large to list)")))) },
-        };
+        let el: ReplayArg = replay_vec_element(pname, i, ename, names, vals);
         if el.reason.len() > 0 { return el; }
         lit.push_str(String::from(" __replay_v.push("));
         lit.push_str(el.lit);

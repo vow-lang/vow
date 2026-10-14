@@ -7,6 +7,7 @@ use vc_solver
 use vc_cache
 use vc_query
 use vc_exec
+use vc_wide
 
 // Contents of `Vec` and `String` parameters in a counterexample. The model of
 // such a parameter is an SMT array plus a 64-bit length (`vc_vec`); the array is
@@ -65,6 +66,13 @@ fn vc_cex_vecs(cs: VcClaims, k: u64) -> Vec<i64> {
     out
 }
 
+// Element type of the 128-bit elements of parameter `v` of `cs.vec_*`, or -1 for
+// one-slot elements.
+fn vc_cex_wide_ty(cs: VcClaims, v: i64) -> i64 {
+    if (v as u64) < cs.vec_wide.len() { return cs.vec_wide[v as u64]; }
+    -1
+}
+
 fn vc_cex_elem_name(cs: VcClaims, v: i64, i: i64) -> String {
     let out: String = String::from(cs.vec_arr[v as u64]);
     out.push_str(String::from("_e"));
@@ -88,17 +96,40 @@ fn vc_cex_elem_names(cs: VcClaims, vecs: Vec<i64>, bound: i64) -> Vec<String> {
     out
 }
 
-// Defines each of those elements as a `select` of the array, so the solver
-// answers it under a plain name.
+// Bit width of each of those elements, in the same order: 64 for a raw slot, 128
+// for an element of a wide `Vec` (`vc_wide`).
+fn vc_cex_elem_widths(cs: VcClaims, vecs: Vec<i64>, bound: i64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut p: u64 = 0;
+    while p < vecs.len() {
+        let mut width: i64 = 64;
+        if vc_cex_wide_ty(cs, vecs[p]) >= 0 { width = 128; }
+        let mut i: i64 = 0;
+        while i < bound {
+            out.push(width);
+            i = i + 1;
+        }
+        p = p + 1;
+    }
+    out
+}
+
+// Defines each of those elements as a `select` of the array (the two limbs of a
+// wide element, joined), so the solver answers it under a plain name.
 fn vc_cex_define_elems(cs: VcClaims, s: SmtScript, vecs: Vec<i64>, bound: i64) {
     let ar: VcArena = cs.arena;
     let mut p: u64 = 0;
     while p < vecs.len() {
         let arr: i64 = vc_tm_var(ar, cs.vec_arr[vecs[p] as u64]);
+        let wide: bool = vc_cex_wide_ty(cs, vecs[p]) >= 0;
         let mut i: i64 = 0;
         while i < bound {
-            let sel: i64 = vc_tm_app2(ar, VC_OP_SELECT(), arr, vc_tm_bv(ar, 64, i, 0));
-            vc_script_define_fun(s, vc_cex_elem_name(cs, vecs[p], i), 64, sel);
+            if wide {
+                vc_script_define_fun(s, vc_cex_elem_name(cs, vecs[p], i), 128, vc_wide_read(ar, arr, vc_tm_bv(ar, 64, i, 0)));
+            } else {
+                let sel: i64 = vc_tm_app2(ar, VC_OP_SELECT(), arr, vc_tm_bv(ar, 64, i, 0));
+                vc_script_define_fun(s, vc_cex_elem_name(cs, vecs[p], i), 64, sel);
+            }
             i = i + 1;
         }
         p = p + 1;
@@ -124,10 +155,11 @@ fn vc_ask_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, vecs: Vec
     let names: Vec<String> = vc_claim_model_names(cs, k);
     let widths: Vec<i64> = vc_claim_model_widths(cs, k);
     let elems: Vec<String> = vc_cex_elem_names(cs, vecs, bound);
+    let elem_widths: Vec<i64> = vc_cex_elem_widths(cs, vecs, bound);
     let mut e: u64 = 0;
     while e < elems.len() {
         names.push(elems[e]);
-        widths.push(64);
+        widths.push(elem_widths[e]);
         e = e + 1;
     }
     vc_script_get_value(s, names);

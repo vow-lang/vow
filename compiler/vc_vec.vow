@@ -98,6 +98,9 @@ struct VcVec {
     pv_arr: Vec<String>,
     pv_len: Vec<String>,
     pv_hdr: Vec<i64>,
+    // The element type (`ITY_I128`/`ITY_U128`) of each of those parameters whose
+    // elements the function reads or writes as 128-bit values (`vc_wide`), else -1.
+    pv_wide: Vec<i64>,
 }
 
 fn vc_vec_new_state(fl: VcFlow, n_blocks: u64) -> VcVec {
@@ -142,6 +145,7 @@ fn vc_vec_new_state(fl: VcFlow, n_blocks: u64) -> VcVec {
         pv_arr: Vec::new(),
         pv_len: Vec::new(),
         pv_hdr: Vec::new(),
+        pv_wide: Vec::new(),
     }
 }
 
@@ -215,9 +219,22 @@ fn vc_vec_slot(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i
         vv.pv_arr.push(a_name);
         vv.pv_len.push(l_name);
         vv.pv_hdr.push(len_hdr);
+        vv.pv_wide.push(-1);
     }
     assumed.push(vc_tm_app2(ar, VC_OP_BVULT(), len, vc_vec_len_mask(ar)));
     s
+}
+
+// Records that the function reads or writes the elements of `obj` as `ty` (a 128-bit
+// integer): a counterexample then lists them as 128-bit values. Only a parameter's
+// contents are ever listed.
+fn vc_vec_mark_wide(vv: VcVec, ag: VcAgg, obj: i64, ty: i64) {
+    if ag.kinds[obj as u64] != VC_OBJ_PARAM() { return; }
+    let mut j: u64 = 0;
+    while j < vv.pv_param.len() {
+        if vv.pv_param[j] == ag.owners[obj as u64] { vv.pv_wide[j] = ty; }
+        j = j + 1;
+    }
 }
 
 // A `Vec::new()` result: length 0, contents unconstrained (readable only behind

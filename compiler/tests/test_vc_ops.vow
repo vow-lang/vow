@@ -107,7 +107,12 @@ fn check_vec_op_table() -> i64 {
     if vc_vec_op_kind(String::from("__vow_vec_pin_to_root_val")) != VC_STR_CLONE() { return 720; }
     if vc_vec_op_kind(String::from("__vow_vec_from_raw_parts_copy_val_in_arena")) != VC_VEC_NONE() { return 721; }
     if vc_vec_op_kind(String::from("__vow_vec_push_val_in_arena")) != VC_VEC_NONE() { return 718; }
-    if vc_vec_op_kind(String::from("__vow_vec_get_wide_ptr")) != VC_VEC_NONE() { return 719; }
+    if vc_vec_op_kind(String::from("__vow_vec_get_wide_ptr")) != VC_VEC_GET_WIDE() { return 719; }
+    if vc_vec_op_kind(String::from("__vow_vec_set_wide_ptr")) != VC_VEC_SET_WIDE() { return 720; }
+    if vc_vec_op_kind(String::from("__vow_vec_push_wide_ptr")) != VC_VEC_PUSH_WIDE() { return 721; }
+    if vc_vec_op_kind(String::from("__vow_vec_push_wide_ptr_in_arena")) != VC_VEC_NONE() { return 722; }
+    if !vc_vec_kind_is_wide(VC_VEC_GET_WIDE()) || vc_vec_kind_is_wide(VC_VEC_GET()) || vc_vec_kind_is_wide(VC_STR_BYTE_AT()) { return 723; }
+    if !vc_vec_kind_mutates(VC_VEC_PUSH_WIDE()) || !vc_vec_kind_mutates(VC_VEC_SET_WIDE()) || vc_vec_kind_mutates(VC_VEC_GET_WIDE()) { return 724; }
     0
 }
 
