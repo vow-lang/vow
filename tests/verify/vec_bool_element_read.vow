@@ -1,0 +1,27 @@
+// TEST: category model-drift
+// A `Vec<bool>` element read reaches the verifier as a `bool`, so it can be the
+// condition of a branch, the result of a function and an operand of `&&`/`||`.
+module VecBoolElementRead
+
+fn flag_at(v: Vec<bool>, i: u64) -> bool vow {
+    requires: i < v.len(),
+    ensures: result == v[i]
+} {
+    v[i]
+}
+
+fn either(v: Vec<bool>) -> bool vow {
+    requires: v.len() >= 2,
+    ensures: result == (v[0] || v[1])
+} {
+    if v[0] { return true; }
+    v[1]
+}
+
+fn main() -> i32 [io] {
+    let v: Vec<bool> = Vec::new();
+    v.push(true);
+    v.push(false);
+    if flag_at(v, 0) && either(v) { print_i64(1); }
+    0
+}

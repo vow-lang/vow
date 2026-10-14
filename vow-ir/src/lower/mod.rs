@@ -2883,13 +2883,18 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             let elem_id = if let Some(wide_ty) = checked_wide_vec_elem(ctx, expr) {
                 emit_wide_vec_elem_get(ctx, iter_id, idx_phi, wide_ty, span)
             } else {
-                ctx.emit(
+                let raw_elem = ctx.emit(
                     Opcode::Call,
                     Ty::I64,
                     vec![iter_id, idx_phi],
                     InstData::CallExtern("__vow_vec_get_val".to_string()),
                     span,
-                )
+                );
+                if foreach_elem_is_bool(ctx, iter_id) {
+                    narrow_vec_bool_elem(ctx, raw_elem, span)
+                } else {
+                    raw_elem
+                }
             };
             project_vec_index_metadata(ctx, iter_id, elem_id);
             record_collection_foreach_element(ctx, iter_id, elem_id);
@@ -4223,7 +4228,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             let result = if let Some(ast_type) = elem_ast_type.as_ref() {
                 let elem_ty =
                     lower_ty_with_linear(ast_type, &ctx.linear_owner_names, &ctx.type_aliases);
-                lower_narrow_literal(ctx, expr, raw_result, elem_ty)
+                if elem_ty == Ty::Bool {
+                    narrow_vec_bool_elem(ctx, raw_result, span)
+                } else {
+                    lower_narrow_literal(ctx, expr, raw_result, elem_ty)
+                }
             } else {
                 raw_result
             };
@@ -4719,6 +4728,41 @@ fn known_map_argument_ast_types(
 /// Record a `for` binding's declared type when the iterated `Vec`'s element is itself a
 /// collection (`Vec`, `HashMap` or `BTreeMap`), as an indexed element already does, so
 /// the binding dispatches map methods and indexes into an inner `Vec<Map>` correctly.
+/// `__vow_vec_get_val` returns a `Vec<bool>` element as the runtime's 8-byte slot, typed
+/// `i64`. Comparing it with zero gives the read the `bool` type the program gave it, so
+/// every later use (branch, return, `!`, `&&`) sees a `bool`. Twin of
+/// `narrow_vec_bool_elem` in `compiler/lower.vow`.
+fn narrow_vec_bool_elem(ctx: &mut LowerCtx, raw: InstId, span: Span) -> InstId {
+    let zero = ctx.emit(
+        Opcode::ConstI64,
+        Ty::I64,
+        vec![],
+        InstData::ConstI64(0),
+        span,
+    );
+    ctx.emit(
+        Opcode::Ne,
+        Ty::Bool,
+        vec![raw, zero],
+        InstData::Integer(IntegerType::I64),
+        span,
+    )
+}
+
+/// True when the `for` loop iterates a `Vec` whose declared element type is `bool`.
+fn foreach_elem_is_bool(ctx: &LowerCtx, iter_id: InstId) -> bool {
+    let Some(iter_ty) = ctx.inst_declared_ast_types.get(&iter_id) else {
+        return false;
+    };
+    let AstType::Generic { name, args, .. } = resolve_type_alias(iter_ty, &ctx.type_aliases) else {
+        return false;
+    };
+    name == "Vec"
+        && args.first().is_some_and(|elem| {
+            lower_ty_with_linear(elem, &ctx.linear_owner_names, &ctx.type_aliases) == Ty::Bool
+        })
+}
+
 fn record_collection_foreach_element(ctx: &mut LowerCtx, iter_id: InstId, elem_id: InstId) {
     let Some(iter_ty) = ctx.inst_declared_ast_types.get(&iter_id) else {
         return;
@@ -7464,6 +7508,34 @@ fn unsigned_max() -> u128 {
             .into_iter()
             .find(|func| func.name == name)
             .unwrap_or_else(|| panic!("function `{name}`"))
+    }
+
+    /// A `Vec<bool>` element read, by index or as a `for` binding, is the runtime's
+    /// slot compared with zero, so it is a `bool`; any other element type keeps its own
+    /// read. Twin of `compiler/tests/test_lower_vec_bool_reads.vow`.
+    #[test]
+    fn vec_bool_reads_are_compared_with_zero() {
+        let fixture = include_str!("../../../tests/fixtures/vec_bool_layout.vow");
+        let slot_tests = |name: &str| {
+            let func = lowered_function(fixture, name);
+            let insts = insts_of(&func);
+            let gets = insts
+                .iter()
+                .filter(|inst| inst.data == InstData::CallExtern("__vow_vec_get_val".to_string()))
+                .count();
+            let tests = insts
+                .iter()
+                .filter(|inst| {
+                    inst.opcode == Opcode::Ne
+                        && inst.ty == Ty::Bool
+                        && inst.data == InstData::Integer(IntegerType::I64)
+                })
+                .count();
+            (gets, tests)
+        };
+        assert_eq!(slot_tests("read_flag"), (1, 1));
+        assert_eq!(slot_tests("count_set"), (1, 1));
+        assert_eq!(slot_tests("read_byte"), (1, 0));
     }
 
     /// Twin of `compiler/tests/test_lower_phi_aggregate_metadata.vow`; both read

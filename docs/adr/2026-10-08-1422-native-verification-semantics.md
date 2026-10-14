@@ -413,8 +413,8 @@ of this change and stay `Skipped`.
   one), labelled `vec bounds` like ESBMC's, unattributed (vow id `4294967293`,
   blame `None`), and assumed afterwards. The index must be a 64-bit integer.
   An element read is the raw slot as `i64`; the lowerer's own cast narrows it.
-  A `Vec<bool>` read reaches a `Branch` or `Return` as an `i64`, which the gate
-  already rejects, so it stays `Skipped` as `unsupported-opcode`.
+  A `Vec<bool>` read is narrowed to `bool` by a comparison with zero (see the
+  #1661 addendum).
 - **Merges.** Entering a block merges the exit states of its live in-edges with
   the same `ite` chain a Phi uses, each merged term bound by a `define-fun`
   (`vc_vec_enter`); a write replaces the state of the block being walked. State
@@ -886,3 +886,18 @@ its parameter is still `unsupported-opcode`.
 This also stops a `bool` flag from hiding the `Vec` functions that take one. A `Vec<bool>` element
 read stays skipped (see the `Return` of a raw `i64` slot in a `bool` function): the lowerer types
 the read `i64` and never narrows it to `bool`.
+
+## Addendum (#1661): `Vec<bool>` element reads
+
+`__vow_vec_get_val` returns a `Vec<bool>` element as the runtime's 8-byte slot typed `i64`, which
+reached a `Branch` or `Return` of a `bool` function untyped and was rejected by the gate. Rather
+than let the verifier guess the element type from how a value is used, both lowerers (`lower.vow`
+and `vow-ir/src/lower/mod.rs`, in lock step) now compare the slot with zero, emitting
+`Ne[i64](slot, 0) : Bool`, after an index read or a `for` binding whose declared element type is
+`bool`. Any other element type is unchanged. The IR is identical in both compilers, and the model
+is the one-slot `Vec` model: a nonzero slot is `true`.
+
+A `Vec<bool>` parameter's slots are therefore unconstrained 64-bit values, and a counterexample may
+list a nonzero slot such as `18446744073709551615` for a `true` element. Replay maps any nonzero
+slot of a `bool` element to `true` (it used to skip on a slot other than 0 or 1), which is exactly
+how the model reads it.

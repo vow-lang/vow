@@ -1,0 +1,19 @@
+// TEST: counterexample-fn "first_clear"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value v.len 1
+module VecBoolElementWrongPost
+
+fn first_clear(v: Vec<bool>) -> bool vow {
+  requires: v.len() > 0,
+  ensures: !result
+} {
+  v[0]
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<bool> = Vec::new();
+  v.push(false);
+  if first_clear(v) { print_i64(1); }
+  0
+}
