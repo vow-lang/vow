@@ -7510,6 +7510,34 @@ fn unsigned_max() -> u128 {
             .unwrap_or_else(|| panic!("function `{name}`"))
     }
 
+    /// A `Vec<bool>` element read, by index or as a `for` binding, is the runtime's
+    /// slot compared with zero, so it is a `bool`; any other element type keeps its own
+    /// read. Twin of `compiler/tests/test_lower_vec_bool_reads.vow`.
+    #[test]
+    fn vec_bool_reads_are_compared_with_zero() {
+        let fixture = include_str!("../../../tests/fixtures/vec_bool_layout.vow");
+        let slot_tests = |name: &str| {
+            let func = lowered_function(fixture, name);
+            let insts = insts_of(&func);
+            let gets = insts
+                .iter()
+                .filter(|inst| inst.data == InstData::CallExtern("__vow_vec_get_val".to_string()))
+                .count();
+            let tests = insts
+                .iter()
+                .filter(|inst| {
+                    inst.opcode == Opcode::Ne
+                        && inst.ty == Ty::Bool
+                        && inst.data == InstData::Integer(IntegerType::I64)
+                })
+                .count();
+            (gets, tests)
+        };
+        assert_eq!(slot_tests("read_flag"), (1, 1));
+        assert_eq!(slot_tests("count_set"), (1, 1));
+        assert_eq!(slot_tests("read_byte"), (1, 0));
+    }
+
     /// Twin of `compiler/tests/test_lower_phi_aggregate_metadata.vow`; both read
     /// `tests/fixtures/phi_aggregate_metadata.vow`. Every if/else, match, `loop`,
     /// `while` and `for` merge Phi over a struct must keep its aggregate metadata, so
