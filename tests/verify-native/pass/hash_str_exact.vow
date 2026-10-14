@@ -1,0 +1,59 @@
+module HashStrExact
+
+// `hash_str` is the runtime's FNV-1a fold over every byte of the string, from the offset
+// basis `0xCBF29CE484222325` with the prime `0x100000001B3`, encoded exactly for a string of
+// any length: a closed term for a short known length (a literal, a string built by pushes),
+// else the entry `len` of a prefix array defined by a step binder in an assumption. The
+// published FNV-1a values of "", "a" and "foobar" are proven here, and so is the one-step
+// unrolling of a symbolic string. (A symbolic string of two or more bytes is a nonlinear query,
+// a miter of 64-bit multipliers, that takes the solver seconds, so it is not a fixture.)
+fn empty_literal() -> bool vow {
+  ensures: result == true
+} {
+  hash_str(String::from("")) == 14695981039346656037u64
+}
+
+fn a_literal() -> bool vow {
+  ensures: result == true
+} {
+  hash_str(String::from("a")) == 12638187200555641996u64
+}
+
+fn foobar_literal() -> bool vow {
+  ensures: result == true
+} {
+  hash_str(String::from("foobar")) == 9625390261332436968u64
+}
+
+fn pushed_bytes() -> bool vow {
+  ensures: result == true
+} {
+  let t: String = String::new();
+  t.push_byte(97u8);
+  hash_str(t) == 12638187200555641996u64
+}
+
+fn empty_param(s: String) -> bool vow {
+  requires: s.len() == 0
+  ensures: result == true
+} {
+  hash_str(s) == 14695981039346656037u64
+}
+
+fn one_byte_param(s: String) -> bool vow {
+  requires: s.len() == 1
+  ensures: result == true
+} {
+  hash_str(s) == (14695981039346656037u64 ^ (s.byte_at(0) as u64)) * 1099511628211u64
+}
+
+fn copy_hashes_alike(s: String) -> bool vow {
+  ensures: result == true
+} {
+  hash_str(s) == hash_str(String::from(s))
+}
+
+fn main() -> i32 [io] {
+  print_u64(hash_str(String::from("a")));
+  0
+}

@@ -411,8 +411,10 @@ narrow field declared after it lives in the shifted slot). A function that
 reads, writes, or pushes a `Vec<i128>` or `Vec<u128>` element is `Skipped`
 under both backends (an unsupported `Call extern` opcode under ESBMC,
 `unmodeled-builtin` under native); so is a call to `parse_i128` or
-`parse_u128`, whose `Option` result the verifier's 64-bit `Option` model cannot
-represent. Contracts over 128-bit parameters alone do verify.
+`parse_u128` under ESBMC, whose 64-bit `Option` model cannot represent the
+result (the native verifier gives the payload its 128 bits and models the call
+as an opaque total function of the string). Contracts over 128-bit parameters
+alone do verify.
 
 Runtime violation values are *not* one of those gaps: a scalar `i128`/`u128`
 binding captured by a `vow` block reports its full value in the runtime

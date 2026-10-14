@@ -1,0 +1,16 @@
+// TEST: unknown-reason opaque builtin result
+// `string_trim` never grows a string (a fact the model keeps), but whether it shortens one depends
+// on the Unicode white space the model does not encode: a counterexample "a string with nothing to
+// trim" is the result of the call being as long as its operand, which the opaque result allows and
+// the real call also gives, but the verifier cannot tell which, so it is unknown.
+module TrimShortensOpaque
+
+fn trimmed_is_shorter(s: String) -> bool vow {
+  ensures: result == true
+} {
+  string_trim(s).len() < s.len()
+}
+
+fn main() -> i32 [io] {
+  if trimmed_is_shorter(String::from(" a ")) { 0 } else { 1 }
+}

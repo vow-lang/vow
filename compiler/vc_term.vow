@@ -43,6 +43,11 @@ fn VC_T_EXT() -> i64 { 4 }
 fn VC_T_QEQ() -> i64 { 5 }
 fn VC_T_QLT() -> i64 { 6 }
 fn VC_T_QDIFF() -> i64 { 7 }
+fn VC_T_QFOLD() -> i64 { 8 }
+fn VC_T_QHEX() -> i64 { 9 }
+fn VC_T_QUNHEX() -> i64 { 10 }
+fn VC_T_HEXPAIR() -> i64 { 11 }
+fn VC_T_HEXVAL() -> i64 { 12 }
 
 fn VC_EXT_ZERO() -> i64 { 0 }
 fn VC_EXT_SIGN() -> i64 { 1 }
@@ -270,10 +275,12 @@ fn vc_tm_is_false(ar: VcArena, t: i64) -> bool {
 // a bit-vector constant carries. Operators on 128-bit constants fold only by
 // width-independent rules.
 
-// The binders of the `String` model (`vc_str`, `vc_strsearch`): `VC_T_QEQ`, and the two
-// that state the for-all half of `contains` through a Skolem array.
+// The kinds `vc_smt` prints from a template (`vc_qbind`) instead of an operator: the binders
+// of the `String` model (`vc_str`, `vc_strsearch`, `vc_strfold`) and the two hex-pair macros
+// of `hex_decode`. Their children are terms (`a`, `b`, `c`, `aux`, each -1 when unused).
 fn vc_kind_is_binder(kind: i64) -> bool {
     kind == VC_T_QEQ() || kind == VC_T_QLT() || kind == VC_T_QDIFF()
+        || (kind >= VC_T_QFOLD() && kind <= VC_T_HEXVAL())
 }
 
 // True for variables and constants: terms that are printed as they are and
@@ -689,4 +696,32 @@ fn vc_tm_qlt(ar: VcArena, a: i64, b: i64, l: i64) -> i64 {
 // array `c` names a position of the needle `a` that differs from the haystack `b` there.
 fn vc_tm_qdiff(ar: VcArena, a: i64, b: i64, c: i64, l: i64) -> i64 {
     vc_arena_intern(ar, VC_T_QDIFF(), a, b, c, l)
+}
+
+// `forall i < n. h[i + 1] == (h[i] xor low8(s[i])) * FNV_PRIME`: the prefix array `h` of the FNV-1a
+// fold over the first `n` bytes of `s` (`vc_strfold`). Built only inside an assumption.
+fn vc_tm_qfold(ar: VcArena, h: i64, s: i64, n: i64) -> i64 {
+    vc_arena_intern(ar, VC_T_QFOLD(), h, s, -1, n)
+}
+
+// `forall i < n. r[2i] == hexdigit(low8(v[i]) >> 4) and r[2i + 1] == hexdigit(low8(v[i]) & 15)`:
+// the text `hex_encode` produces for the first `n` elements of `v`.
+fn vc_tm_qhex(ar: VcArena, r: i64, v: i64, n: i64) -> i64 {
+    vc_arena_intern(ar, VC_T_QHEX(), r, v, -1, n)
+}
+
+// `forall i < m. hexpair(s, i) and r[i] == hexval(s, i)`: every pair of the first `2m` bytes of `s`
+// is one the runtime's `hex_decode` accepts, and `r` holds the bytes they decode to.
+fn vc_tm_qunhex(ar: VcArena, r: i64, s: i64, m: i64) -> i64 {
+    vc_arena_intern(ar, VC_T_QUNHEX(), r, s, -1, m)
+}
+
+// Bool: the pair of bytes `s[2i]`, `s[2i + 1]` is accepted by `hex_decode`.
+fn vc_tm_hexpair(ar: VcArena, s: i64, i: i64) -> i64 {
+    vc_arena_intern(ar, VC_T_HEXPAIR(), s, i, -1, -1)
+}
+
+// 64-bit: the byte that pair decodes to (meaningful when `vc_tm_hexpair` holds).
+fn vc_tm_hexval(ar: VcArena, s: i64, i: i64) -> i64 {
+    vc_arena_intern(ar, VC_T_HEXVAL(), s, i, -1, -1)
 }

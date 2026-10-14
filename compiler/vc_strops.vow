@@ -32,8 +32,40 @@ fn VC_STR_FROM_U64() -> i64 { 24 }
 fn VC_STR_FROM_I128() -> i64 { 25 }
 fn VC_STR_FROM_U128() -> i64 { 26 }
 fn VC_STR_CONTAINS() -> i64 { 27 }
+fn VC_STR_HASH() -> i64 { 28 }
+fn VC_STR_HEX_ENCODE() -> i64 { 29 }
+fn VC_STR_HEX_DECODE() -> i64 { 30 }
+fn VC_STR_PARSE_INT() -> i64 { 31 }
+fn VC_STR_TRIM() -> i64 { 32 }
+fn VC_STR_TO_UPPER() -> i64 { 33 }
+fn VC_STR_TO_LOWER() -> i64 { 34 }
 
 fn VC_STR_PREFIX() -> String { String::from("__vow_string_") }
+
+// The width of the integer `__vow_string_parse_<i|u><bits>_opt` parses (8, 16, 32, 64 or 128), 0
+// for any other symbol.
+fn vc_str_parse_bits(sym: String) -> i64 {
+    let pre: String = String::from("__vow_string_parse_");
+    let post: String = String::from("_opt");
+    if sym.len() < pre.len() + post.len() + 2 || string_starts_with(sym, pre) != 1 || string_ends_with(sym, post) != 1 { return 0; }
+    let sign: i64 = sym.byte_at(pre.len());
+    if sign != 105 && sign != 117 { return 0; }
+    let width: String = sym.substring(pre.len() + 1, sym.len() - post.len());
+    if width == String::from("8") { return 8; }
+    if width == String::from("16") { return 16; }
+    if width == String::from("32") { return 32; }
+    if width == String::from("64") { return 64; }
+    if width == String::from("128") { return 128; }
+    0
+}
+
+// A key that tells two parse functions apart (width and signedness) and differs from every
+// `VC_STR_*` kind, which keys the text functions.
+fn vc_str_parse_key(sym: String) -> i64 {
+    let mut key: i64 = 1000 + vc_str_parse_bits(sym) * 2;
+    if sym.byte_at(String::from("__vow_string_parse_").len()) == 105 { key = key + 1; }
+    key
+}
 
 // The kind of a `String` runtime symbol, or `VC_STR_NONE`.
 fn vc_str_op_kind(sym: String) -> i64 {
@@ -41,8 +73,15 @@ fn vc_str_op_kind(sym: String) -> i64 {
     if sym.len() <= pre.len() || string_starts_with(sym, pre) != 1 {
         if sym == String::from("__vow_parse_f64_bits") { return VC_STR_PARSE_F64(); }
         if sym == String::from("__vow_format_f64_bits") { return VC_STR_FORMAT_F64(); }
+        if sym == String::from("__vow_hash_str") { return VC_STR_HASH(); }
+        if sym == String::from("__vow_hex_encode") { return VC_STR_HEX_ENCODE(); }
+        if sym == String::from("__vow_hex_decode") { return VC_STR_HEX_DECODE(); }
         return VC_STR_NONE();
     }
+    if vc_str_parse_bits(sym) > 0 { return VC_STR_PARSE_INT(); }
+    if sym == String::from("__vow_string_trim") { return VC_STR_TRIM(); }
+    if sym == String::from("__vow_string_to_upper") { return VC_STR_TO_UPPER(); }
+    if sym == String::from("__vow_string_to_lower") { return VC_STR_TO_LOWER(); }
     if sym == String::from("__vow_string_len") { return VC_STR_LEN(); }
     if sym == String::from("__vow_string_new") { return VC_STR_NEW(); }
     if sym == String::from("__vow_string_literal") { return VC_STR_LITERAL(); }
@@ -87,6 +126,19 @@ fn vc_str_kind_creates(k: i64) -> bool {
     k == VC_STR_NEW() || k == VC_STR_LITERAL() || k == VC_STR_CLONE()
         || k == VC_STR_SUBSTRING() || k == VC_STR_SUBSTR() || k == VC_STR_FROM_RAW_PARTS()
         || k == VC_STR_FORMAT_F64() || vc_str_kind_formats_int(k)
+        || k == VC_STR_HEX_ENCODE() || k == VC_STR_HEX_DECODE() || vc_str_kind_text_hook(k)
+}
+
+// A kind whose result is an opaque text (`vc_hooks`): `string_trim`, `string_to_upper` and
+// `string_to_lower`.
+fn vc_str_kind_text_hook(k: i64) -> bool {
+    k == VC_STR_TRIM() || k == VC_STR_TO_UPPER() || k == VC_STR_TO_LOWER()
+}
+
+// A kind whose result is a total function of its operand's bytes that the model does not encode
+// (`vc_hooks`): a text above, or the `Option` of a `parse_*`.
+fn vc_str_kind_opaque(k: i64) -> bool {
+    k == VC_STR_PARSE_INT() || vc_str_kind_text_hook(k)
 }
 
 // A creating kind none of whose operands is a string object: integers (`new`,
@@ -112,9 +164,12 @@ fn vc_str_kind_two_strings(k: i64) -> bool {
 // instruction of a function is one, the contents of its strings cannot matter and
 // the model leaves them unconstrained (no byte facts, no quantifier). `parse_f64_bits`
 // is one: its result is a function of the bytes, which only equal contents make equal.
+// So are `hash_str` and `hex_decode`, which fold or decode them; `hex_encode` reads a
+// `Vec`, whose elements are always modelled.
 fn vc_str_kind_reads_bytes(k: i64) -> bool {
     k == VC_STR_BYTE_AT() || k == VC_STR_EQ() || k == VC_STR_MATCHES_LITERAL_AT()
         || k == VC_STR_STARTS_WITH() || k == VC_STR_ENDS_WITH() || k == VC_STR_PARSE_F64() || k == VC_STR_CONTAINS()
+        || k == VC_STR_HASH() || k == VC_STR_HEX_DECODE() || vc_str_kind_opaque(k)
 }
 
 // Why a `String` runtime symbol that is not a catalogue entry has no model, or ""
@@ -127,9 +182,6 @@ fn vc_str_unmodeled_reason(sym: String) -> String {
     if sym == String::from("__vow_string_from_cstr") {
         return String::from("reads memory behind a C string up to its NUL, whose length and bytes the model does not hold");
     }
-    if sym == String::from("__vow_string_parse_u64_opt") {
-        return String::from("parsing needs a fold over the digits after a Unicode trim, and an Option built by the call; see the parse_* entries of docs/spec/operations.json");
-    }
     if string_ends_with(sym, String::from("_in_arena")) == 1 {
         return String::from("arena variant: region routing happens at codegen and the verifier sees the base symbol; the extra arena operand has no model");
     }
@@ -139,7 +191,7 @@ fn vc_str_unmodeled_reason(sym: String) -> String {
 // A kind of this module (`VC_VEC_LEN`, which `__vow_string_len` shares with the
 // `Vec` length, is not one).
 fn vc_str_kind_is_string_op(k: i64) -> bool {
-    k >= VC_STR_NEW() && k <= VC_STR_CONTAINS()
+    k >= VC_STR_NEW() && k <= VC_STR_TO_LOWER()
 }
 
 // The `dv2` of a `ConstStr` whose bytes the verifier has read from the module's

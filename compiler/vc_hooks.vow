@@ -6,6 +6,7 @@ use vc_smt
 use vc_agg
 use vc_vec
 use vc_str
+use vc_strops
 
 // The float-text hooks `parse_f64_bits(s) -> u64` and `format_f64_bits(bits) -> String`
 // in the native verifier (ADR-2026-10-08-1422, #1646 addendum). Both are total
@@ -75,4 +76,113 @@ fn vc_hook_format(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, bit
     vv.hk_vars.push(arr);
     vv.hk_vars.push(len);
     n
+}
+
+// The opaque total functions of #1654 (`parse_*`, `string_trim`, `string_to_upper`,
+// `string_to_lower`): like `parse_f64_bits`, their result is a function of the operand's
+// contents that the model does not encode (Unicode `trim`, the digit grammar, full case
+// mapping), so it is a fresh constant and a counterexample that depends on it is re-checked
+// (`vc_hook_recheck`) and ends `unknown`, never a failure. Calls of one function on the same
+// operand terms share a result; equal operand strings give equal results (the same Ackermann
+// axioms, built on the exact `vc_str_eq`). Facts true of every run are kept: a `parse_<ty>`
+// payload has the width of `ty`, a result length is below `VOW_CAP_VALUE_MASK`, `string_trim`
+// never grows a string and a case map keeps an empty string empty.
+
+// The index in `ox_*` of the earlier call of function `fid` on the string `(arr, len)`, or -1.
+fn vc_hook_opaque_find(vv: VcVec, fid: i64, arr: i64, len: i64) -> i64 {
+    let mut i: u64 = 0;
+    while i < vv.ox_fn.len() {
+        if vv.ox_fn[i] == fid && vv.ox_arr[i] == arr && vv.ox_len[i] == len { return i as i64; }
+        i = i + 1;
+    }
+    -1
+}
+
+// The earlier calls of function `fid` whose operand may equal `(arr, len)` without being the same
+// term: their indices on `idx` and, on `guards`, the Bool term "the two operands are equal" that
+// guards an Ackermann axiom (a call whose guard is statically false is left out).
+fn vc_hook_opaque_peers(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, fid: i64, arr: i64, len: i64, idx: Vec<u64>, guards: Vec<i64>) {
+    let n: u64 = vv.ox_fn.len();
+    let mut i: u64 = 0;
+    while i < n {
+        if vv.ox_fn[i] == fid {
+            let same: i64 = vc_str_eq(vv, ar, hdr, assumed, arr, len, vv.ox_arr[i], vv.ox_len[i]);
+            if !vc_tm_is_false(ar, same) {
+                idx.push(i);
+                guards.push(same);
+            }
+        }
+        i = i + 1;
+    }
+}
+
+fn vc_hook_opaque_record(vv: VcVec, fid: i64, arr: i64, len: i64, r0: i64, r1: i64) {
+    vv.ox_fn.push(fid);
+    vv.ox_arr.push(arr);
+    vv.ox_len.push(len);
+    vv.ox_r0.push(r0);
+    vv.ox_r1.push(r1);
+}
+
+// `parse_<ty>(s)` for a `bits`-bit `ty`: the Some flag and the payload of the `Option` pushed on
+// `out`. `fid` tells the parse functions apart (`vc_str_parse_key`).
+fn vc_hook_parse_opt(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, fid: i64, bits: i64, arr: i64, len: i64, out: Vec<i64>) {
+    let known: i64 = vc_hook_opaque_find(vv, fid, arr, len);
+    if known >= 0 {
+        out.push(vv.ox_r0[known as u64]);
+        out.push(vv.ox_r1[known as u64]);
+        return;
+    }
+    let some: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("hks")), VC_SORT_BOOL());
+    let payload: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("hkv")), bits);
+    let peers: Vec<u64> = Vec::new();
+    let guards: Vec<i64> = Vec::new();
+    vc_hook_opaque_peers(vv, ar, hdr, assumed, fid, arr, len, peers, guards);
+    let mut k: u64 = 0;
+    while k < peers.len() {
+        let i: u64 = peers[k];
+        let agree: i64 = vc_tm_and(ar, vc_tm_app2(ar, VC_OP_EQ(), some, vv.ox_r0[i]),
+            vc_tm_implies(ar, some, vc_tm_app2(ar, VC_OP_EQ(), payload, vv.ox_r1[i])));
+        vc_str_axiom(ar, assumed, vc_tm_implies(ar, guards[k], agree));
+        k = k + 1;
+    }
+    vc_hook_opaque_record(vv, fid, arr, len, some, payload);
+    vv.hk_vars.push(some);
+    vv.hk_vars.push(payload);
+    out.push(some);
+    out.push(payload);
+}
+
+// The text `string_trim`, `string_to_upper` or `string_to_lower` (`fid`, the kind) returns for
+// `(arr, len)`, as the `(array, length)` pushed on `out`.
+fn vc_hook_text_fn(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, fid: i64, arr: i64, len: i64, out: Vec<i64>) {
+    let known: i64 = vc_hook_opaque_find(vv, fid, arr, len);
+    if known >= 0 {
+        out.push(vv.ox_r0[known as u64]);
+        out.push(vv.ox_r1[known as u64]);
+        return;
+    }
+    let ra: i64 = vc_str_fresh_array(vv, ar, hdr, String::from("hkt"));
+    let rl: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("hkn")), 64);
+    vc_str_axiom(ar, assumed, vc_tm_app2(ar, VC_OP_BVULT(), rl, vc_vec_len_mask(ar)));
+    if fid == VC_STR_TRIM() {
+        vc_str_axiom(ar, assumed, vc_tm_app2(ar, VC_OP_BVULE(), rl, len));
+    } else {
+        let empty: i64 = vc_tm_app2(ar, VC_OP_EQ(), len, vc_str_zero(ar));
+        vc_str_axiom(ar, assumed, vc_tm_implies(ar, empty, vc_tm_app2(ar, VC_OP_EQ(), rl, vc_str_zero(ar))));
+    }
+    let peers: Vec<u64> = Vec::new();
+    let guards: Vec<i64> = Vec::new();
+    vc_hook_opaque_peers(vv, ar, hdr, assumed, fid, arr, len, peers, guards);
+    let mut k: u64 = 0;
+    while k < peers.len() {
+        let i: u64 = peers[k];
+        vc_str_axiom(ar, assumed, vc_tm_implies(ar, guards[k], vc_str_eq(vv, ar, hdr, assumed, ra, rl, vv.ox_r0[i], vv.ox_r1[i])));
+        k = k + 1;
+    }
+    vc_hook_opaque_record(vv, fid, arr, len, ra, rl);
+    vv.hk_vars.push(ra);
+    vv.hk_vars.push(rl);
+    out.push(ra);
+    out.push(rl);
 }

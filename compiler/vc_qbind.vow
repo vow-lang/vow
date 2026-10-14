@@ -1,0 +1,189 @@
+module VcQbind
+
+// SMT-LIB text of the string-function binders and macros of the native verifier (ADR-2026-10-08-1422,
+// #1654 addendum): the FNV-1a prefix fold of `hash_str`, the hex digits of `hex_encode`, and the
+// pair grammar of `hex_decode`, and the text helpers `vc_smt` prints its own `VC_T_QEQ`, `VC_T_QLT`
+// and `VC_T_QDIFF` binders with. `vc_smt` renders the operand terms and hands the text over, so this
+// module knows no term, only SMT-LIB. Every bound variable is `vq_i` (a name no executor symbol
+// uses), and a `let` name is `vq_a`, `vq_b` or `vq_x`; an operand is a closed term, so none is
+// captured.
+
+// The name every binder binds.
+fn vc_qb_i() -> String { String::from("vq_i") }
+
+fn vc_qb_c(v: u64) -> String {
+    let out: String = String::from("(_ bv");
+    out.push_str(uint_to_string(v));
+    out.push_str(String::from(" 64)"));
+    out
+}
+
+fn vc_qb_app2(op: String, a: String, b: String) -> String {
+    let out: String = String::from("(");
+    out.push_str(op);
+    out.push_str(String::from(" "));
+    out.push_str(a);
+    out.push_str(String::from(" "));
+    out.push_str(b);
+    out.push_str(String::from(")"));
+    out
+}
+
+fn vc_qb_app3(op: String, a: String, b: String, c: String) -> String {
+    let out: String = String::from("(");
+    out.push_str(op);
+    out.push_str(String::from(" "));
+    out.push_str(a);
+    out.push_str(String::from(" "));
+    out.push_str(b);
+    out.push_str(String::from(" "));
+    out.push_str(c);
+    out.push_str(String::from(")"));
+    out
+}
+
+fn vc_qb_select(arr: String, idx: String) -> String {
+    vc_qb_app2(String::from("select"), arr, idx)
+}
+
+// `low8(arr[idx])`.
+fn vc_qb_byte(arr: String, idx: String) -> String {
+    vc_qb_app2(String::from("bvand"), vc_qb_select(arr, idx), String::from("#x00000000000000ff"))
+}
+
+fn vc_qb_ult(a: String, b: String) -> String {
+    vc_qb_app2(String::from("bvult"), a, b)
+}
+
+fn vc_qb_eq(a: String, b: String) -> String {
+    vc_qb_app2(String::from("="), a, b)
+}
+
+fn vc_qb_add(a: String, b: String) -> String {
+    vc_qb_app2(String::from("bvadd"), a, b)
+}
+
+fn vc_qb_sub(a: String, b: String) -> String {
+    vc_qb_app2(String::from("bvsub"), a, b)
+}
+
+fn vc_qb_mul(a: String, b: String) -> String {
+    vc_qb_app2(String::from("bvmul"), a, b)
+}
+
+fn vc_qb_and(a: String, b: String) -> String {
+    vc_qb_app2(String::from("and"), a, b)
+}
+
+fn vc_qb_or(a: String, b: String) -> String {
+    vc_qb_app2(String::from("or"), a, b)
+}
+
+// `(forall ((vq_i (_ BitVec 64))) (=> (bvult vq_i bound) body))`.
+fn vc_qb_forall(bound: String, body: String) -> String {
+    let out: String = String::from("(forall ((");
+    out.push_str(vc_qb_i());
+    out.push_str(String::from(" (_ BitVec 64))) (=> "));
+    out.push_str(vc_qb_ult(vc_qb_i(), bound));
+    out.push_str(String::from(" "));
+    out.push_str(body);
+    out.push_str(String::from("))"));
+    out
+}
+
+// `(let ((name value)) body)`.
+fn vc_qb_let(name: String, value: String, body: String) -> String {
+    let out: String = String::from("(let ((");
+    out.push_str(name);
+    out.push_str(String::from(" "));
+    out.push_str(value);
+    out.push_str(String::from(")) "));
+    out.push_str(body);
+    out.push_str(String::from(")"));
+    out
+}
+
+// `forall i < n. h[i + 1] == (h[i] xor low8(s[i])) * 0x100000001B3`: the FNV-1a step of
+// `hash_str` (the runtime's `(h ^ b).wrapping_mul(prime)`).
+fn vc_qb_fold(h: String, s: String, n: String) -> String {
+    let i: String = vc_qb_i();
+    let step: String = vc_qb_mul(vc_qb_app2(String::from("bvxor"), vc_qb_select(h, i), vc_qb_byte(s, i)), vc_qb_c(1099511628211));
+    let next: String = vc_qb_select(h, vc_qb_add(i, vc_qb_c(1)));
+    vc_qb_forall(n, vc_qb_eq(next, step))
+}
+
+// The hex digit of a nibble `d` (0..15): `0123456789abcdef`.
+fn vc_qb_digit(d: String) -> String {
+    vc_qb_app3(String::from("ite"), vc_qb_ult(d, vc_qb_c(10)), vc_qb_add(d, vc_qb_c(48)), vc_qb_add(d, vc_qb_c(87)))
+}
+
+// `forall i < n. low8(r[2i]) == digit(x >> 4) and low8(r[2i + 1]) == digit(x & 15)` with
+// `x = low8(v[i])`: the text of `hex_encode`.
+fn vc_qb_hex_encode(r: String, v: String, n: String) -> String {
+    let i: String = vc_qb_i();
+    let x: String = String::from("vq_x");
+    let at: String = vc_qb_mul(i, vc_qb_c(2));
+    let hi: String = vc_qb_app2(String::from("bvlshr"), x, vc_qb_c(4));
+    let lo: String = vc_qb_app2(String::from("bvand"), x, vc_qb_c(15));
+    let first: String = vc_qb_eq(vc_qb_byte(r, at), vc_qb_digit(hi));
+    let second: String = vc_qb_eq(vc_qb_byte(r, vc_qb_add(at, vc_qb_c(1))), vc_qb_digit(lo));
+    vc_qb_forall(n, vc_qb_let(x, vc_qb_byte(v, i), vc_qb_and(first, second)))
+}
+
+fn vc_qb_is_digit(b: String) -> String {
+    vc_qb_ult(vc_qb_sub(b, vc_qb_c(48)), vc_qb_c(10))
+}
+
+fn vc_qb_is_hex(b: String) -> String {
+    let upper: String = vc_qb_ult(vc_qb_sub(b, vc_qb_c(65)), vc_qb_c(6));
+    let lower: String = vc_qb_ult(vc_qb_sub(b, vc_qb_c(97)), vc_qb_c(6));
+    vc_qb_or(vc_qb_is_digit(b), vc_qb_or(upper, lower))
+}
+
+// The value of the hex digit `b` (meaningful when `vc_qb_is_hex(b)`).
+fn vc_qb_hex_value(b: String) -> String {
+    let upper: String = vc_qb_ult(vc_qb_sub(b, vc_qb_c(65)), vc_qb_c(6));
+    vc_qb_app3(String::from("ite"), vc_qb_is_digit(b), vc_qb_sub(b, vc_qb_c(48)),
+        vc_qb_app3(String::from("ite"), upper, vc_qb_sub(b, vc_qb_c(55)), vc_qb_sub(b, vc_qb_c(87))))
+}
+
+// The two bytes of pair `idx` of the string held in array `s`, bound to `vq_a` and `vq_b`
+// around `body`.
+fn vc_qb_with_pair(s: String, idx: String, body: String) -> String {
+    let at: String = vc_qb_mul(idx, vc_qb_c(2));
+    let inner: String = vc_qb_let(String::from("vq_b"), vc_qb_byte(s, vc_qb_add(at, vc_qb_c(1))), body);
+    vc_qb_let(String::from("vq_a"), vc_qb_byte(s, at), inner)
+}
+
+// The runtime's `u8::from_str_radix(pair, 16)` accepts the pair: a hex digit second, and a hex
+// digit or a `+` (Rust accepts a leading plus sign) first.
+fn vc_qb_pair_valid() -> String {
+    let a: String = String::from("vq_a");
+    let b: String = String::from("vq_b");
+    vc_qb_and(vc_qb_is_hex(b), vc_qb_or(vc_qb_is_hex(a), vc_qb_eq(a, vc_qb_c(43))))
+}
+
+// The byte that pair decodes to: the second digit alone after a `+`, else `16 * first + second`.
+fn vc_qb_pair_value() -> String {
+    let a: String = String::from("vq_a");
+    let b: String = String::from("vq_b");
+    let wide: String = vc_qb_add(vc_qb_mul(vc_qb_hex_value(a), vc_qb_c(16)), vc_qb_hex_value(b));
+    vc_qb_app3(String::from("ite"), vc_qb_eq(a, vc_qb_c(43)), vc_qb_hex_value(b), wide)
+}
+
+// Bool: pair `idx` of the string in array `s` is accepted.
+fn vc_qb_hexpair(s: String, idx: String) -> String {
+    vc_qb_with_pair(s, idx, vc_qb_pair_valid())
+}
+
+// 64-bit: the byte pair `idx` decodes to.
+fn vc_qb_hexval(s: String, idx: String) -> String {
+    vc_qb_with_pair(s, idx, vc_qb_pair_value())
+}
+
+// `forall i < m. hexpair(s, i) and r[i] == value(s, i)`.
+fn vc_qb_hex_decode(r: String, s: String, m: String) -> String {
+    let i: String = vc_qb_i();
+    let body: String = vc_qb_and(vc_qb_pair_valid(), vc_qb_eq(vc_qb_select(r, i), vc_qb_pair_value()));
+    vc_qb_forall(m, vc_qb_with_pair(s, i, body))
+}

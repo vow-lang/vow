@@ -1,0 +1,18 @@
+// TEST: counterexample-fn "not_basis"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value s.len 0
+// `hash_str` is modelled exactly, so a claim that the hash of any string differs from the FNV
+// offset basis is refuted by the string that has it: the empty one (the replay runs the real
+// hash on it).
+module HashStrNotBasis
+
+fn not_basis(s: String) -> bool vow {
+  ensures: result == true
+} {
+  hash_str(s) != 14695981039346656037u64
+}
+
+fn main() -> i32 [io] {
+  if not_basis(String::from("a")) { 0 } else { 1 }
+}

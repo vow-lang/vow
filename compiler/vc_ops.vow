@@ -270,7 +270,25 @@ fn vc_op_gate_candidate(op: i64) -> bool {
 fn catalogue_verifier_known(sym: String) -> bool {
     let n: u64 = sym.len();
     if n == 14 {
-        return sym == String::from("__vow_hash_u64");
+        let c0: i64 = sym.byte_at(11);
+        if c0 == 115 {
+            return sym == String::from("__vow_hash_str");
+        }
+        if c0 == 117 {
+            return sym == String::from("__vow_hash_u64");
+        }
+    }
+    if n == 16 {
+        let c0: i64 = sym.byte_at(10);
+        if c0 == 100 {
+            return sym == String::from("__vow_hex_decode");
+        }
+        if c0 == 101 {
+            return sym == String::from("__vow_hex_encode");
+        }
+    }
+    if n == 17 {
+        return sym == String::from("__vow_string_trim");
     }
     if n == 19 {
         return sym == String::from("__vow_string_substr");
@@ -279,11 +297,14 @@ fn catalogue_verifier_known(sym: String) -> bool {
         return sym == String::from("__vow_parse_f64_bits");
     }
     if n == 21 {
-        let c0: i64 = sym.byte_at(6);
-        if c0 == 102 {
+        let c0: i64 = sym.byte_at(16);
+        if c0 == 95 {
             return sym == String::from("__vow_format_f64_bits");
         }
-        if c0 == 115 {
+        if c0 == 108 {
+            return sym == String::from("__vow_string_to_lower");
+        }
+        if c0 == 109 {
             let c1: i64 = sym.byte_at(18);
             if c1 == 105 {
                 return sym == String::from("__vow_string_from_i64");
@@ -291,6 +312,9 @@ fn catalogue_verifier_known(sym: String) -> bool {
             if c1 == 117 {
                 return sym == String::from("__vow_string_from_u64");
             }
+        }
+        if c0 == 117 {
+            return sym == String::from("__vow_string_to_upper");
         }
     }
     if n == 22 {
@@ -307,6 +331,48 @@ fn catalogue_verifier_known(sym: String) -> bool {
     }
     if n == 24 {
         return sym == String::from("__vow_string_starts_with");
+    }
+    if n == 25 {
+        let c0: i64 = sym.byte_at(19);
+        if c0 == 105 {
+            return sym == String::from("__vow_string_parse_i8_opt");
+        }
+        if c0 == 117 {
+            return sym == String::from("__vow_string_parse_u8_opt");
+        }
+    }
+    if n == 26 {
+        let c0: i64 = sym.byte_at(20);
+        if c0 == 49 {
+            let c1: i64 = sym.byte_at(19);
+            if c1 == 105 {
+                return sym == String::from("__vow_string_parse_i16_opt");
+            }
+            if c1 == 117 {
+                return sym == String::from("__vow_string_parse_u16_opt");
+            }
+        }
+        if c0 == 51 {
+            let c1: i64 = sym.byte_at(19);
+            if c1 == 105 {
+                return sym == String::from("__vow_string_parse_i32_opt");
+            }
+            if c1 == 117 {
+                return sym == String::from("__vow_string_parse_u32_opt");
+            }
+        }
+        if c0 == 54 {
+            return sym == String::from("__vow_string_parse_i64_opt");
+        }
+    }
+    if n == 27 {
+        let c0: i64 = sym.byte_at(19);
+        if c0 == 105 {
+            return sym == String::from("__vow_string_parse_i128_opt");
+        }
+        if c0 == 117 {
+            return sym == String::from("__vow_string_parse_u128_opt");
+        }
     }
     return false;
 }

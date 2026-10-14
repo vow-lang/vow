@@ -1,0 +1,95 @@
+module OpaqueStringHooks
+
+// `parse_<int>`, `string_trim`, `string_to_upper` and `string_to_lower` follow Rust's Unicode-aware
+// `str` methods, which the model does not encode, so each is an opaque total function of the
+// bytes of its string (`vc_hooks`, the route of `parse_f64_bits`): the result is a fresh constant,
+// equal strings give equal results, and the facts true of every run are kept (a `parse_<ty>`
+// payload has the width of `ty`, `trim` never grows a string, a case map keeps the empty string
+// empty). A claim that holds for every result is proven.
+fn trim_never_grows(s: String) -> bool vow {
+  ensures: result == true
+} {
+  string_trim(s).len() <= s.len()
+}
+
+fn trim_of_one_operand_is_one_string(s: String) -> bool vow {
+  ensures: result == true
+} {
+  string_trim(s) == string_trim(s)
+}
+
+fn upper_of_empty_is_empty() -> bool vow {
+  ensures: result == true
+} {
+  string_to_upper(String::from("")).len() == 0
+}
+
+fn lower_of_equal_strings_is_equal(s: String, t: String) -> bool vow {
+  requires: s == t
+  ensures: result == true
+} {
+  string_to_lower(s) == string_to_lower(t)
+}
+
+fn parse_of_equal_strings_agrees(s: String, t: String) -> bool vow {
+  requires: s == t
+  ensures: result == true
+} {
+  let a: bool = match parse_u8(s) { Option::Some(v) => { true }, Option::None => { false } };
+  let b: bool = match parse_u8(t) { Option::Some(v) => { true }, Option::None => { false } };
+  a == b
+}
+
+fn parsed_payload_of_equal_strings_agrees(s: String, t: String) -> bool vow {
+  requires: s == t
+  ensures: result == true
+} {
+  let a: u8 = match parse_u8(s) { Option::Some(v) => { v }, Option::None => { 0u8 } };
+  let b: u8 = match parse_u8(t) { Option::Some(v) => { v }, Option::None => { 0u8 } };
+  a == b
+}
+
+fn parsed_i16_is_in_range(s: String) -> i64 vow {
+  ensures: result >= -32768 && result <= 32767
+} {
+  match parse_i16(s) {
+    Option::Some(v) => v as i64,
+    Option::None => 0,
+  }
+}
+
+fn parsed_u32_is_in_range(s: String) -> i64 vow {
+  ensures: result >= 0 && result <= 4294967295
+} {
+  match parse_u32(s) {
+    Option::Some(v) => v as i64,
+    Option::None => 0,
+  }
+}
+
+fn parsed_u128_has_its_width(s: String) -> bool vow {
+  ensures: result == true
+} {
+  match parse_u128(s) {
+    Option::Some(v) => v <= 340282366920938463463374607431768211455u128,
+    Option::None => true,
+  }
+}
+
+fn clamped(s: String) -> u8 vow {
+  ensures: result <= 200
+} {
+  let mut r: u8 = 0;
+  match parse_u8(s) {
+    Option::Some(v) => {
+      if v > 200 { r = 200; } else { r = v; }
+    },
+    Option::None => { r = 0; },
+  }
+  r
+}
+
+fn main() -> i32 [io] {
+  print_u64(string_trim(String::from(" a ")).len());
+  0
+}

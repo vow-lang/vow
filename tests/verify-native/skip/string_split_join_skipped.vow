@@ -1,0 +1,25 @@
+// TEST: category unverifiable
+// TEST: skip-reason unmodeled-builtin
+module StringSplitJoinSkipped
+
+// `split` returns and `join` takes a `Vec<String>`: a collection of heap strings, whose elements
+// are pointers, which the `Vec` model (elements of at most 64 bits) does not hold. Both calls
+// are `unmodeled-builtin` (each has a `verifier_skip_reason` in docs/spec/operations.json), never
+// a result the model invents.
+fn piece_count(s: String) -> u64 vow {
+  ensures: result == result
+} {
+  let parts: Vec<String> = string_split(s, String::from(","));
+  parts.len()
+}
+
+fn joined_length(parts: Vec<String>) -> u64 vow {
+  ensures: result == result
+} {
+  string_join(parts, String::from(",")).len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(piece_count(String::from("a,b")));
+  0
+}
