@@ -484,7 +484,7 @@ fn region_constraint_encode(out: Vec<i64>, kind: i64, aux: i64, aliases: Vec<i64
     while i < n vow {
         invariant: i <= n
     } {
-        write_u32_le(out, aliases[i]);
+        write_u32_le(out, aliases[i] & 4294967295);
         i = i + 1;
     }
 }
