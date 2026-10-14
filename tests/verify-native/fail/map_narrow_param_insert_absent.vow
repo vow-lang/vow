@@ -1,0 +1,18 @@
+// TEST: replay-skipped the replay harness rebuilds only scalar parameters, not a map
+// TEST: counterexample-fn "insert_then_absent"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+module MapNarrowParamInsertAbsent
+
+fn insert_then_absent(m: HashMap<u8, i64>, k: u8) -> bool vow {
+  ensures: !result
+} {
+  m.insert(k, 1);
+  m.contains_key(k)
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<u8, i64> = HashMap::new();
+  if insert_then_absent(m, 1) { print_u64(1); }
+  0
+}

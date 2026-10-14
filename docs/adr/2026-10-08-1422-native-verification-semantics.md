@@ -886,3 +886,63 @@ its parameter is still `unsupported-opcode`.
 This also stops a `bool` flag from hiding the `Vec` functions that take one. A `Vec<bool>` element
 read stays skipped (see the `Return` of a raw `i64` slot in a `bool` function): the lowerer types
 the read `i64` and never narrows it to `bool`.
+
+## Addendum (#1678): `HashMap` and `BTreeMap` are an SMT presence array, a value array and a symbolic length
+
+Rule 3 said the maps follow the no-cap rule "where the native model covers them"; this
+addendum is that model (`compiler/vc_map.vow`, op table `compiler/vc_mapops.vow`).
+
+- **One model for both maps.** The runtime has no iteration API (`HashMap`: `new`, `insert`,
+  `get`, `contains_key`, `remove`, `len`; `BTreeMap`: `new`, `insert`, `get`, `contains`,
+  `len`), so the ascending order of a `BTreeMap` and the slot a `HashMap` key hashes to
+  (`hash_u64`, SplitMix64) are never observable: a map is a finite partial function from keys to
+  values and the sorted-array layout is not part of the semantics. Nothing about `BTreeMap`
+  ordering is approximated, so nothing needs a fail-closed fallback. The one difference is the
+  result of `insert`: unit for a `HashMap`, the `Option` of the replaced value for a `BTreeMap`.
+- **State.** A map is three terms: `pres` (`Array (BitVec 64) (BitVec 64)`, 0 or 1 per key),
+  `vals` (the stored 8-byte slot per key) and `len` (`BitVec 64`). A key or a value is the slot
+  the runtime stores, widened as `Vec` elements are (sign-extended when signed, zero-extended when
+  unsigned, `bool` as 0/1, `()` as 0), so two keys are equal exactly when their slots are. A key is
+  present when its `pres` word is not 0. `new` is the constant all-zero array
+  (`((as const (Array ...)) #x0)`, the operator `VC_OP_CONSTARR`) and length 0. `insert` stores
+  presence 1 and the value and grows `len` unless the key was present; `remove` stores 0 and
+  shrinks `len` when it was present; `contains` reads `pres`; `get`, and a `BTreeMap`'s `insert`,
+  return a fresh `Option` object with tag 1 and the value when present and tag 0 and payload 0
+  otherwise, exactly as `alloc_option_in_arena` writes them (the payload is stored at every width
+  a `FieldGet` can read, 8/16/32/64 bits and `bool`).
+- **No capacity.** The one length fact is the runtime's own, as for `Vec`: a table with that many
+  entries must be addressable, so every length is below `2^63 - 1`, and an `insert` that returns
+  leaves it below. A cap such as `len <= 64` is never introduced. The ESBMC model's 64-entry
+  `hashmap capacity`/`btreemap capacity` assertions have no native counterpart.
+- **State per block, merged at joins.** Like a `Vec`, a map is a `vc_agg` object and its state is
+  kept per block and merged on entry with the `ite` chain a Phi uses. A map merged by a Phi that
+  supplies two different maps, passed to a call, read as a struct, or handed to another builtin is
+  `Skipped` as `unsupported-opcode` with a named detail; a key or value that is not `bool`, an integer
+  of at most 64 bits or `()` (a `String`, `Vec`, struct or 128-bit value) is too.
+- **Loops.** A loop body that writes a map is cut for invariant-based induction by a
+  `__vc_havoc_map` marker, the way a Vec is (`__vc_havoc_vec`): the map is an arbitrary
+  `(pres, vals, len)` at the top of the header proper. The k-induction step case is not built for
+  such a loop (as for an aggregate or Vec write). Bounded unwinding keeps the map exact.
+- **Exactness boundary.** `len = |{k : pres[k] != 0}|` is not quantifier-free, so a map the function
+  did not build (a parameter, or the havoc'd state of a loop cut) has `pres` and `len` unrelated. Every
+  such state is a superset of the real ones, so a proof over it is sound. The one fact that can be
+  stated is assumed for every key the function names on it: the number of distinct present keys is at
+  most `len` (`vc_map_count_key`), which keeps `requires: m.len() == 0` from admitting a present key.
+  That is also all a real map with 64-bit keys needs (any model of it extends to a map of that
+  length, with keys to spare), so with `i64`/`u64` keys, and always for `BTreeMap`, a counterexample is a
+  run and is reported. A `HashMap` key narrower than 64 bits, or one no operand shows (the IR types a
+  parameter map as a bare pointer; an `i64` literal says nothing about the key type), bounds the
+  length by its domain, which the model does not know. The presence array and length of such a base
+  are listed in `VcClaims.map_vars`, and a hard `sat` that reaches them goes through the same re-check
+  as a float-text hook (`vc_hook_recheck`): it is reported only when the claim fails for every array
+  and length, and otherwise is `unknown` with `unconstrained map state: ...`, never a proof.
+  `tests/verify-native/unknown/map_narrow_param_len_bound.vow` pins the case; ESBMC decides it
+  only through its 64-entry capacity.
+- **Two map parameters are distinct**, as for `Vec` (the rule of the "Collections" bullet of
+  `cli.md`); a function called with one map for both is outside what a per-function proof says.
+
+*Verdict impact:* a function that only builds and queries maps, or takes `i64`/`u64`-keyed or
+`BTreeMap` parameters, is decided like ESBMC (the 14 weaker rows of the gate report and
+`M08`/`M09`). A property over a `HashMap<u8, _>` parameter's length or keys can degrade from
+ESBMC's `Verified` (an artifact of its capacity) to `unknown`. Maps stored in a struct field, passed
+to a function, or with a `String`/`Vec`/struct value stay `Skipped`.

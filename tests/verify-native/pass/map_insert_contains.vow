@@ -1,0 +1,56 @@
+module MapInsertContains
+
+fn two_keys(a: i64, b: i64) -> HashMap<i64, i64> vow {
+  requires: a != b,
+  ensures: result.contains_key(a),
+  ensures: result.contains_key(b),
+  ensures: result.len() == 2
+} {
+  let m: HashMap<i64, i64> = HashMap::new();
+  m.insert(a, 1);
+  m.insert(b, 2);
+  m
+}
+
+fn same_key_twice(k: i64) -> HashMap<i64, i64> vow {
+  ensures: result.len() == 1,
+  ensures: result.get(k).unwrap() == 9
+} {
+  let m: HashMap<i64, i64> = HashMap::new();
+  m.insert(k, 5);
+  m.insert(k, 9);
+  m
+}
+
+fn remove_then_absent(k: i64) -> HashMap<i64, i64> vow {
+  ensures: !result.contains_key(k),
+  ensures: result.len() == 0
+} {
+  let m: HashMap<i64, i64> = HashMap::new();
+  m.insert(k, 1);
+  m.remove(k);
+  m
+}
+
+fn remove_absent_key(a: i64, b: i64) -> HashMap<i64, i64> vow {
+  requires: a != b,
+  ensures: result.contains_key(a),
+  ensures: result.len() == 1
+} {
+  let m: HashMap<i64, i64> = HashMap::new();
+  m.insert(a, 1);
+  m.remove(b);
+  m
+}
+
+fn empty_has_nothing(k: i64) -> bool vow {
+  ensures: !result
+} {
+  let m: HashMap<i64, i64> = HashMap::new();
+  m.contains_key(k)
+}
+
+fn main() -> i32 [io] {
+  print_u64(two_keys(1, 2).len() + same_key_twice(3).len() + remove_then_absent(4).len() + remove_absent_key(5, 6).len());
+  0
+}

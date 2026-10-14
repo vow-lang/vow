@@ -1,0 +1,20 @@
+// TEST: counterexample-fn "drop_other"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value a 0
+// TEST: counterexample-value b 0
+module MapRemoveAliasedKey
+
+fn drop_other(a: i64, b: i64) -> HashMap<i64, i64> vow {
+  ensures: result.len() == 1
+} {
+  let m: HashMap<i64, i64> = HashMap::new();
+  m.insert(a, 1);
+  m.remove(b);
+  m
+}
+
+fn main() -> i32 [io] {
+  print_u64(drop_other(1, 2).len());
+  0
+}
