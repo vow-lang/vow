@@ -183,6 +183,7 @@ fn vc_claims_harvest_fields(cs: VcClaims, ag: VcAgg, vv: VcVec, ov: VcOverlay) {
             v = v + 1;
         } else if ha < hi {
             cs.model_names.push(ov.names[a]);
+            cs.model_paths.push(String::from(""));
             cs.model_params.push(ov.param[a]);
             cs.model_tys.push(ITY_I64());
             cs.model_widths.push(64);
