@@ -120,7 +120,9 @@ fn replay_item_ids(m: Module, kind: i64) -> Vec<i64> {
     let out: Vec<i64> = Vec::new();
     let items: Vec<i64> = m.items;
     let mut i: u64 = 0u64;
-    while i < items.len() {
+    while i < items.len() vow {
+        invariant: i <= items.len()
+    } {
         let it: i64 = items[i];
         if it >= 0 && item_kind(it) == kind {
             out.push(item_id(it));
