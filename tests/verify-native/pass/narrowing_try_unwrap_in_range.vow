@@ -1,0 +1,17 @@
+// Native-only: ESBMC skips `[panic]` functions (see tests/verify-skip/unwrap_panic_effect.vow).
+// `i64_to_u8_try(x).unwrap()` never aborts under the contract that `x` is a byte, and
+// then yields the operand itself.
+module NarrowingTryUnwrapInRange
+
+fn to_byte(x: i64) -> u8 [panic] vow {
+  requires: x >= 0,
+  requires: x <= 255,
+  ensures: result as i64 == x
+} {
+  i64_to_u8_try(x).unwrap()
+}
+
+fn main() -> i32 [io, panic] {
+  print_u64(to_byte(65) as u64);
+  0
+}
