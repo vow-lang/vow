@@ -1,15 +1,18 @@
 name: Native verifier oracles
 
-# Two independent checks on `vowc verify --backend native` (epic #1398, #1431):
+# Three independent checks on `vowc verify --backend native` (epic #1398, #1431):
 #
 #   * the verifier-versus-runtime differential (`scripts/verifier_runtime.py`):
 #     a `Verified` program must not violate a contract when run in debug mode,
 #     and every counterexample must replay;
 #   * the Z3 cross-check (`scripts/z3_crosscheck.py`): every query the native
 #     backend sends to Bitwuzla is re-run under Z3 and a sat/unsat
-#     disagreement fails the run.
+#     disagreement fails the run;
+#   * the ESBMC differential over `tests/verify-native` (`scripts/verify_diff.py
+#     --fail-on soundness`, #1729): a native proof of a program ESBMC refutes
+#     needs a written `esbmc-*-artifact` directive.
 #
-# Both sweep two generated corpora next to the fixtures (#1473): the #905
+# The first two sweep two generated corpora next to the fixtures (#1473): the #905
 # equivalence axis for query volume, and the verifier axis
 # (`gen_corpus.py --axis verifier`), whose `main` calls each contracted function
 # past a collection or loop boundary so the runtime is a soundness oracle, with
@@ -17,8 +20,9 @@ name: Native verifier oracles
 # tracked by issue number in `scripts/gen_verifier_corpus.py`.
 #
 # Z3 is CI-only: it is installed by this workflow and nowhere else, and no
-# product code depends on it. Neither oracle needs ESBMC, so the compiler is
-# built with `bootstrap.sh --no-verify`.
+# product code depends on it. Neither oracle needs ESBMC (only the differential
+# job installs it), so every job builds the compiler with `bootstrap.sh
+# --no-verify`.
 #
 # Runs on pull requests that touch what the oracles exercise, so a fixture or
 # verifier change is checked before it merges instead of reddening `main`
@@ -89,6 +93,43 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python3 scripts/ci_docs_only.py --base "$BASE_SHA" --head "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+  esbmc-differential:
+    # Gate item 1 of #1398: no `soundness` row, i.e. no program the native
+    # verifier proves that ESBMC refutes unless the fixture carries a written
+    # `esbmc-*-artifact` explanation (#1729). The native corpus is what grows
+    # fastest, so a new `verify-native/pass` fixture whose ESBMC refutation is
+    # unexplained fails here instead of surfacing at the next full gate run.
+    # `weaker` rows are tracked by their own issues and do not fail this job.
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    name: Native fixtures versus ESBMC
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install ESBMC
+        uses: ./.github/actions/install-esbmc
+      - name: Install Bitwuzla
+        uses: ./.github/actions/install-bitwuzla
+      - name: Build the self-hosted compiler
+        run: scripts/bootstrap.sh --no-verify
+      - name: Differential over tests/verify-native
+        run: |
+          python3 scripts/verify_diff.py --vowc build/vowc --corpus native \
+            --fail-on soundness --jobs 2 --timeout 120 \
+            --output "$RUNNER_TEMP/verify-diff-native.json"
+      - name: Upload the differential report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verify-diff-native
+          path: ${{ runner.temp }}/verify-diff-native.json
+          if-no-files-found: warn
 
   oracles:
     needs: changes

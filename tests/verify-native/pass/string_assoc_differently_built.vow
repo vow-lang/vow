@@ -1,5 +1,9 @@
 module StringAssocDifferentlyBuilt
 
+// TEST: esbmc-model-artifact fn="assoc" blame=Callee vow_id=0 "ESBMC models string_eq as a cached nondeterministic Bool, so it does not relate equal strings; the native model is exact"
+// TEST: esbmc-model-artifact fn="assoc_four" blame=Callee vow_id=0 "ESBMC models string_eq as a cached nondeterministic Bool, so it does not relate equal strings; the native model is exact"
+// TEST: esbmc-model-artifact fn="assoc_with_literals" blame=Callee vow_id=0 "ESBMC models string_eq as a cached nondeterministic Bool, so it does not relate equal strings; the native model is exact"
+
 // Two equal strings built from the same operands in a different order of appends are
 // decided by reading the differing byte through the builds (#1653), not by relating
 // two quantified definitions.

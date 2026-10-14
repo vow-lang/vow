@@ -209,7 +209,30 @@ through one function (`verify_diff.classify_outcomes`), and `verify_eval.py
 
 Add a directive only after the runtime differential
 (`scripts/verifier_runtime.py --backend native`) shows no false proof for the
-fixture, and write the reason as the explanation gate item 1 asks for.
+fixture, and write the reason as the explanation gate item 1 asks for. The
+fixture's own `main` exercises one input, so for a function with a wider domain
+also run the fixture's functions over many inputs that satisfy their `requires`
+in `--mode debug`, with a deliberately broken contract as a control that must
+abort.
+
+ESBMC's `verify` report names only the first function it refutes, although it
+verifies every function: its stderr lists each `FAILED` one. When a fixture
+has several, declare every one (peel the first off a copy of the file and
+re-run to read the next one's `fn`, `blame` and `vow_id`); the classifier needs
+only the one the report shows, but the others are the evidence that the whole
+file is explained and not just its first refutation. A refutation by ESBMC's own
+`string`/`vec` capacity assertion in a fixture that also has a model artefact is
+declared with `esbmc-model-artifact` and `blame=None vow_id=4294967293` (the
+unattributed property), because `esbmc-capacity-artifact` covers only fixtures
+whose every counterexample is a capacity assertion.
+
+`python3 scripts/verify_diff.py --corpus native --fail-on soundness` is the
+gate for the native corpus: `--corpus native` selects `tests/verify-native/*`
+only, and `--fail-on soundness` makes only `soundness` rows (not `weaker` ones,
+which have their own issues) fail the exit status. The `Native fixtures versus
+ESBMC` job of `.github/workflows/native-oracle.yml` runs exactly that on every
+pull request that touches a fixture, so a new `verify-native/pass` fixture
+cannot land with a bare `soundness` row.
 
 The report is one JSON document (`schema_version`, `summary`, `rows[]` with both
 backends' verdict, `verify_status`, counterexamples and wall-clock seconds) on

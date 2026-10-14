@@ -1,5 +1,7 @@
 module InlineResultFieldWriteBranches
 
+// TEST: esbmc-model-artifact fn="bump" blame=Callee vow_id=1 "ESBMC leaves the struct returned by the uncontracted callee pick unconstrained and unrelated to its arguments, so the field write after the call does not combine with the returned fields; the native model inlines the call and relates the result to its arguments"
+
 struct P { lo: i64, hi: i64 }
 
 fn pick(c: bool, lo: i64) -> P {

@@ -1,5 +1,7 @@
 module HeapVecFieldLastElement
 
+// TEST: esbmc-model-artifact fn="last_op" blame=None vow_id=4294967293 "ESBMC reads the Vec field b.insts as a fresh Vec of nondeterministic length at each use, so the requires and the length read do not bound b.insts[n - 1] and it reports an out-of-bounds read; the native model reads one field as one value"
+
 struct Inst { op: i64 }
 struct Block { insts: Vec<Inst> }
 

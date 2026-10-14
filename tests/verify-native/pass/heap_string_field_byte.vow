@@ -1,5 +1,7 @@
 module HeapStringFieldByte
 
+// TEST: esbmc-model-artifact fn="first_byte_or_zero" blame=None vow_id=4294967293 "ESBMC reads the String field l.text as a fresh String of nondeterministic length at each use, so the l.text.len() > 0 guard does not bound the byte_at that follows and it reports an out-of-bounds read; the native model reads one field as one value"
+
 struct Label { text: String, n: i64 }
 
 fn first_byte_or_zero(l: Label) -> i64 vow {
