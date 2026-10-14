@@ -1,0 +1,29 @@
+// TEST: counterexample-fn "bump"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The else arm's callee object has `lo + 1`, so `lo + 10` for both arms is refuted.
+module InlineResultFieldWriteBranchesWrong
+
+struct P { lo: i64, hi: i64 }
+
+fn pick(c: bool, lo: i64) -> P {
+  if c {
+    P { lo: lo, hi: 1 }
+  } else {
+    P { lo: lo + 1, hi: 2 }
+  }
+}
+
+fn bump(c: bool, lo: i64) -> i64 vow {
+  requires: lo >= 0 && lo < 1000
+  ensures: result == lo + 10
+} {
+  let p: P = pick(c, lo);
+  p.hi = 10;
+  p.lo + p.hi
+}
+
+fn main() -> i32 [io] {
+  print_i64(bump(true, 3));
+  0
+}

@@ -1,0 +1,20 @@
+module InlineResultFieldWrite
+
+struct P { lo: i64, hi: i64 }
+
+fn make(lo: i64) -> P {
+  P { lo: lo, hi: 0 }
+}
+
+fn widen(lo: i64) -> i64 vow {
+  ensures: result == lo + 1
+} {
+  let p: P = make(lo);
+  p.hi = 1;
+  p.lo + p.hi
+}
+
+fn main() -> i32 [io] {
+  print_i64(widen(3));
+  0
+}

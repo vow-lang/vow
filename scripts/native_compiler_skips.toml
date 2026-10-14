@@ -45,9 +45,9 @@ reason = "pushes a pointer element (an IrInst, a String) into a Vec (module_io.v
 
 [[skip]]
 function = "read_inst"
-code = "unsupported-opcode"
-issue = 1691
-reason = "writes a field of a value that is neither an allocation nor a parameter (module_io.vow)"
+code = "non-modelable-callee"
+issue = 1704
+reason = "calls reader_fail, which stores a String into a parameter's field (module_io.vow)"
 
 [[skip]]
 function = "read_region_summary"
