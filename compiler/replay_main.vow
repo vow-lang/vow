@@ -559,10 +559,21 @@ fn replay_vec_len(pname: String, names: Vec<String>, vals: Vec<String>) -> i64 {
     }
 }
 
-// The slot of element `i`, or the reason it is missing.
+// The slot of element `i`, or the reason it is missing. The native counterexample
+// prints an element in its own type (`vc_cex_elem`): a negative signed value or a
+// `bool` is turned back into the slot the runtime keeps.
 fn replay_vec_slot(pname: String, i: i64, names: Vec<String>, vals: Vec<String>) -> Option<u64> {
     let key: String = str3r(pname, String::from("["), str3r(i64_to_string(i), String::from("]"), String::from("")));
-    replay_cex_value(names, vals, key).parse_u64()
+    let raw: String = replay_cex_value(names, vals, key);
+    if raw == String::from("true") { return Option::Some(1u64); }
+    if raw == String::from("false") { return Option::Some(0u64); }
+    if raw.len() > 1 && raw.byte_at(0) == 45 {
+        match parse_i64(raw) {
+            Option::Some(v) => { return Option::Some(v as u64); },
+            Option::None => { return Option::None; },
+        }
+    }
+    raw.parse_u64()
 }
 
 // Element `i` of a `Vec<i128>`/`Vec<u128>` parameter: the counterexample lists a
