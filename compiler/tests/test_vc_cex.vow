@@ -431,7 +431,8 @@ fn check_wide_vec_contents() -> i64 {
 }
 
 // The elements of a float `Vec` print as the float their slot holds, an `f32` from the
-// low 32 bits only, and keep the 64-bit element width of a raw slot.
+// low 32 bits only, and keep the 64-bit element width of a raw slot; the parameter's
+// `<param>.elem` entry names the float type, since an integer-valued float prints like a slot.
 fn check_float_vec_contents() -> i64 {
     let f: IrFunction = vec_fn();
     let values: Vec<i64> = Vec::new();
@@ -448,9 +449,10 @@ fn check_float_vec_contents() -> i64 {
     let cs: VcClaims = vec_claims();
     cs.vec_wide[0] = ITY_F64();
     let r: VerifyResult = vc_claim_result(f, cs, 0, ans);
-    if r.var_names.len() != 4 { return 100; }
-    if r.var_names[2] != String::from("v[0]") || r.var_values[2] != String::from("2.5") { return 101; }
-    if r.var_names[3] != String::from("v[1]") || r.var_values[3] != String::from("-1") { return 102; }
+    if r.var_names.len() != 5 { return 100; }
+    if r.var_names[2] != String::from("v.elem") || r.var_values[2] != String::from("f64") { return 108; }
+    if r.var_names[3] != String::from("v[0]") || r.var_values[3] != String::from("2.5") { return 101; }
+    if r.var_names[4] != String::from("v[1]") || r.var_values[4] != String::from("-1") { return 102; }
     if vc_cex_elem_widths(cs, vc_cex_vecs(cs, 0), 2)[0] != 64 { return 103; }
     let c32: VcClaims = vec_claims();
     c32.vec_wide[0] = ITY_F32();
@@ -466,7 +468,8 @@ fn check_float_vec_contents() -> i64 {
     h32.push(0);
     let a32: VcSolverAnswer = VcSolverAnswer { verdict: VC_ANS_SAT(), values: v32, highs: h32, raw: String::from("") };
     let r32: VerifyResult = vc_claim_result(f, c32, 0, a32);
-    if r32.var_values[2] != String::from("2.5") || r32.var_values[3] != String::from("-1") { return 104; }
+    if r32.var_values[2] != String::from("f32") { return 109; }
+    if r32.var_values[3] != String::from("2.5") || r32.var_values[4] != String::from("-1") { return 104; }
     // an integer element type never reads as a float
     let ci: VcClaims = vec_claims();
     ci.vec_wide[0] = ITY_I64();

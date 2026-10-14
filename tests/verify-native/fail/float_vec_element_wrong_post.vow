@@ -1,8 +1,8 @@
-// TEST: replay-skipped parameter v: element type `f64` is not rebuilt by replay (a listed float and a raw slot are both digits, #1748)
 // TEST: counterexample-fn "second"
 // TEST: counterexample-vow-id 1
 // TEST: counterexample-blame Callee
 // TEST: counterexample-value v.len 2
+// TEST: counterexample-value v.elem f64
 // TEST: counterexample-value v[1] 2.5
 // An element of a float `Vec` parameter is a float, not a raw 64-bit slot: the
 // counterexample lists `v[1]` as the decimal 2.5, never as its bit pattern.

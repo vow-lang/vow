@@ -113,7 +113,8 @@ fn vc_alias_value_source(cs: VcClaims, vals: Vec<i64>, n: u64, j: u64) -> u64 {
 // has no element type, and the driver retypes it from the source declaration
 // (`vc_cex_elem`); an element of a wide `Vec` (`vc_wide`) is one 128-bit entry
 // and prints in its own type; an element of a float `Vec` (`vc_fp`) prints as the
-// float its slot holds.
+// float its slot holds, and the parameter gets a `<param>.elem` entry holding its type
+// (`f64` or `f32`), since a float that is an integer prints like a raw slot.
 fn vc_append_vec_contents(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnswer, n: u64, names: Vec<String>, values: Vec<String>) {
     if ans.values.len() <= n { return; }
     let vecs: Vec<i64> = vc_cex_vecs(cs, k);
@@ -122,6 +123,14 @@ fn vc_append_vec_contents(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnsw
     while p < vecs.len() {
         let len: i64 = vc_answer_vec_len(cs, ans, n, vecs[p]);
         let base: String = vc_source_param_name(f, cs.vec_param[vecs[p] as u64]);
+        let elem_ty: i64 = vc_cex_float_ty(cs, vecs[p]);
+        if elem_ty >= 0 && len as u64 <= per {
+            // Which `Vec` holds floats: an integer-valued float and a raw slot are both digits.
+            let key: String = String::from(base);
+            key.push_str(String::from(".elem"));
+            names.push(key);
+            values.push(vc_float_type_name(elem_ty));
+        }
         let mut i: i64 = 0;
         while i < len && len as u64 <= per {
             let at: u64 = n + p * per + i as u64;
@@ -145,6 +154,11 @@ fn vc_append_vec_contents(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnsw
         }
         p = p + 1;
     }
+}
+
+fn vc_float_type_name(ty: i64) -> String {
+    if ty == ITY_F32() { return String::from("f32"); }
+    String::from("f64")
 }
 
 fn vc_violated_property_text(label: String) -> String {

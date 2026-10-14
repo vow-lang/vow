@@ -102,6 +102,8 @@ struct VcVec {
     // or writes as something other than a raw 64-bit slot: `ITY_I128`/`ITY_U128`
     // (`vc_wide`) or `ITY_F32`/`ITY_F64` (`vc_fp`), else -1.
     pv_wide: Vec<i64>,
+    // `src_of[o]` is the object a clone `o` was copied from (`pin_to_root`, `clone`), -1 for any other.
+    src_of: Vec<i64>,
 }
 
 fn vc_vec_new_state(fl: VcFlow, n_blocks: u64) -> VcVec {
@@ -147,6 +149,7 @@ fn vc_vec_new_state(fl: VcFlow, n_blocks: u64) -> VcVec {
         pv_len: Vec::new(),
         pv_hdr: Vec::new(),
         pv_wide: Vec::new(),
+        src_of: Vec::new(),
     }
 }
 
@@ -228,14 +231,33 @@ fn vc_vec_slot(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i
 
 // Records that the function reads or writes the elements of `obj` as `ty` (a 128-bit
 // integer or a float): a counterexample then lists them as values of that type. Only
-// a parameter's contents are ever listed.
+// a parameter's contents are ever listed, so a copy of a parameter marks the parameter.
 fn vc_vec_mark_elem(vv: VcVec, ag: VcAgg, obj: i64, ty: i64) {
-    if ag.kinds[obj as u64] != VC_OBJ_PARAM() { return; }
+    let mut o: i64 = obj;
+    while o >= 0 && ag.kinds[o as u64] != VC_OBJ_PARAM() {
+        o = vc_vec_src_of(vv, o);
+    }
+    if o < 0 { return; }
     let mut j: u64 = 0;
     while j < vv.pv_param.len() {
-        if vv.pv_param[j] == ag.owners[obj as u64] { vv.pv_wide[j] = ty; }
+        if vv.pv_param[j] == ag.owners[o as u64] { vv.pv_wide[j] = ty; }
         j = j + 1;
     }
+}
+
+// The object `obj` was copied from, or -1.
+fn vc_vec_src_of(vv: VcVec, obj: i64) -> i64 {
+    if (obj as u64) < vv.src_of.len() { return vv.src_of[obj as u64]; }
+    -1
+}
+
+// Records that `obj` is a copy of `src`: a read of the copy as floats is a read of the
+// source's elements as floats.
+fn vc_vec_set_src(vv: VcVec, obj: i64, src: i64) {
+    while vv.src_of.len() as i64 <= obj {
+        vv.src_of.push(-1);
+    }
+    vv.src_of[obj as u64] = src;
 }
 
 // A `Vec::new()` result: length 0, contents unconstrained (readable only behind
