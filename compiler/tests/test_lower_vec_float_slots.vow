@@ -1,0 +1,105 @@
+module TestLowerVecFloatSlots
+
+use frontend
+use clif
+use ir
+
+// Twin of vec_float_elements_cross_the_slot_by_bit_reinterpretation in
+// vow-ir/src/lower/mod.rs: a Vec<f32> or Vec<f64> element crosses the runtime's
+// i64 slot through an explicit bit reinterpretation. `push`, an indexed write, an
+// index read and a `for` binding each emit exactly one, and any other element type
+// emits none.
+
+fn lower_layout() -> IrModule [io, read] {
+    let lowered: LoweredFrontend = frontend_lower_path_with_root(
+        String::from("tests/fixtures/vec_float_layout.vow"), String::from("")
+    );
+    lowered.ir_mod
+}
+
+fn insts_of(m: IrModule, name: String) -> Vec<IrInst> {
+    let out: Vec<IrInst> = Vec::new();
+    let mut fi: u64 = 0;
+    while fi < m.functions.len() {
+        let function: IrFunction = m.functions[fi];
+        if function.name == name {
+            let mut bi: u64 = 0;
+            while bi < function.blocks.len() {
+                let block: IrBlock = function.blocks[bi];
+                let mut ii: u64 = 0;
+                while ii < block.insts.len() {
+                    out.push(block.insts[ii]);
+                    ii = ii + 1;
+                }
+                bi = bi + 1;
+            }
+        }
+        fi = fi + 1;
+    }
+    out
+}
+
+fn count_op(insts: Vec<IrInst>, op: i64) -> i64 {
+    let mut n: i64 = 0;
+    let mut i: u64 = 0;
+    while i < insts.len() {
+        if insts[i].op == op {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    n
+}
+
+fn count_float_moves(insts: Vec<IrInst>) -> i64 {
+    count_op(insts, IOP_F32_TO_BITS()) + count_op(insts, IOP_F64_TO_BITS())
+        + count_op(insts, IOP_BITS_TO_F32()) + count_op(insts, IOP_BITS_TO_F64())
+}
+
+// The type of the first instruction with `op`, or -1 when there is none.
+fn first_type_of(insts: Vec<IrInst>, op: i64) -> i64 {
+    let mut i: u64 = 0;
+    while i < insts.len() {
+        if insts[i].op == op {
+            return insts[i].ty;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn main() -> i32 [io, read] {
+    let m: IrModule = lower_layout();
+
+    let push64: Vec<IrInst> = insts_of(m, String::from("push_f64"));
+    if count_op(push64, IOP_F64_TO_BITS()) != 1 { return 1; }
+    if count_float_moves(push64) != 1 { return 2; }
+    let write64: Vec<IrInst> = insts_of(m, String::from("write_f64"));
+    if count_op(write64, IOP_F64_TO_BITS()) != 1 { return 3; }
+    if count_float_moves(write64) != 1 { return 4; }
+    let read64: Vec<IrInst> = insts_of(m, String::from("read_f64"));
+    if count_op(read64, IOP_BITS_TO_F64()) != 1 { return 5; }
+    if first_type_of(read64, IOP_BITS_TO_F64()) != ITY_F64() { return 6; }
+    if count_float_moves(read64) != 1 { return 7; }
+    let sum64: Vec<IrInst> = insts_of(m, String::from("sum_f64"));
+    if count_op(sum64, IOP_BITS_TO_F64()) != 1 { return 8; }
+    if count_float_moves(sum64) != 1 { return 9; }
+
+    let push32: Vec<IrInst> = insts_of(m, String::from("push_f32"));
+    if count_op(push32, IOP_F32_TO_BITS()) != 1 { return 10; }
+    if count_float_moves(push32) != 1 { return 11; }
+    let write32: Vec<IrInst> = insts_of(m, String::from("write_f32"));
+    if count_op(write32, IOP_F32_TO_BITS()) != 1 { return 12; }
+    if count_float_moves(write32) != 1 { return 13; }
+    let read32: Vec<IrInst> = insts_of(m, String::from("read_f32"));
+    if count_op(read32, IOP_BITS_TO_F32()) != 1 { return 14; }
+    if first_type_of(read32, IOP_BITS_TO_F32()) != ITY_F32() { return 15; }
+    if count_float_moves(read32) != 1 { return 16; }
+    let sum32: Vec<IrInst> = insts_of(m, String::from("sum_f32"));
+    if count_op(sum32, IOP_BITS_TO_F32()) != 1 { return 17; }
+    if count_float_moves(sum32) != 1 { return 18; }
+
+    if count_float_moves(insts_of(m, String::from("read_i64"))) != 0 { return 19; }
+    if count_float_moves(insts_of(m, String::from("push_i64"))) != 0 { return 20; }
+    0
+}
