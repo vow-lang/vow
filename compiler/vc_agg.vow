@@ -190,10 +190,11 @@ fn vc_agg_set(ag: VcAgg, obj: i64, idx: i64, sort: i64, term: i64) {
 // aliasable parameter every parameter that may be the same object.
 fn vc_agg_write(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, sort: i64, term: i64, pc: i64) {
     let kind: i64 = ag.kinds[obj as u64];
+    let pos: i64 = { if kind == VC_OBJ_PARAM() { vc_agg_alias_pos(ag, ag.owners[obj as u64]) } else { -1 } };
     if kind == VC_OBJ_PHI() {
         vc_agg_write_phi(ag, ar, hdr, obj, idx, sort, term, pc);
-    } else if kind == VC_OBJ_PARAM() && vc_agg_alias_pos(ag, ag.owners[obj as u64]) >= 0 {
-        vc_agg_write_aliased(ag, ar, hdr, vc_agg_alias_pos(ag, ag.owners[obj as u64]), idx, sort, term, pc);
+    } else if pos >= 0 {
+        vc_agg_write_aliased(ag, ar, hdr, pos, idx, sort, term, pc);
     } else {
         vc_agg_write_one(ag, ar, hdr, obj, idx, sort, term, pc);
     }
@@ -332,25 +333,18 @@ fn vc_agg_own_symbol(ag: VcAgg, ar: VcArena, hdr: SmtScript, k: i64, idx: i64, s
 }
 
 // Initial value of slot `idx` of parameter `k` at `sort`: its own symbol, unless
-// it is the same object as an earlier aliasable parameter, when it is that one's
-// initial value (each earlier value already follows its own earlier twin, so the
-// result is the symbol of the first parameter with this identity).
+// it is the same object as an earlier aliasable parameter, when it is the symbol
+// of the first parameter with its identity (the lowest position equal to it).
 fn vc_agg_param_initial(ag: VcAgg, ar: VcArena, hdr: SmtScript, k: i64, idx: i64, sort: i64) -> i64 {
     let pos: i64 = vc_agg_alias_pos(ag, k);
-    if pos < 0 { return vc_agg_own_symbol(ag, ar, hdr, k, idx, sort); }
-    let vals: Vec<i64> = Vec::new();
-    let mut i: i64 = 0;
-    while i <= pos {
-        let mut acc: i64 = vc_agg_own_symbol(ag, ar, hdr, ag.al_params[i as u64], idx, sort);
-        let mut j: i64 = 0;
-        while j < i {
-            acc = vc_tm_app3(ar, VC_OP_ITE(), vc_agg_same_object(ag, ar, hdr, j, i), vals[j as u64], acc);
-            j = j + 1;
-        }
-        vals.push(vc_flow_name(ag.fl, ar, hdr, sort, acc));
-        i = i + 1;
+    let mut acc: i64 = vc_agg_own_symbol(ag, ar, hdr, k, idx, sort);
+    let mut j: i64 = pos - 1;
+    while j >= 0 {
+        let first: i64 = vc_agg_own_symbol(ag, ar, hdr, ag.al_params[j as u64], idx, sort);
+        acc = vc_tm_app3(ar, VC_OP_ITE(), vc_agg_same_object(ag, ar, hdr, j, pos), first, acc);
+        j = j - 1;
     }
-    vals[pos as u64]
+    if pos > 0 { vc_flow_name(ag.fl, ar, hdr, sort, acc) } else { acc }
 }
 
 // Gives the parameter symbols declared since the first `seen` the IR type `ty` of

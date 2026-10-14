@@ -99,11 +99,12 @@ fn vc_agg_alias_params(f: IrFunction, n_ids: u64) -> Vec<i64> {
         bi = bi + 1;
     }
     let out: Vec<i64> = Vec::new();
+    if !writes_param { return out; }
     let mut k: u64 = 0;
     while k < marked.len() {
-        if marked[k] == 1 && writes_param { out.push(k as i64); }
+        if marked[k] == 1 { out.push(k as i64); }
         k = k + 1;
     }
-    if out.len() < 2 { return Vec::new(); }
+    if out.len() < 2 { out.clear(); }
     out
 }
