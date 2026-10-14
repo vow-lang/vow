@@ -15,6 +15,7 @@ module Divide
 
 fn divide(x: i64, y: i64) -> i64 vow {
     requires: y != 0
+    requires: x >= -9223372036854775807 || y != -1
 } {
     x / y
 }
@@ -32,10 +33,10 @@ $ vow build examples/divide.vow
 ```
 
 ```json
-{"status":"Verified","executable":"examples/divide","diagnostics":[],"counterexamples":[]}
+{"status":"Verified","executable":"examples/divide","diagnostics":[{"error_code":"VerificationSkipped","message":"calls from `main` to contracted `divide` were not verified: `main` cannot be modelled","severity":"note","span":{"file":"","offset":0,"length":0},"hints":["the callee `requires` at these call sites are checked at runtime in --mode debug only"]}],"counterexamples":[]}
 ```
 
-The verifier proves the contract: whenever `y != 0` holds, the division is safe.
+The verifier proves `divide` against its contract: whenever both clauses hold, the division is safe. `main` has the `io` effect, so the verifier does not model it and does not check its call `divide(10, 0)` against the contract: that is the `VerificationSkipped` note, and the violation shows up at runtime in debug mode (Step 3). `y != 0` rules out a zero divisor and the second clause rules out `i64::MIN / -1`, whose quotient is not representable and which aborts at runtime like a zero divisor.
 
 ### Step 3: Runtime behavior (debug mode)
 

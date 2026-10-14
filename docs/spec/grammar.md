@@ -86,6 +86,7 @@ the declaration. `vow decl` emits these declarations in `.vow.d` stubs.
 ```vow
 fn divide(x: i64, y: i64) -> i64 vow {
     requires: y != 0
+    requires: x >= -9223372036854775807 || y != -1
 } {
     x / y
 }

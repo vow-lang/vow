@@ -576,6 +576,71 @@ class ContractsTest(unittest.TestCase):
             vd.MORE_PRECISE, vd.compare_contracts("VerifyFailed", e, n, {"f"})[0]
         )
 
+    def test_native_divergence_directive_excuses_a_proven_clause_left_unknown(self):
+        e = report(
+            clause("f", "requires", 0, "proven"),
+            clause("f", "ensures", 1, "failed"),
+        )
+        n = report(
+            clause("f", "requires", 0, "unknown"),
+            clause("f", "ensures", 1, "failed"),
+        )
+        self.assertEqual(vd.WEAKER, vd.compare_contracts("VerifyFailed", e, n)[0])
+        cls, detail = vd.compare_contracts(
+            "VerifyFailed", e, n, divergence="requires is proven with its function"
+        )
+        self.assertEqual(vd.MORE_PRECISE, cls)
+        self.assertIn("requires is proven with its function", detail)
+
+    def test_native_divergence_directive_does_not_excuse_a_verified_fixture(self):
+        e = report(clause("f", "ensures", 1, "proven"))
+        n = report(clause("f", "ensures", 1, "unknown"))
+        self.assertEqual(
+            vd.WEAKER,
+            vd.compare_contracts("Verified", e, n, divergence="documented")[0],
+        )
+
+    def test_native_divergence_directive_excuses_nothing_else(self):
+        why = "documented"
+        skipped = report(clause("f", "ensures", 1, "skipped"))
+        proven = report(clause("f", "ensures", 1, "proven"))
+        self.assertEqual(
+            vd.WEAKER,
+            vd.compare_contracts("Verified", proven, skipped, divergence=why)[0],
+        )
+        errored = report(clause("f", "ensures", 1, "error"))
+        self.assertEqual(
+            vd.WEAKER,
+            vd.compare_contracts("Verified", proven, errored, divergence=why)[0],
+        )
+        unproven = report(clause("f", "ensures", 1, "unknown"))
+        failed = report(clause("f", "ensures", 1, "failed"))
+        self.assertEqual(
+            vd.SOUNDNESS,
+            vd.compare_contracts("VerifyFailed", failed, proven, divergence=why)[0],
+        )
+        self.assertEqual(
+            vd.MATCH,
+            vd.compare_contracts("Verified", proven, proven, divergence=why)[0],
+        )
+        self.assertEqual(
+            vd.MATCH,
+            vd.compare_contracts("Verified", unproven, unproven, divergence=why)[0],
+        )
+
+    def test_native_divergence_directive_parsing(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            path = d + "/f.vow"
+            with open(path, "w") as fh:
+                fh.write('// TEST: category x\n// TEST: native-divergence "a why"\n')
+            self.assertEqual("a why", vd.native_divergence(path))
+            with open(path, "w") as fh:
+                fh.write("// TEST: native-divergence\n")
+            self.assertIsNone(vd.native_divergence(path))
+            self.assertIsNone(vd.native_divergence(d + "/missing.vow"))
+
     def test_aborting_functions_are_refuted_without_a_failed_clause(self):
         table = vd.clause_table(
             report(
