@@ -1280,8 +1280,10 @@ overlay of the #1703 addendum reads through it.
   memory) and a `Vec` merged by a Phi (#1662) are as before. The `unsupported-opcode` details `pointer
   written into a field of a value that is not an allocation` and `a field that holds a pointer is read
   back` are gone.
-- **What this does not unskip.** The `reader_*` functions of `compiler/module_io.vow` that store a
-  `String` into a parameter's field (`reader_fail`) no longer fail the gate, but they are loops that
-  write the reader's fields, which the cut does not havoc, so a native run ends in `unknown`
-  (`unwinding assertion`). They stay in `scripts/native_compiler_skips.toml` only while they are
-  skipped; see the pull request for the census.
+- **What this does not unskip.** The `reader_*` functions of `compiler/module_io.vow` store a
+  `String` into the reader (`reader_fail`), `module_encode` and `write_function` read a stored
+  `Vec` back; all eight stop being `Skipped` for that reason and end in `unknown`, `timeout` or a
+  structural counterexample instead, because a loop that writes a struct field is decided by
+  unwinding alone (#1754) and `reader_need` does not say `pos <= buf.len()` (#1755). Until those land
+  the eight functions cannot be proved natively, which is why this change lands only together with a
+  harness that accepts them.
