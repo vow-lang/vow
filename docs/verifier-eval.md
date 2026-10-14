@@ -408,9 +408,11 @@ to an issue (`validate_known` rejects an entry without one); the generator
 stamps matching programs with `// TEST: known-control-gap #N` or
 `// TEST: known-soundness-gap #N`, which the runner reports and does not fail.
 There are no entries today: the controls that fill a `Vec` in a loop past the
-unrolling bound (#1645) verify through the loop cut. `replay-skipped` for a `Vec` parameter points at #1649 (replay of Vec, aggregate, narrow and
-128-bit parameters; the missing counterexample values are #1613). Only a `known-control-gap` goes stale
-(a control that now verifies fails the run); a `known-soundness-gap` that stops reproducing
+unrolling bound (#1645) verify through the loop cut. `replay-skipped` for a
+`Vec`, `String` or float parameter points at #1649 (replay of Vec, String,
+float, aggregate, narrow and 128-bit parameters; the missing counterexample
+values are #1613). Only a `known-control-gap` goes stale (a control that now
+verifies fails the run); a `known-soundness-gap` that stops reproducing
 is not detected. The runner does not apply `ulimit -v`: the native verifier worker carries its
 own address-space cap and the generated programs are small and bounded. A real
 soundness disagreement is a native verifier bug: file an issue with the saved
