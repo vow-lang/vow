@@ -1,0 +1,82 @@
+module VecSortProperties
+
+// `vec_sort(v)` is a new `Vec` that is the sorted permutation of `v`: the same length, every
+// slot at or below its successor, and its slots exactly `v`'s slots in another order. The
+// model states that with a binder (sorted, plus a permutation with its inverse), so the
+// sorted permutation is unique and these properties hold for every length.
+fn same_length(v: Vec<i64>) -> bool vow {
+  ensures: result
+} {
+  vec_sort(v).len() == v.len()
+}
+
+fn adjacent_slots_are_ordered(v: Vec<i64>, i: u64) -> bool vow {
+  requires: v.len() > 1,
+  requires: i < v.len() - 1
+  ensures: result
+} {
+  let s: Vec<i64> = vec_sort(v);
+  s[i] <= s[i + 1]
+}
+
+fn first_is_the_minimum(v: Vec<i64>, k: u64) -> bool vow {
+  requires: k < v.len()
+  ensures: result
+} {
+  let s: Vec<i64> = vec_sort(v);
+  s[0] <= v[k]
+}
+
+fn last_is_the_maximum(v: Vec<i64>, k: u64) -> bool vow {
+  requires: k < v.len()
+  ensures: result
+} {
+  let s: Vec<i64> = vec_sort(v);
+  s[s.len() - 1] >= v[k]
+}
+
+fn sorting_twice_keeps_the_length(v: Vec<i64>) -> bool vow {
+  ensures: result
+} {
+  vec_sort(vec_sort(v)).len() == v.len()
+}
+
+fn the_source_is_not_touched(v: Vec<i64>, i: u64) -> bool vow {
+  requires: i < v.len()
+  ensures: result
+} {
+  let before: i64 = v[i];
+  let s: Vec<i64> = vec_sort(v);
+  s.push(5);
+  v[i] == before
+}
+
+fn a_later_write_does_not_move_the_result(v: Vec<i64>) -> bool vow {
+  requires: v.len() > 1
+  ensures: result
+} {
+  let s: Vec<i64> = vec_sort(v);
+  let first: i64 = s[0];
+  v[0] = 9;
+  s[0] == first
+}
+
+fn the_result_can_grow(v: Vec<i64>) -> bool vow {
+  ensures: result
+} {
+  let s: Vec<i64> = vec_sort(v);
+  let n: u64 = s.len();
+  s.push(5);
+  s[n] == 5 && s.len() == v.len() + 1
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(3);
+  v.push(-1);
+  v.push(2);
+  let s: Vec<i64> = vec_sort(v);
+  print_i64(s[0]);
+  if same_length(v) && first_is_the_minimum(v, 1) { print_i64(s[2]); }
+  0
+}

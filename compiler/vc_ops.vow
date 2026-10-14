@@ -275,6 +275,9 @@ fn catalogue_verifier_known(sym: String) -> bool {
     let n: u64 = sym.len();
     if n == 14 {
         let c0: i64 = sym.byte_at(11);
+        if c0 == 111 {
+            return sym == String::from("__vow_vec_sort");
+        }
         if c0 == 115 {
             return sym == String::from("__vow_hash_str");
         }

@@ -816,8 +816,7 @@
       "doc_signature": "fn(v: Vec<i64>) -> Vec<i64>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "Sortedness plus permutation of an unbounded Vec needs quantifiers over index pairs and a multiset equality; not encoded.",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     }
   ],

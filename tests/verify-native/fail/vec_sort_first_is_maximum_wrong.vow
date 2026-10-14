@@ -1,0 +1,21 @@
+// TEST: counterexample-fn "first_is_the_maximum"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// The first slot of a sorted `Vec` is its minimum, so claiming it is the maximum is refuted by
+// two different elements; replay confirms the model's sort against the runtime's.
+module VecSortFirstIsMaximumWrong
+
+fn first_is_the_maximum(v: Vec<i64>, k: u64) -> bool vow {
+  requires: k < v.len(),
+  ensures: result
+} {
+  let s: Vec<i64> = vec_sort(v);
+  s[0] >= v[k]
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  if first_is_the_maximum(v, 0) { print_i64(1); }
+  0
+}

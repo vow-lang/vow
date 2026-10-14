@@ -804,6 +804,7 @@ VERIFIER_KNOWN_NAMES = {
     "parse_u16",
     "parse_u32",
     "parse_u128",
+    "vec_sort",
 }
 
 

@@ -669,6 +669,23 @@ fn check_vec_ops_rejected() -> i64 {
     0
 }
 
+// let s = vec_sort(v); s.len(): a Vec in, a new Vec out.
+fn check_vec_sort() -> i64 {
+    let insts: Vec<IrInst> = vec_new_insts();
+    insts.push(mk_inst_call_extern(3, ITY_PTR(), args1(2), String::from("__vow_vec_sort")));
+    insts.push(mk_inst_call_extern(4, ITY_U64(), args1(3), String::from("__vow_vec_len")));
+    insts.push(mk_inst_return(5, 4));
+    let f: IrFunction = one_block(String::from("s"), Vec::new(), ITY_U64(), insts);
+    if vc_skip_reason(f).len() != 0 { return 40; }
+    let bad: Vec<IrInst> = vec_new_insts();
+    bad.push(mk_inst_call_extern(3, ITY_I64(), args1(2), String::from("__vow_vec_sort")));
+    bad.push(mk_inst_const_i64(4, 0));
+    bad.push(mk_inst_return(5, 4));
+    let g: IrFunction = one_block(String::from("g"), Vec::new(), ITY_I64(), bad);
+    if vc_reason_code(vc_skip_reason(g)) != VC_SKIP_UNSUPPORTED_OPCODE() { return 41; }
+    0
+}
+
 fn parse_hook_fn(arg_ty: i64, call_ty: i64) -> IrFunction {
     let ps: Vec<i64> = Vec::new();
     ps.push(arg_ty);
@@ -707,6 +724,7 @@ fn main() -> i32 {
     let mut r: i64 = check_accepted();
     if r == 0 { r = check_vec_ops_accepted(); }
     if r == 0 { r = check_vec_ops_rejected(); }
+    if r == 0 { r = check_vec_sort(); }
     if r == 0 { r = check_scalar_calls(); }
     if r == 0 { r = check_effects(); }
     if r == 0 { r = check_branches_accepted(); }
