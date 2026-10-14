@@ -2,7 +2,6 @@
 // TEST: counterexample-fn "square"
 // TEST: counterexample-vow-id 1
 // TEST: counterexample-blame Callee
-// TEST: replay-skipped float parameters are not rebuilt by the replay harness
 // A finite operand can square past the largest finite value: the result is an
 // infinity and `result - result` is a NaN.
 module FloatOverflowToInfinity

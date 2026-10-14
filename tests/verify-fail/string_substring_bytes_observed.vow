@@ -17,4 +17,3 @@ fn first_byte_is_a(s: String) -> i64 vow {
 fn main() -> i32 {
   0
 }
-// TEST: replay-skipped String parameter is not rebuilt by the replay harness (#1649)

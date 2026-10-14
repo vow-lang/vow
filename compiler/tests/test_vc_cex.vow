@@ -35,6 +35,10 @@ fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
         model_hdr: Vec::new(),
         model_ambig: Vec::new(),
         hook_vars: Vec::new(),
+        vec_param: Vec::new(),
+        vec_arr: Vec::new(),
+        vec_len: Vec::new(),
+        vec_hdr: Vec::new(),
     };
     cs.kinds.push(kind);
     cs.frames.push(-1);
@@ -329,6 +333,72 @@ fn check_aggregate_fields() -> i64 {
     0
 }
 
+
+fn vec_fn() -> IrFunction {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    p.push(ITY_PTR());
+    let f: IrFunction = mk_function(1, String::from("h"), p, ITY_I64(), Vec::new());
+    f.param_names[0] = String::from("x");
+    f.param_names[1] = String::from("v");
+    f
+}
+
+// `x` is a scalar parameter and `v` a `Vec` whose length constant sits at header
+// position 3, declared before claim 0's prefix of 10 commands.
+fn vec_claims() -> VcClaims {
+    let cs: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
+    cs.model_names[1] = String::from("p1_vlen");
+    cs.model_tys[1] = ITY_U64();
+    cs.model_slots[1] = VC_SLOT_VEC_LEN();
+    cs.model_hdr.push(0);
+    cs.model_hdr.push(3);
+    cs.header_lens.push(10);
+    cs.vec_param.push(1);
+    cs.vec_arr.push(String::from("p1_varr"));
+    cs.vec_len.push(String::from("p1_vlen"));
+    cs.vec_hdr.push(3);
+    cs
+}
+
+fn vec_answer(x: i64, len: i64, e0: i64, e1: i64, with_contents: bool) -> VcSolverAnswer {
+    let values: Vec<i64> = Vec::new();
+    let highs: Vec<i64> = Vec::new();
+    values.push(x);
+    values.push(len);
+    if with_contents {
+        let mut i: i64 = 0;
+        while i < 8 {
+            if i == 0 { values.push(e0); } else if i == 1 { values.push(e1); } else { values.push(99); }
+            i = i + 1;
+        }
+    }
+    let mut h: u64 = 0;
+    while h < values.len() {
+        highs.push(0);
+        h = h + 1;
+    }
+    VcSolverAnswer { verdict: VC_ANS_SAT(), values: values, highs: highs, raw: String::from("") }
+}
+
+fn check_vec_contents() -> i64 {
+    let f: IrFunction = vec_fn();
+    let cs: VcClaims = vec_claims();
+    let r: VerifyResult = vc_claim_result(f, cs, 0, vec_answer(5, 2, 7, -1, true));
+    if r.var_names.len() != 4 { return 80; }
+    if r.var_names[0] != String::from("x") || r.var_values[0] != String::from("5") { return 81; }
+    if r.var_names[1] != String::from("v.len") || r.var_values[1] != String::from("2") { return 82; }
+    if r.var_names[2] != String::from("v[0]") || r.var_values[2] != String::from("7") { return 83; }
+    if r.var_names[3] != String::from("v[1]") || r.var_values[3] != String::from("18446744073709551615") { return 84; }
+    let bare: VerifyResult = vc_claim_result(f, vec_claims(), 0, vec_answer(5, 2, 0, 0, false));
+    if bare.var_names.len() != 2 || bare.var_names[1] != String::from("v.len") { return 85; }
+    let none: VerifyResult = vc_claim_result(f, vec_claims(), 0, vec_answer(5, 0, 0, 0, true));
+    if none.var_names.len() != 2 || none.var_values[1] != String::from("0") { return 86; }
+    let big: VerifyResult = vc_claim_result(f, vec_claims(), 0, vec_answer(5, 100, 0, 0, true));
+    if big.var_names.len() != 2 || big.var_values[1] != String::from("100") { return 87; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_sat_ensures();
     if r == 0 { r = check_sat_abort_claims(); }
@@ -337,5 +407,6 @@ fn main() -> i32 {
     if r == 0 { r = check_shift_and_arith_labels(); }
     if r == 0 { r = check_callee_clauses(); }
     if r == 0 { r = check_aggregate_fields(); }
+    if r == 0 { r = check_vec_contents(); }
     i64_to_i32_wrap(r)
 }

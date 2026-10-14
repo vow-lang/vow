@@ -1,4 +1,3 @@
-// TEST: replay-skipped the counterexample's string contents are not rebuilt by the replay harness
 // TEST: counterexample-fn "same_length_is_eq"
 // TEST: counterexample-vow-id 1
 // TEST: counterexample-blame Callee

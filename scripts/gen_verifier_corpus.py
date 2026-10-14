@@ -73,10 +73,7 @@ KNOWN_DISAGREEMENTS = {}
 # (shape, class) -> why the replay harness cannot confirm a counterexample of
 # that shape, with its issue. Rendered as `// TEST: replay-skipped`, which the
 # runner already reports instead of failing.
-REPLAY_SKIPS = {
-    ("vec_param_clamp", CLASS_BUG): "Vec parameter is not rebuilt by replay (#1649)",
-    ("vec_param_last", CLASS_BUG): "Vec parameter is not rebuilt by replay (#1649)",
-}
+REPLAY_SKIPS = {}
 
 _ISSUE = re.compile(r"^#\d+$")
 

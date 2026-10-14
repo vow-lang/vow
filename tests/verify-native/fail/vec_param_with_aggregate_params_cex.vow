@@ -1,0 +1,26 @@
+// TEST: counterexample-fn "cell_plus_first"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value v.len 1
+// A counterexample lists a `Vec` parameter's contents next to the identities of
+// the aggregate parameters that may share an object, and the replay rebuilds both.
+module VecParamWithAggregateParamsCex
+
+struct Cell { v: i64 }
+
+fn cell_plus_first(a: Cell, b: Cell, v: Vec<i64>) -> i64 vow {
+  requires: v.len() == 1
+  ensures: result != 7
+} {
+  b.v = 0;
+  a.v + v[0]
+}
+
+fn main() -> i32 [io] {
+  let a: Cell = Cell { v: 1 };
+  let b: Cell = Cell { v: 2 };
+  let v: Vec<i64> = Vec::new();
+  v.push(3);
+  print_i64(cell_plus_first(a, b, v));
+  0
+}

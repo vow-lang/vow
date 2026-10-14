@@ -8,6 +8,7 @@ use vc_exec
 use vc_agg
 use vc_int
 use vc_fmt
+use vc_vecmodel
 
 // Maps a solver answer for one claim onto the `VerifyResult` the shared
 // counterexample reporting (`build_ce_from_result`) already consumes.
@@ -35,6 +36,11 @@ fn vc_model_symbol_name(f: IrFunction, cs: VcClaims, j: u64) -> String {
         alias.push_str(String::from(".alias"));
         return alias;
     }
+    if cs.model_slots[j] == VC_SLOT_VEC_LEN() {
+        let named: String = String::from(base);
+        named.push_str(String::from(".len"));
+        return named;
+    }
     if cs.model_slots[j] < 0 {
         return base;
     }
@@ -59,13 +65,26 @@ fn vc_alias_entry(cs: VcClaims, n: u64, p: i64) -> i64 {
     -1
 }
 
+// The length the answer gives the `Vec`/`String` parameter at position `v` of
+// `cs.vec_*`, or -1 when the claim's model does not list it.
+fn vc_answer_vec_len(cs: VcClaims, ans: VcSolverAnswer, n: u64, v: i64) -> i64 {
+    let mut j: u64 = 0;
+    while j < n && j < ans.values.len() {
+        if cs.model_slots[j] == VC_SLOT_VEC_LEN() && cs.model_names[j] == cs.vec_len[v as u64] {
+            return ans.values[j];
+        }
+        j = j + 1;
+    }
+    -1
+}
+
 // The entry whose value model entry `j` has in the counterexample. A field of an
 // aggregate parameter that is the same object as an earlier one (equal
 // identities) reads that parameter's field, so its own symbol, which the formula
 // ignores then, must not show a value of its own: the first such parameter's
-// entry for the same slot and width, else `j`.
-fn vc_alias_value_source(cs: VcClaims, vals: Vec<i64>, j: u64) -> u64 {
-    let n: u64 = vals.len();
+// entry for the same slot and width, else `j`. Only the first `n` entries of
+// `vals` are model entries; an enriched answer carries `Vec` elements behind them.
+fn vc_alias_value_source(cs: VcClaims, vals: Vec<i64>, n: u64, j: u64) -> u64 {
     if cs.model_slots[j] < 0 { return j; }
     let me: i64 = vc_alias_entry(cs, n, cs.model_params[j]);
     if me < 0 { return j; }
@@ -80,6 +99,35 @@ fn vc_alias_value_source(cs: VcClaims, vals: Vec<i64>, j: u64) -> u64 {
         i = i + 1;
     }
     best
+}
+
+// Appends `<param>[<i>]` for the elements below each `Vec`/`String` parameter's
+// length when the answer carries the contents (`vc_enrich_vec_model`: `n`
+// regular entries, then the same number of raw 8-byte slots per parameter of
+// `vc_cex_vecs`). A slot prints as its unsigned 64-bit value.
+fn vc_append_vec_contents(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnswer, n: u64, names: Vec<String>, values: Vec<String>) {
+    if ans.values.len() <= n { return; }
+    let vecs: Vec<i64> = vc_cex_vecs(cs, k);
+    let per: u64 = vc_answer_elems_per_vec(cs, k, ans);
+    let mut p: u64 = 0;
+    while p < vecs.len() {
+        let len: i64 = vc_answer_vec_len(cs, ans, n, vecs[p]);
+        let base: String = vc_source_param_name(f, cs.vec_param[vecs[p] as u64]);
+        let mut i: i64 = 0;
+        while i < len && len as u64 <= per {
+            let at: u64 = n + p * per + i as u64;
+            if at < ans.values.len() {
+                let key: String = String::from(base);
+                key.push_str(String::from("["));
+                key.push_str(i64_to_string(i));
+                key.push_str(String::from("]"));
+                names.push(key);
+                values.push(uint_to_string(ans.values[at] as u64));
+            }
+            i = i + 1;
+        }
+        p = p + 1;
+    }
 }
 
 fn vc_violated_property_text(label: String) -> String {
@@ -114,13 +162,15 @@ fn vc_claim_result(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnswer) -> 
     if ans.verdict == VC_ANS_SAT() {
         let names: Vec<String> = Vec::new();
         let values: Vec<String> = Vec::new();
+        let n: u64 = vc_answer_regular_count(cs, k, ans);
         let mut j: u64 = 0;
-        while j < ans.values.len() {
+        while j < n {
             names.push(vc_model_symbol_name(f, cs, j));
-            let src: u64 = vc_alias_value_source(cs, ans.values, j);
+            let src: u64 = vc_alias_value_source(cs, ans.values, n, j);
             values.push(vc_format_value(cs.model_tys[j], ans.values[src], ans.highs[src]));
             j = j + 1;
         }
+        vc_append_vec_contents(f, cs, k, ans, n, names, values);
         let kind: i64 = cs.kinds[k];
         let mut raw: String = String::from("");
         if kind != VC_CLAIM_ENSURES() && kind != VC_CLAIM_CALLER_PRE() && kind != VC_CLAIM_CALLEE_POST() {

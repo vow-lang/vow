@@ -1,0 +1,18 @@
+// TEST: counterexample-fn "off_by_one"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The claim contradicts itself for every result of the hook, whatever the string
+// is, so the counterexample is reported; the contents of the string parameter come
+// from a second query that keeps the first one's scalars, and the replay builds it.
+module FloatBitsHookStringParamFailure
+
+fn off_by_one(s: String) -> u64 vow {
+  ensures: result == parse_f64_bits(s) + 1u64
+} {
+  parse_f64_bits(s)
+}
+
+fn main() -> i32 [io] {
+  print_u64(off_by_one(String::from("1.5")));
+  0
+}

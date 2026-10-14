@@ -1,7 +1,6 @@
 // TEST: counterexample-fn "commutes"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
-// TEST: replay-skipped the counterexample's string contents are not rebuilt by the replay harness
 // TEST: counterexample-violation "ensures result == true"
 module StringAppendNotCommutative
 

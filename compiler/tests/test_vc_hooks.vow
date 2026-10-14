@@ -10,6 +10,7 @@ use vc_str
 use vc_vec
 use vc_slice
 use vc_native
+use vc_vecmodel
 use vc_cex
 use vc_solver
 use verifier

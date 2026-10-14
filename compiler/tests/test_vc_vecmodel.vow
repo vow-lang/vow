@@ -1,0 +1,168 @@
+module TestVcVecModel
+
+use ir
+use verifier
+use vc_solver
+use vc_exec
+use vc_smt
+use vc_term
+use vc_vecmodel
+
+// Two `Vec`/`String` parameters: `p0`'s length constant is declared at header
+// position 2 and `p3`'s at 20, and claim 0's query holds the first 10 commands,
+// so only the first is in its prefix.
+fn two_vec_claims() -> VcClaims {
+    let cs: VcClaims = VcClaims {
+        arena: vc_arena_new(),
+        header: vc_script_new(),
+        assumed: Vec::new(),
+        kinds: Vec::new(),
+        frames: Vec::new(),
+        fr: vc_frames_new(),
+        pre_only: false,
+        step: false,
+        hyp_now: false,
+        vow_ids: Vec::new(),
+        labels: Vec::new(),
+        ostarts: Vec::new(),
+        olens: Vec::new(),
+        negated_goals: Vec::new(),
+        header_lens: Vec::new(),
+        assumed_lens: Vec::new(),
+        model_names: Vec::new(),
+        model_params: Vec::new(),
+        model_tys: Vec::new(),
+        model_widths: Vec::new(),
+        model_slots: Vec::new(),
+        model_hdr: Vec::new(),
+        model_ambig: Vec::new(),
+        hook_vars: Vec::new(),
+        vec_param: Vec::new(),
+        vec_arr: Vec::new(),
+        vec_len: Vec::new(),
+        vec_hdr: Vec::new(),
+    };
+    cs.header_lens.push(10);
+    cs.model_names.push(String::from("p0_vlen"));
+    cs.model_params.push(0);
+    cs.model_tys.push(ITY_U64());
+    cs.model_widths.push(64);
+    cs.model_slots.push(VC_SLOT_VEC_LEN());
+    cs.model_hdr.push(2);
+    cs.model_names.push(String::from("p3_vlen"));
+    cs.model_params.push(3);
+    cs.model_tys.push(ITY_U64());
+    cs.model_widths.push(64);
+    cs.model_slots.push(VC_SLOT_VEC_LEN());
+    cs.model_hdr.push(20);
+    cs.vec_param.push(0);
+    cs.vec_arr.push(String::from("p0_varr"));
+    cs.vec_len.push(String::from("p0_vlen"));
+    cs.vec_hdr.push(2);
+    cs.vec_param.push(3);
+    cs.vec_arr.push(String::from("p3_varr"));
+    cs.vec_len.push(String::from("p3_vlen"));
+    cs.vec_hdr.push(20);
+    cs
+}
+
+fn check_only_declared_vecs_are_read() -> i64 {
+    let cs: VcClaims = two_vec_claims();
+    let vecs: Vec<i64> = vc_cex_vecs(cs, 0);
+    if vecs.len() != 1 || vecs[0] != 0 { return 1; }
+    let names: Vec<String> = vc_cex_elem_names(cs, vecs, 8);
+    if names.len() != 8 { return 2; }
+    if names[0] != String::from("p0_varr_e0") { return 3; }
+    if names[7] != String::from("p0_varr_e7") { return 4; }
+    cs.header_lens[0] = 21;
+    if vc_cex_vecs(cs, 0).len() != 2 { return 5; }
+    let both: Vec<String> = vc_cex_elem_names(cs, vc_cex_vecs(cs, 0), 8);
+    if both.len() != 16 { return 6; }
+    if both[8] != String::from("p3_varr_e0") { return 7; }
+    0
+}
+
+fn answer_with(count: u64) -> VcSolverAnswer {
+    let values: Vec<i64> = Vec::new();
+    let highs: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < count {
+        values.push(0);
+        highs.push(0);
+        i = i + 1;
+    }
+    VcSolverAnswer { verdict: VC_ANS_SAT(), values: values, highs: highs, raw: String::from("") }
+}
+
+fn check_regular_count() -> i64 {
+    let cs: VcClaims = two_vec_claims();
+    let n: u64 = vc_claim_model_count(cs, 0);
+    if n != 1 { return 10; }
+    if vc_answer_regular_count(cs, 0, answer_with(n)) != n { return 11; }
+    if vc_answer_elems_per_vec(cs, 0, answer_with(n)) != 0 { return 12; }
+    if vc_answer_regular_count(cs, 0, answer_with(n + 8)) != n { return 13; }
+    if vc_answer_elems_per_vec(cs, 0, answer_with(n + 8)) != 8 { return 14; }
+    cs.header_lens[0] = 21;
+    let n2: u64 = vc_claim_model_count(cs, 0);
+    if vc_answer_elems_per_vec(cs, 0, answer_with(n2 + 128)) != 64 { return 15; }
+    if vc_answer_regular_count(cs, 0, answer_with(n2)) != n2 { return 16; }
+    0
+}
+
+fn check_bounds_grow() -> i64 {
+    if vc_next_vec_bound(2) != 8 { return 20; }
+    if vc_next_vec_bound(8) != 64 { return 21; }
+    if vc_next_vec_bound(64) != VC_CEX_VEC_MAX() { return 22; }
+    if vc_next_vec_bound(VC_CEX_VEC_MAX()) <= VC_CEX_VEC_MAX() { return 23; }
+    0
+}
+
+// The element definitions are `define-fun`s of a `select` of the array, so the
+// solver answers them under a plain name.
+fn check_elements_are_defined_from_the_array() -> i64 {
+    let cs: VcClaims = two_vec_claims();
+    let s: SmtScript = vc_script_new();
+    vc_cex_define_elems(cs, s, vc_cex_vecs(cs, 0), 4);
+    if s.kinds.len() != 4 { return 30; }
+    let text: String = vc_command_text(cs.arena, s, 1);
+    if text != String::from("(define-fun p0_varr_e1 () (_ BitVec 64) (select p0_varr #x0000000000000001))") { return 31; }
+    0
+}
+
+fn check_max_vec_len() -> i64 {
+    let cs: VcClaims = two_vec_claims();
+    cs.header_lens[0] = 21;
+    let a: VcSolverAnswer = answer_with(2 + 4);
+    a.values[0] = 3;
+    a.values[1] = 7;
+    if vc_answer_max_vec_len(cs, 0, a) != 7 { return 40; }
+    let bare: VcSolverAnswer = answer_with(2);
+    bare.values[0] = 9;
+    bare.values[1] = 1;
+    if vc_answer_max_vec_len(cs, 0, bare) != 9 { return 41; }
+    0
+}
+
+// A counterexample's length is the model's to choose, so the recheck that pins
+// the scalars of a hook-reaching claim leaves it free.
+fn check_pin_leaves_lengths_free() -> i64 {
+    let cs: VcClaims = two_vec_claims();
+    cs.header_lens[0] = 21;
+    let a: VcSolverAnswer = answer_with(2);
+    a.values[0] = 3;
+    a.values[1] = 4;
+    let s: SmtScript = vc_script_new();
+    vc_pin_model(cs, a, s);
+    if s.kinds.len() != 0 { return 50; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_only_declared_vecs_are_read();
+    if r == 0 { r = check_regular_count(); }
+    if r == 0 { r = check_bounds_grow(); }
+    if r == 0 { r = check_elements_are_defined_from_the_array(); }
+    if r == 0 { r = check_max_vec_len(); }
+    if r == 0 { r = check_pin_leaves_lengths_free(); }
+    i64_to_i32_wrap(r)
+}

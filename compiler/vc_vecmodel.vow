@@ -1,0 +1,221 @@
+module VcVecModel
+
+use ir
+use vc_smt
+use vc_term
+use vc_solver
+use vc_cache
+use vc_query
+use vc_exec
+
+// Contents of `Vec` and `String` parameters in a counterexample. The model of
+// such a parameter is an SMT array plus a 64-bit length (`vc_vec`); the array is
+// infinite, so a counterexample cannot list it whole. A claim's first model gives
+// the length (`<param>.len`). When some `Vec` or `String` parameter is declared
+// before the claim, `vc_enrich_vec_model` asks the claim's query again with every
+// such length bounded, by 2, then 8, 64 and `VC_CEX_VEC_MAX`, and reads back the
+// elements below the bound (`<param>[<i>]`, the 8-byte slot the runtime keeps: a
+// `String` byte is its low 8 bits). The bound only picks which counterexample the
+// solver returns: any model of the claim's query is one, so no run is excluded
+// from verification, and when no model of that length exists the first answer
+// stands and the length alone is reported. A string's high element bits and an
+// unread element are arbitrary in the model; every read of the verifier masks them
+// the way the runtime does.
+
+fn VC_CEX_VEC_MAX() -> i64 { 512 }
+
+// Asserts that each scalar the counterexample `ans` gives a value is that value.
+// A float is left free, which only makes the query that follows weaker, and so
+// is the length of a `Vec` or `String`: both are the model's to choose.
+fn vc_pin_model(cs: VcClaims, ans: VcSolverAnswer, s: SmtScript) {
+    let ar: VcArena = cs.arena;
+    let mut j: u64 = 0;
+    while j < ans.values.len() {
+        let w: i64 = cs.model_widths[j];
+        if w < VC_SORT_ARRAY64() && cs.model_slots[j] != VC_SLOT_VEC_LEN() {
+            let sym: i64 = vc_tm_var(ar, cs.model_names[j]);
+            if w == VC_SORT_BOOL() {
+                if ans.values[j] != 0 { vc_script_assert(s, sym); } else { vc_script_assert(s, vc_tm_app1(ar, VC_OP_NOT(), sym)); }
+            } else {
+                vc_script_assert(s, vc_tm_app2(ar, VC_OP_EQ(), sym, vc_tm_bv(ar, w, ans.values[j], ans.highs[j])));
+            }
+        }
+        j = j + 1;
+    }
+}
+
+// The next length bound after `bound` (a value above `VC_CEX_VEC_MAX` ends the
+// search).
+fn vc_next_vec_bound(bound: i64) -> i64 {
+    if bound < 8 { return 8; }
+    if bound < 64 { return 64; }
+    if bound < VC_CEX_VEC_MAX() { return VC_CEX_VEC_MAX(); }
+    VC_CEX_VEC_MAX() + 1
+}
+
+// Positions in `cs.vec_*` of the `Vec`/`String` parameters whose constants the
+// query of claim `k` declares.
+fn vc_cex_vecs(cs: VcClaims, k: u64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut v: u64 = 0;
+    while v < cs.vec_hdr.len() {
+        if cs.vec_hdr[v] < cs.header_lens[k] { out.push(v as i64); }
+        v = v + 1;
+    }
+    out
+}
+
+fn vc_cex_elem_name(cs: VcClaims, v: i64, i: i64) -> String {
+    let out: String = String::from(cs.vec_arr[v as u64]);
+    out.push_str(String::from("_e"));
+    out.push_str(i64_to_string(i));
+    out
+}
+
+// Names of the first `bound` elements of each parameter in `vecs`, parameter by
+// parameter, in the order the answer lists them.
+fn vc_cex_elem_names(cs: VcClaims, vecs: Vec<i64>, bound: i64) -> Vec<String> {
+    let out: Vec<String> = Vec::new();
+    let mut p: u64 = 0;
+    while p < vecs.len() {
+        let mut i: i64 = 0;
+        while i < bound {
+            out.push(vc_cex_elem_name(cs, vecs[p], i));
+            i = i + 1;
+        }
+        p = p + 1;
+    }
+    out
+}
+
+// Defines each of those elements as a `select` of the array, so the solver
+// answers it under a plain name.
+fn vc_cex_define_elems(cs: VcClaims, s: SmtScript, vecs: Vec<i64>, bound: i64) {
+    let ar: VcArena = cs.arena;
+    let mut p: u64 = 0;
+    while p < vecs.len() {
+        let arr: i64 = vc_tm_var(ar, cs.vec_arr[vecs[p] as u64]);
+        let mut i: i64 = 0;
+        while i < bound {
+            let sel: i64 = vc_tm_app2(ar, VC_OP_SELECT(), arr, vc_tm_bv(ar, 64, i, 0));
+            vc_script_define_fun(s, vc_cex_elem_name(cs, vecs[p], i), 64, sel);
+            i = i + 1;
+        }
+        p = p + 1;
+    }
+}
+
+// One ask for the model of claim `k` with every `Vec`/`String` length at most
+// `bound`; the answer carries `bound` elements of each parameter in `vecs` behind
+// the claim's regular values.
+fn vc_ask_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, vecs: Vec<i64>, bound: i64, pin: bool, first: VcSolverAnswer, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+    let ar: VcArena = cs.arena;
+    let s: SmtScript = vc_claim_context_script(cs, k);
+    let mut p: u64 = 0;
+    while p < vecs.len() {
+        let len: i64 = vc_tm_var(ar, cs.vec_len[vecs[p] as u64]);
+        vc_script_assert(s, vc_tm_app2(ar, VC_OP_BVULE(), len, vc_tm_bv(ar, 64, bound, 0)));
+        p = p + 1;
+    }
+    if pin { vc_pin_model(cs, first, s); }
+    vc_script_assert(s, cs.negated_goals[k]);
+    vc_cex_define_elems(cs, s, vecs, bound);
+    vc_script_check_sat(s);
+    let names: Vec<String> = vc_claim_model_names(cs, k);
+    let widths: Vec<i64> = vc_claim_model_widths(cs, k);
+    let elems: Vec<String> = vc_cex_elem_names(cs, vecs, bound);
+    let mut e: u64 = 0;
+    while e < elems.len() {
+        names.push(elems[e]);
+        widths.push(64);
+        e = e + 1;
+    }
+    vc_script_get_value(s, names);
+    vc_solver_check_cached(cache, bin, vc_smt_render(ar, s), names, widths, budget_ms, scratch)
+}
+
+// The longest length any `Vec`/`String` parameter has in the regular entries of
+// `ans`.
+fn vc_answer_max_vec_len(cs: VcClaims, k: u64, ans: VcSolverAnswer) -> i64 {
+    let n: u64 = vc_answer_regular_count(cs, k, ans);
+    let mut most: i64 = 0;
+    let mut j: u64 = 0;
+    while j < n {
+        if cs.model_slots[j] == VC_SLOT_VEC_LEN() && ans.values[j] > most { most = ans.values[j]; }
+        j = j + 1;
+    }
+    most
+}
+
+// `found`, a model with every length at most some bound, shrunk by bisection to
+// the shortest the solver still finds, given that no model has all lengths at most
+// `lo`: each ask bounds the lengths by the midpoint of `lo` and the longest length
+// found so far, so a counterexample needing 101 elements is not reported with 512.
+fn vc_shrink_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, vecs: Vec<i64>, pin: bool, first: VcSolverAnswer, found: VcSolverAnswer, lo0: i64, started: i64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+    let mut best: VcSolverAnswer = found;
+    let mut lo: i64 = lo0;
+    let mut hi: i64 = vc_answer_max_vec_len(cs, k, best);
+    while hi - lo > 1 {
+        let left_ms: i64 = budget_ms - (time_micros() - started) / 1000;
+        if left_ms <= 0 { return best; }
+        let mid: i64 = (lo + hi) / 2;
+        let again: VcSolverAnswer = vc_ask_vec_model(cache, bin, cs, k, vecs, mid, pin, first, left_ms, scratch);
+        if again.verdict == VC_ANS_SAT() {
+            best = again;
+            hi = vc_answer_max_vec_len(cs, k, best);
+        } else if again.verdict == VC_ANS_UNSAT() {
+            lo = mid;
+        } else {
+            return best;
+        }
+    }
+    best
+}
+
+// The model of claim `k` with the contents of its `Vec` and `String` parameters:
+// the regular values, then the same number of elements of each parameter of
+// `vc_cex_vecs`, in order (`vc_answer_elems_per_vec`). The lengths are bounded
+// first by 2, then 8, 64 and `VC_CEX_VEC_MAX`, and the first bound that has a
+// model is shrunk (`vc_shrink_vec_model`), so the counterexample is the shortest
+// one the solver finds; `ans` itself when the claim has no such parameter, or no
+// bound gives a `sat` within the budget. With `pin` every query also fixes the
+// scalars of `ans` (`vc_pin_model`): a claim that reaches a float-text hook was
+// checked to fail for those scalars whatever the hook returns (`vc_hook_recheck`),
+// and another set of scalars might not.
+fn vc_enrich_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: VcSolverAnswer, pin: bool, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+    let vecs: Vec<i64> = vc_cex_vecs(cs, k);
+    if vecs.len() == 0 { return ans; }
+    let started: i64 = time_micros();
+    let mut lo: i64 = -1;
+    let mut bound: i64 = 2;
+    while bound <= VC_CEX_VEC_MAX() {
+        let left_ms: i64 = budget_ms - (time_micros() - started) / 1000;
+        if left_ms <= 0 { return ans; }
+        let again: VcSolverAnswer = vc_ask_vec_model(cache, bin, cs, k, vecs, bound, pin, ans, left_ms, scratch);
+        if again.verdict == VC_ANS_SAT() {
+            return vc_shrink_vec_model(cache, bin, cs, k, vecs, pin, ans, again, lo, started, budget_ms, scratch);
+        }
+        if again.verdict != VC_ANS_UNSAT() { return ans; }
+        lo = bound;
+        bound = vc_next_vec_bound(bound);
+    }
+    ans
+}
+
+// How many of `ans.values` are the claim's regular model entries: all of them,
+// unless the answer carries elements of the claim's `Vec`/`String` parameters
+// behind them (`vc_enrich_vec_model`).
+fn vc_answer_regular_count(cs: VcClaims, k: u64, ans: VcSolverAnswer) -> u64 {
+    let vecs: u64 = vc_cex_vecs(cs, k).len();
+    let n: u64 = vc_claim_model_count(cs, k);
+    if vecs > 0 && ans.values.len() > n && (ans.values.len() - n) % vecs == 0 { return n; }
+    ans.values.len()
+}
+
+// Elements the answer lists per parameter of `vc_cex_vecs`; 0 when it lists none.
+fn vc_answer_elems_per_vec(cs: VcClaims, k: u64, ans: VcSolverAnswer) -> u64 {
+    let n: u64 = vc_answer_regular_count(cs, k, ans);
+    let vecs: u64 = vc_cex_vecs(cs, k).len();
+    if vecs == 0 { return 0; }
+    (ans.values.len() - n) / vecs
+}

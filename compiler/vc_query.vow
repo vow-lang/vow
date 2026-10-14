@@ -37,7 +37,16 @@ struct VcClaims {
     model_hdr: Vec<i64>,
     model_ambig: Vec<i64>,
     hook_vars: Vec<i64>,
+    vec_param: Vec<i64>,
+    vec_arr: Vec<String>,
+    vec_len: Vec<String>,
+    vec_hdr: Vec<i64>,
 }
+
+// `model_slots` of the length of a `Vec` or `String` parameter; a scalar
+// parameter is -1, an aggregate parameter's identity `VC_ALIAS_SLOT` (-2) and a
+// field of an aggregate one its slot, 0 or more.
+fn VC_SLOT_VEC_LEN() -> i64 { -3 }
 
 // Number of model symbols claim `k`'s query declares: the header is only
 // declared up to `header_lens[k]`, and `get-value` of a symbol declared later

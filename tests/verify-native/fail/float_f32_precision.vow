@@ -2,7 +2,7 @@
 // TEST: counterexample-fn "add_nonzero"
 // TEST: counterexample-vow-id 3
 // TEST: counterexample-blame Callee
-// TEST: replay-skipped float parameters are not rebuilt by the replay harness
+// TEST: replay-skipped f32 has no source literal, so replay cannot rebuild an f32 parameter
 // An `f32` has a 24-bit significand: adding a nonzero finite value to a much
 // larger one can leave it unchanged, so the sum can equal the first operand.
 module FloatF32Precision

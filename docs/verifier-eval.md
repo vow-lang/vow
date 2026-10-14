@@ -548,11 +548,12 @@ to an issue (`validate_known` rejects an entry without one); the generator
 stamps matching programs with `// TEST: known-control-gap #N` or
 `// TEST: known-soundness-gap #N`, which the runner reports and does not fail.
 There are no entries today: the controls that fill a `Vec` in a loop past the
-unrolling bound (#1645) verify through the loop cut. `replay-skipped` for a
-`Vec`, `String`, float or linear struct parameter, or a linear struct result,
-points at #1649 (replay of Vec, String, float, linear, aggregate, narrow and
-128-bit parameters; the missing counterexample
-values are #1613). Only a `known-control-gap` goes stale (a control that now
+unrolling bound (#1645) verify through the loop cut. `REPLAY_SKIPS` is empty
+too: `--replay-cex` rebuilds `Vec`, `String`, aggregate, narrow, 128-bit and `f64`
+parameters (#1649), so no generated shape needs a `replay-skipped` line (an entry is
+`(shape, class) -> "why (#N)"`, rendered at the end of the file). A hand-written
+fixture keeps one for a linear struct parameter or result, which the replay does
+not rebuild yet (#1649), and for an `f32` parameter, which no source text denotes. Only a `known-control-gap` goes stale (a control that now
 verifies fails the run); a `known-soundness-gap` that stops reproducing
 is not detected. The runner does not apply `ulimit -v`: the native verifier worker carries its
 own address-space cap and the generated programs are small and bounded. A real

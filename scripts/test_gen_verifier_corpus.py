@@ -15,6 +15,7 @@ import random
 import re
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import gen_corpus
@@ -244,20 +245,30 @@ class KnownDisagreementTest(unittest.TestCase):
 
         self.assertIn("// TEST: known-soundness-gap #7", lines)
 
-    def test_replay_skips_are_issue_backed_and_trail_the_file(self):
+    def test_replay_skips_are_issue_backed(self):
         for (shape, cls), why in gen.REPLAY_SKIPS.items():
             self.assertIn(shape, gen.SHAPES)
             self.assertRegex(why, r"#\d+")
+
+    def test_a_replay_skip_trails_the_file(self):
+        skips = {("vec_param_clamp", gen.CLASS_BUG): "example limit (#1)"}
         rng = random.Random(2)
-        for i in range(300):
-            text = gen.gen_program(rng, i)
-            shape, cls = class_of(text)[1], class_of(text)[0]
-            if (shape, cls) in gen.REPLAY_SKIPS:
-                self.assertTrue(
-                    text.splitlines()[-1].startswith("// TEST: replay-skipped ")
-                )
-                return
+        with unittest.mock.patch.dict(gen.REPLAY_SKIPS, skips):
+            for i in range(300):
+                text = gen.gen_program(rng, i)
+                cls, shape = class_of(text)[0], class_of(text)[1]
+                if (shape, cls) in skips:
+                    self.assertEqual(
+                        "// TEST: replay-skipped example limit (#1)",
+                        text.splitlines()[-1],
+                    )
+                    return
         self.fail("no program exercised a replay skip")
+
+    def test_no_shape_skips_its_replay_today(self):
+        rng = random.Random(2)
+        for i in range(100):
+            self.assertNotIn("replay-skipped", gen.gen_program(rng, i))
 
 
 if __name__ == "__main__":

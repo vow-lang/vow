@@ -3,7 +3,6 @@
 // TEST: counterexample-vow-id 2
 // TEST: counterexample-blame Callee
 // TEST: counterexample-value x NaN
-// TEST: replay-skipped float parameters are not rebuilt by the replay harness
 // Neither `x < 0.0` nor `x > 1.0` holds for a NaN, so the NaN falls through to
 // the result and `result >= 0.0` is false.
 module FloatNanEscapesClamp
