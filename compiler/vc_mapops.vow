@@ -57,6 +57,11 @@ fn vc_inst_map_kind(inst: IrInst) -> i64 {
     vc_map_op_kind(inst.ds)
 }
 
+// True for a `BTreeMap` operation, whose key is always `i64`.
+fn vc_inst_is_btree_op(inst: IrInst) -> bool {
+    inst.ds.len() > VC_MAP_BTREE_PREFIX().len() && string_starts_with(inst.ds, VC_MAP_BTREE_PREFIX()) == 1
+}
+
 // An operation that changes the key set or a value of the map its first operand
 // names: the loop cut havocs the map a loop mutates.
 fn vc_map_kind_mutates(k: i64) -> bool {

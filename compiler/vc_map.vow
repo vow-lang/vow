@@ -222,15 +222,22 @@ fn vc_map_count_key(mp: VcMap, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, s
     assumed.push(vc_tm_app2(ar, VC_OP_BVULE(), accs[j], ls[j]));
 }
 
-// Records that the function uses `key` on the map of slot `s`, so every arbitrary
-// base of the slot counts it. `bits` is the width of the key operand, or -1 for an
-// `i64` literal, whose type says nothing about the map's key type.
-fn vc_map_note_key(mp: VcMap, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, s: i64, key: i64, bits: i64) {
+// Records what an operand says of the key width of slot `s`: `bits` is the
+// width of a key operand, or -1 when it says nothing. A `BTreeMap`'s key is
+// always `i64`, so any operation on one says 64 even without a key operand.
+fn vc_map_note_width(mp: VcMap, s: i64, bits: i64) {
     if bits >= 0 && bits < 64 {
         mp.key_wide[s as u64] = 2;
     } else if bits == 64 && mp.key_wide[s as u64] == 0 {
         mp.key_wide[s as u64] = 1;
     }
+}
+
+// Records that the function uses `key` on the map of slot `s`, so every arbitrary
+// base of the slot counts it. `bits` is the width of the key operand, or -1 for an
+// `i64` literal, whose type says nothing about the map's key type.
+fn vc_map_note_key(mp: VcMap, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, s: i64, key: i64, bits: i64) {
+    vc_map_note_width(mp, s, bits);
     let qs: Vec<i64> = mp.qkeys[s as u64];
     let mut i: u64 = 0;
     while i < qs.len() {
@@ -424,15 +431,6 @@ fn vc_map_fill_option(mp: VcMap, ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i6
     vc_agg_store(ag, obj, 1, VC_SORT_BOOL(), vc_tm_app2(ar, VC_OP_DISTINCT(), payload, vc_map_zero(ar)));
 }
 
-fn vc_map_any_arg(inst: IrInst, is_map: Vec<i64>) -> bool {
-    let mut k: u64 = 0;
-    while k < inst.args.len() {
-        if is_map[inst.args[k] as u64] == 1 { return true; }
-        k = k + 1;
-    }
-    false
-}
-
 // Marks every map pointer: the result of `new` and the first operand of every
 // other operation. Returns whether the function has any.
 fn vc_map_mark_values(f: IrFunction, is_map: Vec<i64>) -> bool {
@@ -459,44 +457,6 @@ fn vc_map_mark_values(f: IrFunction, is_map: Vec<i64>) -> bool {
     any
 }
 
-// A Phi that a map pointer feeds supplies one value only (`sup` is that value,
-// -2 once two differ): a differing merge would be two model objects for one
-// runtime map. Iterated, since a Phi can feed another Phi.
-fn vc_map_phi_detail(f: IrFunction, is_map: Vec<i64>, n_ids: u64) -> String {
-    let sup: Vec<i64> = dom_fill(n_ids, -1);
-    let mut changed: bool = true;
-    while changed {
-        changed = false;
-        let mut bi: u64 = 0;
-        while bi < f.blocks.len() {
-            let blk: IrBlock = f.blocks[bi];
-            let mut ii: u64 = 0;
-            while ii < blk.insts.len() {
-                let inst: IrInst = blk.insts[ii];
-                if inst.op == IOP_UPSILON() && inst.args.len() == 1 {
-                    let phi: u64 = inst.dv as u64;
-                    let val: u64 = inst.args[0] as u64;
-                    if is_map[phi] == 1 || is_map[val] == 1 {
-                        if sup[phi] == -1 {
-                            sup[phi] = inst.args[0];
-                        } else if sup[phi] != inst.args[0] {
-                            return String::from("map merged by a Phi");
-                        }
-                        if is_map[phi] != 1 || is_map[val] != 1 {
-                            is_map[phi] = 1;
-                            is_map[val] = 1;
-                            changed = true;
-                        }
-                    }
-                }
-                ii = ii + 1;
-            }
-            bi = bi + 1;
-        }
-    }
-    String::from("")
-}
-
 // Gate rule: a map lives only in its own function, as an object no other
 // instruction can alias. A pointer used by a map operation must not also be a
 // struct (`FieldGet`/`FieldSet`) or be passed to a user call or to a builtin the
@@ -506,8 +466,7 @@ fn vc_map_phi_detail(f: IrFunction, is_map: Vec<i64>, n_ids: u64) -> String {
 fn vc_map_shape_detail(f: IrFunction, n_ids: u64) -> String {
     let is_map: Vec<i64> = dom_fill(n_ids, 0);
     if !vc_map_mark_values(f, is_map) { return String::from(""); }
-    let phi: String = vc_map_phi_detail(f, is_map, n_ids);
-    if phi.len() > 0 { return phi; }
+    if vc_phi_merges_objects(f, is_map, n_ids) { return String::from("map merged by a Phi"); }
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
         let blk: IrBlock = f.blocks[bi];
@@ -517,7 +476,7 @@ fn vc_map_shape_detail(f: IrFunction, n_ids: u64) -> String {
             if (inst.op == IOP_FIELD_GET() || inst.op == IOP_FIELD_SET()) && is_map[inst.args[0] as u64] == 1 {
                 return String::from("map used as a struct");
             }
-            if inst.op == IOP_CALL() && vc_map_any_arg(inst, is_map) {
+            if inst.op == IOP_CALL() && vc_vec_any_arg(inst, is_map) {
                 if inst.dk == IDATA_CALL_TARGET() { return String::from("map passed to a call"); }
                 if inst.dk == IDATA_CALL_EXTERN() && vc_inst_map_kind(inst) == VC_MAP_NONE() {
                     return String::from("map passed to an unmodelled builtin");

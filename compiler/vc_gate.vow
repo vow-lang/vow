@@ -262,14 +262,11 @@ fn vc_vec_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
     false
 }
 
-// A map key: Bool or an integer up to 64 bits, one 8-byte slot. A map value is
-// the same or unit; a pointer value (`String`, `Vec`, a struct) is not modelled.
-fn vc_map_key_ok(ty: i64) -> bool {
-    ty == ITY_BOOL() || (vc_ty_is_int(ty) && vc_ty_bits(ty) <= 64)
-}
-
+// A map key is a Bool or an integer up to 64 bits, one 8-byte slot, as a `Vec`
+// element is. A map value is the same or unit; a pointer value (`String`, `Vec`,
+// a struct) is not modelled.
 fn vc_map_value_ok(ty: i64) -> bool {
-    ty == ITY_UNIT() || vc_map_key_ok(ty)
+    ty == ITY_UNIT() || vc_vec_elem_ok(ty)
 }
 
 // Operand and result types of a map call (`vc_map`). The `Option` a `get` or a
@@ -279,7 +276,7 @@ fn vc_map_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
     if kind == VC_MAP_NEW() { return n == 0 && inst.ty == ITY_PTR(); }
     if vc_arg_ty(tys, inst, 0) != ITY_PTR() { return false; }
     if kind == VC_MAP_LEN() { return n == 1 && inst.ty == ITY_U64(); }
-    if !vc_map_key_ok(vc_arg_ty(tys, inst, 1)) { return false; }
+    if !vc_vec_elem_ok(vc_arg_ty(tys, inst, 1)) { return false; }
     if kind == VC_MAP_CONTAINS() { return n == 2 && inst.ty == ITY_BOOL(); }
     if kind == VC_MAP_GET() { return n == 2 && inst.ty == ITY_PTR(); }
     if kind == VC_MAP_REMOVE() { return n == 2 && inst.ty == ITY_UNIT(); }

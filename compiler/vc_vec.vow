@@ -366,6 +366,46 @@ fn vc_vec_pop(vv: VcVec, ar: VcArena, hdr: SmtScript, s: i64, bi: i64) {
     vc_vec_write(vv, ar, hdr, s, bi, arr, next);
 }
 
+// True when a Phi that an object pointer (`is_obj[id] == 1`) feeds, or that reads
+// one, is supplied two different values: a differing merge would be two model
+// objects for one runtime object. `sup` is the one value a Phi gets (-1 none
+// yet). Marks every Phi and value it links as an object, iterated since a Phi
+// can feed another Phi. Shared by the `Vec` and map gates.
+fn vc_phi_merges_objects(f: IrFunction, is_obj: Vec<i64>, n_ids: u64) -> bool {
+    let sup: Vec<i64> = dom_fill(n_ids, -1);
+    let mut changed: bool = true;
+    while changed {
+        changed = false;
+        let mut bi: u64 = 0;
+        while bi < f.blocks.len() {
+            let blk: IrBlock = f.blocks[bi];
+            let mut ii: u64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                if inst.op == IOP_UPSILON() && inst.args.len() == 1 {
+                    let phi: u64 = inst.dv as u64;
+                    let val: u64 = inst.args[0] as u64;
+                    if is_obj[phi] == 1 || is_obj[val] == 1 {
+                        if sup[phi] == -1 {
+                            sup[phi] = inst.args[0];
+                        } else if sup[phi] != inst.args[0] {
+                            return true;
+                        }
+                        if is_obj[phi] != 1 || is_obj[val] != 1 {
+                            is_obj[phi] = 1;
+                            is_obj[val] = 1;
+                            changed = true;
+                        }
+                    }
+                }
+                ii = ii + 1;
+            }
+            bi = bi + 1;
+        }
+    }
+    false
+}
+
 fn vc_vec_any_arg(inst: IrInst, is_vec: Vec<i64>) -> bool {
     let mut k: u64 = 0;
     while k < inst.args.len() {
@@ -408,40 +448,7 @@ fn vc_vec_shape_detail(f: IrFunction, n_ids: u64, calls: bool) -> String {
         bi = bi + 1;
     }
     if !any { return String::from(""); }
-    // A Phi that a Vec pointer feeds or that a Vec operation reads supplies
-    // one value only; `sup` is that value (-2 once two differ). Iterated, since
-    // a Phi can feed another Phi.
-    let sup: Vec<i64> = dom_fill(n_ids, -1);
-    let mut changed: bool = true;
-    while changed {
-        changed = false;
-        bi = 0;
-        while bi < f.blocks.len() {
-            let blk: IrBlock = f.blocks[bi];
-            let mut ii: u64 = 0;
-            while ii < blk.insts.len() {
-                let inst: IrInst = blk.insts[ii];
-                if inst.op == IOP_UPSILON() && inst.args.len() == 1 {
-                    let phi: u64 = inst.dv as u64;
-                    let val: u64 = inst.args[0] as u64;
-                    if is_vec[phi] == 1 || is_vec[val] == 1 {
-                        if sup[phi] == -1 {
-                            sup[phi] = inst.args[0];
-                        } else if sup[phi] != inst.args[0] {
-                            return String::from("Vec merged by a Phi");
-                        }
-                        if is_vec[phi] != 1 || is_vec[val] != 1 {
-                            is_vec[phi] = 1;
-                            is_vec[val] = 1;
-                            changed = true;
-                        }
-                    }
-                }
-                ii = ii + 1;
-            }
-            bi = bi + 1;
-        }
-    }
+    if vc_phi_merges_objects(f, is_vec, n_ids) { return String::from("Vec merged by a Phi"); }
     bi = 0;
     while bi < f.blocks.len() {
         let blk: IrBlock = f.blocks[bi];

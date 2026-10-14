@@ -584,7 +584,7 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
 // negative literal reaches the IR as `0 - 1` at type `i64`). A `BTreeMap`'s key is
 // always `i64`.
 fn vc_map_key_bits(w: VcWalk, inst: IrInst) -> i64 {
-    if inst.ds.len() > 15 && string_starts_with(inst.ds, VC_MAP_BTREE_PREFIX()) == 1 { return 64; }
+    if vc_inst_is_btree_op(inst) { return 64; }
     let id: u64 = inst.args[1] as u64;
     if w.lits[id] == 1 || vc_is_bv(w.cs.arena, w.var_of[id]) { return -1; }
     if w.tys[id] == ITY_BOOL() { return 1; }
@@ -608,6 +608,7 @@ fn vc_walk_map(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
     }
     let s: i64 = vc_map_slot(mp, w.ag, ar, hdr, cs.assumed, w.obj_of[inst.args[0] as u64]);
     if kind == VC_MAP_LEN() {
+        if vc_inst_is_btree_op(inst) { vc_map_note_width(mp, s, 64); }
         vc_define(w, inst, vc_map_cur_len(mp, s, b));
         return true;
     }
