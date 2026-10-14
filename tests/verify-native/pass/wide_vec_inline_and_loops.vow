@@ -1,0 +1,46 @@
+module WideVecInlineAndLoops
+
+fn push_two(v: Vec<i128>, x: i128) {
+  v.push(x);
+  v.push(x);
+}
+
+fn caller(v: Vec<i128>, x: i128) -> bool vow {
+  ensures: result
+} {
+  let n: u64 = v.len();
+  push_two(v, x);
+  v.len() == n + 2 && v[n] == x && v[n + 1] == x
+}
+
+fn fill(n: u64, x: u128) -> u64 vow {
+  requires: n < 4,
+  ensures: result == n
+} {
+  let v: Vec<u128> = Vec::new();
+  let mut i: u64 = 0;
+  while i < n {
+    v.push(x);
+    i = i + 1;
+  }
+  v.len()
+}
+
+fn sum_first_two(v: Vec<u128>) -> u128 vow {
+  requires: v.len() >= 2,
+  ensures: result == v[0] + v[1]
+} {
+  let mut total: u128 = 0;
+  let mut i: u64 = 0;
+  while i < 2 {
+    total = total + v[i];
+    i = i + 1;
+  }
+  total
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i128> = Vec::new();
+  if caller(v, 5) { print_u64(fill(3, 7)); }
+  0
+}

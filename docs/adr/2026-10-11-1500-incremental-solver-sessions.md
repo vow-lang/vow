@@ -101,3 +101,22 @@ round) instead of 36.
   session and the only source of models.
 - Follow-up: prefix-stable unrolling so one session spans the bounds of a
   schedule (decision 6).
+
+## Addendum (issue #1684): no session ask behind a quantifier binder
+
+A scoped check (`push`, `check-sat`, `pop`) on a query that holds a `String`
+quantifier binder (`VC_T_QEQ`, `VC_T_QLT`, `VC_T_QDIFF`) is far slower in
+Bitwuzla than the same query asked once. On
+`tests/verify-native/fail/string_append_wrong_byte.vow` the session's `sat` on
+the hard claim took 0.3 to 0.8 s, then was discarded for the standalone query,
+which Bitwuzla decides in about 5 ms (`VOW_VERIFY_NO_INCREMENTAL=1` took the run
+from about 0.8 s to 0.09 s). The cause is the session, not the `String`
+encoding.
+
+A session therefore never asks a claim whose prefix holds a binder
+(`vc_claims_first_binder` gives the index of the first such assumption;
+`vc_session_admits` is the test). Those claims take the standalone sliced path
+exactly as with `VOW_VERIFY_NO_INCREMENTAL=1`; claims before the first binder
+still share the session. `vc_session_wanted` counts only admitted claims.
+Verdicts and counterexamples are unchanged: a session `sat` on a hard claim was
+never used, and `unsat` is decided by the same solver on the same assertions.

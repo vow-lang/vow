@@ -534,8 +534,9 @@ as 128-bit bit-vectors, so every value is exact (`i128::MIN`, `i128::MAX` and
 the ESBMC backend 128-bit constants are modelled exactly under the bit-vector
 encoding, and a proof from its `--encoding ir` timeout fallback is reported as
 plain `proven` and is weaker; 128-bit checked arithmetic and aggregate fields
-are `Skipped`. A `Vec<i128>` or `Vec<u128>` element is `Skipped` under both
-backends. A contract over 128-bit scalars and literals verifies under both:
+are `Skipped`. A `Vec<i128>` or `Vec<u128>` element is `Skipped` under the
+ESBMC backend; `--backend native` models it exactly (a parameter or local `Vec`,
+not one read through a struct field). A contract over 128-bit scalars and literals verifies under both:
 
 ```vow
 fn at_least_one(x: u128) -> u128

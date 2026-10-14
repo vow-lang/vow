@@ -16,17 +16,31 @@ use vc_solver
 // on its own: a session answer is `VC_ANS_NONE` unless the reply is
 // well-formed, and the caller re-decides anything but `unsat` (and a soft
 // `sat`) with a standalone query, so counterexample models never come from it.
+//
+// A session never asks a claim whose prefix holds a quantifier binder (the `String`
+// model's `VC_T_QEQ`, `VC_T_QLT`, `VC_T_QDIFF`; `binder_at` is the index of the first
+// such assumption, -1 for none). Bitwuzla decides a scoped check under a quantifier
+// far slower than the same query asked once (hundreds of milliseconds against a few
+// for a `String` append), the session's `sat` on a hard claim is discarded for the
+// standalone query anyway, and its `unsat` is as cheap standalone. Those claims go
+// straight to the standalone path.
 
 struct VcSession {
     handle: i64,
     live: bool,
     sent_hdr: u64,
     sent_assumed: u64,
+    binder_at: i64,
 }
 
 // `live` false makes every ask `VC_ANS_NONE` without starting a process.
-fn vc_session_new(live: bool) -> VcSession {
-    VcSession { handle: -1, live: live, sent_hdr: 0, sent_assumed: 0 }
+fn vc_session_new(live: bool, binder_at: i64) -> VcSession {
+    VcSession { handle: -1, live: live, sent_hdr: 0, sent_assumed: 0, binder_at: binder_at }
+}
+
+// True when claim `k`'s query is free of quantifier binders, so a session may ask it.
+fn vc_session_admits(binder_at: i64, cs: VcClaims, k: u64) -> bool {
+    binder_at < 0 || cs.assumed_lens[k] <= binder_at
 }
 
 fn vc_session_probe_sentinel() -> String {
@@ -114,6 +128,7 @@ fn vc_session_start(ss: VcSession, bin: String, cs: VcClaims, k: u64, deadline_u
 // session, so no later ask can read a stale reply. `bin` is the solver path.
 fn vc_session_ask(ss: VcSession, bin: String, cs: VcClaims, k: u64, wait_ms: i64) -> i64 [io] {
     if !ss.live || wait_ms <= 0 { return VC_ANS_NONE(); }
+    if !vc_session_admits(ss.binder_at, cs, k) { return VC_ANS_NONE(); }
     let deadline_us: i64 = time_micros() + wait_ms * 1000;
     if ss.handle < 0 {
         if !vc_session_start(ss, bin, cs, k, deadline_us) {

@@ -2,6 +2,7 @@ module VcAggShape
 
 use ir
 use ir_dominance
+use vc_wide
 
 // Gate and set-up for the aggregate model (`vc_agg`): which writes it accepts and
 // which parameters it must treat as possibly one object. Both read the IR only.
@@ -31,13 +32,14 @@ fn vc_agg_def_ops(f: IrFunction, n_ids: u64) -> Vec<i64> {
 // instruction-id space.
 fn vc_agg_shape_detail(f: IrFunction, n_ids: u64) -> String {
     let def_op: Vec<i64> = vc_agg_def_ops(f, n_ids);
+    let elem_ref: Vec<i64> = vc_wide_ref_ids(f, n_ids);
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
         let blk: IrBlock = f.blocks[bi];
         let mut ii: u64 = 0;
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
-            if inst.op == IOP_FIELD_SET() {
+            if inst.op == IOP_FIELD_SET() && elem_ref[inst.args[0] as u64] == 0 {
                 let op: i64 = def_op[inst.args[0] as u64];
                 if op != IOP_REGION_ALLOC() && op != IOP_GET_ARG() && op != IOP_PHI() {
                     return String::from("FieldSet on a value that is neither an allocation, a parameter nor a merge of them");

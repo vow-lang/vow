@@ -1,0 +1,67 @@
+module WideVecElements
+
+fn first(v: Vec<i128>) -> i128 vow {
+  requires: v.len() > 0,
+  ensures: result == v[0]
+} {
+  v[0]
+}
+
+fn pushed(v: Vec<u128>, x: u128) -> u128 vow {
+  ensures: result == x
+} {
+  v.push(x);
+  v[v.len() - 1]
+}
+
+fn set_then_get(v: Vec<i128>, x: i128) -> i128 vow {
+  requires: v.len() > 2,
+  ensures: result == x
+} {
+  v[1] = x;
+  v[1]
+}
+
+fn neighbour_untouched(v: Vec<i128>, x: i128) -> bool vow {
+  requires: v.len() > 2,
+  ensures: result
+} {
+  let before: i128 = v[0];
+  v[1] = x;
+  v[0] == before
+}
+
+fn limbs_do_not_mix(x: i128, y: i128) -> bool vow {
+  ensures: result
+} {
+  let v: Vec<i128> = Vec::new();
+  v.push(x);
+  v.push(y);
+  v[0] == x && v[1] == y
+}
+
+fn build_sum(x: u128, y: u128) -> u128 vow {
+  ensures: result == x + y
+} {
+  let v: Vec<u128> = Vec::new();
+  v.push(x);
+  v.push(y);
+  v[0] + v[1]
+}
+
+fn length_and_pop(v: Vec<i128>, x: i128) -> bool vow {
+  ensures: result
+} {
+  let n: u64 = v.len();
+  v.push(x);
+  v.pop();
+  v.len() == n
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i128> = Vec::new();
+  v.push(7);
+  print_i64(u128_to_u8_wrap(build_sum(1, 2)) as i64);
+  if limbs_do_not_mix(1, 2) { print_i64(i128_to_i32_wrap(first(v)) as i64); }
+  0
+}

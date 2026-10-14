@@ -111,6 +111,37 @@ fn vc_slicer_link(sx: VcSlicer, ar: VcArena, root: i64, owner: i64, defs: bool) 
     leaves
 }
 
+// The index of the first assumption of `cs` whose term holds a quantifier binder
+// (`vc_kind_is_binder`), looking through bound variables into their definitions;
+// -1 when none does. Claim `k`'s query holds that assumption exactly when
+// `assumed_lens[k]` is above the index. A term met under an earlier assumption
+// held no binder (the scan would have stopped), so it is not visited twice.
+fn vc_claims_first_binder(cs: VcClaims) -> i64 {
+    let ar: VcArena = cs.arena;
+    let seen: Vec<i64> = dom_fill(ar.kinds.len(), 0);
+    let st: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < cs.assumed.len() {
+        st.push(cs.assumed[i]);
+        while st.len() > 0 {
+            let t: i64 = st[st.len() - 1];
+            st.pop();
+            if seen[t as u64] == 0 {
+                seen[t as u64] = 1;
+                let kind: i64 = ar.kinds[t as u64];
+                if vc_kind_is_binder(kind) { return i as i64; }
+                if kind == VC_T_VAR() {
+                    if ar.named[t as u64] >= 0 { st.push(ar.named[t as u64]); }
+                } else {
+                    vc_slice_push_children(st, ar, t, kind);
+                }
+            }
+        }
+        i = i + 1;
+    }
+    -1
+}
+
 fn vc_slicer_new(cs: VcClaims) -> VcSlicer {
     let ar: VcArena = cs.arena;
     let n: u64 = ar.kinds.len();
