@@ -279,17 +279,12 @@ fn vc_query_is_float(query: String) -> bool {
 // Bitwuzla's default rewrite level (2) turns chains of `fp.add` and `fp.mul`
 // into forms the bit-blaster then searches slowly: refuting
 // `(a + b) + c == a + (b + c)` over `f64` takes 0.4 to 1.5 s at level 2 and
-// 0.08 to 0.2 s at level 1, and distributivity behaves alike. Across the
-// floating-point queries measured level 1 is never more than about 1.6x slower
-// and level 0 is far slower on proofs, so level 1 is the floating-point
-// setting. It changes the speed of the search, never a verdict.
-fn vc_solver_float_args() -> Vec<String> {
-    let args: Vec<String> = Vec::new();
-    args.push(String::from("--rewrite-level"));
-    args.push(String::from("1"));
-    args
-}
-
+// 0.08 to 0.2 s at level 1, and distributivity behaves alike. Over 32
+// generated `f32` and `f64` queries the two levels cost the same in total;
+// level 1 is slower by a few tenths of a second at most on queries that take
+// under a second either way, and level 0 is far slower on proofs. Only the
+// speed of the search depends on the level, never a verdict.
+//
 // Arguments of an interactive session whose first commands are `header`:
 // commands come from stdin.
 fn vc_solver_stdin_args(header: String) -> Vec<String> {
@@ -297,9 +292,8 @@ fn vc_solver_stdin_args(header: String) -> Vec<String> {
     args.push(String::from("--bv-output-format"));
     args.push(String::from("2"));
     if vc_query_is_float(header) {
-        let extra: Vec<String> = vc_solver_float_args();
-        args.push(extra[0]);
-        args.push(extra[1]);
+        args.push(String::from("--rewrite-level"));
+        args.push(String::from("1"));
     }
     args
 }
