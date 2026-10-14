@@ -267,6 +267,56 @@ fn check_aggregate_fields() -> i64 {
     let r4: VerifyResult = vc_claim_result(f, fl, 0, ans);
     if r4.var_names[1] != String::from("o.1:f64") { return 71; }
     if r4.var_names[2] != String::from("o.1:f32") { return 72; }
+    // The identity of an aggregate parameter reads `<param>.alias`.
+    let al: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
+    al.model_names.pop();
+    al.model_params.pop();
+    al.model_tys.pop();
+    al.model_widths.pop();
+    al.model_slots.pop();
+    al.model_ambig.pop();
+    push_field(al, 1, VC_ALIAS_SLOT(), ITY_U8(), 8, 0);
+    push_field(al, 1, 0, ITY_I64(), 64, 0);
+    let r5: VerifyResult = vc_claim_result(f, al, 0, ans);
+    if r5.var_names[1] != String::from("o.alias") { return 73; }
+    if r5.var_names[2] != String::from("o.0") { return 74; }
+    // A parameter that is the same object as an earlier one shows that one's
+    // field, not the value the solver left on its own symbol; a distinct one
+    // keeps its own.
+    let eq: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
+    eq.model_names.pop();
+    eq.model_params.pop();
+    eq.model_tys.pop();
+    eq.model_widths.pop();
+    eq.model_slots.pop();
+    eq.model_ambig.pop();
+    push_field(eq, 1, VC_ALIAS_SLOT(), ITY_U8(), 8, 0);
+    push_field(eq, 2, VC_ALIAS_SLOT(), ITY_U8(), 8, 0);
+    push_field(eq, 3, VC_ALIAS_SLOT(), ITY_U8(), 8, 0);
+    push_field(eq, 1, 0, ITY_I64(), 64, 0);
+    push_field(eq, 2, 0, ITY_I64(), 64, 0);
+    push_field(eq, 3, 0, ITY_I64(), 64, 0);
+    let av: Vec<i64> = Vec::new();
+    av.push(9);
+    av.push(3);
+    av.push(3);
+    av.push(4);
+    av.push(10);
+    av.push(99);
+    av.push(55);
+    let ah: Vec<i64> = Vec::new();
+    ah.push(0);
+    ah.push(0);
+    ah.push(0);
+    ah.push(0);
+    ah.push(0);
+    ah.push(0);
+    ah.push(0);
+    let aans: VcSolverAnswer = VcSolverAnswer { verdict: VC_ANS_SAT(), values: av, highs: ah, raw: String::from("") };
+    let r6: VerifyResult = vc_claim_result(f, eq, 0, aans);
+    if r6.var_values[4] != String::from("10") { return 75; }
+    if r6.var_values[5] != String::from("10") { return 76; }
+    if r6.var_values[6] != String::from("55") { return 77; }
     // The answer of an earlier claim carries only the symbols it declared.
     let short_values: Vec<i64> = Vec::new();
     short_values.push(9);

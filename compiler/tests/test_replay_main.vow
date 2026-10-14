@@ -246,6 +246,20 @@ fn check_value_text_is_validated() -> i32 [io] {
     0
 }
 
+fn check_alias_identities() -> i32 {
+    let names: Vec<String> = kv_part(String::from("a.alias=3,b.alias=3,c.alias=4,a.0=1"), false);
+    let vals: Vec<String> = kv_part(String::from("a.alias=3,b.alias=3,c.alias=4,a.0=1"), true);
+    if replay_alias_id(names, vals, String::from("b")) != String::from("3") { return 150; }
+    if replay_alias_id(names, vals, String::from("z")).len() != 0 { return 151; }
+    let seen: Vec<String> = Vec::new();
+    seen.push(String::from("3"));
+    seen.push(String::from("4"));
+    if replay_alias_find(seen, String::from("4")) != 1 { return 152; }
+    if replay_alias_find(seen, String::from("9")) != -1 { return 153; }
+    if replay_alias_find(seen, String::from("")) != -1 { return 154; }
+    0
+}
+
 fn main() -> i32 [io] {
     let r1: i32 = check_locates_main();
     if r1 != 0 { return r1; }
@@ -271,5 +285,7 @@ fn main() -> i32 [io] {
     if r11 != 0 { return r11; }
     let r12: i32 = check_value_text_is_validated();
     if r12 != 0 { return r12; }
+    let r13: i32 = check_alias_identities();
+    if r13 != 0 { return r13; }
     0
 }

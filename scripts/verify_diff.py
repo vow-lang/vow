@@ -564,11 +564,20 @@ def compare_contracts(
         e, n = etable[key], ntable[key]
         cls, why = classify_clause(truth, key, e, n, etable, aborting, divergence)
         if cls == MATCH and e["trivially_satisfiable"] != n["trivially_satisfiable"]:
-            cls = WEAKER
-            why = (
-                f"`{key[0]}` {key[1]} trivially_satisfiable differs "
-                f"(esbmc: {e['trivially_satisfiable']}, native: {n['trivially_satisfiable']})"
-            )
+            if n["trivially_satisfiable"]:
+                # `true` is a proof (the probe was proven): native shows the
+                # clause weak where ESBMC's probe was not conclusive.
+                cls = MORE_PRECISE
+                why = (
+                    f"`{key[0]}` {key[1]} native proves the trivial-body probe "
+                    "ESBMC does not"
+                )
+            else:
+                cls = WEAKER
+                why = (
+                    f"`{key[0]}` {key[1]} trivially_satisfiable differs "
+                    f"(esbmc: {e['trivially_satisfiable']}, native: {n['trivially_satisfiable']})"
+                )
         if SEVERITY[cls] > SEVERITY[worst]:
             worst, detail = cls, f"`{key[0]}` {key[1]} #{key[2]}: {why}"
     return worst, detail

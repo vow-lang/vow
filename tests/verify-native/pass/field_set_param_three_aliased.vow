@@ -1,0 +1,26 @@
+module FieldSetParamThreeAliased
+
+struct Cell { v: i64 }
+
+fn outer(a: Cell, b: Cell, c: Cell) -> i64 vow {
+  ensures: result == 1 || result == 2 || result == 3
+} {
+  a.v = 1;
+  b.v = 2;
+  c.v = 3;
+  a.v
+}
+
+fn same_value(a: Cell, b: Cell) -> i64 vow {
+  ensures: result == 5
+} {
+  a.v = 5;
+  b.v = 5;
+  a.v
+}
+
+fn main() -> i32 [io] {
+  print_i64(outer(Cell { v: 0 }, Cell { v: 0 }, Cell { v: 0 }));
+  print_i64(same_value(Cell { v: 0 }, Cell { v: 0 }));
+  0
+}

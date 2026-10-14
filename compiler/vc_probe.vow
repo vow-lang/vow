@@ -138,8 +138,8 @@ fn vc_probe_vacuity(f: IrFunction) -> IrFunction {
 }
 
 // The constant opcode that carries a default of type `ty`, or -1 for a type the
-// probe has no default for (floats, pointers): a float result is never replaced,
-// so the trivial probe is not applied to it.
+// probe has no default for (pointers). A float's default is `+0.0`, the value
+// `return 0.0` produces, whose bit pattern is 0 at either width.
 fn vc_probe_default_op(ty: i64) -> i64 {
     if ty == ITY_BOOL() { return IOP_CONST_BOOL(); }
     if ty == ITY_I64() { return IOP_CONST_I64(); }
@@ -148,6 +148,8 @@ fn vc_probe_default_op(ty: i64) -> i64 {
     if ty == ITY_I8() || ty == ITY_U8() { return IOP_CONST_U8(); }
     if ty == ITY_I128() { return IOP_CONST_I128(); }
     if ty == ITY_U128() { return IOP_CONST_U128(); }
+    if ty == ITY_F32() { return IOP_CONST_F32(); }
+    if ty == ITY_F64() { return IOP_CONST_F64(); }
     -1
 }
 
@@ -158,6 +160,8 @@ fn vc_probe_default_dk(op: i64) -> i64 {
     if op == IOP_CONST_I32() { return IDATA_CONST_I32(); }
     if op == IOP_CONST_U8() { return IDATA_CONST_U8(); }
     if op == IOP_CONST_I128() { return IDATA_CONST_I128(); }
+    if op == IOP_CONST_F32() { return IDATA_CONST_F32(); }
+    if op == IOP_CONST_F64() { return IDATA_CONST_F64(); }
     IDATA_CONST_U128()
 }
 
