@@ -1216,12 +1216,13 @@ impl<'e> Checker<'e> {
         )
     }
 
-    /// Records a `Vec` access whose element is 128 bits wide (an index read or
-    /// write, a `push`, or a `for` loop), keyed by its AST address. The element
-    /// helpers are 8-byte, so lowering needs the width from the checker rather
-    /// than from whatever metadata the receiver happens to carry.
+    /// Records a `Vec` access whose element is 128 bits wide or a float (an index
+    /// read or write, a `push`, or a `for` loop), keyed by its AST address. The
+    /// element helpers are 8-byte slots, so lowering needs the width and the float
+    /// type from the checker rather than from whatever metadata the receiver
+    /// happens to carry (a `Vec` returned by a call carries none).
     fn record_wide_vec_site(&mut self, key: usize, elem_ty: &Ty) {
-        if matches!(elem_ty, Ty::I128 | Ty::U128)
+        if matches!(elem_ty, Ty::I128 | Ty::U128 | Ty::F32 | Ty::F64)
             && let Some(scalar) = pattern_scalar_type(elem_ty)
         {
             self.payload_scalars.insert(key, scalar);

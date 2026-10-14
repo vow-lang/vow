@@ -942,6 +942,10 @@ fn modelability_issue<'a>(
         | Opcode::DivF64
         | Opcode::NegF32
         | Opcode::NegF64
+        | Opcode::F32ToBits
+        | Opcode::F64ToBits
+        | Opcode::BitsToF32
+        | Opcode::BitsToF64
         | Opcode::EqF32
         | Opcode::EqF64
         | Opcode::NeF32
@@ -1324,6 +1328,24 @@ fn emit_inst(
         Opcode::NegF32 | Opcode::NegF64 => {
             let a = inst.args[0].0;
             out.push_str(&format!("  v{} = -v{};\n", id, a));
+        }
+
+        // A float entering or leaving a `Vec` slot is the same bit-pattern move a struct
+        // field store or load makes.
+        Opcode::F32ToBits | Opcode::F64ToBits | Opcode::BitsToF32 | Opcode::BitsToF64 => {
+            let a = inst.args[0].0;
+            let (float_ty, to_slot) = match inst.opcode {
+                Opcode::F32ToBits => (Ty::F32, true),
+                Opcode::F64ToBits => (Ty::F64, true),
+                Opcode::BitsToF32 => (Ty::F32, false),
+                _ => (Ty::F64, false),
+            };
+            let moved = if to_slot {
+                float_slot_encode(float_ty, &format!("v{a}"))
+            } else {
+                float_slot_decode(float_ty, &format!("v{a}"))
+            };
+            out.push_str(&format!("  v{id} = {moved};\n"));
         }
 
         // Integer comparisons
@@ -2894,6 +2916,8 @@ fn scan_float_slot_needs(funcs: &[&Function]) -> FloatSlotNeeds {
         for inst in func.blocks.iter().flat_map(|b| &b.insts) {
             match inst.opcode {
                 Opcode::FieldGet => needs.note(inst.ty),
+                Opcode::F32ToBits | Opcode::BitsToF32 => needs.note(Ty::F32),
+                Opcode::F64ToBits | Opcode::BitsToF64 => needs.note(Ty::F64),
                 Opcode::FieldSet => {
                     if let Some(val) = inst.args.get(1) {
                         let by_id = by_id.get_or_insert_with(|| build_inst_by_id(func));
@@ -5715,6 +5739,46 @@ mod tests {
             assert!(
                 c.contains(&format!("__vow_{name}_from_slot(int64_t slot)")),
                 "{name} decode helper must be defined: {c}"
+            );
+            assert!(
+                !c.contains(&format!("__vow_{other}_")),
+                "{other} helpers unused: {c}"
+            );
+        }
+    }
+
+    #[test]
+    fn float_vec_slots_move_by_bit_pattern() {
+        for (ty, name, other, to_bits, from_bits) in [
+            (Ty::F64, "f64", "f32", Opcode::F64ToBits, Opcode::BitsToF64),
+            (Ty::F32, "f32", "f64", Opcode::F32ToBits, Opcode::BitsToF32),
+        ] {
+            let func = make_func(
+                "vec_slot_roundtrip",
+                vec![ty],
+                ty,
+                vec![
+                    inst(0, Opcode::GetArg, ty, vec![], InstData::ArgIndex(0)),
+                    inst(1, to_bits, Ty::I64, vec![0], InstData::None),
+                    inst(2, from_bits, ty, vec![1], InstData::None),
+                    inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            );
+            let (_, module) =
+                one_block_func_module("vec_slot_roundtrip", ty, func.blocks[0].insts.clone());
+            assert_eq!(non_modelable_reason(&func, &module, &HashMap::new()), None);
+            let c = emit_c_module(&[&func], &HashMap::new(), &VerifyLimits::default());
+            assert!(
+                c.contains(&format!("v1 = __vow_{name}_to_slot(v0);")),
+                "{name} slot write must encode by bits: {c}"
+            );
+            assert!(
+                c.contains(&format!("v2 = __vow_{name}_from_slot(v1);")),
+                "{name} slot read must decode by bits: {c}"
+            );
+            assert!(
+                c.contains(&format!("static inline int64_t __vow_{name}_to_slot(")),
+                "{name} encode helper must be defined: {c}"
             );
             assert!(
                 !c.contains(&format!("__vow_{other}_")),

@@ -493,6 +493,13 @@ fn checked_wide_vec_elem(ctx: &LowerCtx, expr: &Expr) -> Option<Ty> {
         .filter(|ty| matches!(ty, Ty::I128 | Ty::U128))
 }
 
+/// The float element type of a `Vec` access (index read or `for` loop), as resolved
+/// by the checker for that expression.
+fn checked_float_vec_elem(ctx: &LowerCtx, expr: &Expr) -> Option<Ty> {
+    checked_payload_ty(ctx, expr as *const Expr as usize)
+        .filter(|ty| matches!(ty, Ty::F32 | Ty::F64))
+}
+
 /// Reads a 128-bit `Vec` element: a bounds-checked element address, then the
 /// two-slot `WideSlot` load. Twin of `lctx_emit_wide_vec_elem_get`.
 fn emit_wide_vec_elem_get(
@@ -2504,10 +2511,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     emit_wide_slot_store(ctx, slot, new_val, span);
                     return new_val;
                 }
+                let slot_val = vec_slot_value(ctx, new_val, span);
                 ctx.emit(
                     Opcode::Call,
                     Ty::Unit,
-                    vec![vec_ptr, idx_id, new_val],
+                    vec![vec_ptr, idx_id, slot_val],
                     InstData::CallExtern("__vow_vec_set_val".to_string()),
                     span,
                 );
@@ -2890,7 +2898,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     InstData::CallExtern("__vow_vec_get_val".to_string()),
                     span,
                 );
-                if foreach_elem_is_bool(ctx, iter_id) {
+                if let Some(float_ty) = checked_float_vec_elem(ctx, expr) {
+                    float_from_vec_slot(ctx, raw_elem, float_ty, span)
+                } else if foreach_elem_is_bool(ctx, iter_id) {
                     narrow_vec_bool_elem(ctx, raw_elem, span)
                 } else {
                     raw_elem
@@ -4177,10 +4187,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         );
                         return emit_wide_slot_store(ctx, slot, elem_id, span);
                     }
+                    let slot_val = vec_slot_value(ctx, elem_id, span);
                     ctx.emit(
                         Opcode::Call,
                         Ty::Unit,
-                        vec![recv_id, elem_id],
+                        vec![recv_id, slot_val],
                         InstData::CallExtern("__vow_vec_push_val".to_string()),
                         span,
                     )
@@ -4225,7 +4236,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 InstData::CallExtern("__vow_vec_get_val".to_string()),
                 span,
             );
-            let result = if let Some(ast_type) = elem_ast_type.as_ref() {
+            let result = if let Some(float_ty) = checked_float_vec_elem(ctx, expr) {
+                float_from_vec_slot(ctx, raw_result, float_ty, span)
+            } else if let Some(ast_type) = elem_ast_type.as_ref() {
                 let elem_ty =
                     lower_ty_with_linear(ast_type, &ctx.linear_owner_names, &ctx.type_aliases);
                 if elem_ty == Ty::Bool {
@@ -4758,6 +4771,29 @@ fn foreach_elem_is_bool(ctx: &LowerCtx, iter_id: InstId) -> bool {
         && args.first().is_some_and(|elem| {
             lower_ty_with_linear(elem, &ctx.linear_owner_names, &ctx.type_aliases) == Ty::Bool
         })
+}
+
+/// The `Vec` slot a float element is stored in: the runtime's slots are 8 raw bytes
+/// typed `i64`, so a float is reinterpreted bit for bit (an `f32` in the low 32 bits)
+/// and any other value is stored as it is. Twin of `lctx_vec_slot_value`.
+fn vec_slot_value(ctx: &mut LowerCtx, value: InstId, span: Span) -> InstId {
+    let opcode = match ctx.inst_ty(value) {
+        Ty::F32 => Opcode::F32ToBits,
+        Ty::F64 => Opcode::F64ToBits,
+        _ => return value,
+    };
+    ctx.emit(opcode, Ty::I64, vec![value], InstData::None, span)
+}
+
+/// Reads a float back out of the `i64` slot `__vow_vec_get_val` returned. Twin of
+/// `lctx_float_from_vec_slot`.
+fn float_from_vec_slot(ctx: &mut LowerCtx, raw: InstId, float_ty: Ty, span: Span) -> InstId {
+    let opcode = if float_ty == Ty::F32 {
+        Opcode::BitsToF32
+    } else {
+        Opcode::BitsToF64
+    };
+    ctx.emit(opcode, float_ty, vec![raw], InstData::None, span)
 }
 
 /// Record a `for` binding's declared type when the iterated `Vec`'s element is itself a

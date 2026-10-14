@@ -1,0 +1,37 @@
+// TEST: category model-drift
+// A float stored in a `Vec` slot keeps its value: the C model moves it through the
+// runtime's int64 slot by bit pattern, like a struct field, so 2.5 does not read back
+// as 2. The lowering unit tests pin the F32ToBits/BitsToF32 opcodes (#1681).
+module FloatVecElementVerified
+
+fn round_trip(x: f64) -> f64 vow {
+    requires: x == x,
+    ensures: result == x
+} {
+    let v: Vec<f64> = Vec::new();
+    v.push(x);
+    v[0]
+}
+
+fn overwrite(x: f64, y: f64) -> f64 vow {
+    requires: y == y,
+    ensures: result == y
+} {
+    let v: Vec<f64> = Vec::new();
+    v.push(x);
+    v[0] = y;
+    v[0]
+}
+
+fn round_trip32(x: f32) -> f32 vow {
+    requires: x == x,
+    ensures: result == x
+} {
+    let v: Vec<f32> = Vec::new();
+    v.push(x);
+    v[0]
+}
+
+fn main() -> i32 [io] {
+    0
+}

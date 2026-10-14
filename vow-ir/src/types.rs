@@ -144,6 +144,13 @@ pub enum Opcode {
     GeF64,
     NegF32,
     NegF64,
+    /// Bit-for-bit reinterpretation between a float and the runtime's 8-byte `Vec`
+    /// slot: `F32ToBits`/`F64ToBits` yield the `i64` slot (an `f32` in its low 32 bits,
+    /// zero-extended), `BitsToF32`/`BitsToF64` read it back.
+    F32ToBits,
+    F64ToBits,
+    BitsToF32,
+    BitsToF64,
 
     Not,
     And,

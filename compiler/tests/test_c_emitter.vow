@@ -1461,6 +1461,36 @@ fn check_float_phi_temporary_keeps_its_type(ty: i64, c_ty: String, base: i64) ->
     0
 }
 
+// arg0 (of `ty`) moved into a Vec slot and read back, as a float Vec element is.
+fn check_float_vec_slots_move_by_bit_pattern(ty: i64, name: String, to_op: i64, from_op: i64, base: i64) -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ty, 0));
+    let to_args: Vec<i64> = Vec::new();
+    to_args.push(0);
+    insts.push(mk_inst(1, to_op, ITY_I64(), to_args));
+    let from_args: Vec<i64> = Vec::new();
+    from_args.push(1);
+    insts.push(mk_inst(2, from_op, ty, from_args));
+    insts.push(mk_inst_return(3, 2));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ty);
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(mk_function(base, String::from("vec_slot_roundtrip"), params, ty, blocks));
+    let c: String = emit_c_module(mk_module(funcs), 16, 16, 16, 16);
+    let store: String = str3(String::from("v1 = __vow_"), name, String::from("_to_slot(v0);"));
+    if !c.contains(store) { return base; }
+    let load: String = str3(String::from("v2 = __vow_"), name, String::from("_from_slot(v1);"));
+    if !c.contains(load) { return base + 1; }
+    let encoder: String = str3(String::from("static inline int64_t __vow_"), name, String::from("_to_slot("));
+    if !c.contains(encoder) { return base + 2; }
+    let other: String = if ty == ITY_F64() { String::from("__vow_f32_") } else { String::from("__vow_f64_") };
+    if c.contains(other) { return base + 3; }
+    if c.contains(String::from("not modelled")) { return base + 4; }
+    0
+}
+
 fn check_float_negation_emits_unary_minus(ty: i64, op: i64, base: i64) -> i64 {
     let insts: Vec<IrInst> = Vec::new();
     insts.push(mk_inst_arg(0, ty, 0));
@@ -1822,5 +1852,9 @@ fn main() -> i32 {
     if r57 != 0 { return i64_to_i32_wrap(r57); }
     let r58: i64 = check_float_negation_emits_unary_minus(ITY_F32(), IOP_NEG_F32(), 770);
     if r58 != 0 { return i64_to_i32_wrap(r58); }
+    let r59: i64 = check_float_vec_slots_move_by_bit_pattern(ITY_F64(), String::from("f64"), IOP_F64_TO_BITS(), IOP_BITS_TO_F64(), 780);
+    if r59 != 0 { return i64_to_i32_wrap(r59); }
+    let r60: i64 = check_float_vec_slots_move_by_bit_pattern(ITY_F32(), String::from("f32"), IOP_F32_TO_BITS(), IOP_BITS_TO_F32(), 790);
+    if r60 != 0 { return i64_to_i32_wrap(r60); }
     0
 }

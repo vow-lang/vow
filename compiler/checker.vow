@@ -2766,13 +2766,14 @@ fn pattern_vec_variant_payload_ty_path(ts: TyStore, tid: i64) -> Vec<Vec<i64>> {
     result
 }
 
-// Records a Vec access whose element is 128 bits wide (an index read or write,
-// a `push`, or a `for` loop), keyed by expression id. The element helpers are
-// 8-byte, so lowering needs the width from the checker rather than from
-// whatever metadata the receiver happens to carry.
+// Records a Vec access whose element is 128 bits wide or a float (an index read
+// or write, a `push`, or a `for` loop), keyed by expression id. The element
+// helpers are 8-byte slots, so lowering needs the width and the float type from
+// the checker rather than from whatever metadata the receiver happens to carry
+// (a `Vec` returned by a call carries none).
 fn record_wide_vec_site(e: CheckEnv, eid: i64, elem_tid: i64) {
     let elem_tag: i64 = ty_tag(e.ts, elem_tid);
-    if elem_tag != CTY_I128() && elem_tag != CTY_U128() {
+    if elem_tag != CTY_I128() && elem_tag != CTY_U128() && elem_tag != CTY_F32() && elem_tag != CTY_F64() {
         return;
     }
     while e.question_scalar_tys.len() as i64 <= eid {

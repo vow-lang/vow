@@ -1,0 +1,22 @@
+// TEST: category callee-blame
+// TEST: native-divergence "native defines a requires clause proven only when its whole function is, and this function's ensures fails (cli.md, Clause status)"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-fn "vec_f64_wrong"
+// TEST: counterexample-blame Callee
+// The element 2.5 is not 2.0. A model that truncates the float to the int64 slot
+// reads 2 back, which equals 2.0 and wrongly proves this contract.
+module FloatVecElementWrong
+
+fn vec_f64_wrong(x: f64) -> f64 vow {
+    requires: x == 2.5,
+    ensures: result == 2.0
+} {
+    let v: Vec<f64> = Vec::new();
+    v.push(x);
+    v[0]
+}
+
+fn main() -> i32 [io] {
+    print_i64(0);
+    0
+}
