@@ -16,6 +16,7 @@ use vc_strdeep
 use vc_str
 use vc_hooks
 use vc_numeric
+use vc_narrow
 use vc_strsearch
 use ir_dominance
 
@@ -584,6 +585,24 @@ fn vc_walk_clause(w: VcWalk, inst: IrInst, pc: i64) {
     vc_assume(cs, pc, goal);
 }
 
+// A narrowing intrinsic (`vc_narrow`): a `wrap` or `sat` call defines a closed term
+// of its operand; a `try` call creates the `Option` it returns, tag and payload
+// slots both functions of the operand, so a `match` on it reads exact values.
+fn vc_walk_narrow(w: VcWalk, bi: u64, inst: IrInst) -> bool {
+    let nar: VcNarrow = vc_narrow_of(inst);
+    if nar.kind == VC_NAR_NONE() { return false; }
+    let ar: VcArena = w.cs.arena;
+    let x: i64 = w.var_of[inst.args[0] as u64];
+    if nar.kind != VC_NAR_TRY() {
+        vc_define(w, inst, vc_narrow_value(ar, nar, x));
+        return true;
+    }
+    let obj: i64 = vc_walk_new_obj(w, bi, inst);
+    vc_agg_set(w.ag, obj, 0, 64, vc_narrow_try_tag(ar, nar, x));
+    vc_agg_set(w.ag, obj, 1, vc_ty_bits(nar.dst), vc_cast(ar, nar.src, nar.dst, x));
+    true
+}
+
 fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
     let cs: VcClaims = w.cs;
     let fl: VcFlow = w.fl;
@@ -610,7 +629,7 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
         vc_define(w, inst, vc_num_hash_mix(cs.arena, w.var_of[inst.args[0] as u64]));
         return;
     }
-    if vc_walk_agg(w, bi, inst) || vc_walk_vec(w, bi, inst, pc) {
+    if vc_walk_narrow(w, bi, inst) || vc_walk_agg(w, bi, inst) || vc_walk_vec(w, bi, inst, pc) {
         return;
     }
     if op == IOP_PHI() {

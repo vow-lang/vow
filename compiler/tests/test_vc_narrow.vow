@@ -1,0 +1,257 @@
+module TestVcNarrow
+
+use ir
+use vc_ops
+use vc_term
+use vc_smt
+use vc_int
+use vc_exec
+use vc_gate
+use vc_narrow
+use verifier
+use tests.builders
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn args2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = args1(a);
+    v.push(b);
+    v
+}
+
+fn contains(hay: String, needle: String) -> bool {
+    str_find_str(hay, needle) >= 0
+}
+
+fn one_block(params: Vec<i64>, ret: i64, insts: Vec<IrInst>) -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(1, String::from("f"), params, ret, blocks)
+}
+
+fn nar(sym: String) -> VcNarrow {
+    vc_narrow_parse(sym)
+}
+
+fn check_parse() -> i64 {
+    let a: VcNarrow = nar(String::from("__vow_i64_to_u8_wrap"));
+    if a.kind != VC_NAR_WRAP() || a.src != ITY_I64() || a.dst != ITY_U8() { return 1; }
+    let b: VcNarrow = nar(String::from("__vow_i32_to_u16_sat"));
+    if b.kind != VC_NAR_SAT() || b.src != ITY_I32() || b.dst != ITY_U16() { return 2; }
+    let c: VcNarrow = nar(String::from("__vow_i16_to_i8_try"));
+    if c.kind != VC_NAR_TRY() || c.src != ITY_I16() || c.dst != ITY_I8() { return 3; }
+    let d: VcNarrow = nar(String::from("__vow_u128_to_i128_wrap"));
+    if d.kind != VC_NAR_WRAP() || d.src != ITY_U128() || d.dst != ITY_I128() { return 4; }
+    if nar(String::from("__vow_i8_to_u8_try")).kind != VC_NAR_NONE() { return 5; }
+    if nar(String::from("__vow_i8_to_i64_wrap")).kind != VC_NAR_NONE() { return 15; }
+    if nar(String::from("__vow_u8_to_u8_wrap")).kind != VC_NAR_NONE() { return 16; }
+    if nar(String::from("__vow_i64_to_i128_wrap")).kind != VC_NAR_NONE() { return 17; }
+    if nar(String::from("__vow_i64_to_u64_sat")).kind != VC_NAR_NONE() { return 18; }
+    if nar(String::from("__vow_i128_to_u128_try")).kind != VC_NAR_NONE() { return 19; }
+    if nar(String::from("__vow_u128_to_i128_try")).kind != VC_NAR_NONE() { return 21; }
+    let t: VcNarrow = nar(String::from("__vow_u32_to_i32_try"));
+    if t.kind != VC_NAR_TRY() || t.src != ITY_U32() || t.dst != ITY_I32() { return 22; }
+    let u: VcNarrow = nar(String::from("__vow_i128_to_i8_try"));
+    if u.kind != VC_NAR_TRY() || u.src != ITY_I128() || u.dst != ITY_I8() { return 23; }
+    if nar(String::from("__vow_u128_to_i128_sat")).kind != VC_NAR_SAT() { return 24; }
+    if nar(String::from("__vow_i64_to_u8_try_in_arena")).kind != VC_NAR_NONE() { return 6; }
+    if nar(String::from("__vow_hash_u64")).kind != VC_NAR_NONE() { return 7; }
+    if nar(String::from("__vow_i64_to_f64_wrap")).kind != VC_NAR_NONE() { return 8; }
+    if nar(String::from("__vow_i64_to_u8_clamp")).kind != VC_NAR_NONE() { return 9; }
+    if nar(String::from("i64_to_u8_wrap_xx")).kind != VC_NAR_NONE() { return 10; }
+    if nar(String::from("__vow_string_from_i64")).kind != VC_NAR_NONE() { return 11; }
+    if nar(String::from("")).kind != VC_NAR_NONE() { return 12; }
+    let call: IrInst = mk_inst_call_extern(1, ITY_U8(), args1(0), String::from("__vow_i64_to_u8_wrap"));
+    if vc_narrow_of(call).kind != VC_NAR_WRAP() { return 13; }
+    if vc_narrow_of(mk_inst_const_i64(1, 0)).kind != VC_NAR_NONE() { return 14; }
+    0
+}
+
+// A constant of `ty` from `v` (sign-extended 64-bit limb, the way the IR stores it).
+fn cst(ar: VcArena, ty: i64, v: i64) -> i64 {
+    vc_int_const(ar, ty, v, 0)
+}
+
+// The masked value of a folded constant term, or -1 when it did not fold.
+fn folded(ar: VcArena, t: i64) -> i64 {
+    if ar.kinds[t as u64] != VC_T_BV() { return -1; }
+    ar.aux[t as u64]
+}
+
+fn value(sym: String, ty: i64, v: i64) -> i64 {
+    let ar: VcArena = vc_arena_new();
+    folded(ar, vc_narrow_value(ar, nar(sym), cst(ar, ty, v)))
+}
+
+fn tag(sym: String, ty: i64, v: i64) -> i64 {
+    let ar: VcArena = vc_arena_new();
+    folded(ar, vc_narrow_try_tag(ar, nar(sym), cst(ar, ty, v)))
+}
+
+fn check_wrap_values() -> i64 {
+    if value(String::from("__vow_i64_to_u8_wrap"), ITY_I64(), 300) != 44 { return 20; }
+    if value(String::from("__vow_i64_to_u8_wrap"), ITY_I64(), -1) != 255 { return 21; }
+    if value(String::from("__vow_i32_to_u16_wrap"), ITY_I32(), -1) != 65535 { return 22; }
+    if value(String::from("__vow_i32_to_i8_wrap"), ITY_I32(), 200) != 200 { return 23; }
+    if value(String::from("__vow_u32_to_i32_wrap"), ITY_U32(), 4294967295) != 4294967295 { return 24; }
+    0
+}
+
+fn check_sat_values() -> i64 {
+    if value(String::from("__vow_i32_to_u8_sat"), ITY_I32(), 300) != 255 { return 30; }
+    if value(String::from("__vow_i32_to_u8_sat"), ITY_I32(), -5) != 0 { return 31; }
+    if value(String::from("__vow_i32_to_u8_sat"), ITY_I32(), 200) != 200 { return 32; }
+    if value(String::from("__vow_i32_to_i8_sat"), ITY_I32(), 300) != 127 { return 33; }
+    if value(String::from("__vow_i32_to_i8_sat"), ITY_I32(), -300) != 128 { return 34; }
+    if value(String::from("__vow_i32_to_i8_sat"), ITY_I32(), -7) != 249 { return 35; }
+    if value(String::from("__vow_u32_to_i8_sat"), ITY_U32(), 4294967295) != 127 { return 36; }
+    if value(String::from("__vow_u32_to_i8_sat"), ITY_U32(), 100) != 100 { return 37; }
+    if value(String::from("__vow_u64_to_u32_sat"), ITY_U64(), 4294967296) != 4294967295 { return 38; }
+    if value(String::from("__vow_i64_to_u32_sat"), ITY_I64(), -1) != 0 { return 39; }
+    if value(String::from("__vow_i64_to_i32_sat"), ITY_I64(), -2147483649) != 2147483648 { return 40; }
+    0
+}
+
+fn check_try_tags() -> i64 {
+    if tag(String::from("__vow_i32_to_u8_try"), ITY_I32(), 255) != 1 { return 50; }
+    if tag(String::from("__vow_i32_to_u8_try"), ITY_I32(), 256) != 0 { return 51; }
+    if tag(String::from("__vow_i32_to_u8_try"), ITY_I32(), -1) != 0 { return 52; }
+    if tag(String::from("__vow_i16_to_i8_try"), ITY_I16(), -128) != 1 { return 53; }
+    if tag(String::from("__vow_i16_to_i8_try"), ITY_I16(), -129) != 0 { return 54; }
+    if tag(String::from("__vow_u32_to_i32_try"), ITY_U32(), 2147483647) != 1 { return 55; }
+    if tag(String::from("__vow_u32_to_i32_try"), ITY_U32(), 2147483648) != 0 { return 56; }
+    if tag(String::from("__vow_u64_to_u32_try"), ITY_U64(), 4294967295) != 1 { return 57; }
+    if tag(String::from("__vow_u64_to_u32_try"), ITY_U64(), 4294967296) != 0 { return 58; }
+    0
+}
+
+// A 128-bit source needs the 128-bit compare; the same-width sign changes clamp on
+// one side only (`i128 -> u128` below 0, `u128 -> i128` above `i128::MAX`).
+fn check_wide_sources() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let x: i64 = vc_tm_var(ar, String::from("x"));
+    let ni: VcNarrow = nar(String::from("__vow_i128_to_u128_sat"));
+    if vc_narrow_above(ar, ni, x) >= 0 { return 60; }
+    if vc_narrow_below(ar, ni, x) < 0 { return 61; }
+    let nu: VcNarrow = nar(String::from("__vow_u128_to_i128_sat"));
+    if vc_narrow_below(ar, nu, x) >= 0 { return 62; }
+    if vc_narrow_above(ar, nu, x) < 0 { return 63; }
+    let ns: VcNarrow = nar(String::from("__vow_i128_to_i8_sat"));
+    if vc_narrow_below(ar, ns, x) < 0 || vc_narrow_above(ar, ns, x) < 0 { return 64; }
+    let nw: VcNarrow = nar(String::from("__vow_u128_to_u32_sat"));
+    if vc_narrow_below(ar, nw, x) >= 0 { return 65; }
+    0
+}
+
+fn mk_probe(id: i64, ty: i64, v: i64) -> IrInst {
+    if ty == ITY_U8() || ty == ITY_I8() {
+        return ir_inst_new(id, IOP_CONST_U8(), ty, Vec::new(), IDATA_CONST_I64(), v, 0, String::from(""));
+    }
+    if ty == ITY_I64() { return mk_inst_const_i64(id, v); }
+    ir_inst_new(id, IOP_CONST_I32(), ty, Vec::new(), IDATA_CONST_I64(), v, 0, String::from(""))
+}
+
+fn narrow_fn(sym: String, src: i64, ret: i64, probe_const: i64) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, src, 0));
+    insts.push(mk_inst_call_extern(1, ret, args1(0), sym));
+    insts.push(mk_probe(2, ret, probe_const));
+    insts.push(ir_inst_new(3, IOP_NE(), ITY_BOOL(), args2(1, 2), IDATA_NONE(), 0, 0, String::from("")));
+    insts.push(ir_inst_new(4, IOP_VOW_ENS(), ITY_UNIT(), args1(3), IDATA_VOW_ID(), 0, 0, String::from("")));
+    insts.push(mk_inst_return(5, 1));
+    let p: Vec<i64> = Vec::new();
+    p.push(src);
+    one_block(p, ret, insts)
+}
+
+fn check_gate_shapes() -> i64 {
+    if vc_skip_reason(narrow_fn(String::from("__vow_i64_to_u8_wrap"), ITY_I64(), ITY_U8(), 7)).len() != 0 { return 70; }
+    if vc_skip_reason(narrow_fn(String::from("__vow_i64_to_u8_sat"), ITY_I64(), ITY_U8(), 7)).len() != 0 { return 71; }
+    if vc_skip_reason(narrow_fn(String::from("__vow_i128_to_i8_sat"), ITY_I128(), ITY_I8(), 7)).len() != 0 { return 72; }
+    0
+}
+
+// The operand and result types must be the symbol's own: anything else is skipped,
+// never modelled by guessing.
+fn check_gate_rejects_mismatched_types() -> i64 {
+    if vc_skip_reason(narrow_fn(String::from("__vow_i64_to_u8_wrap"), ITY_I32(), ITY_U8(), 7)).len() == 0 { return 80; }
+    if vc_skip_reason(narrow_fn(String::from("__vow_i64_to_u8_wrap"), ITY_I64(), ITY_I8(), 7)).len() == 0 { return 81; }
+    if vc_skip_reason(narrow_fn(String::from("__vow_i64_to_u8_sat"), ITY_U64(), ITY_U8(), 7)).len() == 0 { return 82; }
+    if vc_skip_reason(narrow_fn(String::from("__vow_i8_to_i64_sat"), ITY_I8(), ITY_I64(), 7)).len() == 0 { return 83; }
+    0
+}
+
+// A call whose symbol merely resembles an intrinsic stays an unmodelled builtin.
+fn check_unrelated_symbol_stays_unmodeled() -> i64 {
+    let r: String = vc_skip_reason(narrow_fn(String::from("__vow_i64_to_u8_try_in_arena"), ITY_I64(), ITY_U8(), 7));
+    if r != String::from("unmodeled-builtin: __vow_i64_to_u8_try_in_arena") { return 90; }
+    0
+}
+
+// `wrap` is the extract of the operand and `sat` a clamp, both closed terms: the claim
+// needs no constant for the result, no binder and no axiom.
+fn check_claim_is_closed_term() -> i64 {
+    let w: VcClaims = vc_claims(narrow_fn(String::from("__vow_i64_to_u8_wrap"), ITY_I64(), ITY_U8(), 7));
+    if w.kinds.len() != 1 { return 100; }
+    if w.assumed.len() != 0 { return 101; }
+    let q: String = vc_smt_render(w.arena, vc_claim_script(w, 0));
+    if !contains(q, String::from("(declare-const p0 (_ BitVec 64))")) { return 102; }
+    if !contains(q, String::from("extract")) { return 103; }
+    let s: VcClaims = vc_claims(narrow_fn(String::from("__vow_i64_to_u8_sat"), ITY_I64(), ITY_U8(), 7));
+    let sq: String = vc_smt_render(s.arena, vc_claim_script(s, 0));
+    if !contains(sq, String::from("bvslt")) || !contains(sq, String::from("bvsgt")) { return 104; }
+    if contains(sq, String::from("forall")) { return 105; }
+    0
+}
+
+// `try` returns an `Option` read by a later `match`: tag slot 0 and a payload slot
+// of the destination's width: `ensures: tag == 1 && payload as i16 == x`.
+fn try_match_fn() -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    let b0: Vec<IrInst> = Vec::new();
+    b0.push(mk_inst_arg(0, ITY_I16(), 0));
+    b0.push(mk_inst_call_extern(1, ITY_PTR(), args1(0), String::from("__vow_i16_to_i8_try")));
+    b0.push(mk_inst_field_get(2, ITY_I64(), 1, 0));
+    b0.push(mk_inst_const_i64(3, 1));
+    b0.push(ir_inst_new(4, IOP_EQ(), ITY_BOOL(), args2(2, 3), IDATA_NONE(), 0, 0, String::from("")));
+    b0.push(mk_inst_field_get(5, ITY_I8(), 1, 1));
+    b0.push(ir_inst_new(6, IOP_INT_CAST(), ITY_I16(), args1(5), IDATA_INTEGER_CAST(), ITY_I8(), ITY_I16(), String::from("")));
+    b0.push(ir_inst_new(8, IOP_EQ(), ITY_BOOL(), args2(6, 0), IDATA_NONE(), 0, 0, String::from("")));
+    b0.push(ir_inst_new(9, IOP_AND(), ITY_BOOL(), args2(4, 8), IDATA_NONE(), 0, 0, String::from("")));
+    b0.push(ir_inst_new(10, IOP_VOW_ENS(), ITY_UNIT(), args1(9), IDATA_VOW_ID(), 0, 0, String::from("")));
+    b0.push(mk_inst_return(11, 5));
+    blocks.push(mk_block(0, b0));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I16());
+    mk_function(1, String::from("f"), p, ITY_I8(), blocks)
+}
+
+fn check_try_option_is_read_back() -> i64 {
+    let f: IrFunction = try_match_fn();
+    if vc_skip_reason(f).len() != 0 { return 110; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 111; }
+    if cs.assumed.len() != 0 { return 112; }
+    let q: String = vc_smt_render(cs.arena, vc_claim_script(cs, 0));
+    if contains(q, String::from("(declare-const j")) { return 113; }
+    if !contains(q, String::from("extract")) { return 114; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_parse();
+    if r == 0 { r = check_wrap_values(); }
+    if r == 0 { r = check_sat_values(); }
+    if r == 0 { r = check_try_tags(); }
+    if r == 0 { r = check_wide_sources(); }
+    if r == 0 { r = check_gate_shapes(); }
+    if r == 0 { r = check_gate_rejects_mismatched_types(); }
+    if r == 0 { r = check_unrelated_symbol_stays_unmodeled(); }
+    if r == 0 { r = check_claim_is_closed_term(); }
+    if r == 0 { r = check_try_option_is_read_back(); }
+    i64_to_i32_wrap(r)
+}

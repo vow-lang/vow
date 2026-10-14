@@ -618,7 +618,8 @@ match i64_to_u8_try(big) {
 ```
 
 These intrinsics are emitted by the compiler so the verifier sees their semantics
-directly in its model (the C model under ESBMC).
+directly in its model (the C model under ESBMC, exact bit-vector terms under the
+native verifier).
 
 For the `u8` target, the available narrowing source types are `i16`, `i32`,
 `i64`, `i128`, `u16`, `u32`, `u64`, and `u128`. Each source provides all three

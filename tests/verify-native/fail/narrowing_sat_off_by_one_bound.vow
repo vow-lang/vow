@@ -1,0 +1,18 @@
+// TEST: counterexample-fn "sat_i16"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-violation "x > 32768"
+// The saturation bound is 32767, not 32768: `u64_to_i16_sat(32768)` is 32767, so the
+// second clause of the postcondition is false at `x = 32768`.
+module NarrowingSatOffByOneBound
+
+fn sat_i16(x: u64) -> i16 vow {
+  ensures: (x > 32768 && result == 32767) || (x <= 32768 && result as u64 == x)
+} {
+  u64_to_i16_sat(x)
+}
+
+fn main() -> i32 [io] {
+  print_i64(sat_i16(32768) as i64);
+  0
+}

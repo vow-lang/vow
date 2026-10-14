@@ -110,7 +110,8 @@ class SkipListTest(unittest.TestCase):
 
     def test_the_checked_in_list_is_valid(self):
         skips = vc.load_skips(vc.DEFAULT_SKIPS)
-        self.assertIn("byte_at_u8", skips)
+        for name, entry in skips.items():
+            self.assertIn(entry["code"], vc.NATIVE_SKIP_CODES, msg=name)
 
     def test_every_entry_needs_a_tracking_issue_a_reason_and_a_closed_code(self):
         base = {

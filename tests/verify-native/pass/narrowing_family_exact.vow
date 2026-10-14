@@ -1,0 +1,675 @@
+// Every narrowing pair of docs/spec/grammar.md ("Type Cast", the `u8`, `i8`, `i16`,
+// `u16`, `i32` and `u32` targets) against its documented semantics, stated on the
+// source value: `_wrap` keeps the low bits (sign-extended for a signed destination),
+// `_sat` clamps into the destination's range and `_try` is `Some` exactly when the
+// operand is in range. One function per pair and kind; the contracts are the spec,
+// not a copy of the model.
+module NarrowingFamilyExact
+
+fn wrap_i16_to_u8(x: i16) -> u8 vow {
+  ensures: result as i128 == ((x as i128) & 255)
+} {
+  i16_to_u8_wrap(x)
+}
+fn sat_i16_to_u8(x: i16) -> u8 vow {
+  ensures: (x < 0 && result as i128 == 0) || (x > 255 && result as i128 == 255) || (x >= 0 && x <= 255 && result as i128 == x as i128)
+} {
+  i16_to_u8_sat(x)
+}
+fn try_i16_to_u8(x: i16) -> bool vow {
+  ensures: result
+} {
+  match i16_to_u8_try(x) {
+    Option::Some(b) => { x >= 0 && x <= 255 && b as i128 == x as i128 },
+    Option::None => { x < 0 || x > 255 },
+  }
+}
+fn wrap_i32_to_u8(x: i32) -> u8 vow {
+  ensures: result as i128 == ((x as i128) & 255)
+} {
+  i32_to_u8_wrap(x)
+}
+fn sat_i32_to_u8(x: i32) -> u8 vow {
+  ensures: (x < 0 && result as i128 == 0) || (x > 255 && result as i128 == 255) || (x >= 0 && x <= 255 && result as i128 == x as i128)
+} {
+  i32_to_u8_sat(x)
+}
+fn try_i32_to_u8(x: i32) -> bool vow {
+  ensures: result
+} {
+  match i32_to_u8_try(x) {
+    Option::Some(b) => { x >= 0 && x <= 255 && b as i128 == x as i128 },
+    Option::None => { x < 0 || x > 255 },
+  }
+}
+fn wrap_i64_to_u8(x: i64) -> u8 vow {
+  ensures: result as i128 == ((x as i128) & 255)
+} {
+  i64_to_u8_wrap(x)
+}
+fn sat_i64_to_u8(x: i64) -> u8 vow {
+  ensures: (x < 0 && result as i128 == 0) || (x > 255 && result as i128 == 255) || (x >= 0 && x <= 255 && result as i128 == x as i128)
+} {
+  i64_to_u8_sat(x)
+}
+fn try_i64_to_u8(x: i64) -> bool vow {
+  ensures: result
+} {
+  match i64_to_u8_try(x) {
+    Option::Some(b) => { x >= 0 && x <= 255 && b as i128 == x as i128 },
+    Option::None => { x < 0 || x > 255 },
+  }
+}
+fn wrap_i128_to_u8(x: i128) -> u8 vow {
+  ensures: result as i128 == ((x as i128) & 255)
+} {
+  i128_to_u8_wrap(x)
+}
+fn sat_i128_to_u8(x: i128) -> u8 vow {
+  ensures: (x < 0 && result as i128 == 0) || (x > 255 && result as i128 == 255) || (x >= 0 && x <= 255 && result as i128 == x as i128)
+} {
+  i128_to_u8_sat(x)
+}
+fn try_i128_to_u8(x: i128) -> bool vow {
+  ensures: result
+} {
+  match i128_to_u8_try(x) {
+    Option::Some(b) => { x >= 0 && x <= 255 && b as i128 == x as i128 },
+    Option::None => { x < 0 || x > 255 },
+  }
+}
+fn wrap_u16_to_u8(x: u16) -> u8 vow {
+  ensures: result as i128 == ((x as i128) & 255)
+} {
+  u16_to_u8_wrap(x)
+}
+fn sat_u16_to_u8(x: u16) -> u8 vow {
+  ensures: (x > 255 && result as i128 == 255) || (x <= 255 && result as i128 == x as i128)
+} {
+  u16_to_u8_sat(x)
+}
+fn try_u16_to_u8(x: u16) -> bool vow {
+  ensures: result
+} {
+  match u16_to_u8_try(x) {
+    Option::Some(b) => { x <= 255 && b as i128 == x as i128 },
+    Option::None => { x > 255 },
+  }
+}
+fn wrap_u32_to_u8(x: u32) -> u8 vow {
+  ensures: result as i128 == ((x as i128) & 255)
+} {
+  u32_to_u8_wrap(x)
+}
+fn sat_u32_to_u8(x: u32) -> u8 vow {
+  ensures: (x > 255 && result as i128 == 255) || (x <= 255 && result as i128 == x as i128)
+} {
+  u32_to_u8_sat(x)
+}
+fn try_u32_to_u8(x: u32) -> bool vow {
+  ensures: result
+} {
+  match u32_to_u8_try(x) {
+    Option::Some(b) => { x <= 255 && b as i128 == x as i128 },
+    Option::None => { x > 255 },
+  }
+}
+fn wrap_u64_to_u8(x: u64) -> u8 vow {
+  ensures: result as i128 == ((x as i128) & 255)
+} {
+  u64_to_u8_wrap(x)
+}
+fn sat_u64_to_u8(x: u64) -> u8 vow {
+  ensures: (x > 255 && result as i128 == 255) || (x <= 255 && result as i128 == x as i128)
+} {
+  u64_to_u8_sat(x)
+}
+fn try_u64_to_u8(x: u64) -> bool vow {
+  ensures: result
+} {
+  match u64_to_u8_try(x) {
+    Option::Some(b) => { x <= 255 && b as i128 == x as i128 },
+    Option::None => { x > 255 },
+  }
+}
+fn wrap_u128_to_u8(x: u128) -> u8 vow {
+  ensures: result as i128 == ((x as i128) & 255)
+} {
+  u128_to_u8_wrap(x)
+}
+fn sat_u128_to_u8(x: u128) -> u8 vow {
+  ensures: (x > 255 && result as i128 == 255) || (x <= 255 && result as i128 == x as i128)
+} {
+  u128_to_u8_sat(x)
+}
+fn try_u128_to_u8(x: u128) -> bool vow {
+  ensures: result
+} {
+  match u128_to_u8_try(x) {
+    Option::Some(b) => { x <= 255 && b as i128 == x as i128 },
+    Option::None => { x > 255 },
+  }
+}
+fn wrap_i16_to_i8(x: i16) -> i8 vow {
+  ensures: result as i128 == ((((x as i128) & 255) ^ 128) - 128)
+} {
+  i16_to_i8_wrap(x)
+}
+fn sat_i16_to_i8(x: i16) -> i8 vow {
+  ensures: (x < -128 && result as i128 == -128) || (x > 127 && result as i128 == 127) || (x >= -128 && x <= 127 && result as i128 == x as i128)
+} {
+  i16_to_i8_sat(x)
+}
+fn try_i16_to_i8(x: i16) -> bool vow {
+  ensures: result
+} {
+  match i16_to_i8_try(x) {
+    Option::Some(b) => { x >= -128 && x <= 127 && b as i128 == x as i128 },
+    Option::None => { x < -128 || x > 127 },
+  }
+}
+fn wrap_u16_to_i8(x: u16) -> i8 vow {
+  ensures: result as i128 == ((((x as i128) & 255) ^ 128) - 128)
+} {
+  u16_to_i8_wrap(x)
+}
+fn sat_u16_to_i8(x: u16) -> i8 vow {
+  ensures: (x > 127 && result as i128 == 127) || (x <= 127 && result as i128 == x as i128)
+} {
+  u16_to_i8_sat(x)
+}
+fn try_u16_to_i8(x: u16) -> bool vow {
+  ensures: result
+} {
+  match u16_to_i8_try(x) {
+    Option::Some(b) => { x <= 127 && b as i128 == x as i128 },
+    Option::None => { x > 127 },
+  }
+}
+fn wrap_i32_to_i8(x: i32) -> i8 vow {
+  ensures: result as i128 == ((((x as i128) & 255) ^ 128) - 128)
+} {
+  i32_to_i8_wrap(x)
+}
+fn sat_i32_to_i8(x: i32) -> i8 vow {
+  ensures: (x < -128 && result as i128 == -128) || (x > 127 && result as i128 == 127) || (x >= -128 && x <= 127 && result as i128 == x as i128)
+} {
+  i32_to_i8_sat(x)
+}
+fn try_i32_to_i8(x: i32) -> bool vow {
+  ensures: result
+} {
+  match i32_to_i8_try(x) {
+    Option::Some(b) => { x >= -128 && x <= 127 && b as i128 == x as i128 },
+    Option::None => { x < -128 || x > 127 },
+  }
+}
+fn wrap_u32_to_i8(x: u32) -> i8 vow {
+  ensures: result as i128 == ((((x as i128) & 255) ^ 128) - 128)
+} {
+  u32_to_i8_wrap(x)
+}
+fn sat_u32_to_i8(x: u32) -> i8 vow {
+  ensures: (x > 127 && result as i128 == 127) || (x <= 127 && result as i128 == x as i128)
+} {
+  u32_to_i8_sat(x)
+}
+fn try_u32_to_i8(x: u32) -> bool vow {
+  ensures: result
+} {
+  match u32_to_i8_try(x) {
+    Option::Some(b) => { x <= 127 && b as i128 == x as i128 },
+    Option::None => { x > 127 },
+  }
+}
+fn wrap_i64_to_i8(x: i64) -> i8 vow {
+  ensures: result as i128 == ((((x as i128) & 255) ^ 128) - 128)
+} {
+  i64_to_i8_wrap(x)
+}
+fn sat_i64_to_i8(x: i64) -> i8 vow {
+  ensures: (x < -128 && result as i128 == -128) || (x > 127 && result as i128 == 127) || (x >= -128 && x <= 127 && result as i128 == x as i128)
+} {
+  i64_to_i8_sat(x)
+}
+fn try_i64_to_i8(x: i64) -> bool vow {
+  ensures: result
+} {
+  match i64_to_i8_try(x) {
+    Option::Some(b) => { x >= -128 && x <= 127 && b as i128 == x as i128 },
+    Option::None => { x < -128 || x > 127 },
+  }
+}
+fn wrap_u64_to_i8(x: u64) -> i8 vow {
+  ensures: result as i128 == ((((x as i128) & 255) ^ 128) - 128)
+} {
+  u64_to_i8_wrap(x)
+}
+fn sat_u64_to_i8(x: u64) -> i8 vow {
+  ensures: (x > 127 && result as i128 == 127) || (x <= 127 && result as i128 == x as i128)
+} {
+  u64_to_i8_sat(x)
+}
+fn try_u64_to_i8(x: u64) -> bool vow {
+  ensures: result
+} {
+  match u64_to_i8_try(x) {
+    Option::Some(b) => { x <= 127 && b as i128 == x as i128 },
+    Option::None => { x > 127 },
+  }
+}
+fn wrap_i128_to_i8(x: i128) -> i8 vow {
+  ensures: result as i128 == ((((x as i128) & 255) ^ 128) - 128)
+} {
+  i128_to_i8_wrap(x)
+}
+fn sat_i128_to_i8(x: i128) -> i8 vow {
+  ensures: (x < -128 && result as i128 == -128) || (x > 127 && result as i128 == 127) || (x >= -128 && x <= 127 && result as i128 == x as i128)
+} {
+  i128_to_i8_sat(x)
+}
+fn try_i128_to_i8(x: i128) -> bool vow {
+  ensures: result
+} {
+  match i128_to_i8_try(x) {
+    Option::Some(b) => { x >= -128 && x <= 127 && b as i128 == x as i128 },
+    Option::None => { x < -128 || x > 127 },
+  }
+}
+fn wrap_u128_to_i8(x: u128) -> i8 vow {
+  ensures: result as i128 == ((((x as i128) & 255) ^ 128) - 128)
+} {
+  u128_to_i8_wrap(x)
+}
+fn sat_u128_to_i8(x: u128) -> i8 vow {
+  ensures: (x > 127 && result as i128 == 127) || (x <= 127 && result as i128 == x as i128)
+} {
+  u128_to_i8_sat(x)
+}
+fn try_u128_to_i8(x: u128) -> bool vow {
+  ensures: result
+} {
+  match u128_to_i8_try(x) {
+    Option::Some(b) => { x <= 127 && b as i128 == x as i128 },
+    Option::None => { x > 127 },
+  }
+}
+fn wrap_i32_to_i16(x: i32) -> i16 vow {
+  ensures: result as i128 == ((((x as i128) & 65535) ^ 32768) - 32768)
+} {
+  i32_to_i16_wrap(x)
+}
+fn sat_i32_to_i16(x: i32) -> i16 vow {
+  ensures: (x < -32768 && result as i128 == -32768) || (x > 32767 && result as i128 == 32767) || (x >= -32768 && x <= 32767 && result as i128 == x as i128)
+} {
+  i32_to_i16_sat(x)
+}
+fn try_i32_to_i16(x: i32) -> bool vow {
+  ensures: result
+} {
+  match i32_to_i16_try(x) {
+    Option::Some(b) => { x >= -32768 && x <= 32767 && b as i128 == x as i128 },
+    Option::None => { x < -32768 || x > 32767 },
+  }
+}
+fn wrap_u32_to_i16(x: u32) -> i16 vow {
+  ensures: result as i128 == ((((x as i128) & 65535) ^ 32768) - 32768)
+} {
+  u32_to_i16_wrap(x)
+}
+fn sat_u32_to_i16(x: u32) -> i16 vow {
+  ensures: (x > 32767 && result as i128 == 32767) || (x <= 32767 && result as i128 == x as i128)
+} {
+  u32_to_i16_sat(x)
+}
+fn try_u32_to_i16(x: u32) -> bool vow {
+  ensures: result
+} {
+  match u32_to_i16_try(x) {
+    Option::Some(b) => { x <= 32767 && b as i128 == x as i128 },
+    Option::None => { x > 32767 },
+  }
+}
+fn wrap_i64_to_i16(x: i64) -> i16 vow {
+  ensures: result as i128 == ((((x as i128) & 65535) ^ 32768) - 32768)
+} {
+  i64_to_i16_wrap(x)
+}
+fn sat_i64_to_i16(x: i64) -> i16 vow {
+  ensures: (x < -32768 && result as i128 == -32768) || (x > 32767 && result as i128 == 32767) || (x >= -32768 && x <= 32767 && result as i128 == x as i128)
+} {
+  i64_to_i16_sat(x)
+}
+fn try_i64_to_i16(x: i64) -> bool vow {
+  ensures: result
+} {
+  match i64_to_i16_try(x) {
+    Option::Some(b) => { x >= -32768 && x <= 32767 && b as i128 == x as i128 },
+    Option::None => { x < -32768 || x > 32767 },
+  }
+}
+fn wrap_u64_to_i16(x: u64) -> i16 vow {
+  ensures: result as i128 == ((((x as i128) & 65535) ^ 32768) - 32768)
+} {
+  u64_to_i16_wrap(x)
+}
+fn sat_u64_to_i16(x: u64) -> i16 vow {
+  ensures: (x > 32767 && result as i128 == 32767) || (x <= 32767 && result as i128 == x as i128)
+} {
+  u64_to_i16_sat(x)
+}
+fn try_u64_to_i16(x: u64) -> bool vow {
+  ensures: result
+} {
+  match u64_to_i16_try(x) {
+    Option::Some(b) => { x <= 32767 && b as i128 == x as i128 },
+    Option::None => { x > 32767 },
+  }
+}
+fn wrap_i128_to_i16(x: i128) -> i16 vow {
+  ensures: result as i128 == ((((x as i128) & 65535) ^ 32768) - 32768)
+} {
+  i128_to_i16_wrap(x)
+}
+fn sat_i128_to_i16(x: i128) -> i16 vow {
+  ensures: (x < -32768 && result as i128 == -32768) || (x > 32767 && result as i128 == 32767) || (x >= -32768 && x <= 32767 && result as i128 == x as i128)
+} {
+  i128_to_i16_sat(x)
+}
+fn try_i128_to_i16(x: i128) -> bool vow {
+  ensures: result
+} {
+  match i128_to_i16_try(x) {
+    Option::Some(b) => { x >= -32768 && x <= 32767 && b as i128 == x as i128 },
+    Option::None => { x < -32768 || x > 32767 },
+  }
+}
+fn wrap_u128_to_i16(x: u128) -> i16 vow {
+  ensures: result as i128 == ((((x as i128) & 65535) ^ 32768) - 32768)
+} {
+  u128_to_i16_wrap(x)
+}
+fn sat_u128_to_i16(x: u128) -> i16 vow {
+  ensures: (x > 32767 && result as i128 == 32767) || (x <= 32767 && result as i128 == x as i128)
+} {
+  u128_to_i16_sat(x)
+}
+fn try_u128_to_i16(x: u128) -> bool vow {
+  ensures: result
+} {
+  match u128_to_i16_try(x) {
+    Option::Some(b) => { x <= 32767 && b as i128 == x as i128 },
+    Option::None => { x > 32767 },
+  }
+}
+fn wrap_i32_to_u16(x: i32) -> u16 vow {
+  ensures: result as i128 == ((x as i128) & 65535)
+} {
+  i32_to_u16_wrap(x)
+}
+fn sat_i32_to_u16(x: i32) -> u16 vow {
+  ensures: (x < 0 && result as i128 == 0) || (x > 65535 && result as i128 == 65535) || (x >= 0 && x <= 65535 && result as i128 == x as i128)
+} {
+  i32_to_u16_sat(x)
+}
+fn try_i32_to_u16(x: i32) -> bool vow {
+  ensures: result
+} {
+  match i32_to_u16_try(x) {
+    Option::Some(b) => { x >= 0 && x <= 65535 && b as i128 == x as i128 },
+    Option::None => { x < 0 || x > 65535 },
+  }
+}
+fn wrap_u32_to_u16(x: u32) -> u16 vow {
+  ensures: result as i128 == ((x as i128) & 65535)
+} {
+  u32_to_u16_wrap(x)
+}
+fn sat_u32_to_u16(x: u32) -> u16 vow {
+  ensures: (x > 65535 && result as i128 == 65535) || (x <= 65535 && result as i128 == x as i128)
+} {
+  u32_to_u16_sat(x)
+}
+fn try_u32_to_u16(x: u32) -> bool vow {
+  ensures: result
+} {
+  match u32_to_u16_try(x) {
+    Option::Some(b) => { x <= 65535 && b as i128 == x as i128 },
+    Option::None => { x > 65535 },
+  }
+}
+fn wrap_i64_to_u16(x: i64) -> u16 vow {
+  ensures: result as i128 == ((x as i128) & 65535)
+} {
+  i64_to_u16_wrap(x)
+}
+fn sat_i64_to_u16(x: i64) -> u16 vow {
+  ensures: (x < 0 && result as i128 == 0) || (x > 65535 && result as i128 == 65535) || (x >= 0 && x <= 65535 && result as i128 == x as i128)
+} {
+  i64_to_u16_sat(x)
+}
+fn try_i64_to_u16(x: i64) -> bool vow {
+  ensures: result
+} {
+  match i64_to_u16_try(x) {
+    Option::Some(b) => { x >= 0 && x <= 65535 && b as i128 == x as i128 },
+    Option::None => { x < 0 || x > 65535 },
+  }
+}
+fn wrap_u64_to_u16(x: u64) -> u16 vow {
+  ensures: result as i128 == ((x as i128) & 65535)
+} {
+  u64_to_u16_wrap(x)
+}
+fn sat_u64_to_u16(x: u64) -> u16 vow {
+  ensures: (x > 65535 && result as i128 == 65535) || (x <= 65535 && result as i128 == x as i128)
+} {
+  u64_to_u16_sat(x)
+}
+fn try_u64_to_u16(x: u64) -> bool vow {
+  ensures: result
+} {
+  match u64_to_u16_try(x) {
+    Option::Some(b) => { x <= 65535 && b as i128 == x as i128 },
+    Option::None => { x > 65535 },
+  }
+}
+fn wrap_i128_to_u16(x: i128) -> u16 vow {
+  ensures: result as i128 == ((x as i128) & 65535)
+} {
+  i128_to_u16_wrap(x)
+}
+fn sat_i128_to_u16(x: i128) -> u16 vow {
+  ensures: (x < 0 && result as i128 == 0) || (x > 65535 && result as i128 == 65535) || (x >= 0 && x <= 65535 && result as i128 == x as i128)
+} {
+  i128_to_u16_sat(x)
+}
+fn try_i128_to_u16(x: i128) -> bool vow {
+  ensures: result
+} {
+  match i128_to_u16_try(x) {
+    Option::Some(b) => { x >= 0 && x <= 65535 && b as i128 == x as i128 },
+    Option::None => { x < 0 || x > 65535 },
+  }
+}
+fn wrap_u128_to_u16(x: u128) -> u16 vow {
+  ensures: result as i128 == ((x as i128) & 65535)
+} {
+  u128_to_u16_wrap(x)
+}
+fn sat_u128_to_u16(x: u128) -> u16 vow {
+  ensures: (x > 65535 && result as i128 == 65535) || (x <= 65535 && result as i128 == x as i128)
+} {
+  u128_to_u16_sat(x)
+}
+fn try_u128_to_u16(x: u128) -> bool vow {
+  ensures: result
+} {
+  match u128_to_u16_try(x) {
+    Option::Some(b) => { x <= 65535 && b as i128 == x as i128 },
+    Option::None => { x > 65535 },
+  }
+}
+fn wrap_i64_to_i32(x: i64) -> i32 vow {
+  ensures: result as i128 == ((((x as i128) & 4294967295) ^ 2147483648) - 2147483648)
+} {
+  i64_to_i32_wrap(x)
+}
+fn sat_i64_to_i32(x: i64) -> i32 vow {
+  ensures: (x < -2147483648 && result as i128 == -2147483648) || (x > 2147483647 && result as i128 == 2147483647) || (x >= -2147483648 && x <= 2147483647 && result as i128 == x as i128)
+} {
+  i64_to_i32_sat(x)
+}
+fn try_i64_to_i32(x: i64) -> bool vow {
+  ensures: result
+} {
+  match i64_to_i32_try(x) {
+    Option::Some(b) => { x >= -2147483648 && x <= 2147483647 && b as i128 == x as i128 },
+    Option::None => { x < -2147483648 || x > 2147483647 },
+  }
+}
+fn wrap_u32_to_i32(x: u32) -> i32 vow {
+  ensures: result as i128 == ((((x as i128) & 4294967295) ^ 2147483648) - 2147483648)
+} {
+  u32_to_i32_wrap(x)
+}
+fn sat_u32_to_i32(x: u32) -> i32 vow {
+  ensures: (x > 2147483647 && result as i128 == 2147483647) || (x <= 2147483647 && result as i128 == x as i128)
+} {
+  u32_to_i32_sat(x)
+}
+fn try_u32_to_i32(x: u32) -> bool vow {
+  ensures: result
+} {
+  match u32_to_i32_try(x) {
+    Option::Some(b) => { x <= 2147483647 && b as i128 == x as i128 },
+    Option::None => { x > 2147483647 },
+  }
+}
+fn wrap_u64_to_i32(x: u64) -> i32 vow {
+  ensures: result as i128 == ((((x as i128) & 4294967295) ^ 2147483648) - 2147483648)
+} {
+  u64_to_i32_wrap(x)
+}
+fn sat_u64_to_i32(x: u64) -> i32 vow {
+  ensures: (x > 2147483647 && result as i128 == 2147483647) || (x <= 2147483647 && result as i128 == x as i128)
+} {
+  u64_to_i32_sat(x)
+}
+fn try_u64_to_i32(x: u64) -> bool vow {
+  ensures: result
+} {
+  match u64_to_i32_try(x) {
+    Option::Some(b) => { x <= 2147483647 && b as i128 == x as i128 },
+    Option::None => { x > 2147483647 },
+  }
+}
+fn wrap_i128_to_i32(x: i128) -> i32 vow {
+  ensures: result as i128 == ((((x as i128) & 4294967295) ^ 2147483648) - 2147483648)
+} {
+  i128_to_i32_wrap(x)
+}
+fn sat_i128_to_i32(x: i128) -> i32 vow {
+  ensures: (x < -2147483648 && result as i128 == -2147483648) || (x > 2147483647 && result as i128 == 2147483647) || (x >= -2147483648 && x <= 2147483647 && result as i128 == x as i128)
+} {
+  i128_to_i32_sat(x)
+}
+fn try_i128_to_i32(x: i128) -> bool vow {
+  ensures: result
+} {
+  match i128_to_i32_try(x) {
+    Option::Some(b) => { x >= -2147483648 && x <= 2147483647 && b as i128 == x as i128 },
+    Option::None => { x < -2147483648 || x > 2147483647 },
+  }
+}
+fn wrap_u128_to_i32(x: u128) -> i32 vow {
+  ensures: result as i128 == ((((x as i128) & 4294967295) ^ 2147483648) - 2147483648)
+} {
+  u128_to_i32_wrap(x)
+}
+fn sat_u128_to_i32(x: u128) -> i32 vow {
+  ensures: (x > 2147483647 && result as i128 == 2147483647) || (x <= 2147483647 && result as i128 == x as i128)
+} {
+  u128_to_i32_sat(x)
+}
+fn try_u128_to_i32(x: u128) -> bool vow {
+  ensures: result
+} {
+  match u128_to_i32_try(x) {
+    Option::Some(b) => { x <= 2147483647 && b as i128 == x as i128 },
+    Option::None => { x > 2147483647 },
+  }
+}
+fn wrap_i64_to_u32(x: i64) -> u32 vow {
+  ensures: result as i128 == ((x as i128) & 4294967295)
+} {
+  i64_to_u32_wrap(x)
+}
+fn sat_i64_to_u32(x: i64) -> u32 vow {
+  ensures: (x < 0 && result as i128 == 0) || (x > 4294967295 && result as i128 == 4294967295) || (x >= 0 && x <= 4294967295 && result as i128 == x as i128)
+} {
+  i64_to_u32_sat(x)
+}
+fn try_i64_to_u32(x: i64) -> bool vow {
+  ensures: result
+} {
+  match i64_to_u32_try(x) {
+    Option::Some(b) => { x >= 0 && x <= 4294967295 && b as i128 == x as i128 },
+    Option::None => { x < 0 || x > 4294967295 },
+  }
+}
+fn wrap_u64_to_u32(x: u64) -> u32 vow {
+  ensures: result as i128 == ((x as i128) & 4294967295)
+} {
+  u64_to_u32_wrap(x)
+}
+fn sat_u64_to_u32(x: u64) -> u32 vow {
+  ensures: (x > 4294967295 && result as i128 == 4294967295) || (x <= 4294967295 && result as i128 == x as i128)
+} {
+  u64_to_u32_sat(x)
+}
+fn try_u64_to_u32(x: u64) -> bool vow {
+  ensures: result
+} {
+  match u64_to_u32_try(x) {
+    Option::Some(b) => { x <= 4294967295 && b as i128 == x as i128 },
+    Option::None => { x > 4294967295 },
+  }
+}
+fn wrap_i128_to_u32(x: i128) -> u32 vow {
+  ensures: result as i128 == ((x as i128) & 4294967295)
+} {
+  i128_to_u32_wrap(x)
+}
+fn sat_i128_to_u32(x: i128) -> u32 vow {
+  ensures: (x < 0 && result as i128 == 0) || (x > 4294967295 && result as i128 == 4294967295) || (x >= 0 && x <= 4294967295 && result as i128 == x as i128)
+} {
+  i128_to_u32_sat(x)
+}
+fn try_i128_to_u32(x: i128) -> bool vow {
+  ensures: result
+} {
+  match i128_to_u32_try(x) {
+    Option::Some(b) => { x >= 0 && x <= 4294967295 && b as i128 == x as i128 },
+    Option::None => { x < 0 || x > 4294967295 },
+  }
+}
+fn wrap_u128_to_u32(x: u128) -> u32 vow {
+  ensures: result as i128 == ((x as i128) & 4294967295)
+} {
+  u128_to_u32_wrap(x)
+}
+fn sat_u128_to_u32(x: u128) -> u32 vow {
+  ensures: (x > 4294967295 && result as i128 == 4294967295) || (x <= 4294967295 && result as i128 == x as i128)
+} {
+  u128_to_u32_sat(x)
+}
+fn try_u128_to_u32(x: u128) -> bool vow {
+  ensures: result
+} {
+  match u128_to_u32_try(x) {
+    Option::Some(b) => { x <= 4294967295 && b as i128 == x as i128 },
+    Option::None => { x > 4294967295 },
+  }
+}
+fn main() -> i32 { 0 }

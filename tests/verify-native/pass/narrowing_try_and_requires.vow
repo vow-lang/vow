@@ -1,0 +1,20 @@
+// A `requires` with `&&` joins its operands through a Phi, and a body that calls the
+// checked intrinsic (which allocates an `Option`) opens its region in that merge
+// block, in front of the Phi. The Phi is still at the head of its block, so the
+// function is modelled (ESBMC proves it too).
+module NarrowingTryAndRequires
+
+fn to_byte(x: i64) -> i64 vow {
+  requires: x >= 0 && x <= 255
+  ensures: result == x
+} {
+  match i64_to_u8_try(x) {
+    Option::Some(b) => { b as i64 },
+    Option::None => { -1 },
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(to_byte(65));
+  0
+}

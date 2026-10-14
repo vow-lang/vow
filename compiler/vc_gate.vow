@@ -13,6 +13,7 @@ use vc_agg
 use vc_vec
 use vc_strops
 use vc_str
+use vc_narrow
 use ast
 
 // Fail-closed subset gate for the native verifier. `vc_skip_reason` returns ""
@@ -320,6 +321,8 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
         if vc_inst_scalar_kind(inst) == VC_SCALAR_HASH_U64() {
             return n == 1 && inst.ty == ITY_U64() && vc_vec_index_ok(t0);
         }
+        let nar: VcNarrow = vc_narrow_of(inst);
+        if nar.kind != VC_NAR_NONE() { return vc_narrow_shape_ok(nar, inst, t0); }
         return calls && vc_call_scalar(inst, tys);
     }
     if vc_is_arith_op(op) {
@@ -364,7 +367,7 @@ fn vc_inst_specific_reason(inst: IrInst) -> String {
     if model == VC_OPM_FLOAT_REM() { return vc_reason(VC_SKIP_FLOAT_REM(), opcode_name(inst.op)); }
     if model == VC_OPM_CALL() {
         if inst.dk == IDATA_CALL_EXTERN() && !vc_is_unwrap_abort(inst) && vc_inst_vec_kind(inst) == VC_VEC_NONE()
-            && !catalogue_verifier_known(inst.ds) {
+            && !catalogue_verifier_known(inst.ds) && vc_narrow_of(inst).kind == VC_NAR_NONE() {
             return vc_reason(VC_SKIP_UNMODELED_BUILTIN(), inst.ds);
         }
         return String::from("");

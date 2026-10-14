@@ -805,3 +805,42 @@ their parity are unchanged.
   depend on a value the runtime computes, which `--replay-cex` reports as a `VerifierBug`. The
   opaque-result route of #1646 needs the `u64`/text split of the float hooks and an ADR decision
   of its own; it is left to a follow-up.
+
+## Addendum (#1679, #1690): the narrowing intrinsics
+
+The families `<src>_to_<dst>_wrap`, `_sat` and `_try` are pure integer functions whose runtime
+semantics are Rust's `as` cast, `clamp`/`min` and `try_from`. The native verifier models every
+member exactly; no result is a fresh constant.
+
+- **Where the model lives.** In `compiler/vc_narrow.vow`, not in the operation catalogue. ADR-2026-10-13-1048
+  (d) keeps the family in the `excluded` section (it needs a family mechanism, not 100+ rows) and
+  this change does not supersede that: the verifier parses the runtime symbol
+  `__vow_<src>_to_<dst>_<kind>` the way `vc_ops` keys the `Vec` operations by symbol, so no
+  `verifier_model` field is recorded per member and `generate_operations.py --check` is unchanged.
+  A symbol that merely resembles one (`..._try_in_arena`, a `f64` destination) is not parsed and
+  stays `unmodeled-builtin`.
+- **`_wrap`** is `vc_cast` of the operand to the destination: the low bits when narrowing, the
+  extension by the *source's* signedness otherwise. `u32_to_i32_wrap` and the 128-bit same-width
+  pair are the identity on the bits.
+- **`_sat`** clamps in the source's width: a signed source is compared with `bvslt`/`bvsgt` against
+  the destination's bounds extended to the source width by the destination's signedness, an unsigned
+  source with `bvugt`, and the result is a select of the destination's minimum or maximum over the
+  wrapped operand. A side that cannot occur has no compare: an unsigned source has no lower
+  clamp, and a signed source of the destination's own width with an unsigned destination
+  (`i128_to_u128_sat`) has no upper clamp, because the maximum is not a value of the source.
+- **`_try`** creates the `Option` the runtime allocates (`alloc_option_in_arena`): the tag slot 0 is
+  the 64-bit `1` exactly when the operand is in range (the negation of the two clamp conditions)
+  and the payload slot 1, of the destination's width, is the wrapped operand. The payload of
+  `None` is therefore the wrapped operand, which no program can read (a `match` reads the payload
+  only under `Some`, `unwrap` aborts on `None`). `_try` exists only for destinations of at most
+  64 bits (128-bit enum payloads are not supported by the language).
+- **Gate.** The operand must have exactly the symbol's source type and the result its destination
+  (`ptr` for `_try`); `_sat` and `_try` are accepted only when the destination is no wider than the
+  source. Any other shape is `unsupported-opcode`, never guessed at.
+- **Replay.** A counterexample through `_wrap`, `_sat` or a `_try` `match` replays: the model is the
+  runtime's function, so the real run takes the same path (`tests/verify-native/fail/narrowing_*`).
+- **Against ESBMC.** On the wrapping, saturating and checked pairs of
+  `tests/verify-native/pass/narrowing_intrinsics_exact.vow` (mixed signedness, 128-bit sources) both
+  backends prove every function.
+  ESBMC's C model has no `i128_to_u128`/`u128_to_i128` arms and skips a function that calls them, so
+  `tests/verify-native/pass/narrowing_sign_change_128.vow` is native-only (an extra proof).

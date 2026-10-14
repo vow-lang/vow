@@ -113,6 +113,8 @@ fn vc_phi_blocks(f: IrFunction, rpo: Vec<i64>, n_ids: u64) -> Vec<i64> {
     out
 }
 
+// The region markers the region analysis inserts at a block's start change no value
+// (the executor skips them), so a Phi that follows them is still at the block's head.
 fn vc_phi_head_detail(f: IrFunction, rpo: Vec<i64>) -> String {
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
@@ -129,7 +131,7 @@ fn vc_phi_head_detail(f: IrFunction, rpo: Vec<i64>) -> String {
                     if bi == 0 {
                         return String::from("Phi in the entry block");
                     }
-                } else {
+                } else if inst.op != IOP_REGION_OPEN() && inst.op != IOP_REGION_CLOSE() {
                     in_head = false;
                 }
                 ii = ii + 1;
