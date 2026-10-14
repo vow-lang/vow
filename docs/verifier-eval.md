@@ -368,6 +368,22 @@ above on an idle host.
 Exit codes: `0` every criterion holds, `1` a criterion failed, `2` the harness
 could not run (missing `vowc`, `esbmc` or `bitwuzla`, a malformed skip list).
 
+**Status at `78f48c2a` (2026-10-14, ESBMC 8.5.0, single runs on a loaded host).**
+
+- Verdicts: native proves every function ESBMC proves except the 37 listed in the
+  skip list (tracked by #1676, #1677, #1678, #1679, all open); there is no
+  counterexample and no `weaker` function outside the list. Native proves
+  `note_vals_has_root` (ESBMC inconclusive) and `module_io.vow`'s `write_u8`
+  (ESBMC refutes it only through its vec capacity assertion).
+- Stages: Stage 1 and Stage 2 `vowc` give identical outcomes on every root
+  (`bootstrap.sh --native-verify`, 697 s at `--verify-jobs 2`).
+- Cost: peak RSS is 0.25x ESBMC (geometric mean; `main.vow` 0.11x), within the
+  gate. Wall-clock is not: the geometric mean is 1.38x and the worst root 2.11x,
+  because each `verify-worker` re-runs the whole frontend, roughly 8 s on
+  `compiler/main.vow`, once per verified function (#1683). That is a wall-clock
+  gap of the driver, not of the solver, and it is why the CI comparison does not
+  enforce the cost gate.
+
 ## Native oracles: runtime differential and Z3 cross-check
 
 Two CI-only checks hold `vowc verify --backend native` to a second opinion
