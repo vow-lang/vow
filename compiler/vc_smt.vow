@@ -1,6 +1,7 @@
 module VcSmt
 
 use vc_term
+use vc_qbind
 
 // SMT-LIB command list and its writer. This is the only module that prints
 // SMT text: the symbolic executor builds `SmtScript`s and `vc_smt_render`
@@ -311,6 +312,18 @@ fn vc_qdiff_text(ar: VcArena, t: i64) -> String {
     vc_bound_text(ar, t, body)
 }
 
+// The string-function binders of `vc_qbind`: the operands are rendered here, the template is its.
+fn vc_string_fn_text(ar: VcArena, t: i64, kind: i64) -> String {
+    let a: String = vc_term_text(ar, ar.a[t as u64]);
+    let b: String = vc_term_text(ar, ar.b[t as u64]);
+    if kind == VC_T_HEXPAIR() { return vc_qb_hexpair(a, b); }
+    if kind == VC_T_HEXVAL() { return vc_qb_hexval(a, b); }
+    let n: String = vc_term_text(ar, ar.aux[t as u64]);
+    if kind == VC_T_QFOLD() { return vc_qb_fold(a, b, n); }
+    if kind == VC_T_QHEX() { return vc_qb_hex_encode(a, b, n); }
+    vc_qb_hex_decode(a, b, n)
+}
+
 fn vc_term_text(ar: VcArena, t: i64) -> String {
     let kind: i64 = ar.kinds[t as u64];
     let aux: i64 = ar.aux[t as u64];
@@ -325,6 +338,9 @@ fn vc_term_text(ar: VcArena, t: i64) -> String {
     }
     if kind == VC_T_QDIFF() {
         return vc_qdiff_text(ar, t);
+    }
+    if kind >= VC_T_QFOLD() && kind <= VC_T_HEXVAL() {
+        return vc_string_fn_text(ar, t, kind);
     }
     if kind == VC_T_BV() {
         return vc_bv_literal(ar.a[t as u64], aux, ar.b[t as u64]);

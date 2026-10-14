@@ -1,0 +1,85 @@
+module HexCodecExact
+
+// `hex_encode` and `hex_decode` are exact. The text of `hex_encode(v)` has `2 |v|` bytes, the
+// digits `0123456789abcdef` of the high and the low nibble of each element's low 8 bits.
+// `hex_decode(s)` is empty unless `|s|` is even and every pair is a hex digit, optionally
+// after a `+` (the runtime parses a pair with `u8::from_str_radix(pair, 16)`, which accepts a
+// leading plus sign), and then holds `|s| / 2` bytes. A literal operand is unrolled; a symbolic
+// one goes through a binder that stands only in an assumption.
+fn encode_literal() -> bool vow {
+  ensures: result == true
+} {
+  let v: Vec<u8> = Vec::new();
+  v.push(222u8);
+  v.push(173u8);
+  v.push(0u8);
+  hex_encode(v) == String::from("dead00")
+}
+
+fn encode_length(v: Vec<u8>) -> bool vow {
+  ensures: result == true
+} {
+  hex_encode(v).len() == v.len() * 2
+}
+
+fn encode_first_digit(v: Vec<u8>) -> bool vow {
+  requires: v.len() > 0
+  ensures: result == true
+} {
+  let h: String = hex_encode(v);
+  let b: u8 = v[0];
+  let hi: u8 = b >> 4u32;
+  let want: i64 = if hi < 10u8 { 48 + hi as i64 } else { 87 + hi as i64 };
+  h.byte_at(0) == want
+}
+
+fn decode_literal() -> bool vow {
+  ensures: result == true
+} {
+  let d: Vec<u8> = hex_decode(String::from("dead00"));
+  d.len() == 3 && d[0] == 222u8 && d[1] == 173u8 && d[2] == 0u8
+}
+
+fn decode_mixed_case() -> bool vow {
+  ensures: result == true
+} {
+  let d: Vec<u8> = hex_decode(String::from("aF"));
+  d.len() == 1 && d[0] == 175u8
+}
+
+fn decode_odd_is_empty() -> bool vow {
+  ensures: result == true
+} {
+  hex_decode(String::from("abc")).len() == 0
+}
+
+fn decode_bad_digit_is_empty() -> bool vow {
+  ensures: result == true
+} {
+  hex_decode(String::from("zz")).len() == 0
+}
+
+fn decode_leading_plus_is_accepted() -> bool vow {
+  ensures: result == true
+} {
+  let d: Vec<u8> = hex_decode(String::from("+f"));
+  d.len() == 1 && d[0] == 15u8
+}
+
+fn decode_minus_is_empty() -> bool vow {
+  ensures: result == true
+} {
+  hex_decode(String::from("-f")).len() == 0
+}
+
+fn decode_length_is_empty_or_half(s: String) -> bool vow {
+  ensures: result == true
+} {
+  let n: u64 = hex_decode(s).len();
+  n == 0 || n * 2 == s.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(hex_decode(String::from("ff")).len());
+  0
+}

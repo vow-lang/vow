@@ -1,0 +1,16 @@
+// TEST: counterexample-fn "wrong_literal"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The hash of a literal folds to the runtime's value, so a claim off by one is refuted outright
+// (no parameter, an empty counterexample the replay still confirms).
+module HashStrWrongLiteral
+
+fn wrong_literal() -> bool vow {
+  ensures: result == true
+} {
+  hash_str(String::from("a")) == 12638187200555641997u64
+}
+
+fn main() -> i32 [io] {
+  if wrong_literal() { 0 } else { 1 }
+}

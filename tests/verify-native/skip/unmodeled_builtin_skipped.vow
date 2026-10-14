@@ -2,17 +2,18 @@
 // TEST: skip-reason unmodeled-builtin
 module UnmodeledBuiltinSkipped
 
-// `trim` follows Rust's Unicode `str::trim` (it strips U+00A0 and the other multi-byte
-// white space and returns the empty string for invalid UTF-8), which the String model
-// does not encode, so the call is `unmodeled-builtin` (its `verifier_skip_reason` in
-// docs/spec/operations.json says why).
-fn trimmed_length(s: String) -> u64 vow {
+// `replace` validates its three strings as UTF-8 and then follows Rust's `str::replace`
+// (left-to-right non-overlapping matches whose count sets the result length), a fold over the
+// match positions the String model does not encode, and it has no opaque-result route either
+// (that needs a congruence over all three operands). The call is `unmodeled-builtin` (its
+// `verifier_skip_reason` in docs/spec/operations.json says why).
+fn replaced_length(s: String) -> u64 vow {
   ensures: result == result
 } {
-  string_trim(s).len()
+  string_replace(s, String::from("a"), String::from("b")).len()
 }
 
 fn main() -> i32 [io] {
-  print_u64(trimmed_length(String::from(" a ")));
+  print_u64(replaced_length(String::from("aba")));
   0
 }

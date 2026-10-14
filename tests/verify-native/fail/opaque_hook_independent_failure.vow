@@ -1,0 +1,19 @@
+// TEST: counterexample-fn "independent_failure"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// A function may call an opaque builtin (`string_to_lower`) and still fail for a reason that has
+// nothing to do with its result: the claim `result > 5` is about `x` alone, its cone does not
+// reach the hook, so the counterexample is a real one (the replay runs the real `to_lowercase`).
+module OpaqueHookIndependentFailure
+
+fn independent_failure(x: u64, s: String) -> u64 vow {
+  ensures: result > 5
+} {
+  let t: String = string_to_lower(s);
+  x
+}
+
+fn main() -> i32 [io] {
+  print_u64(independent_failure(7u64, String::from("A")));
+  0
+}

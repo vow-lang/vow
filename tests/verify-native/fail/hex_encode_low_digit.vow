@@ -1,0 +1,20 @@
+// TEST: counterexample-fn "low_digit_is_never_zero"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value v.len 1
+// The second digit of `hex_encode` is the low nibble of the element, so a one-element vector
+// whose low nibble is 0 (0, 16, ..., 240) makes it the digit `0`.
+module HexEncodeLowDigit
+
+fn low_digit_is_never_zero(v: Vec<u8>) -> bool vow {
+  requires: v.len() == 1
+  ensures: result == true
+} {
+  hex_encode(v).byte_at(1) != 48
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<u8> = Vec::new();
+  v.push(1u8);
+  if low_digit_is_never_zero(v) { 0 } else { 1 }
+}

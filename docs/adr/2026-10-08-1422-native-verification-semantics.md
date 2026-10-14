@@ -823,18 +823,70 @@ their parity are unchanged.
   The ESBMC model is a bounded loop, so `tests/verify-native/pass/string_contains_exact.vow` has
   functions it fails or times out on that native proves (PR evidence), and
   `tests/verify/string_contains_basic.vow` keeps the corpus row both decide.
+- **`hash_str`** is the runtime's FNV-1a fold over every byte, exact for a string of any length
+  (`compiler/vc_strfold.vow`). For a known length of at most 64 it is a closed term
+  `((basis xor b0) * prime xor b1) * prime ...` (`basis = 0xCBF29CE484222325`, `prime = 0x100000001B3`,
+  every operation wrapping, each `bi` the masked byte, read through the appends that built the string),
+  so the hash of a literal or of a string built by pushes folds to the runtime's value (`hash_str("a")
+  == 0xAF63DC4C8601EC8C`). Otherwise the result is entry `len` of a fresh prefix array `h` that two
+  assumptions define: `h[0] == basis` and the new binder `VC_T_QFOLD` (`forall i < len. h[i + 1] ==
+  (h[i] xor low8(s[i])) * prime`). The binder obeys the rule of #1426: built only in an assumption, in
+  a positive position, never in a goal; the assumptions define `h` from the operand and cannot make a
+  query unsatisfiable, and they determine `h[len]` exactly, so a counterexample is a real run (replay
+  confirms it). Calls on the same operand terms share one result. No Ackermann axiom relates the
+  hashes of two equal strings that are built differently: the solver cannot do the induction over a
+  fold, so such a claim is `unknown` or `timeout`, never a proof of the wrong thing (the claim is
+  true, the model only cannot show it).
+- **`hex_encode`** is exact: the result has length `2 |v|` (a closed term; the path assumes it stays
+  below `VOW_CAP_VALUE_MASK`, like `push_str`) and bytes `2i`, `2i + 1` are the digits
+  `0123456789abcdef` of the high and the low nibble of `low8(v[i])` (the runtime's `val & 0xff`). A
+  known length of at most 16 is unfolded; otherwise the binder `VC_T_QHEX` states it, together with its
+  instances at the first and the last element (plain facts, as for `contains`). The digits are asserted
+  only in a function that reads the bytes of some string (`vv.content`).
+- **`hex_decode`** is exact, the runtime's strict decoder included (read in `decoded_hex`): the result
+  is empty unless the string is UTF-8, of even length, and every pair parses with
+  `u8::from_str_radix(pair, 16)`, which accepts a hex digit (either case) after an optional leading
+  `+` (`"+f"` decodes to `[15]`, `"-f"` is empty), and then holds `len / 2` bytes. Any non-ASCII byte
+  falls in some pair that is neither a hex digit nor `+`, so the UTF-8 test needs no separate
+  encoding. A Bool `e` ("the string decodes") is tied to its statement in both directions, as in
+  `vc_str_range_eq`: `e => (|s| even and forall i < |s| / 2. pair(i) valid and r[i] == value(i))`
+  through the binder `VC_T_QUNHEX`, and `not e => (|s| odd or (w < |s| / 2 and pair(w) invalid))` for a
+  fresh witness `w` through the ground macro `VC_T_HEXPAIR`; the length is `ite(e, |s| / 2, 0)`. The
+  two macros (`VC_T_HEXPAIR`, `VC_T_HEXVAL`) are printed from the same template as the binder
+  (`compiler/vc_qbind.vow`), so the ground and the quantified statements cannot differ. The instances at
+  the first and the last pair are plain facts too. The templates and the decoder were checked
+  against the runtime on `+f`, `-f`, `++`, `+0`, `aF`, `0x`, `+1+2`, `1+`, a space, and a non-ASCII
+  pair (`tests/verify-native/pass/hex_codec_exact.vow` pins the results).
+- **Opaque total functions: `parse_<int>`, `string_trim`, `string_to_upper`, `string_to_lower`.** The
+  rule above says a helper is never havoced, and the #1646 addendum already holds the answer for a
+  result the model cannot encode: it is not a havoc but a *total function* whose arbitrary value is
+  guarded. The route is that of `parse_f64_bits`: each call is a fresh constant (for `parse_<ty>` a
+  Some flag, a Bool, and a payload of exactly the width of `ty`, written to the `Option` object the
+  call returns as tag `ite(flag, 1, 0)` and payload slots; for a text an array and a length below
+  `VOW_CAP_VALUE_MASK`), calls of one function on the same operand terms share the constant, and equal
+  operand strings give equal results by the Ackermann axioms of #1646 (built on the exact `vc_str_eq`;
+  for a text the results are compared with `vc_str_eq` too). Facts that hold in every run are kept: a
+  payload fits its type (by its width), `string_trim` never grows a string (invalid UTF-8 gives the
+  empty string, `trim` only removes), and a case map keeps the empty string empty. It is sound for
+  proofs: the runtime's result is one value of the declared type, so a claim that holds for every
+  result holds for it. It does not make a counterexample spurious: a `sat` whose cone reaches one of
+  the constants is re-checked by `vc_hook_recheck` (the scalar inputs pinned, every string and constant
+  free, the claim asked), and unless the claim fails for every result it ends
+  `unknown` with `opaque builtin result: ...`, never `Verified` and never a counterexample.
+  `to_upper` and `to_lower` get no length fact (Unicode full case mapping can lengthen a string:
+  `U+0149` maps to `U+02BC U+004E`). The closed rule of #1646 therefore stands: a result is opaque
+  only with a determinism axiom and the recheck, never as a free havoc; the helper rows of the issue
+  (`parse_narrow_int_bounds`, `parse_u8_clamped`) are proven because their claims hold for every
+  payload of the width. Pinned by `tests/verify-native/pass/opaque_string_hooks.vow`,
+  `unknown/parse_value_opaque.vow`, `unknown/trim_shortens_opaque.vow` and
+  `fail/opaque_hook_independent_failure.vow`.
 - **Skipped with a stated reason** (each in `verifier_skip_reason` of `docs/spec/operations.json`, or
-  `vc_str_unmodeled_reason` for a runtime symbol the catalogue lacks): `string_trim`,
-  `string_to_upper`, `string_to_lower` (Rust's Unicode `str` methods: the length can change,
-  invalid UTF-8 gives the empty string; a byte-wise map would be unsound), `string_replace`,
-  `parse_*` (a fold over the digits after a Unicode trim and an `Option` built by the call),
-  `hash_str` (FNV-1a fold), `hex_encode`/`hex_decode` (a per-index map between two arrays),
-  `string_split`/`string_join` (`Vec<String>` elements are pointers),
-  `String::from_cstr` (memory behind a C string) and the arena variants (the verifier sees the base symbol; region routing is codegen). A
-  nondeterministic or opaque result is not an option for these: it would let a counterexample
-  depend on a value the runtime computes, which `--replay-cex` reports as a `VerifierBug`. The
-  opaque-result route of #1646 needs the `u64`/text split of the float hooks and an ADR decision
-  of its own; it is left to a follow-up.
+  `vc_str_unmodeled_reason` for a runtime symbol the catalogue lacks): `string_split` and `string_join`
+  (`Vec<String>` elements are pointers, which the `Vec` model does not hold), `string_replace` (a fold
+  over the match positions with no closed form; the opaque route needs a congruence over all three
+  operands, which the hook tables do not carry), `String::from_cstr` (memory behind a C string) and the
+  arena variants (the verifier sees the base symbol; region routing is codegen). None is a cap, and none
+  is a havoc: a function that calls one is `Skipped`.
 
 ## Addendum (#1679, #1690): the narrowing intrinsics
 

@@ -1,0 +1,18 @@
+// TEST: counterexample-fn "one_byte_decodes_to_nothing"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// A two-byte string can decode to one byte ("00", or "+6": the runtime accepts a leading plus
+// sign), so the claim that it never does is refuted by a string the real decoder maps to one
+// byte (the replay confirms it).
+module HexDecodeOneByte
+
+fn one_byte_decodes_to_nothing(s: String) -> bool vow {
+  requires: s.len() == 2
+  ensures: result == true
+} {
+  hex_decode(s).len() != 1
+}
+
+fn main() -> i32 [io] {
+  if one_byte_decodes_to_nothing(String::from("zz")) { 0 } else { 1 }
+}

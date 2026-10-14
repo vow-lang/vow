@@ -76,6 +76,20 @@ struct VcVec {
     dc_key: Vec<i64>,
     dc_arr: Vec<i64>,
     dc_len: Vec<i64>,
+    // `hash_str`, `hex_encode` and `hex_decode` calls already encoded (`vc_strfold`): the kind and
+    // the two operand terms (three words per call) and the result, an `(array, length)` pair
+    // (the hash term and -1 for `hash_str`).
+    fm_key: Vec<i64>,
+    fm_arr: Vec<i64>,
+    fm_len: Vec<i64>,
+    // Opaque total functions (`vc_hooks`): per call the function key, the operand `(array, length)`
+    // terms and the two result terms (the Some flag and payload of a `parse_*`, or the `(array,
+    // length)` of a text).
+    ox_fn: Vec<i64>,
+    ox_arr: Vec<i64>,
+    ox_len: Vec<i64>,
+    ox_r0: Vec<i64>,
+    ox_r1: Vec<i64>,
     // The `Vec` and `String` parameters, in the order the walk first read them:
     // the parameter index, the names of the array and length constants, and the
     // header position of the length declaration. A counterexample reads them back
@@ -116,6 +130,14 @@ fn vc_vec_new_state(fl: VcFlow, n_blocks: u64) -> VcVec {
         dc_key: Vec::new(),
         dc_arr: Vec::new(),
         dc_len: Vec::new(),
+        fm_key: Vec::new(),
+        fm_arr: Vec::new(),
+        fm_len: Vec::new(),
+        ox_fn: Vec::new(),
+        ox_arr: Vec::new(),
+        ox_len: Vec::new(),
+        ox_r0: Vec::new(),
+        ox_r1: Vec::new(),
         pv_param: Vec::new(),
         pv_arr: Vec::new(),
         pv_len: Vec::new(),
