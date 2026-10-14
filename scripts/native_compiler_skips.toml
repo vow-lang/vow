@@ -9,9 +9,9 @@
 
 [[skip]]
 function = "decl_unprintable_enum"
-code = "unmodeled-builtin"
-issue = 1678
-reason = "uses a HashMap"
+code = "unsupported-opcode"
+issue = 1676
+reason = "reads a Vec held in a struct nested in a struct parameter (the HashMap it fills is modelled, #1678)"
 
 [[skip]]
 function = "module_encode"

@@ -1,0 +1,30 @@
+module MapSetMembershipLoops
+
+// The shape of `decl_unprintable_enum` in compiler/decl_text.vow: a `HashMap` used as a set,
+// filled by one loop and queried by another.
+
+fn first_marked(items: Vec<i64>, marks: Vec<i64>) -> i64 vow {
+  ensures: result >= -1
+} {
+  let bad: HashMap<i64, i64> = HashMap::new();
+  let mut bi: u64 = 0u64;
+  while bi < marks.len() vow {
+    invariant: bi <= marks.len()
+  } {
+    bad.insert(marks[bi], 1);
+    bi = bi + 1u64;
+  }
+  let mut i: u64 = 0u64;
+  while i < items.len() vow {
+    invariant: i <= items.len()
+  } {
+    let item: i64 = items[i];
+    if item >= 0 && bad.contains_key(item) {
+      return item;
+    }
+    i = i + 1u64;
+  }
+  -1
+}
+
+fn main() -> i32 [io] { 0 }

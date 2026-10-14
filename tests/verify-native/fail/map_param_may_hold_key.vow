@@ -1,0 +1,17 @@
+// TEST: replay-skipped the replay harness rebuilds only scalar parameters, not a map
+// TEST: counterexample-fn "has_key"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+module MapParamMayHoldKey
+
+fn has_key(m: HashMap<i64, i64>, k: i64) -> bool vow {
+  ensures: !result
+} {
+  m.contains_key(k)
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<i64, i64> = HashMap::new();
+  if has_key(m, 1) { print_u64(1); }
+  0
+}

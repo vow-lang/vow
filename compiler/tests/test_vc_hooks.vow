@@ -239,12 +239,12 @@ fn unused_hook(mix: bool) -> IrFunction {
 fn check_cone_reaches_hook() -> i64 {
     let a: VcClaims = vc_claims(unused_hook(false));
     if a.kinds.len() != 1 { return 80; }
-    if vc_claim_reaches_hook(a, vc_slicer_new(a), 0) { return 81; }
+    if vc_claim_reaches(a, vc_slicer_new(a), 0, a.hook_vars) { return 81; }
     let b: VcClaims = vc_claims(unused_hook(true));
     if b.kinds.len() != 1 { return 82; }
-    if !vc_claim_reaches_hook(b, vc_slicer_new(b), 0) { return 83; }
+    if !vc_claim_reaches(b, vc_slicer_new(b), 0, b.hook_vars) { return 83; }
     let c: VcClaims = vc_claims(parse_pair(1));
-    if !vc_claim_reaches_hook(c, vc_slicer_new(c), 0) { return 84; }
+    if !vc_claim_reaches(c, vc_slicer_new(c), 0, c.hook_vars) { return 84; }
     0
 }
 

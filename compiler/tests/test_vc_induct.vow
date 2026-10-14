@@ -464,6 +464,60 @@ fn check_vec_set_pop_in_loop() -> i64 {
     0
 }
 
+fn map_new_inst(id: i64) -> IrInst {
+    mk_inst_call_extern(id, ITY_PTR(), Vec::new(), String::from("__vow_map_new"))
+}
+
+fn triple(a: i64, b: i64, c: i64) -> Vec<i64> {
+    let v: Vec<i64> = pair(a, b);
+    v.push(c);
+    v
+}
+
+// A map allocated before the loop and written in its body is havoc'd like a Vec,
+// by the map's own marker: one `__vc_havoc_map` after the Phis, no Vec marker, and
+// a map only read in the loop keeps its state.
+fn check_map_written_in_loop() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(map_new_inst(40));
+    let body: Vec<IrInst> = Vec::new();
+    body.push(mk_inst_call_extern(50, ITY_UNIT(), triple(40, 0, 0), String::from("__vow_map_insert")));
+    let f: IrFunction = count_up_with(pre, body);
+    let c: VcInduct = vc_induct_cut(f);
+    if c.status != VC_INDUCT_OK() { return 1; }
+    let g: IrFunction = c.f;
+    if count_marker(g, VC_INTERNAL_HAVOC_MAP()) != 1 { return 2; }
+    if count_marker(g, VC_INTERNAL_HAVOC_VEC()) != 0 { return 3; }
+    let h: IrBlock = block_by_id(g, 1);
+    let m: IrInst = h.insts[1];
+    if !vc_is_havoc_map(m) || vc_is_havoc_vec(m) || m.args.len() != 1 || m.args[0] != 40 { return 4; }
+    if !well_formed(g) { return 5; }
+
+    let read_pre: Vec<IrInst> = Vec::new();
+    read_pre.push(map_new_inst(40));
+    let read_body: Vec<IrInst> = Vec::new();
+    read_body.push(mk_inst_call_extern(50, ITY_U64(), one(40), String::from("__vow_map_len")));
+    let r: VcInduct = vc_induct_cut(count_up_with(read_pre, read_body));
+    if r.status != VC_INDUCT_OK() { return 6; }
+    if count_marker(r.f, VC_INTERNAL_HAVOC_MAP()) != 0 { return 7; }
+    0
+}
+
+// A map born in the loop that writes it leaves the function uncut; a `remove` on a
+// map made before the loop is a write like `insert` and keeps the cut.
+fn check_map_havoc_refused() -> i64 {
+    let born: Vec<IrInst> = Vec::new();
+    born.push(map_new_inst(41));
+    born.push(mk_inst_call_extern(42, ITY_UNIT(), triple(41, 0, 0), String::from("__vow_map_insert")));
+    if vc_induct_cut(count_up_with(Vec::new(), born)).status != VC_INDUCT_NA() { return 1; }
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(map_new_inst(40));
+    let body: Vec<IrInst> = Vec::new();
+    body.push(mk_inst_call_extern(50, ITY_UNIT(), pair(40, 0), String::from("__vow_map_remove")));
+    if vc_induct_cut(count_up_with(pre, body)).status != VC_INDUCT_OK() { return 2; }
+    0
+}
+
 // A field written in the loop body on an object allocated before the loop is
 // not a header Phi either, so the function is not cut. An object allocated and
 // written inside the body is fresh each iteration and keeps the cut.
@@ -517,6 +571,8 @@ fn main() -> i32 {
     if r == 0 { r = check_vec_written_in_region_header() + 540; if r == 540 { r = 0; } }
     if r == 0 { r = check_vec_read_in_loop() + 550; if r == 550 { r = 0; } }
     if r == 0 { r = check_vec_havoc_refused() + 570; if r == 570 { r = 0; } }
+    if r == 0 { r = check_map_written_in_loop() + 580; if r == 580 { r = 0; } }
+    if r == 0 { r = check_map_havoc_refused() + 585; if r == 585 { r = 0; } }
     if r == 0 { r = check_vec_set_pop_in_loop() + 590; if r == 590 { r = 0; } }
     if r == 0 { r = check_agg_written_in_loop() + 600; if r == 600 { r = 0; } }
     i64_to_i32_wrap(r)

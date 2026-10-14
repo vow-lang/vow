@@ -1,0 +1,31 @@
+module MapInBranches
+
+fn insert_one_of(c: i64, a: i64, b: i64) -> HashMap<i64, i64> vow {
+  requires: a != b,
+  ensures: result.len() == 1,
+  ensures: result.contains_key(a) || result.contains_key(b),
+  ensures: (c > 0) == result.contains_key(a)
+} {
+  let m: HashMap<i64, i64> = HashMap::new();
+  if c > 0 {
+    m.insert(a, 1);
+  } else {
+    m.insert(b, 2);
+  }
+  m
+}
+
+fn get_or_zero(m: HashMap<i64, i64>, k: i64) -> i64 vow {
+  requires: !m.contains_key(k),
+  ensures: result == 0
+} {
+  match m.get(k) {
+    Option::Some(v) => { v },
+    Option::None => { 0 },
+  }
+}
+
+fn main() -> i32 [io] {
+  print_u64(insert_one_of(1, 1, 2).len());
+  0
+}

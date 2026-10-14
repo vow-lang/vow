@@ -136,6 +136,7 @@ fn vc_op_symbol(op: i64) -> String {
     if op == VC_OP_SELECT() { return String::from("select"); }
     if op == VC_OP_STORE() { return String::from("store"); }
     if op == VC_OP_CONCAT() { return String::from("concat"); }
+    if op == VC_OP_CONSTARR() { return String::from("(as const (Array (_ BitVec 64) (_ BitVec 64)))"); }
     vc_fp_op_symbol(op)
 }
 

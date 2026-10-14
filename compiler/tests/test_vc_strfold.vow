@@ -359,7 +359,7 @@ fn check_parse_hook() -> i64 {
     if !contains(q, String::from("(or (not hks2) (= hkv3 hkv1))")) { return 118; }
     let wide: VcClaims = vc_claims(parse_tags(String::from("__vow_string_parse_i128_opt"), 1));
     if !contains(query(wide, 0), String::from("(declare-const hkv1 (_ BitVec 128))")) { return 119; }
-    if !vc_claim_reaches_hook(cs, vc_slicer_new(cs), 0) { return 120; }
+    if !vc_claim_reaches(cs, vc_slicer_new(cs), 0, cs.hook_vars) { return 120; }
     0
 }
 

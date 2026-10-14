@@ -1,0 +1,19 @@
+// TEST: skip-reason unsupported-opcode
+module MapPassedToCallSkipped
+
+fn fill(m: HashMap<i64, i64>) {
+  m.insert(1, 1);
+}
+
+fn filled() -> u64 vow {
+  ensures: result == 1
+} {
+  let m: HashMap<i64, i64> = HashMap::new();
+  fill(m);
+  m.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(filled());
+  0
+}

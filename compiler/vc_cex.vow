@@ -251,12 +251,27 @@ fn vc_inline_budget_reason(cap: i64) -> String {
     out
 }
 
+// A counterexample depends on the key set or length of a map the function did not
+// build (a parameter, or a map a loop cut forgot): the model keeps the two apart,
+// where a real map's length is its number of keys, so it may not be a run.
+fn vc_map_state_label() -> String { String::from("unconstrained map state") }
+
+fn vc_map_state_reason() -> String {
+    let out: String = vc_map_state_label();
+    out.push_str(String::from(": the counterexample depends on the keys or the length of a HashMap or BTreeMap the function did not build, which the native verifier does not relate"));
+    out
+}
+
 fn vc_output_has_unwinding(raw: String) -> bool {
     str_find_str(raw, VC_LABEL_UNWIND()) >= 0
 }
 
 fn vc_output_has_opaque_hook(raw: String) -> bool {
     str_find_str(raw, vc_opaque_hook_label()) >= 0
+}
+
+fn vc_output_has_map_state(raw: String) -> bool {
+    str_find_str(raw, vc_map_state_label()) >= 0
 }
 
 fn vc_output_has_inline_budget(raw: String) -> bool {

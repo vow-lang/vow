@@ -13,6 +13,8 @@ use vc_agg
 use vc_vec
 use vc_wide
 use vc_heap
+use vc_map
+use vc_mapops
 use vc_strops
 use vc_str
 use vc_narrow
@@ -265,6 +267,29 @@ fn vc_vec_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
     false
 }
 
+// A map key is a Bool or an integer up to 64 bits, one 8-byte slot, as a `Vec`
+// element is. A map value is the same or unit; a pointer value (`String`, `Vec`,
+// a struct) is not modelled.
+fn vc_map_value_ok(ty: i64) -> bool {
+    ty == ITY_UNIT() || vc_vec_elem_ok(ty)
+}
+
+// Operand and result types of a map call (`vc_map`). The `Option` a `get` or a
+// `BTreeMap` `insert` returns is a pointer; `contains` yields Bool, `len` `u64`.
+fn vc_map_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
+    let n: u64 = inst.args.len();
+    if kind == VC_MAP_NEW() { return n == 0 && inst.ty == ITY_PTR(); }
+    if vc_arg_ty(tys, inst, 0) != ITY_PTR() { return false; }
+    if kind == VC_MAP_LEN() { return n == 1 && inst.ty == ITY_U64(); }
+    if !vc_vec_elem_ok(vc_arg_ty(tys, inst, 1)) { return false; }
+    if kind == VC_MAP_CONTAINS() { return n == 2 && inst.ty == ITY_BOOL(); }
+    if kind == VC_MAP_GET() { return n == 2 && inst.ty == ITY_PTR(); }
+    if kind == VC_MAP_REMOVE() { return n == 2 && inst.ty == ITY_UNIT(); }
+    if !vc_map_value_ok(vc_arg_ty(tys, inst, 2)) { return false; }
+    if kind == VC_MAP_INSERT() { return n == 3 && inst.ty == ITY_UNIT(); }
+    n == 3 && inst.ty == ITY_PTR()
+}
+
 // Operand and result types of a `String` call whose first operand is a string
 // pointer (`vc_str`). Offsets and lengths are 64-bit integers (the checker types
 // them `u64`; an unsuffixed literal reaches the IR as `i64`), a byte is `u8` or an
@@ -337,6 +362,8 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
         if vc_is_unwrap_abort(inst) { return n == 0 && inst.ty == ITY_UNIT(); }
         let vk: i64 = vc_inst_vec_kind(inst);
         if vk != VC_VEC_NONE() { return vc_vec_call_ok(inst, tys, vk); }
+        let mk: i64 = vc_inst_map_kind(inst);
+        if mk != VC_MAP_NONE() { return vc_map_call_ok(inst, tys, mk); }
         if vc_inst_scalar_kind(inst) == VC_SCALAR_HASH_U64() {
             return n == 1 && inst.ty == ITY_U64() && vc_vec_index_ok(t0);
         }
@@ -385,6 +412,9 @@ fn vc_inst_specific_reason(inst: IrInst) -> String {
     let model: i64 = vc_op_model(inst.op);
     if model == VC_OPM_FLOAT_REM() { return vc_reason(VC_SKIP_FLOAT_REM(), opcode_name(inst.op)); }
     if model == VC_OPM_CALL() {
+        if vc_inst_map_kind(inst) != VC_MAP_NONE() {
+            return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), String::from("map key or value that is not a Bool, an integer up to 64 bits or unit"));
+        }
         if inst.dk == IDATA_CALL_EXTERN() && !vc_is_unwrap_abort(inst) && vc_inst_vec_kind(inst) == VC_VEC_NONE()
             && !catalogue_verifier_known(inst.ds) && vc_narrow_of(inst).kind == VC_NAR_NONE() {
             return vc_reason(VC_SKIP_UNMODELED_BUILTIN(), inst.ds);
@@ -474,6 +504,10 @@ fn vc_skip_reason_with(src: IrFunction, calls: bool) -> String {
     let shape: String = vc_agg_shape_detail(f, tys.len());
     if shape.len() > 0 {
         return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), shape);
+    }
+    let map_shape: String = vc_map_shape_detail(f, tys.len());
+    if map_shape.len() > 0 {
+        return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), map_shape);
     }
     let heap: String = vc_heap_shape_detail(f, tys);
     if heap.len() > 0 {

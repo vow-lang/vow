@@ -1,0 +1,279 @@
+module TestVcMap
+
+use ir
+use vc_ops
+use vc_mapops
+use vc_map
+use vc_term
+use vc_smt
+use vc_gate
+use vc_exec
+use verifier
+use tests.builders
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn args2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = args1(a);
+    v.push(b);
+    v
+}
+
+fn args3(a: i64, b: i64, c: i64) -> Vec<i64> {
+    let v: Vec<i64> = args2(a, b);
+    v.push(c);
+    v
+}
+
+fn ptr_i64_params() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    p.push(ITY_I64());
+    p
+}
+
+fn ptr_u8_params() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    p.push(ITY_U8());
+    p
+}
+
+fn one_block(params: Vec<i64>, ret: i64, insts: Vec<IrInst>) -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(1, String::from("f"), params, ret, blocks)
+}
+
+fn contains(hay: String, needle: String) -> bool {
+    str_find_str(hay, needle) >= 0
+}
+
+fn render(cs: VcClaims, k: u64) -> String {
+    vc_smt_render(cs.arena, vc_claim_script(cs, k))
+}
+
+// Every map runtime symbol the lowerer emits has a kind; an operation the
+// runtime does not have, an arena variant and a `Vec` or `String` symbol do not.
+fn check_op_table() -> i64 {
+    if vc_map_op_kind(String::from("__vow_map_new")) != VC_MAP_NEW() { return 1; }
+    if vc_map_op_kind(String::from("__vow_map_len")) != VC_MAP_LEN() { return 2; }
+    if vc_map_op_kind(String::from("__vow_map_get")) != VC_MAP_GET() { return 3; }
+    if vc_map_op_kind(String::from("__vow_map_contains")) != VC_MAP_CONTAINS() { return 4; }
+    if vc_map_op_kind(String::from("__vow_map_insert")) != VC_MAP_INSERT() { return 5; }
+    if vc_map_op_kind(String::from("__vow_map_remove")) != VC_MAP_REMOVE() { return 6; }
+    if vc_map_op_kind(String::from("__vow_btreemap_new")) != VC_MAP_NEW() { return 7; }
+    if vc_map_op_kind(String::from("__vow_btreemap_len")) != VC_MAP_LEN() { return 8; }
+    if vc_map_op_kind(String::from("__vow_btreemap_get")) != VC_MAP_GET() { return 9; }
+    if vc_map_op_kind(String::from("__vow_btreemap_contains")) != VC_MAP_CONTAINS() { return 10; }
+    if vc_map_op_kind(String::from("__vow_btreemap_insert")) != VC_MAP_INSERT_OLD() { return 11; }
+    if vc_map_op_kind(String::from("__vow_btreemap_remove")) != VC_MAP_NONE() { return 12; }
+    if vc_map_op_kind(String::from("__vow_map_insert_in_arena")) != VC_MAP_NONE() { return 13; }
+    if vc_map_op_kind(String::from("__vow_map_")) != VC_MAP_NONE() { return 14; }
+    if vc_map_op_kind(String::from("__vow_vec_len")) != VC_MAP_NONE() { return 15; }
+    if vc_map_op_kind(String::from("__vow_string_len")) != VC_MAP_NONE() { return 16; }
+    if !vc_map_kind_mutates(VC_MAP_INSERT()) || !vc_map_kind_mutates(VC_MAP_INSERT_OLD()) || !vc_map_kind_mutates(VC_MAP_REMOVE()) { return 17; }
+    if vc_map_kind_mutates(VC_MAP_GET()) || vc_map_kind_mutates(VC_MAP_LEN()) || vc_map_kind_mutates(VC_MAP_CONTAINS()) { return 18; }
+    if !vc_map_kind_returns_option(VC_MAP_GET()) || !vc_map_kind_returns_option(VC_MAP_INSERT_OLD()) { return 19; }
+    if vc_map_kind_returns_option(VC_MAP_INSERT()) { return 20; }
+    0
+}
+
+// fn f(m: HashMap<i64, i64>) -> u64 { m.len() }
+fn param_len() -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_call_extern(1, ITY_U64(), args1(0), String::from("__vow_map_len")));
+    insts.push(mk_inst_return(2, 1));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    one_block(p, ITY_U64(), insts)
+}
+
+// A parameter map has no capacity: its length is an unconstrained constant below
+// the representation mask, and the function stays in the array logic.
+fn check_param_length_is_unconstrained() -> i64 {
+    let f: IrFunction = param_len();
+    if vc_skip_reason(f).len() != 0 { return 30; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 0 { return 31; }
+    if cs.assumed.len() != 1 { return 32; }
+    if vc_term_text(cs.arena, cs.assumed[0]) != String::from("(bvult p0_mlen #x7fffffffffffffff)") { return 33; }
+    let hdr: SmtScript = cs.header;
+    if hdr.names[0] != String::from("QF_ABV") { return 34; }
+    0
+}
+
+// fn f(m: HashMap<_, i64>, k) -> bool { m.contains_key(k) }, the key typed by `key_ty`
+fn param_contains(key_ty: i64) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, key_ty, 1));
+    insts.push(mk_inst_call_extern(2, ITY_BOOL(), args2(0, 1), String::from("__vow_map_contains")));
+    insts.push(mk_inst_return(3, 2));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    p.push(key_ty);
+    one_block(p, ITY_BOOL(), insts)
+}
+
+// The key a function names on a parameter map is counted: the number of distinct
+// present keys is at most the length, so `len == 0` leaves no key present. A 64-bit
+// key makes that all a real map needs, so nothing is left free; a narrower key
+// leaves the presence array and the length free for the driver to recheck.
+fn check_key_count_and_free_vars() -> i64 {
+    let wide: IrFunction = param_contains(ITY_I64());
+    if vc_skip_reason(wide).len() != 0 { return 40; }
+    let cs: VcClaims = vc_claims(wide);
+    if cs.assumed.len() != 2 { return 41; }
+    let counted: String = vc_term_text(cs.arena, cs.assumed[1]);
+    if !contains(counted, String::from("bvule")) { return 42; }
+    if !contains(counted, String::from("p0_mlen")) { return 43; }
+    if cs.map_vars.len() != 0 { return 44; }
+    let narrow: VcClaims = vc_claims(param_contains(ITY_U8()));
+    if narrow.map_vars.len() != 2 { return 45; }
+    0
+}
+
+// let m = HashMap::new(); m.insert(k, 1); return m.len()
+fn local_insert_len() -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_I64(), 0));
+    insts.push(mk_inst_call_extern(1, ITY_PTR(), Vec::new(), String::from("__vow_map_new")));
+    insts.push(mk_inst_const_i64(2, 1));
+    insts.push(mk_inst_call_extern(3, ITY_UNIT(), args3(1, 0, 2), String::from("__vow_map_insert")));
+    insts.push(mk_inst_call_extern(4, ITY_U64(), args1(1), String::from("__vow_map_len")));
+    insts.push(mk_inst_return(5, 4));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    one_block(p, ITY_U64(), insts)
+}
+
+// A map built in the function starts as the constant all-zero presence array with
+// length 0, and nothing about it is left free.
+fn check_new_map_is_empty() -> i64 {
+    let f: IrFunction = local_insert_len();
+    if vc_skip_reason(f).len() != 0 { return 50; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.map_vars.len() != 0 { return 51; }
+    let hdr: SmtScript = cs.header;
+    let text: String = vc_smt_render(cs.arena, hdr);
+    if !contains(text, String::from("((as const (Array (_ BitVec 64) (_ BitVec 64))) #x0000000000000000)")) { return 52; }
+    if !contains(text, String::from("(store ")) { return 53; }
+    0
+}
+
+// let m = <param>; m.get(k) returns an Option whose slot 0 is the tag and slot 1
+// the payload, read back by `FieldGet`.
+fn param_get_tag() -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_I64(), 1));
+    insts.push(mk_inst_call_extern(2, ITY_PTR(), args2(0, 1), String::from("__vow_map_get")));
+    insts.push(mk_inst_field_get(3, ITY_I64(), 2, 0));
+    insts.push(mk_inst_field_get(4, ITY_U8(), 2, 1));
+    insts.push(mk_inst_return(5, 3));
+    one_block(ptr_i64_params(), ITY_I64(), insts)
+}
+
+fn check_get_builds_option() -> i64 {
+    let f: IrFunction = param_get_tag();
+    if vc_skip_reason(f).len() != 0 { return 60; }
+    let cs: VcClaims = vc_claims(f);
+    let text: String = vc_smt_render(cs.arena, cs.header);
+    if !contains(text, String::from("(select p0_mpres p1)")) { return 61; }
+    0
+}
+
+// The gate refuses a map whose key or value is not a Bool, an integer up to 64
+// bits or unit, with a reason that names the cause.
+fn check_pointer_value_is_refused() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_I64(), 1));
+    insts.push(mk_inst_arg(2, ITY_PTR(), 2));
+    insts.push(mk_inst_call_extern(3, ITY_UNIT(), args3(0, 1, 2), String::from("__vow_map_insert")));
+    insts.push(mk_inst_return(4, 3));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    p.push(ITY_I64());
+    p.push(ITY_PTR());
+    let f: IrFunction = one_block(p, ITY_UNIT(), insts);
+    let why: String = vc_skip_reason(f);
+    if !contains(why, String::from("unsupported-opcode: map key or value")) { return 70; }
+    0
+}
+
+fn two_ptr_params() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    p.push(ITY_PTR());
+    p
+}
+
+// The shape rule is called on IR the instruction gate would already have refused,
+// so each rejection class is checked on its own: a map pointer read as a struct,
+// handed to a call or to another builtin, or merged by a Phi that supplies two
+// different values; a Phi that always supplies one value is accepted.
+fn check_shape_rejections() -> i64 {
+    let used: Vec<IrInst> = Vec::new();
+    used.push(mk_inst_arg(0, ITY_PTR(), 0));
+    used.push(mk_inst_call_extern(1, ITY_U64(), args1(0), String::from("__vow_map_len")));
+    used.push(mk_inst_field_get(2, ITY_I64(), 0, 0));
+    used.push(mk_inst_return(3, 2));
+    let as_struct: IrFunction = one_block(ptr_i64_params(), ITY_I64(), used);
+    if vc_map_shape_detail(as_struct, 8) != String::from("map used as a struct") { return 80; }
+
+    let called: Vec<IrInst> = Vec::new();
+    called.push(mk_inst_arg(0, ITY_PTR(), 0));
+    called.push(mk_inst_call_extern(1, ITY_U64(), args1(0), String::from("__vow_map_len")));
+    called.push(mk_inst_call_target(2, ITY_U64(), args1(0), 7));
+    called.push(mk_inst_return(3, 2));
+    let to_call: IrFunction = one_block(ptr_i64_params(), ITY_U64(), called);
+    if vc_map_shape_detail(to_call, 8) != String::from("map passed to a call") { return 81; }
+
+    let builtin: Vec<IrInst> = Vec::new();
+    builtin.push(mk_inst_arg(0, ITY_PTR(), 0));
+    builtin.push(mk_inst_call_extern(1, ITY_U64(), args1(0), String::from("__vow_map_len")));
+    builtin.push(mk_inst_call_extern(2, ITY_U64(), args1(0), String::from("__vow_vec_len")));
+    builtin.push(mk_inst_return(3, 2));
+    let to_builtin: IrFunction = one_block(ptr_i64_params(), ITY_U64(), builtin);
+    if vc_map_shape_detail(to_builtin, 8) != String::from("map passed to an unmodelled builtin") { return 82; }
+
+    let merged: Vec<IrInst> = Vec::new();
+    merged.push(mk_inst_arg(0, ITY_PTR(), 0));
+    merged.push(mk_inst_arg(1, ITY_PTR(), 1));
+    merged.push(mk_inst_phi(2, ITY_PTR()));
+    merged.push(mk_inst_upsilon(3, 0, 2));
+    merged.push(mk_inst_upsilon(4, 1, 2));
+    merged.push(mk_inst_call_extern(5, ITY_U64(), args1(2), String::from("__vow_map_len")));
+    merged.push(mk_inst_return(6, 5));
+    let by_phi: IrFunction = one_block(two_ptr_params(), ITY_U64(), merged);
+    if vc_map_shape_detail(by_phi, 8) != String::from("map merged by a Phi") { return 83; }
+
+    let same: Vec<IrInst> = Vec::new();
+    same.push(mk_inst_arg(0, ITY_PTR(), 0));
+    same.push(mk_inst_phi(1, ITY_PTR()));
+    same.push(mk_inst_upsilon(2, 0, 1));
+    same.push(mk_inst_upsilon(3, 0, 1));
+    same.push(mk_inst_call_extern(4, ITY_U64(), args1(1), String::from("__vow_map_len")));
+    same.push(mk_inst_return(5, 4));
+    let one_value: IrFunction = one_block(ptr_i64_params(), ITY_U64(), same);
+    if vc_map_shape_detail(one_value, 8).len() != 0 { return 84; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_op_table();
+    if r == 0 { r = check_param_length_is_unconstrained(); }
+    if r == 0 { r = check_key_count_and_free_vars(); }
+    if r == 0 { r = check_new_map_is_empty(); }
+    if r == 0 { r = check_get_builds_option(); }
+    if r == 0 { r = check_pointer_value_is_refused(); }
+    if r == 0 { r = check_shape_rejections(); }
+    i64_to_i32_wrap(r)
+}

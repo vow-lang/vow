@@ -1,0 +1,15 @@
+// TEST: skip-reason unsupported-opcode
+module MapPointerValueSkipped
+
+fn put(m: HashMap<i64, String>, s: String) -> u64 vow {
+  ensures: result >= 1
+} {
+  m.insert(1, s);
+  m.len()
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<i64, String> = HashMap::new();
+  print_u64(put(m, String::from("a")));
+  0
+}

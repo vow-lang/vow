@@ -1,0 +1,19 @@
+// TEST: replay-skipped the replay harness rebuilds only scalar parameters, not a map
+// TEST: counterexample-fn "lookup"
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-blame None
+// TEST: counterexample-violation "unwrap() called on None"
+module MapParamUnwrapMissing
+
+fn lookup(m: HashMap<i64, i64>, k: i64) -> i64 [panic] vow {
+  ensures: result == result
+} {
+  m.get(k).unwrap()
+}
+
+fn main() -> i32 [io, panic] {
+  let m: HashMap<i64, i64> = HashMap::new();
+  m.insert(1, 2);
+  print_i64(lookup(m, 1));
+  0
+}
