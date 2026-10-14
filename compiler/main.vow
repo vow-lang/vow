@@ -3357,6 +3357,7 @@ fn skill_support_content_index_guard(index: u64) vow {
 }
 
 fn skill_support_content(index: u64) -> String {
+    if index >= skill_support_count() { return String::from(""); }
     skill_support_content_index_guard(index);
     if index == 0 { return skill_support_content_reference_grammar_md_92418de9(); }
     if index == 1 { return skill_support_content_reference_cli_md_31f8541a(); }
