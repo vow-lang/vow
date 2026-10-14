@@ -1,0 +1,230 @@
+# Functions of compiler/*.vow that `vowc verify --backend native` still skips
+# (issue #1432, epic #1398). scripts/verify_compiler.py accepts a native `Skipped`
+# only for a function listed here, with the closed-list reason the native gate
+# gives and the issue that tracks closing the gap. An entry whose function is no
+# longer skipped fails the run, so this list only shrinks: delete the row in the
+# commit that closes its issue.
+#
+# `code` is checked against the reason the native verifier reports.
+
+[[skip]]
+function = "byte_at_u8"
+code = "unmodeled-builtin"
+issue = 1679
+reason = "calls the wrapping narrowing intrinsic i64_to_u8_wrap"
+
+[[skip]]
+function = "span_pack_to_here"
+code = "unsupported-opcode"
+issue = 1677
+reason = "calls span_end_here with a Parser struct argument"
+
+[[skip]]
+function = "skill_support_content"
+code = "unsupported-opcode"
+issue = 1677
+reason = "calls helpers that return a String"
+
+[[skip]]
+function = "lctx_is_terminated"
+code = "unsupported-opcode"
+issue = 1676
+reason = "reads a Vec<struct> element out of a struct field"
+
+[[skip]]
+function = "lctx_block_terminated"
+code = "unsupported-opcode"
+issue = 1676
+reason = "reads a Vec<struct> element out of a struct field"
+
+[[skip]]
+function = "linear_successors"
+code = "unsupported-opcode"
+issue = 1676
+reason = "reads the length of a Vec held in a struct field"
+
+[[skip]]
+function = "module_has_unenforceable_contract"
+code = "unsupported-opcode"
+issue = 1676
+reason = "reads the length of a Vec held in a struct field"
+
+[[skip]]
+function = "replay_item_ids"
+code = "unsupported-opcode"
+issue = 1676
+reason = "reads the length of a Vec held in a struct field"
+
+[[skip]]
+function = "decl_unprintable_enum"
+code = "unmodeled-builtin"
+issue = 1678
+reason = "uses a HashMap"
+
+[[skip]]
+function = "module_encode"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "module_decode"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "read_block"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "read_enum_layout"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "read_function"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "read_inst"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "read_region_summary"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "read_struct_layout"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "read_variant"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "read_vow_entry"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "reader_read_effects"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "reader_read_leb"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "region_constraint_decode"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "region_constraint_encode"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "region_encode"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "write_block"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "write_effects"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "write_enum_layout"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "write_function"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "write_inst"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "write_integer_ty"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "write_region_summary"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "write_string"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "write_struct_layout"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "write_variant"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "write_vow_entry"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+
+[[skip]]
+function = "reader_read_string"
+code = "unmodeled-builtin"
+issue = 1679
+reason = "calls the wrapping narrowing intrinsic i64_to_u8_wrap (module_io.vow)"
+
+[[skip]]
+function = "sort_local_names"
+code = "unsupported-opcode"
+issue = 1676
+reason = "builds a struct whose fields are Vecs (module_io.vow)"

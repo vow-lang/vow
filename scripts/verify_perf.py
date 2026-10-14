@@ -263,8 +263,11 @@ def parse_result(text, killed, status):
     return None
 
 
-def run_once(vowc, backend, path, jobs, timeout, watchdog_s):
+def run_once(vowc, backend, path, jobs, timeout, watchdog_s, capture_stderr=False):
     """Run one `vowc verify`; return wall time, peak RSS and the parsed result.
+
+    `capture_stderr` adds the run's stderr text to the returned dict (the
+    per-function progress lines scripts/verify_compiler.py reads).
 
     The child leads its own session so a watchdog kill also reaches the solver
     processes it spawned. Wall time ends the instant the child exits (blocking
@@ -303,9 +306,11 @@ def run_once(vowc, backend, path, jobs, timeout, watchdog_s):
         with open(out_path, "r", encoding="utf-8", errors="replace") as fh:
             stdout = fh.read()
         result = parse_result(stdout, measured["killed"], measured["status"])
-        if result is None:
+        stderr = None
+        if result is None or capture_stderr:
             with open(err_path, "r", encoding="utf-8", errors="replace") as fh:
                 stderr = fh.read()
+        if result is None:
             print(
                 f"verify_perf: {backend} printed no JSON for {path}: {stderr.rstrip()}",
                 file=sys.stderr,
@@ -325,6 +330,7 @@ def run_once(vowc, backend, path, jobs, timeout, watchdog_s):
         "rss_source": source,
         "result": result,
         "timed_out": timed_out,
+        "stderr": stderr if capture_stderr else None,
     }
 
 

@@ -349,6 +349,86 @@ full run measures hundreds of fixtures six times per backend and takes hours. It
 is an acceptance-gate tool, not a `full_test.sh` section: it is host-dependent
 and its thresholds only become meaningful once native covers the corpus.
 
+## Whole-compiler native verification
+
+[`scripts/verify_compiler.py`](../scripts/verify_compiler.py) (epic #1398, issue
+#1432) runs the native verifier over every source of the self-hosted compiler,
+the real-world workload, and holds it to three claims. The unit tests are
+`scripts/test_verify_compiler.py`.
+
+**Roots.** `compiler/main.vow` plus every top-level module of `compiler/` that
+`main.vow` does not reach through `use` (today `module_io.vow`, `span.vow` and
+the `test_*.vow` programs), so every compiler source, including the `vc_*.vow`
+verifier modules, is under a `vowc verify` run. `compiler/tests/` is not a root:
+those programs only re-load the modules above.
+
+**Verdicts.** Per function, from the driver's progress lines
+(`  <fn>: PROVEN|SKIPPED|UNKNOWN|TIMEOUT|FAILED|ERROR|PANICKED`) classified with
+the `scripts/verify_diff.py` classes, with ground truth `Verified` (the compiler
+is expected to satisfy its own contracts). A function native is `weaker` on, or
+refutes, fails the run unless it is a skip the next paragraph explains.
+
+**Skip list.** [`scripts/native_compiler_skips.toml`](../scripts/native_compiler_skips.toml)
+lists every function native still skips, with the closed-list reason code and the
+issue that tracks the gap. A native `Skipped` is accepted only for a listed
+function with the listed code; a skipped function that is not listed fails, and
+so does a listed function no root skips any more, so the list only shrinks.
+Delete the row in the commit that closes its issue.
+
+**Modes.**
+
+```bash
+# Native vs ESBMC: verdicts and the cost gate of scripts/verify_perf.py
+python3 scripts/verify_compiler.py --vowc build/vowc --output /tmp/verify-compiler.json
+# Native only, several binaries: identical outcomes required (bootstrap stages)
+python3 scripts/verify_compiler.py --native-only --vowc build/vowc --vowc build/vowc2
+```
+
+The comparison times `--backend esbmc` against `--backend native` per root with
+the cache off, median of `--runs` runs (default 5, one discarded warm-up), both at
+`--verify-jobs 1` unless overridden, and applies the `verify_perf.py` thresholds:
+geometric mean of native/ESBMC at most 1.0 on wall-clock and peak RSS, no root
+above 1.25, native timing out on no root where ESBMC finishes. A root where both
+backends finish within one second is reported but not gated (it measures process
+start-up). `--no-perf-gate` keeps the cost in the report and out of the exit
+code; `--allow-esbmc-version` accepts an ESBMC other than the pinned 8.5 and marks
+the report provisional (as does `--runs` below 5).
+
+`--native-only` verifies once with each `--vowc` and requires the status, the
+per-function verdicts, the skipped set and the counterexamples to agree, so a
+native verdict never depends on which bootstrap stage compiled the verifier.
+
+**Bootstrap hook.** `scripts/bootstrap.sh --native-verify` runs the native mode
+over the Stage 1 binary (`build/vowc`, built by the Rust compiler) and the Stage 2
+binary (`build/vowc2`) after the fixed point and before the promotion, writing
+`build/native-verify.json`. It needs `bitwuzla` and no ESBMC, and is independent
+of `--no-verify`. `VOW_BOOTSTRAP_NATIVE_JOBS` sets its `--verify-jobs` (default 2).
+
+**CI.** [`compiler-native-verify.yml`](../.github/workflows/compiler-native-verify.yml)
+runs both on every push to `main` and nightly: `bootstrap.sh --no-verify
+--native-verify`, then the comparison with `--runs 1 --no-perf-gate` (shared runners
+are too noisy to gate a ratio on). The cost gate is enforced by running the command
+above on an idle host.
+
+Exit codes: `0` every criterion holds, `1` a criterion failed, `2` the harness
+could not run (missing `vowc`, `esbmc` or `bitwuzla`, a malformed skip list).
+
+**Status at `78f48c2a` (2026-10-14, ESBMC 8.5.0, single runs on a loaded host).**
+
+- Verdicts: native proves every function ESBMC proves except the 37 listed in the
+  skip list (tracked by #1676, #1677, #1678, #1679, all open); there is no
+  counterexample and no `weaker` function outside the list. Native proves
+  `note_vals_has_root` (ESBMC inconclusive) and `module_io.vow`'s `write_u8`
+  (ESBMC refutes it only through its vec capacity assertion).
+- Stages: Stage 1 and Stage 2 `vowc` give identical outcomes on every root
+  (`bootstrap.sh --native-verify`, 697 s at `--verify-jobs 2`).
+- Cost: peak RSS is 0.25x ESBMC (geometric mean; `main.vow` 0.11x), within the
+  gate. Wall-clock is not: the geometric mean is 1.38x and the worst root 2.11x,
+  because each `verify-worker` re-runs the whole frontend, roughly 8 s on
+  `compiler/main.vow`, once per verified function (#1683). That is a wall-clock
+  gap of the driver, not of the solver, and it is why the CI comparison does not
+  enforce the cost gate.
+
 ## Native oracles: runtime differential and Z3 cross-check
 
 Two CI-only checks hold `vowc verify --backend native` to a second opinion

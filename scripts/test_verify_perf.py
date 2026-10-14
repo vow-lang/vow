@@ -336,6 +336,12 @@ class RunOnceTest(unittest.TestCase):
         self.assertFalse(got["timed_out"])
         self.assertGreater(got["wall_s"], 0)
 
+    def test_stderr_is_returned_only_when_asked_for(self):
+        body = "import sys\nsys.stderr.write('  f: PROVEN\\n')\nprint('{}')\n"
+        self.assertIsNone(self.run_stub(body)["stderr"])
+        got = vp.run_once(self.stub(body), "native", "x.vow", 1, None, 20.0, True)
+        self.assertEqual("  f: PROVEN\n", got["stderr"])
+
     def test_cache_written_while_measuring_invalidates_the_sample(self):
         with self.assertRaisesRegex(ValueError, "cache was used while measuring"):
             self.run_stub(
