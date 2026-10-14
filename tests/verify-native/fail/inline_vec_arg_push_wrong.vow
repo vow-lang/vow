@@ -1,4 +1,3 @@
-// TEST: replay-skipped parameter 0 is a Vec, which the replay harness cannot build
 // TEST: counterexample-fn "grow"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
