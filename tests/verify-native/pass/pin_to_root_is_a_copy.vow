@@ -1,0 +1,32 @@
+module PinToRootIsACopy
+
+// `pin_to_root` always deep-copies its string into root storage (the runtime never
+// returns its argument), so the model treats it as `String::from`: same length and
+// bytes, and a separate object the caller can change without touching the original.
+fn same_contents(s: String) -> bool vow {
+  ensures: result == true
+} {
+  let p: String = pin_to_root(s);
+  p.eq(s)
+}
+
+fn same_length(s: String) -> bool vow {
+  ensures: result == true
+} {
+  pin_to_root(s).len() == s.len()
+}
+
+fn original_untouched(s: String) -> bool vow {
+  ensures: result == true
+} {
+  let before: u64 = s.len();
+  let p: String = pin_to_root(s);
+  p.push_byte(65u8);
+  s.len() == before && p.len() == before + 1u64
+}
+
+fn main() -> i32 [io] {
+  let s: String = String::from("ab");
+  print_u64(pin_to_root(s).len());
+  0
+}

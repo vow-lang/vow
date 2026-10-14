@@ -14,6 +14,8 @@ use vc_strops
 use vc_strdeep
 use vc_str
 use vc_hooks
+use vc_numeric
+use vc_strsearch
 use ir_dominance
 
 // Symbolic execution of an acyclic integer/Bool function (one that
@@ -457,13 +459,14 @@ fn vc_walk_str(w: VcWalk, bi: u64, inst: IrInst, pc: i64, kind: i64, s: i64) {
         let total: i64 = vc_tm_app2(ar, VC_OP_BVADD(), len, tl);
         vc_assume(cs, pc, vc_tm_app2(ar, VC_OP_BVULT(), total, vc_vec_len_mask(ar)));
         vc_vec_write(vv, ar, hdr, s, b, vc_str_append(vv, ar, hdr, cs.assumed, arr, len, ta, tl), total);
-    } else if kind == VC_STR_EQ() || kind == VC_STR_STARTS_WITH() || kind == VC_STR_ENDS_WITH() {
+    } else if kind == VC_STR_EQ() || kind == VC_STR_STARTS_WITH() || kind == VC_STR_ENDS_WITH() || kind == VC_STR_CONTAINS() {
         let t: i64 = vc_vec_slot(vv, w.ag, ar, hdr, cs.assumed, w.obj_of[inst.args[1] as u64]);
         let ta: i64 = vc_vec_cur_arr(vv, t, b);
         let tl: i64 = vc_vec_cur_len(vv, t, b);
         let mut r: i64 = 0;
         if kind == VC_STR_STARTS_WITH() { r = vc_str_starts_with(vv, ar, hdr, cs.assumed, arr, len, ta, tl); }
         else if kind == VC_STR_ENDS_WITH() { r = vc_str_ends_with(vv, ar, hdr, cs.assumed, arr, len, ta, tl); }
+        else if kind == VC_STR_CONTAINS() { r = vc_str_contains(vv, ar, hdr, cs.assumed, arr, len, ta, tl); }
         else { r = vc_str_eq(vv, ar, hdr, cs.assumed, arr, len, ta, tl); }
         vc_define(w, inst, vc_str_flag(ar, inst, r));
     } else if kind == VC_STR_MATCHES_LITERAL_AT() {
@@ -512,6 +515,13 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
         let obj: i64 = vc_walk_new_obj(w, bi, inst);
         let j: u64 = vc_hook_format(vv, ar, hdr, cs.assumed, w.var_of[inst.args[0] as u64]);
         vc_vec_create_with(vv, ar, hdr, obj, b, vv.fk_arr[j], vv.fk_len[j]);
+        return true;
+    }
+    if vc_str_kind_formats_int(kind) {
+        let obj: i64 = vc_walk_new_obj(w, bi, inst);
+        let text: Vec<i64> = Vec::new();
+        vc_num_decimal(vv, ar, hdr, cs.assumed, w.var_of[inst.args[0] as u64], vc_str_kind_int_bits(kind), vc_str_kind_int_signed(kind), text);
+        vc_vec_create_with(vv, ar, hdr, obj, b, text[0], text[1]);
         return true;
     }
     if kind == VC_STR_FROM_RAW_PARTS() {
@@ -590,6 +600,10 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
     }
     // Region markers only scope an allocation's lifetime; they change no value.
     if op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE() {
+        return;
+    }
+    if vc_inst_scalar_kind(inst) == VC_SCALAR_HASH_U64() {
+        vc_define(w, inst, vc_num_hash_mix(cs.arena, w.var_of[inst.args[0] as u64]));
         return;
     }
     if vc_walk_agg(w, bi, inst) || vc_walk_vec(w, bi, inst, pc) {

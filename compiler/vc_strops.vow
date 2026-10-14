@@ -27,6 +27,11 @@ fn VC_STR_ENDS_WITH() -> i64 { 19 }
 fn VC_STR_FROM_RAW_PARTS() -> i64 { 20 }
 fn VC_STR_PARSE_F64() -> i64 { 21 }
 fn VC_STR_FORMAT_F64() -> i64 { 22 }
+fn VC_STR_FROM_I64() -> i64 { 23 }
+fn VC_STR_FROM_U64() -> i64 { 24 }
+fn VC_STR_FROM_I128() -> i64 { 25 }
+fn VC_STR_FROM_U128() -> i64 { 26 }
+fn VC_STR_CONTAINS() -> i64 { 27 }
 
 fn VC_STR_PREFIX() -> String { String::from("__vow_string_") }
 
@@ -42,6 +47,7 @@ fn vc_str_op_kind(sym: String) -> i64 {
     if sym == String::from("__vow_string_new") { return VC_STR_NEW(); }
     if sym == String::from("__vow_string_literal") { return VC_STR_LITERAL(); }
     if sym == String::from("__vow_string_clone") { return VC_STR_CLONE(); }
+    if sym == String::from("__vow_string_pin_to_root") { return VC_STR_CLONE(); }
     if sym == String::from("__vow_string_push_str") { return VC_STR_PUSH_STR(); }
     if sym == String::from("__vow_string_push_byte") { return VC_STR_PUSH_BYTE(); }
     if sym == String::from("__vow_string_clear") { return VC_STR_CLEAR(); }
@@ -53,20 +59,42 @@ fn vc_str_op_kind(sym: String) -> i64 {
     if sym == String::from("__vow_string_starts_with") { return VC_STR_STARTS_WITH(); }
     if sym == String::from("__vow_string_ends_with") { return VC_STR_ENDS_WITH(); }
     if sym == String::from("__vow_string_from_raw_parts_copy") { return VC_STR_FROM_RAW_PARTS(); }
+    if sym == String::from("__vow_string_contains") { return VC_STR_CONTAINS(); }
+    if sym == String::from("__vow_string_from_i64") { return VC_STR_FROM_I64(); }
+    if sym == String::from("__vow_string_from_u64") { return VC_STR_FROM_U64(); }
+    if sym == String::from("__vow_string_from_i128") { return VC_STR_FROM_I128(); }
+    if sym == String::from("__vow_string_from_u128") { return VC_STR_FROM_U128(); }
     VC_STR_NONE()
+}
+
+// `int_to_string`, `uint_to_string` and their 128-bit forms: an integer in, its decimal
+// text out (`vc_numeric`).
+fn vc_str_kind_formats_int(k: i64) -> bool {
+    k >= VC_STR_FROM_I64() && k <= VC_STR_FROM_U128()
+}
+
+fn vc_str_kind_int_bits(k: i64) -> i64 {
+    if k == VC_STR_FROM_I128() || k == VC_STR_FROM_U128() { return 128; }
+    64
+}
+
+fn vc_str_kind_int_signed(k: i64) -> bool {
+    k == VC_STR_FROM_I64() || k == VC_STR_FROM_I128()
 }
 
 // A kind that creates a new string object (its result is the object).
 fn vc_str_kind_creates(k: i64) -> bool {
     k == VC_STR_NEW() || k == VC_STR_LITERAL() || k == VC_STR_CLONE()
         || k == VC_STR_SUBSTRING() || k == VC_STR_SUBSTR() || k == VC_STR_FROM_RAW_PARTS()
-        || k == VC_STR_FORMAT_F64()
+        || k == VC_STR_FORMAT_F64() || vc_str_kind_formats_int(k)
 }
 
 // A creating kind none of whose operands is a string object: integers (`new`,
-// `from_raw_parts_copy`, `format_f64_bits`) or the static bytes of a literal.
+// `from_raw_parts_copy`, `format_f64_bits`, the decimal formatters) or the static
+// bytes of a literal.
 fn vc_str_kind_no_object_operand(k: i64) -> bool {
     k == VC_STR_NEW() || k == VC_STR_LITERAL() || k == VC_STR_FROM_RAW_PARTS() || k == VC_STR_FORMAT_F64()
+        || vc_str_kind_formats_int(k)
 }
 
 // A kind that changes the string its first operand names.
@@ -77,6 +105,7 @@ fn vc_str_kind_mutates(k: i64) -> bool {
 // A kind whose second operand is a string as well.
 fn vc_str_kind_two_strings(k: i64) -> bool {
     k == VC_STR_PUSH_STR() || k == VC_STR_EQ() || k == VC_STR_STARTS_WITH() || k == VC_STR_ENDS_WITH()
+        || k == VC_STR_CONTAINS()
 }
 
 // A kind that reads the bytes of a string, not only its length: when no
@@ -85,7 +114,7 @@ fn vc_str_kind_two_strings(k: i64) -> bool {
 // is one: its result is a function of the bytes, which only equal contents make equal.
 fn vc_str_kind_reads_bytes(k: i64) -> bool {
     k == VC_STR_BYTE_AT() || k == VC_STR_EQ() || k == VC_STR_MATCHES_LITERAL_AT()
-        || k == VC_STR_STARTS_WITH() || k == VC_STR_ENDS_WITH() || k == VC_STR_PARSE_F64()
+        || k == VC_STR_STARTS_WITH() || k == VC_STR_ENDS_WITH() || k == VC_STR_PARSE_F64() || k == VC_STR_CONTAINS()
 }
 
 // Why a `String` runtime symbol that is not a catalogue entry has no model, or ""
@@ -95,20 +124,14 @@ fn vc_str_kind_reads_bytes(k: i64) -> bool {
 // be encoded; none is a bound or a cap.
 fn vc_str_unmodeled_reason(sym: String) -> String {
     if vc_str_op_kind(sym) != VC_STR_NONE() { return String::from(""); }
-    if sym == String::from("__vow_string_contains") {
-        return String::from("substring search needs an existential over the match position");
-    }
-    if sym == String::from("__vow_string_pin_to_root") {
-        return String::from("copies a string between arenas; the model has no arena identity");
-    }
     if sym == String::from("__vow_string_from_cstr") {
-        return String::from("reads memory behind a C string, whose length the model does not hold");
+        return String::from("reads memory behind a C string up to its NUL, whose length and bytes the model does not hold");
     }
     if sym == String::from("__vow_string_parse_u64_opt") {
-        return String::from("parsing is opaque: no model of the digit grammar");
+        return String::from("parsing needs a fold over the digits after a Unicode trim, and an Option built by the call; see the parse_* entries of docs/spec/operations.json");
     }
     if string_ends_with(sym, String::from("_in_arena")) == 1 {
-        return String::from("arena variant: the model has no arena identity");
+        return String::from("arena variant: region routing happens at codegen and the verifier sees the base symbol; the extra arena operand has no model");
     }
     String::from("")
 }
@@ -116,7 +139,7 @@ fn vc_str_unmodeled_reason(sym: String) -> String {
 // A kind of this module (`VC_VEC_LEN`, which `__vow_string_len` shares with the
 // `Vec` length, is not one).
 fn vc_str_kind_is_string_op(k: i64) -> bool {
-    k >= VC_STR_NEW() && k <= VC_STR_FORMAT_F64()
+    k >= VC_STR_NEW() && k <= VC_STR_CONTAINS()
 }
 
 // The `dv2` of a `ConstStr` whose bytes the verifier has read from the module's

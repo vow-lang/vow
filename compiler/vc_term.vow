@@ -38,6 +38,8 @@ fn VC_T_BOOL() -> i64 { 2 }
 fn VC_T_APP() -> i64 { 3 }
 fn VC_T_EXT() -> i64 { 4 }
 fn VC_T_QEQ() -> i64 { 5 }
+fn VC_T_QLT() -> i64 { 6 }
+fn VC_T_QDIFF() -> i64 { 7 }
 
 fn VC_EXT_ZERO() -> i64 { 0 }
 fn VC_EXT_SIGN() -> i64 { 1 }
@@ -264,11 +266,17 @@ fn vc_tm_is_false(ar: VcArena, t: i64) -> bool {
 // a bit-vector constant carries. Operators on 128-bit constants fold only by
 // width-independent rules.
 
+// The binders of the `String` model (`vc_str`, `vc_strsearch`): `VC_T_QEQ`, and the two
+// that state the for-all half of `contains` through a Skolem array.
+fn vc_kind_is_binder(kind: i64) -> bool {
+    kind == VC_T_QEQ() || kind == VC_T_QLT() || kind == VC_T_QDIFF()
+}
+
 // True for variables and constants: terms that are printed as they are and
 // never named.
 fn vc_tm_is_leaf(ar: VcArena, t: i64) -> bool {
     let kind: i64 = ar.kinds[t as u64];
-    kind != VC_T_APP() && kind != VC_T_EXT() && kind != VC_T_QEQ()
+    kind != VC_T_APP() && kind != VC_T_EXT() && !vc_kind_is_binder(kind)
 }
 
 // The variable already standing for `t`, `t` itself when it is a leaf, or -1
@@ -592,4 +600,16 @@ fn vc_tm_ext(ar: VcArena, kind: i64, amount: i64, x: i64) -> i64 {
 // (`vc_str`). Not interned through the simplifier on purpose.
 fn vc_tm_qeq(ar: VcArena, a: i64, b: i64, k: i64, n: i64) -> i64 {
     vc_arena_intern(ar, VC_T_QEQ(), a, b, k, n)
+}
+
+// `forall i <= l. a[i] < b` (unsigned): every slot of the Skolem array `a` up to `l` is below
+// the bound `b`. Like `vc_tm_qeq`, built only inside an assumption.
+fn vc_tm_qlt(ar: VcArena, a: i64, b: i64, l: i64) -> i64 {
+    vc_arena_intern(ar, VC_T_QLT(), a, b, -1, l)
+}
+
+// `forall i <= l. low8(a[c[i]]) != low8(b[i + c[i]])`: at every start `i` up to `l` the Skolem
+// array `c` names a position of the needle `a` that differs from the haystack `b` there.
+fn vc_tm_qdiff(ar: VcArena, a: i64, b: i64, c: i64, l: i64) -> i64 {
+    vc_arena_intern(ar, VC_T_QDIFF(), a, b, c, l)
 }

@@ -1,10 +1,12 @@
 // TEST: category unverifiable
 module HashBuiltinCallSkipped
 
-// `hash_u64` and `hash_str` are unmodeled externs: the verifier has no model of
-// their results. A function that calls one is Skipped (fail-closed) instead of
-// being "proven" against an invented nondeterministic hash. `bucket`'s
-// postcondition is true for the real hash, but nothing is claimed about it.
+// `hash_u64` and `hash_str` are unmodeled externs of the ESBMC C model: it has no
+// model of their results. A function that calls one is Skipped (fail-closed) instead
+// of being "proven" against an invented nondeterministic hash. `bucket`'s
+// postcondition is true for the real hash, but nothing is claimed about it. (The
+// native backend encodes `hash_u64` exactly and proves `bucket`; it still skips
+// `hash_str`. See tests/verify-native/pass/hash_u64_exact.vow.)
 fn bucket(key: u64, buckets: u64) -> u64 vow {
   requires: buckets > 0
   ensures: result < buckets

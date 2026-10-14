@@ -1,0 +1,19 @@
+// TEST: replay-skipped the replay harness takes scalar parameters of up to 64 bits
+// TEST: counterexample-fn "at_most_twenty"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// A `u64` has at most 20 digits but a `u128` does not: any operand from 10^20 on has 21,
+// so a claim of at most 20 for operands from 10^19 is refuted (the solver picks one).
+module Uint128ToStringWrongLength
+
+fn at_most_twenty(n: u128) -> u64 vow {
+  requires: n >= 10000000000000000000u128
+  ensures: result <= 20
+} {
+  uint128_to_string(n).len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(at_most_twenty(10000000000000000000u128));
+  0
+}

@@ -1,0 +1,75 @@
+module VcStrsearch
+
+use vc_term
+use vc_smt
+use vc_agg
+use vc_vec
+use vc_str
+
+// `String::contains` in the native verifier (ADR-2026-10-08-1422, #1654 addendum): exact for
+// strings of any length, as `vc_str_eq` is. `contains(s, p)` is true exactly when `p` is
+// empty or some start `w <= |s| - |p|` has `s[w + j] == p[j]` for every `j < |p|`.
+//
+// The result is a fresh Bool `e` tied to that statement by two assumptions, one per
+// direction, so that `e` is exactly the statement under every polarity:
+//
+//   e     => |p| <= |s| and w <= |s| - |p| and (p matches s at w)
+//   not e => |p| > |s| or (for every start i <= |s| - |p|: sk[i] < |p| and p[sk[i]] != s[i + sk[i]])
+//
+// `w` is a fresh witness start, and `sk` a fresh Skolem array that names, for every start, a
+// position at which the needle differs: the for-all/exists of the false direction becomes one
+// for-all over `i` with the existential read off `sk`. The match at `w` is the byte-range
+// equality of `vc_str` (a conjunction for small constant lengths, a binder otherwise). The
+// two binders (`VC_T_QLT`, `VC_T_QDIFF`) stand only in these assumptions, in a positive
+// position, never in a goal. The assumptions define `e`, `w` and `sk` from the operands, so
+// they cannot make a query unsatisfiable. No length is bounded. The for-all is also stated
+// at the first and at the last start (`0` and `|s| - |p|`) as plain facts: they are instances
+// of it, so they add nothing the binder does not say, but they are the starts a prefix or a
+// suffix test relates to, and the solver need not find them by instantiation.
+
+// The result of an earlier call on the same operand terms, or -1.
+fn vc_search_find(vv: VcVec, sa: i64, sl: i64, pa: i64, pl: i64) -> i64 {
+    let k: Vec<i64> = vv.cn_key;
+    let mut i: u64 = 0;
+    while i + 3 < k.len() {
+        if k[i] == sa && k[i + 1] == sl && k[i + 2] == pa && k[i + 3] == pl { return vv.cn_res[i / 4]; }
+        i = i + 4;
+    }
+    -1
+}
+
+// The body of the for-all of the false direction at the start `i`: the Skolem position is
+// inside the needle and the needle differs from the haystack there.
+fn vc_search_miss_at(ar: VcArena, sa: i64, pa: i64, pl: i64, sk: i64, i: i64) -> i64 {
+    let pick: i64 = vc_tm_app2(ar, VC_OP_SELECT(), sk, i);
+    let at: i64 = vc_tm_app2(ar, VC_OP_BVADD(), i, pick);
+    let differs: i64 = vc_tm_app2(ar, VC_OP_DISTINCT(), vc_str_byte(ar, pa, pick), vc_str_byte(ar, sa, at));
+    vc_tm_and(ar, vc_tm_app2(ar, VC_OP_BVULT(), pick, pl), differs)
+}
+
+// A Bool term that is exactly "the string `(pa, pl)` occurs in the string `(sa, sl)`".
+fn vc_str_contains(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, sa: i64, sl: i64, pa: i64, pl: i64) -> i64 {
+    let known: i64 = vc_search_find(vv, sa, sl, pa, pl);
+    if known >= 0 { return known; }
+    let e: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("ce")), VC_SORT_BOOL());
+    let w: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("cw")), 64);
+    let sk: i64 = vc_str_fresh_array(vv, ar, hdr, String::from("ck"));
+    let fits: i64 = vc_tm_app2(ar, VC_OP_BVULE(), pl, sl);
+    let room: i64 = vc_tm_app2(ar, VC_OP_BVSUB(), sl, pl);
+    let found: i64 = vc_str_range_eq(vv, ar, hdr, assumed, vc_tm_bool_const(ar, true), pa, sa, w, pl);
+    let hit: i64 = vc_tm_and(ar, fits, vc_tm_and(ar, vc_tm_app2(ar, VC_OP_BVULE(), w, room), found));
+    vc_str_axiom(ar, assumed, vc_tm_implies(ar, e, hit));
+    let misses: i64 = vc_tm_and(ar, vc_tm_qlt(ar, sk, pl, room), vc_tm_qdiff(ar, pa, sa, sk, room));
+    let none: i64 = vc_tm_or(ar, vc_tm_app1(ar, VC_OP_NOT(), fits), misses);
+    let not_e: i64 = vc_tm_app1(ar, VC_OP_NOT(), e);
+    vc_str_axiom(ar, assumed, vc_tm_implies(ar, not_e, none));
+    vc_str_axiom(ar, assumed, vc_tm_implies(ar, not_e, vc_tm_or(ar, vc_tm_app1(ar, VC_OP_NOT(), fits), vc_search_miss_at(ar, sa, pa, pl, sk, vc_str_zero(ar)))));
+    vc_str_axiom(ar, assumed, vc_tm_implies(ar, not_e, vc_tm_or(ar, vc_tm_app1(ar, VC_OP_NOT(), fits), vc_search_miss_at(ar, sa, pa, pl, sk, room))));
+    vv.quantified = true;
+    vv.cn_key.push(sa);
+    vv.cn_key.push(sl);
+    vv.cn_key.push(pa);
+    vv.cn_key.push(pl);
+    vv.cn_res.push(e);
+    e
+}

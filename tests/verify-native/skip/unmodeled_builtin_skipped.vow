@@ -2,15 +2,17 @@
 // TEST: skip-reason unmodeled-builtin
 module UnmodeledBuiltinSkipped
 
-// Substring search needs an existential over the match position, which the
-// String model does not encode (`vc_str_unmodeled_reason`).
-fn found(s: String, t: String) -> bool vow {
+// `trim` follows Rust's Unicode `str::trim` (it strips U+00A0 and the other multi-byte
+// white space and returns the empty string for invalid UTF-8), which the String model
+// does not encode, so the call is `unmodeled-builtin` (its `verifier_skip_reason` in
+// docs/spec/operations.json says why).
+fn trimmed_length(s: String) -> u64 vow {
   ensures: result == result
 } {
-  s.contains(t)
+  string_trim(s).len()
 }
 
 fn main() -> i32 [io] {
-  if found(String::from("a"), String::from("a")) { print_u64(1); }
+  print_u64(trimmed_length(String::from(" a ")));
   0
 }

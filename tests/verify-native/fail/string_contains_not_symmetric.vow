@@ -1,0 +1,17 @@
+// TEST: replay-skipped the counterexample's string contents are not rebuilt by the replay harness
+// TEST: counterexample-fn "mutual"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// `a` containing `b` does not make `b` contain `a`: the model can take `a` longer than `b`,
+// and then `b.contains(a)` is false by length alone.
+module StringContainsNotSymmetric
+
+fn mutual(a: String, b: String) -> bool vow {
+  ensures: result == true
+} {
+  !a.contains(b) || b.contains(a)
+}
+
+fn main() -> i32 [io] {
+  if mutual(String::from("ab"), String::from("ab")) { 0 } else { 1 }
+}

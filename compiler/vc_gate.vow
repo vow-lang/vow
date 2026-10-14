@@ -232,6 +232,9 @@ fn vc_vec_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
     if kind == VC_STR_FORMAT_F64() {
         return n == 1 && inst.ty == ITY_PTR() && vc_vec_index_ok(t0);
     }
+    if vc_str_kind_formats_int(kind) {
+        return n == 1 && inst.ty == ITY_PTR() && vc_ty_is_int(t0) && vc_ty_bits(t0) == vc_str_kind_int_bits(kind);
+    }
     if t0 != ITY_PTR() { return false; }
     if vc_str_kind_is_string_op(kind) { return vc_str_call_ok(inst, tys, kind); }
     if kind == VC_VEC_PUSH() { return n == 2 && inst.ty == ITY_UNIT() && vc_vec_elem_ok(t1); }
@@ -262,6 +265,7 @@ fn vc_str_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
     if kind == VC_STR_STARTS_WITH() || kind == VC_STR_ENDS_WITH() {
         return n == 2 && inst.ty == ITY_I64() && t1 == ITY_PTR();
     }
+    if kind == VC_STR_CONTAINS() { return n == 2 && (inst.ty == ITY_I64() || inst.ty == ITY_BOOL()) && t1 == ITY_PTR(); }
     if kind == VC_STR_MATCHES_LITERAL_AT() {
         return n == 4 && inst.ty == ITY_I64() && vc_vec_index_ok(t1) && t2 == ITY_PTR() && vc_ty_is_int(vc_arg_ty(tys, inst, 3));
     }
@@ -311,6 +315,9 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
         if vc_is_unwrap_abort(inst) { return n == 0 && inst.ty == ITY_UNIT(); }
         let vk: i64 = vc_inst_vec_kind(inst);
         if vk != VC_VEC_NONE() { return vc_vec_call_ok(inst, tys, vk); }
+        if vc_inst_scalar_kind(inst) == VC_SCALAR_HASH_U64() {
+            return n == 1 && inst.ty == ITY_U64() && vc_vec_index_ok(t0);
+        }
         return calls && vc_call_scalar(inst, tys);
     }
     if vc_is_arith_op(op) {

@@ -70,10 +70,14 @@ fn vc_slice_push_children(st: Vec<i64>, ar: VcArena, t: i64, kind: i64) {
         if ar.c[t as u64] >= 0 { st.push(ar.c[t as u64]); }
     } else if kind == VC_T_EXT() {
         st.push(ar.a[t as u64]);
-    } else if kind == VC_T_QEQ() {
+    } else if kind == VC_T_QEQ() || kind == VC_T_QDIFF() {
         st.push(ar.a[t as u64]);
         st.push(ar.b[t as u64]);
         st.push(ar.c[t as u64]);
+        st.push(ar.aux[t as u64]);
+    } else if kind == VC_T_QLT() {
+        st.push(ar.a[t as u64]);
+        st.push(ar.b[t as u64]);
         st.push(ar.aux[t as u64]);
     }
 }

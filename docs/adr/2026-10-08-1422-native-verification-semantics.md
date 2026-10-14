@@ -732,3 +732,72 @@ their parity are untouched.
   direction, and `unknown/float_bits_hook_opaque_*` pin the claims about a value or a text.
 - **Verdict impact.** Strictly more than before: these calls were `Skipped` as
   `unmodeled-builtin`, which `skip/unmodeled_builtin_skipped.vow` still pins for other builtins.
+
+## Addendum (#1654): numeric and string helper builtins
+
+The helpers of #1654 each get an exact model or a `verifier_skip_reason` that names the
+semantics the model would have to encode. Rule 3 stands: a helper is never havoced, and no
+model caps a length. The exact models are native verifier only (`compiler/vc_numeric.vow`
+and the kinds of `compiler/vc_strops.vow`); `c_model` is untouched, so the C emitters and
+their parity are unchanged.
+
+- **`hash_u64`** is the runtime's SplitMix64 output function as one closed 64-bit term
+  (`vc_num_hash_mix`): `z = x + 0x9E3779B97F4A7C15`, two xor-shift-multiply rounds and a final
+  xor-shift, every operation wrapping. It is a term of the operand, not a fresh constant, so
+  equal operands agree with no axiom, a constant operand folds to the runtime's value
+  (`hash_u64(0) == 0xE220A8397B1DCDAF`, pinned by `tests/verify-native/pass/hash_u64_exact.vow`
+  and `compiler/tests/test_vc_numeric.vow`), and a counterexample is a real run (replay
+  confirms it). The term is a call of the executor on a scalar: it has no object operand
+  and takes no part in the `String` kinds (`vc_inst_scalar_kind`).
+- **`int_to_string`, `uint_to_string`, `int128_to_string`, `uint128_to_string`** are the exact
+  decimal text of the operand (`vc_num_decimal`). The operand's magnitude is `v`, or `0 - v` for a
+  negative signed `v` (the minimum is its own magnitude, read unsigned). The text has one digit
+  and one more for each power of ten the magnitude reaches (`bvuge` against a constant, at most
+  20 digits for 64 bits and 39 for 128), plus a `-` for a negative operand, so its length is a
+  closed term of the operand and a claim about the length alone costs no division and no
+  assumption. The bytes are the fresh array `sd<N>`, asserted only in a function that reads the
+  bytes of some string (the `vv.content` rule of #1426): digit `k` from the right sits at the
+  symbolic index `len - 1 - k` and is `0x30 + q[k] - 10 * q[k + 1]`, where `q[k]` is the magnitude
+  divided by ten `k` times (constant divisors), guarded by "the magnitude reaches `10^k`"; a `-`
+  sits at index 0 of a negative operand. The axioms only define a fresh array from the operand,
+  so they cannot make a query unsatisfiable. Calls on one operand term share one string (the
+  memo of #1426), so `uint_to_string(a).eq(uint_to_string(a))` needs no binder; a relation between
+  the texts of two different operands is the quantified equality of #1426 (`unknown` or
+  `timeout` when the solver cannot close it, never a proof). This is exact, not a cap: no
+  operand is excluded.
+- **`pin_to_root`** on a `String` is a clone: the runtime always copies into root storage and
+  never returns its argument (`__vow_string_pin_to_root`), so the model gives it the kind of
+  `String::from` (`VC_STR_CLONE`): the same `(array, length)` in a fresh object. The arena
+  placement it exists for has no value-level effect.
+- **`String::contains`** is exact for any length (`vc_str_contains`, `compiler/vc_strsearch.vow`). The
+  result is a fresh Bool `e` tied to the statement by two assumptions, one per direction:
+  `e => |p| <= |s| and w <= |s| - |p| and (p matches s at w)` with a fresh witness start `w` (the
+  match is the byte-range equality of #1426), and `not e => |p| > |s| or (for every start
+  i <= |s| - |p|: sk[i] < |p| and p[sk[i]] != s[i + sk[i]])` with a fresh Skolem array `sk` that
+  names, per start, a position where the needle differs. The for-all/exists alternation of the
+  false direction is the one for-all over `i` with the existential read off `sk`, written with two
+  new binders next to `VC_T_QEQ`: `VC_T_QLT` (`forall i <= l. a[i] < b`) and `VC_T_QDIFF`
+  (`forall i <= l. low8(a[c[i]]) != low8(b[i + c[i]])`). They obey the rule of #1426: built only in an
+  assumption, in a positive position, never in a goal, so the quantifier is never in the negated
+  query. The assumptions define `e`, `w` and `sk` from the operands, so they cannot make a query
+  unsatisfiable. The for-all is also stated as two plain facts at the first and the last start, which
+  are instances of it (they add no information) but are the starts a prefix and a suffix test relate to,
+  so the solver does not have to find them by instantiation. Calls on the same operand terms share one
+  result. A needle that is a prefix, a suffix, an appended part or a substring is proven contained
+  in milliseconds; a property that chains the false directions of two searches
+  (`a.contains(b) && b.contains(c)` implies `a.contains(c)`) is `unknown`/`timeout`, never a proof.
+  The ESBMC model is a bounded loop, so `tests/verify-native/pass/string_contains_exact.vow` has
+  functions it fails or times out on that native proves (PR evidence), and
+  `tests/verify/string_contains_basic.vow` keeps the corpus row both decide.
+- **Skipped with a stated reason** (each in `verifier_skip_reason` of `docs/spec/operations.json`, or
+  `vc_str_unmodeled_reason` for a runtime symbol the catalogue lacks): `string_trim`,
+  `string_to_upper`, `string_to_lower` (Rust's Unicode `str` methods: the length can change,
+  invalid UTF-8 gives the empty string; a byte-wise map would be unsound), `string_replace`,
+  `parse_*` (a fold over the digits after a Unicode trim and an `Option` built by the call),
+  `hash_str` (FNV-1a fold), `hex_encode`/`hex_decode` (a per-index map between two arrays),
+  `string_split`/`string_join` (`Vec<String>` elements are pointers),
+  `String::from_cstr` (memory behind a C string) and the arena variants (the verifier sees the base symbol; region routing is codegen). A
+  nondeterministic or opaque result is not an option for these: it would let a counterexample
+  depend on a value the runtime computes, which `--replay-cex` reports as a `VerifierBug`. The
+  opaque-result route of #1646 needs the `u64`/text split of the float hooks and an ADR decision
+  of its own; it is left to a follow-up.

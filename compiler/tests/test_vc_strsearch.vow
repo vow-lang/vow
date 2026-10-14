@@ -1,0 +1,179 @@
+module TestVcStrsearch
+
+use ir
+use vc_ops
+use vc_strops
+use vc_term
+use vc_smt
+use vc_gate
+use vc_exec
+use vc_strsearch
+use verifier
+use tests.builders
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn args2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = args1(a);
+    v.push(b);
+    v
+}
+
+fn one_block(params: Vec<i64>, ret: i64, insts: Vec<IrInst>) -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(1, String::from("f"), params, ret, blocks)
+}
+
+fn contains(hay: String, needle: String) -> bool {
+    str_find_str(hay, needle) >= 0
+}
+
+fn count_of(hay: String, needle: String) -> i64 {
+    let mut n: i64 = 0;
+    let mut from: u64 = 0;
+    while from < hay.len() {
+        let rest: String = hay.substring(from, hay.len());
+        let at: i64 = str_find_str(rest, needle);
+        if at < 0 { return n; }
+        n = n + 1;
+        from = from + at as u64 + needle.len();
+    }
+    n
+}
+
+fn mk_ens(id: i64, pred: i64, vow_id: i64) -> IrInst {
+    ir_inst_new(id, IOP_VOW_ENS(), ITY_UNIT(), args1(pred), IDATA_VOW_ID(), vow_id, 0, String::from(""))
+}
+
+fn has(id: i64, ty: i64, s: i64, p: i64) -> IrInst {
+    mk_inst_call_extern(id, ty, args2(s, p), String::from("__vow_string_contains"))
+}
+
+fn ptr2() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    p.push(ITY_PTR());
+    p
+}
+
+// fn f(s: String, p: String) -> bool { let a = s.contains(p); let b = <second arguments> ; a == b } with `ensures: result`.
+fn contains_twice(ty: i64, swap: bool) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_PTR(), 1));
+    insts.push(has(2, ty, 0, 1));
+    if swap { insts.push(has(3, ty, 1, 0)); } else { insts.push(has(3, ty, 0, 1)); }
+    insts.push(ir_inst_new(4, IOP_EQ(), ITY_BOOL(), args2(2, 3), IDATA_NONE(), 0, 0, String::from("")));
+    insts.push(mk_ens(5, 4, 0));
+    insts.push(mk_inst_return(6, 4));
+    one_block(ptr2(), ITY_BOOL(), insts)
+}
+
+// fn f(s: String, p: String) -> bool { s.contains(p) } with `ensures: result`.
+fn contains_once(ty: i64) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_PTR(), 1));
+    insts.push(has(2, ty, 0, 1));
+    let mut res: i64 = 2;
+    if ty == ITY_I64() {
+        insts.push(mk_inst_const_i64(3, 0));
+        insts.push(ir_inst_new(4, IOP_NE(), ITY_BOOL(), args2(2, 3), IDATA_NONE(), 0, 0, String::from("")));
+        res = 4;
+    }
+    insts.push(mk_ens(10, res, 0));
+    insts.push(mk_inst_return(11, res));
+    one_block(ptr2(), ITY_BOOL(), insts)
+}
+
+fn check_op_table() -> i64 {
+    if vc_vec_op_kind(String::from("__vow_string_contains")) != VC_STR_CONTAINS() { return 1; }
+    if !vc_str_kind_is_string_op(VC_STR_CONTAINS()) { return 2; }
+    if vc_str_kind_creates(VC_STR_CONTAINS()) || vc_str_kind_no_object_operand(VC_STR_CONTAINS()) { return 3; }
+    if !vc_str_kind_two_strings(VC_STR_CONTAINS()) { return 4; }
+    if !vc_str_kind_reads_bytes(VC_STR_CONTAINS()) { return 5; }
+    if vc_vec_kind_mutates(VC_STR_CONTAINS()) { return 6; }
+    if vc_str_unmodeled_reason(String::from("__vow_string_contains")).len() != 0 { return 7; }
+    if !vc_kind_is_binder(VC_T_QLT()) || !vc_kind_is_binder(VC_T_QDIFF()) || !vc_kind_is_binder(VC_T_QEQ()) { return 8; }
+    if vc_kind_is_binder(VC_T_APP()) || vc_kind_is_binder(VC_T_VAR()) { return 9; }
+    0
+}
+
+// The result may be an `i64` (the runtime's) or a Bool; both are accepted.
+fn check_gate() -> i64 {
+    if vc_skip_reason(contains_once(ITY_BOOL())).len() != 0 { return 10; }
+    if vc_skip_reason(contains_once(ITY_I64())).len() != 0 { return 11; }
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_U64(), 1));
+    insts.push(has(2, ITY_BOOL(), 0, 1));
+    insts.push(mk_inst_return(3, 2));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    p.push(ITY_U64());
+    if vc_skip_reason(one_block(p, ITY_BOOL(), insts)).len() == 0 { return 12; }
+    0
+}
+
+// The query holds the two directions of the definition: the witness for the true one, the
+// Skolem array and its two binders for the false one (in assumptions, never in the goal),
+// and the two ground instances of the for-all at the first and the last start.
+fn check_definition_is_rendered() -> i64 {
+    let cs: VcClaims = vc_claims(contains_once(ITY_BOOL()));
+    if cs.kinds.len() != 1 { return 20; }
+    let q: String = vc_smt_render(cs.arena, vc_claim_script(cs, 0));
+    if !contains(q, String::from("(declare-const ce0 Bool)")) { return 21; }
+    if !contains(q, String::from("(declare-const cw1 (_ BitVec 64))")) { return 22; }
+    if !contains(q, String::from("ck2_varr")) { return 23; }
+    if count_of(q, String::from("(forall ((vq_i (_ BitVec 64))) (=> (bvule vq_i ")) != 2 { return 24; }
+    if !contains(q, String::from("(bvult (select ck2_varr vq_i) ")) { return 25; }
+    if !contains(q, String::from("(distinct (bvand (select p1_varr (select ck2_varr vq_i))")) { return 26; }
+    if !contains(q, String::from("(bvadd vq_i (select ck2_varr vq_i))")) { return 27; }
+    if !contains(q, String::from("(select ck2_varr #x0000000000000000)")) { return 28; }
+    if contains(q, String::from("(assert (not (forall")) { return 29; }
+    0
+}
+
+// The same operand terms give the same Bool term: the second call adds no witness, array or
+// axiom, and `a == a` leaves no claim.
+fn check_same_operands_share_the_result() -> i64 {
+    let twice: VcClaims = vc_claims(contains_twice(ITY_BOOL(), false));
+    if twice.kinds.len() != 0 { return 30; }
+    let once: VcClaims = vc_claims(contains_once(ITY_BOOL()));
+    if once.assumed.len() == 0 { return 31; }
+    if twice.assumed.len() != once.assumed.len() { return 32; }
+    0
+}
+
+// Swapping the operands is a different question: two results, nothing ties them.
+fn check_swapped_operands_are_separate() -> i64 {
+    let cs: VcClaims = vc_claims(contains_twice(ITY_BOOL(), true));
+    if cs.kinds.len() != 1 { return 40; }
+    let q: String = vc_smt_render(cs.arena, vc_claim_script(cs, 0));
+    if !contains(q, String::from("(declare-const ce0 Bool)")) { return 41; }
+    if !contains(q, String::from("(declare-const ce")) { return 42; }
+    0
+}
+
+// The query leaves the quantifier-free logic.
+fn check_logic() -> i64 {
+    let cs: VcClaims = vc_claims(contains_once(ITY_BOOL()));
+    let q: String = vc_smt_render(cs.arena, vc_claim_script(cs, 0));
+    if !contains(q, String::from("(set-logic ABV)")) { return 50; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_op_table();
+    if r == 0 { r = check_gate(); }
+    if r == 0 { r = check_definition_is_rendered(); }
+    if r == 0 { r = check_same_operands_share_the_result(); }
+    if r == 0 { r = check_swapped_operands_are_separate(); }
+    if r == 0 { r = check_logic(); }
+    i64_to_i32_wrap(r)
+}

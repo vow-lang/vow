@@ -67,6 +67,15 @@ struct VcVec {
     // append that built array term `r`, -1 when it was not built by one (`vc_strdeep`).
     app_at: Vec<i64>,
     app_ops: Vec<i64>,
+    // `contains` calls already encoded (`vc_strsearch`): the four operand terms and the Bool
+    // term that is the result.
+    cn_key: Vec<i64>,
+    cn_res: Vec<i64>,
+    // Decimal formatter calls already encoded (`vc_numeric`): the operand term and its
+    // signedness (two words per call) and the `(array, length)` terms of the result.
+    dc_key: Vec<i64>,
+    dc_arr: Vec<i64>,
+    dc_len: Vec<i64>,
 }
 
 fn vc_vec_new_state(fl: VcFlow, n_blocks: u64) -> VcVec {
@@ -94,6 +103,11 @@ fn vc_vec_new_state(fl: VcFlow, n_blocks: u64) -> VcVec {
         hk_vars: Vec::new(),
         app_at: Vec::new(),
         app_ops: Vec::new(),
+        cn_key: Vec::new(),
+        cn_res: Vec::new(),
+        dc_key: Vec::new(),
+        dc_arr: Vec::new(),
+        dc_len: Vec::new(),
     }
 }
 

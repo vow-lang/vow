@@ -1,0 +1,21 @@
+// TEST: counterexample-fn "single_digit"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures result == 1"
+// TEST: counterexample-value n 10
+// The decimal length is exact: 10 is the smallest operand with two digits, so a
+// claim of one digit up to 10 is refuted at it, and the replay (which formats the
+// real number) confirms it.
+module UintToStringWrongLength
+
+fn single_digit(n: u64) -> u64 vow {
+  requires: n <= 10
+  ensures: result == 1
+} {
+  uint_to_string(n).len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(single_digit(7u64));
+  0
+}
