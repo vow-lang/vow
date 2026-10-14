@@ -1,0 +1,107 @@
+// TEST: stdout "0"
+// A region summary is written with u32 region ids and a 2-bit constraint kind: in-range values
+// are unchanged and anything else is reduced modulo 2^32 (kind: modulo 4), since nothing bounds
+// the elements of a Vec for the verifier.
+module Main
+
+use ir
+use module_io
+
+fn expect_bytes(out: Vec<i64>, want: Vec<i64>) -> i64 {
+    if out.len() != want.len() { return 1; }
+    let mut i: u64 = 0;
+    let n: u64 = want.len();
+    while i < n vow {
+        invariant: i <= n
+    } {
+        if out[i] != want[i] { return 1; }
+        i = i + 1;
+    }
+    0
+}
+
+fn push_u32(v: Vec<i64>, a: i64, b: i64, c: i64, d: i64) {
+    v.push(a);
+    v.push(b);
+    v.push(c);
+    v.push(d);
+}
+
+fn new_fn() -> IrFunction {
+    ir_function_new(1, String::from("f"), ITY_UNIT(), 0, String::from("t.vow"))
+}
+
+fn in_range_summary() -> i64 {
+    let f: IrFunction = new_fn();
+    f.rsum_param_regions.push(5);
+    f.rsum_param_regions.push(4294967295);
+    f.rsum_return_kind = RSUM_KIND_ALIAS_OF();
+    f.rsum_return_aux = 3;
+    f.rsum_store_effects.push(2);
+    f.rsum_store_effects.push(RSUM_KIND_ALIAS_OF());
+    f.rsum_store_effects.push(4);
+    let out: Vec<i64> = Vec::new();
+    write_region_summary(out, f);
+    let want: Vec<i64> = Vec::new();
+    want.push(2);
+    push_u32(want, 5, 0, 0, 0);
+    push_u32(want, 255, 255, 255, 255);
+    want.push(1);
+    push_u32(want, 3, 0, 0, 0);
+    want.push(1);
+    push_u32(want, 2, 0, 0, 0);
+    want.push(1);
+    push_u32(want, 4, 0, 0, 0);
+    expect_bytes(out, want)
+}
+
+fn out_of_range_summary() -> i64 {
+    let f: IrFunction = new_fn();
+    f.rsum_param_regions.push(5);
+    f.rsum_param_regions.push(-1);
+    f.rsum_param_regions.push(4294967303);
+    f.rsum_return_kind = RSUM_KIND_ALIAS_OF();
+    f.rsum_return_aux = -1;
+    f.rsum_store_effects.push(4294967297);
+    f.rsum_store_effects.push(RSUM_KIND_ALIAS_OF());
+    f.rsum_store_effects.push(-2);
+    f.rsum_store_effects.push(3);
+    f.rsum_store_effects.push(RSUM_KIND_FRESH_IN_CALLER());
+    let out: Vec<i64> = Vec::new();
+    write_region_summary(out, f);
+    let want: Vec<i64> = Vec::new();
+    want.push(3);
+    push_u32(want, 5, 0, 0, 0);
+    push_u32(want, 255, 255, 255, 255);
+    push_u32(want, 7, 0, 0, 0);
+    want.push(1);
+    push_u32(want, 255, 255, 255, 255);
+    want.push(2);
+    push_u32(want, 1, 0, 0, 0);
+    want.push(1);
+    push_u32(want, 254, 255, 255, 255);
+    push_u32(want, 3, 0, 0, 0);
+    want.push(0);
+    expect_bytes(out, want)
+}
+
+fn out_of_range_return_kind() -> i64 {
+    let f: IrFunction = new_fn();
+    f.rsum_return_kind = 6;
+    f.rsum_return_aliases.push(9);
+    let out: Vec<i64> = Vec::new();
+    write_region_summary(out, f);
+    let want: Vec<i64> = Vec::new();
+    want.push(0);
+    want.push(RSUM_KIND_ALIAS_OF_ANY());
+    want.push(1);
+    push_u32(want, 9, 0, 0, 0);
+    want.push(0);
+    expect_bytes(out, want)
+}
+
+fn main() -> i32 [io] {
+    let fail: i64 = in_range_summary() + out_of_range_summary() + out_of_range_return_kind();
+    print_i64(fail);
+    0
+}

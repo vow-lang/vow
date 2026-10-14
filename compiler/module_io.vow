@@ -550,11 +550,13 @@ fn write_region_summary(out: Vec<i64>, f: IrFunction) {
     while i < param_regions.len() vow {
         invariant: i <= param_regions.len()
     } {
-        write_u32_le(out, param_regions[i]);
+        write_u32_le(out, param_regions[i] & 4294967295);
         i = i + 1;
     }
 
-    region_constraint_encode(out, f.rsum_return_kind, f.rsum_return_aux, f.rsum_return_aliases);
+    let return_kind: i64 = f.rsum_return_kind & 3;
+    let return_aux: i64 = f.rsum_return_aux & 4294967295;
+    region_constraint_encode(out, return_kind, return_aux, f.rsum_return_aliases);
 
     let flat: Vec<i64> = f.rsum_store_effects;
     write_leb(out, store_effect_count(flat));
@@ -563,13 +565,13 @@ fn write_region_summary(out: Vec<i64>, f: IrFunction) {
         invariant: i <= flat.len()
     } {
         let target: i64 = flat[i];
-        let kind: i64 = flat[i + 1];
-        write_u32_le(out, target);
+        let kind: i64 = flat[i + 1] & 3;
+        write_u32_le(out, target & 4294967295);
         if kind == RSUM_KIND_FRESH_IN_CALLER() || kind == RSUM_KIND_CONSTANT_GLOBAL() {
             region_constraint_encode(out, kind, 0, Vec::new());
             i = i + 2;
         } else if kind == RSUM_KIND_ALIAS_OF() {
-            region_constraint_encode(out, kind, flat[i + 2], Vec::new());
+            region_constraint_encode(out, kind, flat[i + 2] & 4294967295, Vec::new());
             i = i + 3;
         } else {
             let n_aliases: u64 = flat[i + 2] as u64;
