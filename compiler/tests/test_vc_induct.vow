@@ -369,7 +369,7 @@ fn check_vec_written_in_loop() -> i64 {
     let m: IrInst = h.insts[1];
     if !vc_is_havoc_vec(m) || m.args.len() != 1 || m.args[0] != 40 || m.ty != ITY_UNIT() { return 3; }
     if !vc_is_havoc(h.insts[0]) || vc_is_havoc_vec(h.insts[0]) { return 4; }
-    if m.id < 22 || vc_is_havoc_vec(h.insts[2]) { return 5; }
+    if m.id <= dom_max_inst_id(f) || vc_is_havoc_vec(h.insts[2]) { return 5; }
     if !well_formed(g) { return 6; }
     let again: VcInduct = vc_induct_cut(f);
     if print_function(again.f) != print_function(g) { return 7; }
@@ -401,6 +401,34 @@ fn check_vec_havoc_refused() -> i64 {
     let body: Vec<IrInst> = Vec::new();
     body.push(mk_inst_call_extern(50, ITY_UNIT(), pair(40, 40), String::from("__vow_string_push_str")));
     if vc_induct_cut(count_up_with(pre, body)).status != VC_INDUCT_NA() { return 2; }
+
+    let anon: Vec<IrInst> = Vec::new();
+    anon.push(mk_inst_call_extern(50, ITY_UNIT(), Vec::new(), String::from("__vow_vec_push_val")));
+    if vc_induct_cut(count_up_with(Vec::new(), anon)).status != VC_INDUCT_NA() { return 3; }
+
+    let neg: Vec<IrInst> = Vec::new();
+    neg.push(mk_inst_call_extern(50, ITY_UNIT(), pair(0 - 1, 0), String::from("__vow_vec_push_val")));
+    if vc_induct_cut(count_up_with(Vec::new(), neg)).status != VC_INDUCT_NA() { return 4; }
+
+    let far: Vec<IrInst> = Vec::new();
+    far.push(mk_inst_call_extern(50, ITY_UNIT(), pair(9999, 0), String::from("__vow_vec_push_val")));
+    if vc_induct_cut(count_up_with(Vec::new(), far)).status != VC_INDUCT_NA() { return 5; }
+    0
+}
+
+// An indexed assignment and a pop mutate a Vec as a push does: each gets the
+// havoc marker, once per loop however many writes the body holds.
+fn check_vec_set_pop_in_loop() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(vec_new_inst(40));
+    let body: Vec<IrInst> = Vec::new();
+    let set_args: Vec<i64> = pair(40, 0);
+    set_args.push(0);
+    body.push(mk_inst_call_extern(50, ITY_UNIT(), set_args, String::from("__vow_vec_set_val")));
+    body.push(mk_inst_call_extern(51, ITY_PTR(), one(40), String::from("__vow_vec_pop")));
+    let c: VcInduct = vc_induct_cut(count_up_with(pre, body));
+    if c.status != VC_INDUCT_OK() { return 1; }
+    if count_marker(c.f, VC_INTERNAL_HAVOC_VEC()) != 1 { return 2; }
     0
 }
 
@@ -456,6 +484,7 @@ fn main() -> i32 {
     if r == 0 { r = check_vec_written_in_loop() + 500; if r == 500 { r = 0; } }
     if r == 0 { r = check_vec_read_in_loop() + 550; if r == 550 { r = 0; } }
     if r == 0 { r = check_vec_havoc_refused() + 570; if r == 570 { r = 0; } }
+    if r == 0 { r = check_vec_set_pop_in_loop() + 590; if r == 590 { r = 0; } }
     if r == 0 { r = check_agg_written_in_loop() + 600; if r == 600 { r = 0; } }
     i64_to_i32_wrap(r)
 }

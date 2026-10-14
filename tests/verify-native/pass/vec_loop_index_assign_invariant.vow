@@ -1,0 +1,30 @@
+// TEST: category invariant
+// The loop writes contents with an indexed assignment and never changes the
+// length: the invariant carries the length and the fact about element 0 past
+// the unwinding bound.
+module VecLoopIndexAssignInvariant
+
+fn overwrite(v: Vec<i64>) vow {
+  requires: v.len() == 100,
+  ensures: v.len() == 100 && v[0] == 7
+} {
+  let mut i: u64 = 0;
+  while i < 100 vow {
+    invariant: i <= 100 && v.len() == 100 && (i == 0 || v[0] == 7)
+  } {
+    v[i] = 7;
+    i = i + 1;
+  }
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  let mut k: u64 = 0;
+  while k < 100 {
+    v.push(0);
+    k = k + 1;
+  }
+  overwrite(v);
+  print_i64(v[0]);
+  0
+}

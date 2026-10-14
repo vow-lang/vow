@@ -33,10 +33,9 @@ use vc_inline
 //
 // A loop the cut cannot treat exactly (a loop without an invariant, a pointer
 // carried by a header Phi, a String written in a loop, a Vec born in the loop
-// that writes it, an irregular header) makes
-// the whole function `NA`: the caller keeps the bounded verdict, as it does for
-// a cut the executor cannot walk. An accepted cut is only a transformation: it
-// never produces a verdict itself.
+// that writes it, an irregular header) makes the whole function `NA`: the caller
+// keeps the bounded verdict, as it does for a cut the executor cannot walk. An
+// accepted cut is only a transformation: it never produces a verdict itself.
 
 fn VC_INDUCT_OK() -> i64 { 0 }
 fn VC_INDUCT_NA() -> i64 { 1 }
@@ -248,10 +247,10 @@ fn vc_induct_has(v: Vec<i64>, x: i64) -> bool {
 // The Vecs each loop writes. A Vec's state is the executor's own flow-sensitive
 // `(array, length)` pair, not a header Phi, so the cut havocs it at the top of
 // the header proper of every loop whose body (nested loops included) mutates
-// it: `recv[j]` lists the receivers of loop `j`, in instruction order. Not `ok`
-// (the function is not cut) when a mutated receiver is a String or is defined
-// inside a loop that mutates it: the model has no state for an object that is
-// born in the loop it is havoced by.
+// it: `recv[j]` lists the receivers of loop `j`, in block then instruction order.
+// Not `ok` (the function is not cut) when a mutated receiver is a String or is
+// defined inside a loop that mutates it: the model has no state for an object
+// that is born in the loop it is havoced by.
 fn vc_induct_vec_havocs(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, n_ids: u64) -> VcVecHavocs {
     let out: VcVecHavocs = VcVecHavocs { ok: false, recv: Vec::new() };
     let mut j: i64 = 0;
@@ -563,12 +562,14 @@ fn vc_induct_rebuild_block(st: VcCut, b: u64) -> IrBlock {
     let out: IrBlock = ir_block_new(src.id);
     let hl: i64 = st.li.loop_of_header[b];
     let mut at: u64 = 0;
-    while at < src.insts.len() && src.insts[at].op == IOP_PHI() {
-        at = at + 1;
+    if hl >= 0 {
+        while at < src.insts.len() && src.insts[at].op == IOP_PHI() {
+            at = at + 1;
+        }
     }
     let mut i: u64 = 0;
     while i < src.insts.len() {
-        if i == at && hl >= 0 {
+        if hl >= 0 && i == at {
             vc_induct_push_vec_havocs(st, hl, out);
         }
         out.insts.push(vc_induct_rebuild_inst(st, b, src.insts[i]));
