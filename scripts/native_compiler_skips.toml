@@ -8,12 +8,6 @@
 # `code` is checked against the reason the native verifier reports.
 
 [[skip]]
-function = "byte_at_u8"
-code = "unmodeled-builtin"
-issue = 1679
-reason = "calls the wrapping narrowing intrinsic i64_to_u8_wrap"
-
-[[skip]]
 function = "span_pack_to_here"
 code = "unsupported-opcode"
 issue = 1677
@@ -219,9 +213,9 @@ reason = "passes a Vec buffer or a reader struct to another function (module_io.
 
 [[skip]]
 function = "reader_read_string"
-code = "unmodeled-builtin"
-issue = 1679
-reason = "calls the wrapping narrowing intrinsic i64_to_u8_wrap (module_io.vow)"
+code = "unsupported-opcode"
+issue = 1677
+reason = "passes a reader struct to reader_read_count and reader_read_u8 (module_io.vow)"
 
 [[skip]]
 function = "sort_local_names"

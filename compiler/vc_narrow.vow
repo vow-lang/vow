@@ -1,0 +1,174 @@
+module VcNarrow
+
+use ir
+use vc_term
+use vc_int
+
+// The narrowing intrinsics `<src>_to_<dst>_{wrap,sat,try}` of the native verifier
+// (docs/spec/grammar.md "Type Cast"; runtime `__vow_<src>_to_<dst>_<kind>`). They are
+// pure integer functions, so each is a closed bit-vector term of its operand, never
+// an unconstrained result:
+//
+//   wrap  `value as dst`: the low bits when narrowing, the extension by the
+//         source's signedness otherwise (`vc_cast`).
+//   sat   the operand clamped into `[DST_MIN, DST_MAX]` (a signed or unsigned
+//         compare by the source's signedness, then a select).
+//   try   `Some(wrapped)` when the operand is in range, else `None`: an `Option`
+//         whose tag slot is the 64-bit `1`/`0` and whose payload slot holds the
+//         destination-width value (the cell `alloc_option_in_arena` fills).
+//
+// The family is not in the operation catalogue (ADR-2026-10-13-1048 keeps it
+// excluded); the symbol is parsed here instead, like the `Vec` operations of
+// `vc_ops`.
+
+fn VC_NAR_NONE() -> i64 { 0 }
+fn VC_NAR_WRAP() -> i64 { 1 }
+fn VC_NAR_SAT() -> i64 { 2 }
+fn VC_NAR_TRY() -> i64 { 3 }
+
+// `kind` is a `VC_NAR_*`; `src` and `dst` are IR integer type codes (-1 when `kind`
+// is `VC_NAR_NONE`).
+struct VcNarrow {
+    kind: i64,
+    src: i64,
+    dst: i64,
+}
+
+fn vc_narrow_none() -> VcNarrow {
+    VcNarrow { kind: VC_NAR_NONE(), src: -1, dst: -1 }
+}
+
+// The IR type of an integer type name, or -1.
+fn vc_narrow_ity(name: String) -> i64 {
+    if name == String::from("i8") { return ITY_I8(); }
+    if name == String::from("u8") { return ITY_U8(); }
+    if name == String::from("i16") { return ITY_I16(); }
+    if name == String::from("u16") { return ITY_U16(); }
+    if name == String::from("i32") { return ITY_I32(); }
+    if name == String::from("u32") { return ITY_U32(); }
+    if name == String::from("i64") { return ITY_I64(); }
+    if name == String::from("u64") { return ITY_U64(); }
+    if name == String::from("i128") { return ITY_I128(); }
+    if name == String::from("u128") { return ITY_U128(); }
+    -1
+}
+
+fn vc_narrow_kind_of(suffix: String) -> i64 {
+    if suffix == String::from("wrap") { return VC_NAR_WRAP(); }
+    if suffix == String::from("sat") { return VC_NAR_SAT(); }
+    if suffix == String::from("try") { return VC_NAR_TRY(); }
+    VC_NAR_NONE()
+}
+
+// The index of the first `needle` byte of `s` at or after `from`, or -1.
+fn vc_narrow_find_byte(s: String, from: u64, needle: i64) -> i64 {
+    let mut i: u64 = from;
+    while i < s.len() {
+        if s.byte_at(i) == needle { return i as i64; }
+        i = i + 1;
+    }
+    -1
+}
+
+// `__vow_<src>_to_<dst>_<kind>` is 18 bytes at the shortest (`__vow_i8_to_u8_try`)
+// and 23 at the longest (`__vow_u128_to_i128_wrap`).
+fn vc_narrow_parse(sym: String) -> VcNarrow {
+    let n: u64 = sym.len();
+    if n < 18 || n > 23 { return vc_narrow_none(); }
+    if string_starts_with(sym, String::from("__vow_")) != 1 { return vc_narrow_none(); }
+    let body: String = sym.substring(6, n);
+    let to_at: i64 = vc_narrow_find_byte(body, 0, 95);
+    if to_at < 0 { return vc_narrow_none(); }
+    let rest_at: u64 = (to_at as u64) + 4;
+    if rest_at > body.len() { return vc_narrow_none(); }
+    if body.substring(to_at as u64, rest_at) != String::from("_to_") { return vc_narrow_none(); }
+    let src: i64 = vc_narrow_ity(body.substring(0, to_at as u64));
+    let rest: String = body.substring(rest_at, body.len());
+    let us: i64 = vc_narrow_find_byte(rest, 0, 95);
+    if src < 0 || us < 0 { return vc_narrow_none(); }
+    let dst: i64 = vc_narrow_ity(rest.substring(0, us as u64));
+    let kind: i64 = vc_narrow_kind_of(rest.substring((us as u64) + 1, rest.len()));
+    if dst < 0 || kind == VC_NAR_NONE() { return vc_narrow_none(); }
+    VcNarrow { kind: kind, src: src, dst: dst }
+}
+
+// The narrowing intrinsic an instruction calls, or `kind == VC_NAR_NONE`.
+fn vc_narrow_of(inst: IrInst) -> VcNarrow {
+    if inst.op != IOP_CALL() || inst.dk != IDATA_CALL_EXTERN() { return vc_narrow_none(); }
+    vc_narrow_parse(inst.ds)
+}
+
+// Operand and result types of a call to `nar`. A `sat` or `try` runs only from a
+// source at least as wide as the destination, and a `try` cell holds a payload of
+// at most one 8-byte slot, so every other shape is not modelled.
+fn vc_narrow_shape_ok(nar: VcNarrow, inst: IrInst, arg_ty: i64) -> bool {
+    if inst.args.len() != 1 || arg_ty != nar.src { return false; }
+    let sw: i64 = vc_ty_bits(nar.src);
+    let dw: i64 = vc_ty_bits(nar.dst);
+    if nar.kind == VC_NAR_WRAP() { return inst.ty == nar.dst; }
+    if dw > sw { return false; }
+    if nar.kind == VC_NAR_SAT() { return inst.ty == nar.dst; }
+    inst.ty == ITY_PTR() && dw <= 64
+}
+
+// The destination's bounds as constants of the destination's width: the smallest
+// value is the signed minimum, or 0 for an unsigned type; the largest is the signed
+// maximum or all ones.
+fn vc_narrow_dst_min(ar: VcArena, dst: i64) -> i64 {
+    if vc_ty_signed(dst) { return vc_int_min(ar, dst); }
+    vc_int_zero(ar, dst)
+}
+
+fn vc_narrow_dst_max(ar: VcArena, dst: i64) -> i64 {
+    let w: i64 = vc_ty_bits(dst);
+    if !vc_ty_signed(dst) { return vc_int_minus_one(ar, dst); }
+    if w == 128 { return vc_tm_bv(ar, w, -1, 9223372036854775807); }
+    if w == 64 { return vc_tm_bv(ar, w, 9223372036854775807, 0); }
+    vc_tm_bv(ar, w, (1 << (w - 1)) - 1, 0)
+}
+
+// Bool term: `x` is below the destination's range, or -1 when it never can be (an
+// unsigned source has no negative values).
+fn vc_narrow_below(ar: VcArena, nar: VcNarrow, x: i64) -> i64 {
+    if !vc_ty_signed(nar.src) { return -1; }
+    let lo: i64 = vc_cast(ar, nar.dst, nar.src, vc_narrow_dst_min(ar, nar.dst));
+    vc_tm_app2(ar, VC_OP_BVSLT(), x, lo)
+}
+
+// Bool term: `x` is above the destination's range, or -1 when it never can be
+// (a signed source of the destination's own width, an unsigned destination: the
+// destination's maximum is not a value of the source).
+fn vc_narrow_above(ar: VcArena, nar: VcNarrow, x: i64) -> i64 {
+    let signed_src: bool = vc_ty_signed(nar.src);
+    if signed_src && !vc_ty_signed(nar.dst) && vc_ty_bits(nar.src) == vc_ty_bits(nar.dst) { return -1; }
+    let hi: i64 = vc_cast(ar, nar.dst, nar.src, vc_narrow_dst_max(ar, nar.dst));
+    if signed_src { return vc_tm_app2(ar, VC_OP_BVSGT(), x, hi); }
+    vc_tm_app2(ar, VC_OP_BVUGT(), x, hi)
+}
+
+// Bool term: `x` lies in the destination's range.
+fn vc_narrow_in_range(ar: VcArena, nar: VcNarrow, x: i64) -> i64 {
+    let below: i64 = vc_narrow_below(ar, nar, x);
+    let above: i64 = vc_narrow_above(ar, nar, x);
+    if below < 0 && above < 0 { return vc_tm_bool_const(ar, true); }
+    if below < 0 { return vc_tm_app1(ar, VC_OP_NOT(), above); }
+    if above < 0 { return vc_tm_app1(ar, VC_OP_NOT(), below); }
+    vc_tm_app1(ar, VC_OP_NOT(), vc_tm_app2(ar, VC_OP_OR(), below, above))
+}
+
+// The result of a `wrap` or `sat` call on the operand term `x`.
+fn vc_narrow_value(ar: VcArena, nar: VcNarrow, x: i64) -> i64 {
+    let wrapped: i64 = vc_cast(ar, nar.src, nar.dst, x);
+    if nar.kind != VC_NAR_SAT() { return wrapped; }
+    let mut r: i64 = wrapped;
+    let above: i64 = vc_narrow_above(ar, nar, x);
+    if above >= 0 { r = vc_tm_app3(ar, VC_OP_ITE(), above, vc_narrow_dst_max(ar, nar.dst), r); }
+    let below: i64 = vc_narrow_below(ar, nar, x);
+    if below >= 0 { r = vc_tm_app3(ar, VC_OP_ITE(), below, vc_narrow_dst_min(ar, nar.dst), r); }
+    r
+}
+
+// The tag slot of a `try` call's `Option`: 64-bit `1` (`Some`) in range, else `0`.
+fn vc_narrow_try_tag(ar: VcArena, nar: VcNarrow, x: i64) -> i64 {
+    vc_tm_app3(ar, VC_OP_ITE(), vc_narrow_in_range(ar, nar, x), vc_tm_bv(ar, 64, 1, 0), vc_tm_bv(ar, 64, 0, 0))
+}

@@ -1,0 +1,84 @@
+// The wrapping, saturating and checked narrowing intrinsics are modelled exactly:
+// each contract is the documented semantics (docs/spec/grammar.md, "Type Cast")
+// stated on the source value, and the native verifier proves it.
+module NarrowingIntrinsicsExact
+
+fn wrap_unsigned_low_bits(x: i64) -> u8 vow {
+  ensures: result as i64 == (x & 255)
+} {
+  i64_to_u8_wrap(x)
+}
+
+fn wrap_signed_sign_extends(x: i32) -> i8 vow {
+  ensures: result as i32 == (((x & 255) ^ 128) - 128)
+} {
+  i32_to_i8_wrap(x)
+}
+
+fn wrap_same_width_reinterprets(x: u32) -> i32 vow {
+  ensures: result as u32 == x
+} {
+  u32_to_i32_wrap(x)
+}
+
+fn wrap_wide_source(x: i128) -> u16 vow {
+  ensures: result as i128 == (x & 65535)
+} {
+  i128_to_u16_wrap(x)
+}
+
+fn sat_signed_to_unsigned(x: i32) -> u8 vow {
+  ensures: (x < 0 && result == 0) || (x > 255 && result == 255) || (x >= 0 && x <= 255 && result as i32 == x)
+} {
+  i32_to_u8_sat(x)
+}
+
+fn sat_unsigned_to_signed(x: u64) -> i16 vow {
+  ensures: (x > 32767 && result == 32767) || (x <= 32767 && result as u64 == x)
+} {
+  u64_to_i16_sat(x)
+}
+
+fn sat_wide_source(x: i128) -> i8 vow {
+  ensures: (x < -128 && result == -128) || (x > 127 && result == 127) || (x >= -128 && x <= 127 && result as i128 == x)
+} {
+  i128_to_i8_sat(x)
+}
+
+fn try_signed(x: i16) -> i64 vow {
+  ensures: (x >= -128 && x <= 127 && result == x as i64) || ((x < -128 || x > 127) && result == -1000)
+} {
+  match i16_to_i8_try(x) {
+    Option::Some(b) => { b as i64 },
+    Option::None => { -1000 },
+  }
+}
+
+fn try_unsigned_target(x: i64) -> i64 vow {
+  ensures: (x >= 0 && x <= 65535 && result == x) || ((x < 0 || x > 65535) && result == -1)
+} {
+  match i64_to_u16_try(x) {
+    Option::Some(b) => { b as i64 },
+    Option::None => { -1 },
+  }
+}
+
+fn try_unsigned_source(x: u32) -> bool vow {
+  ensures: result == (x <= 2147483647)
+} {
+  match u32_to_i32_try(x) {
+    Option::Some(b) => { true },
+    Option::None => { false },
+  }
+}
+
+fn try_then_wrap_agree(x: u64) -> bool vow {
+  ensures: result
+} {
+  match u64_to_u32_try(x) {
+    Option::Some(b) => { b == u64_to_u32_wrap(x) },
+    Option::None => { x > 4294967295 },
+  }
+}
+
+fn main() -> i32 { 0 }

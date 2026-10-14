@@ -943,7 +943,7 @@
     {
       "contains": "_to_",
       "suffixes": ["_try", "_wrap", "_sat"],
-      "reason": "Narrowing-conversion families (<source>_to_<target>_{try,wrap,sat}) return narrow integer types the catalogue token vocabulary cannot express yet; they stay in the hand-written conversion tables, and their _try runtime symbols are the arena_routes entries."
+      "reason": "Narrowing-conversion families (<source>_to_<target>_{try,wrap,sat}) return narrow integer types the catalogue token vocabulary cannot express yet; they stay in the hand-written conversion tables, and their _try runtime symbols are the arena_routes entries. The native verifier models the whole family by parsing the runtime symbol (compiler/vc_narrow.vow, ADR-2026-10-08-1422 addendum for #1679 and #1690), so no per-member verifier_model is recorded here."
     },
     {
       "names": ["add_sat_u8", "sub_sat_u8", "mul_sat_u8"],
