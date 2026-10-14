@@ -2,6 +2,7 @@
 // TEST: counterexample-fn "twice_halved"
 // TEST: counterexample-blame Callee
 // TEST: counterexample-vow-id 1
+// TEST: replay-skipped float parameters are not rebuilt by the replay harness
 // Halving twice never exceeds the argument, so the caller's claim of a strictly
 // smaller result is false for a zero argument, where the inlined float calls return that same zero.
 module FloatInlineCallEnsuresWrong

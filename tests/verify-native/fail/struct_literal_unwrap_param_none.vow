@@ -1,5 +1,4 @@
 // Native-only: ESBMC marks every `[panic]` function non-modelable.
-// TEST: replay-skipped Option parameter
 // TEST: counterexample-fn "with_unwrap"
 // TEST: counterexample-vow-id 4294967293
 // TEST: counterexample-blame None
