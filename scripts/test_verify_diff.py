@@ -553,11 +553,11 @@ class ContractsTest(unittest.TestCase):
         n = report(clause("f", "ensures", 1, "vacuous"))
         self.assertEqual(vd.WEAKER, self.cmp(e, n))
 
-    def test_trivial_flag_must_agree(self):
+    def test_trivial_flag_native_false_is_weaker_native_true_is_more_precise(self):
         e = report(clause("f", "ensures", 1, "proven", True))
         n = report(clause("f", "ensures", 1, "proven", False))
         self.assertEqual(vd.WEAKER, self.cmp(e, n))
-        self.assertEqual(vd.WEAKER, self.cmp(n, e))
+        self.assertEqual(vd.MORE_PRECISE, self.cmp(n, e))
 
     def test_native_error_where_esbmc_is_inconclusive_is_weaker(self):
         e = report(clause("f", "ensures", 1, "unknown"))
