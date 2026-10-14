@@ -85,10 +85,25 @@ fixtures), and by the wiring tests of `tests/verify-native/tests.sh`.
 
 ## Measurements
 
-`compiler/main.vow` (about 51k lines), `--no-cache`, `--verify-jobs 1`,
-a shared machine under the benchmark lock; CPU time is the contention-free
-figure. See the PR for the table; the cost per worker is one frontend instead of
-one per function.
+`compiler/main.vow` (about 51k lines, 40 targets), `vowc verify --no-cache
+--backend native`, one run per cell on a shared machine under the benchmark
+lock; user CPU is the contention-free figure. RSS is the peak of the process
+tree. The same sources, before (one process per function) and after (sessions):
+
+| `--verify-jobs` | wall before | wall after | CPU before | CPU after | tree RSS before | tree RSS after |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 307 s | 22 to 28 s | 305 s | 22 to 28 s | 454 MB | 460 MB |
+| 12 | 96 s | 48 s | 758 s | 339 s | 2.63 GB | 2.67 GB |
+
+ESBMC verifies the same program in 271 s (4.05 GB) in the P5 gate run, so the
+native path is now about a tenth of ESBMC's wall time at one job instead of
+1.8x. The cost per worker is one frontend instead of one per function; peak
+memory is unchanged because the frontend's footprint is per resident worker.
+With 12 jobs the remaining cost is the 12 frontends that run at once.
+
+The report is byte-identical (stdout, stderr and exit code) to the
+one-process-per-function pool for `compiler/main.vow` and for all 387 fixtures
+of `tests/verify*`, in both `verify` and `contracts` modes.
 
 ## Consequences
 
