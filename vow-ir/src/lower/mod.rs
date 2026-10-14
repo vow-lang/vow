@@ -4725,9 +4725,6 @@ fn known_map_argument_ast_types(
     declared_map(ctx, recv_id).map_or((None, None), |map| (map.key.cloned(), map.value.cloned()))
 }
 
-/// Record a `for` binding's declared type when the iterated `Vec`'s element is itself a
-/// collection (`Vec`, `HashMap` or `BTreeMap`), as an indexed element already does, so
-/// the binding dispatches map methods and indexes into an inner `Vec<Map>` correctly.
 /// `__vow_vec_get_val` returns a `Vec<bool>` element as the runtime's 8-byte slot, typed
 /// `i64`. Comparing it with zero gives the read the `bool` type the program gave it, so
 /// every later use (branch, return, `!`, `&&`) sees a `bool`. Twin of
@@ -4763,6 +4760,9 @@ fn foreach_elem_is_bool(ctx: &LowerCtx, iter_id: InstId) -> bool {
         })
 }
 
+/// Record a `for` binding's declared type when the iterated `Vec`'s element is itself a
+/// collection (`Vec`, `HashMap` or `BTreeMap`), as an indexed element already does, so
+/// the binding dispatches map methods and indexes into an inner `Vec<Map>` correctly.
 fn record_collection_foreach_element(ctx: &mut LowerCtx, iter_id: InstId, elem_id: InstId) {
     let Some(iter_ty) = ctx.inst_declared_ast_types.get(&iter_id) else {
         return;
