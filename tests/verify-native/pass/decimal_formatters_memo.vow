@@ -1,0 +1,29 @@
+module DecimalFormattersMemo
+
+// Calls on one operand share one string, and signedness is part of what is shared: the
+// signed and the unsigned text of a negative `i64` are different strings, so the second
+// call must not reuse the first.
+fn repeated_call_agrees(n: u64) -> bool vow {
+  ensures: result == true
+} {
+  uint_to_string(n).eq(uint_to_string(n))
+}
+
+fn signed_and_unsigned_differ(n: i64) -> bool vow {
+  requires: n < 0
+  ensures: result == true
+} {
+  !int_to_string(n).eq(uint_to_string(n as u64))
+}
+
+fn signed_and_unsigned_agree(n: i64) -> bool vow {
+  requires: n >= 0
+  ensures: result == true
+} {
+  int_to_string(n).eq(uint_to_string(n as u64))
+}
+
+fn main() -> i32 [io] {
+  print_u64(uint_to_string(7u64).len());
+  0
+}

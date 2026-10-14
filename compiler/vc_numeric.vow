@@ -32,6 +32,17 @@ fn vc_num_max_digits(bits: i64) -> i64 {
     20
 }
 
+// The index of the earlier call on operand `v` with signedness `flag`, or -1.
+fn vc_num_decimal_find(vv: VcVec, v: i64, flag: i64) -> i64 {
+    let k: Vec<i64> = vv.dc_key;
+    let mut i: u64 = 0;
+    while i + 1 < k.len() {
+        if k[i] == v && k[i + 1] == flag { return (i / 2) as i64; }
+        i = i + 2;
+    }
+    -1
+}
+
 // The decimal expansion `int_to_string` (`signed`) or `uint_to_string` of the `bits`-bit
 // vector `v` (64 or 128) returns, as the `(array, length)` of a string pushed on `out`.
 //
@@ -47,10 +58,10 @@ fn vc_num_max_digits(bits: i64) -> i64 {
 // share one string.
 fn vc_num_decimal(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, v: i64, bits: i64, signed: bool, out: Vec<i64>) {
     let flag: i64 = if signed { 1 } else { 0 };
-    let known: i64 = vc_str_memo_find(vv, v, flag, -7, -7);
+    let known: i64 = vc_num_decimal_find(vv, v, flag);
     if known >= 0 {
-        out.push(known);
-        out.push(vc_str_memo_find(vv, v, flag, -8, -8));
+        out.push(vv.dc_arr[known as u64]);
+        out.push(vv.dc_len[known as u64]);
         return;
     }
     let max_digits: i64 = vc_num_max_digits(bits);
@@ -97,8 +108,10 @@ fn vc_num_decimal(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, v: 
         let minus: i64 = vc_tm_app2(ar, VC_OP_EQ(), vc_str_byte(ar, arr, zero), vc_num_c64(ar, 45));
         vc_str_axiom(ar, assumed, vc_tm_implies(ar, neg, minus));
     }
-    vc_str_memo_add(vv, v, flag, -7, -7, arr);
-    vc_str_memo_add(vv, v, flag, -8, -8, len);
+    vv.dc_key.push(v);
+    vv.dc_key.push(flag);
+    vv.dc_arr.push(arr);
+    vv.dc_len.push(len);
     out.push(arr);
     out.push(len);
 }
