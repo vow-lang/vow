@@ -113,11 +113,6 @@ MAIN_DECL = re.compile(r"^\s*fn\s+main\s*\(", re.MULTILINE)
 SKIPPED_FN = re.compile(r"^skipped verification of `([^`]+)`")
 
 
-def capacity_artifact(path):
-    """The reason of the fixture's `esbmc-capacity-artifact` directive, or None."""
-    return verify_eval.artifact_directives(path).capacity
-
-
 def skipped_functions(result):
     """Functions a `vowc verify` result reports as not analysed (warnings only).
 

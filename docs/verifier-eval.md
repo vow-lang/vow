@@ -310,7 +310,8 @@ alternate between backends so host drift hits both.
 | Comparable rows | at least one |
 
 Only rows classed `match` by `verify_diff.py` (same verdict and counterexamples,
-and the same set of skipped functions, so the same work) enter the ratios. `more_precise`, `weaker`, `soundness`,
+and the same set of skipped functions, so the same work) enter the ratios.
+`more_precise`, `weaker`, `soundness`,
 `harness`, a verdict that changes between runs of one backend (`unstable`) and
 rows where either backend timed out are listed with their reason and left out of
 the ratios. Verdict parity is gate item 1 and stays with `verify_diff.py`. The

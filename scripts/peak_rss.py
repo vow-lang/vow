@@ -15,6 +15,7 @@ The sampler runs a fast phase first (1 ms for the first FAST_WINDOW_S) because
 the verifier runs the gate measures start at a few milliseconds.
 """
 
+import functools
 import os
 import resource
 import threading
@@ -45,6 +46,7 @@ def read_rss_hwm(pid):
     return rss, hwm
 
 
+@functools.cache
 def children_listed():
     """True when the kernel exposes /proc/<pid>/task/<tid>/children."""
     return os.path.exists(f"/proc/self/task/{os.getpid()}/children")

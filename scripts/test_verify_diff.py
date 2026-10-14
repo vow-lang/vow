@@ -147,14 +147,14 @@ class CapacityArtifactTest(unittest.TestCase):
                 fh.write(
                     '// TEST: category x\n// TEST: esbmc-capacity-artifact "a cap"\n'
                 )
-            self.assertEqual("a cap", vd.capacity_artifact(path))
+            self.assertEqual("a cap", vd.verify_eval.artifact_directives(path).capacity)
             with open(path, "w") as fh:
                 fh.write("// TEST: category x\n")
-            self.assertIsNone(vd.capacity_artifact(path))
+            self.assertIsNone(vd.verify_eval.artifact_directives(path).capacity)
             with open(path, "w") as fh:
                 fh.write("// TEST: esbmc-capacity-artifact\n")
             with self.assertRaisesRegex(ValueError, "malformed esbmc artifact"):
-                vd.capacity_artifact(path)
+                vd.verify_eval.artifact_directives(path).capacity
 
 
 def skip_diag(fn, severity="warning", code="VerificationSkipped"):
