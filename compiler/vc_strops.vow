@@ -129,13 +129,14 @@ fn vc_str_kind_creates(k: i64) -> bool {
         || k == VC_STR_HEX_ENCODE() || k == VC_STR_HEX_DECODE() || vc_str_kind_text_hook(k)
 }
 
-// A kind whose result is a total function of its operand's bytes that the model does not
-// encode (`vc_hooks`): the text of `string_trim`, `string_to_upper` and `string_to_lower`, and
-// the `Option` a `parse_*` returns.
+// A kind whose result is an opaque text (`vc_hooks`): `string_trim`, `string_to_upper` and
+// `string_to_lower`.
 fn vc_str_kind_text_hook(k: i64) -> bool {
     k == VC_STR_TRIM() || k == VC_STR_TO_UPPER() || k == VC_STR_TO_LOWER()
 }
 
+// A kind whose result is a total function of its operand's bytes that the model does not encode
+// (`vc_hooks`): a text above, or the `Option` of a `parse_*`.
 fn vc_str_kind_opaque(k: i64) -> bool {
     k == VC_STR_PARSE_INT() || vc_str_kind_text_hook(k)
 }

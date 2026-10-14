@@ -6,6 +6,7 @@ use vc_agg
 use vc_vec
 use vc_strdeep
 use vc_str
+use vc_numeric
 
 // Exact models of `hash_str`, `hex_encode` and `hex_decode` in the native verifier
 // (ADR-2026-10-08-1422, #1654 addendum). Each is a total function of the bytes it reads,
@@ -32,10 +33,6 @@ fn VC_FOLD_HEX_DECODE() -> i64 { 3 }
 // states the same for every length.
 fn VC_FOLD_UNFOLD() -> i64 { 64 }
 
-fn vc_fold_c(ar: VcArena, v: i64) -> i64 {
-    vc_tm_bv(ar, 64, v, 0)
-}
-
 // The index of the earlier call of `kind` on the operand terms `(a, b)`, or -1.
 fn vc_fold_find(vv: VcVec, kind: i64, a: i64, b: i64) -> i64 {
     let k: Vec<i64> = vv.fm_key;
@@ -60,20 +57,20 @@ fn vc_fold_memo(vv: VcVec, kind: i64, a: i64, b: i64, arr: i64, len: i64) {
 fn vc_str_hash(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, arr: i64, len: i64) -> i64 {
     let known: i64 = vc_fold_find(vv, VC_FOLD_HASH(), arr, len);
     if known >= 0 { return vv.fm_arr[known as u64]; }
-    let basis: i64 = vc_fold_c(ar, -3750763034362895579);
-    let prime: i64 = vc_fold_c(ar, 1099511628211);
+    let basis: i64 = vc_num_c64(ar, -3750763034362895579);
+    let prime: i64 = vc_num_c64(ar, 1099511628211);
     let cnt: i64 = vc_str_const(ar, len);
     let mut res: i64 = basis;
     if cnt >= 0 && cnt <= VC_FOLD_UNFOLD() {
         let mut j: i64 = 0;
         while j < cnt {
-            let b: i64 = vc_str_ground_byte(vv, ar, arr, vc_fold_c(ar, j));
+            let b: i64 = vc_str_ground_byte(vv, ar, arr, vc_num_c64(ar, j));
             res = vc_tm_app2(ar, VC_OP_BVMUL(), vc_tm_app2(ar, VC_OP_BVXOR(), res, b), prime);
             j = j + 1;
         }
     } else {
         let h: i64 = vc_str_fresh_array(vv, ar, hdr, String::from("hh"));
-        vc_str_axiom(ar, assumed, vc_tm_app2(ar, VC_OP_EQ(), vc_tm_app2(ar, VC_OP_SELECT(), h, vc_fold_c(ar, 0)), basis));
+        vc_str_axiom(ar, assumed, vc_tm_app2(ar, VC_OP_EQ(), vc_tm_app2(ar, VC_OP_SELECT(), h, vc_num_c64(ar, 0)), basis));
         vc_str_axiom(ar, assumed, vc_tm_qfold(ar, h, arr, len));
         vv.quantified = true;
         res = vc_tm_app2(ar, VC_OP_SELECT(), h, len);
@@ -84,18 +81,18 @@ fn vc_str_hash(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, arr: i
 
 // The hex digit of a nibble `d` (a term below 16): `0123456789abcdef`.
 fn vc_fold_digit(ar: VcArena, d: i64) -> i64 {
-    let below: i64 = vc_tm_app2(ar, VC_OP_BVULT(), d, vc_fold_c(ar, 10));
-    vc_tm_app3(ar, VC_OP_ITE(), below, vc_tm_app2(ar, VC_OP_BVADD(), d, vc_fold_c(ar, 48)), vc_tm_app2(ar, VC_OP_BVADD(), d, vc_fold_c(ar, 87)))
+    let below: i64 = vc_tm_app2(ar, VC_OP_BVULT(), d, vc_num_c64(ar, 10));
+    vc_tm_app3(ar, VC_OP_ITE(), below, vc_tm_app2(ar, VC_OP_BVADD(), d, vc_num_c64(ar, 48)), vc_tm_app2(ar, VC_OP_BVADD(), d, vc_num_c64(ar, 87)))
 }
 
 // Under `guard`, the two digits at entry `i` of `hex_encode`'s result `arr` for the element `varr[i]`:
 // one instance of the encode binder, a plain fact.
 fn vc_fold_hex_at(ar: VcArena, assumed: Vec<i64>, guard: i64, arr: i64, varr: i64, i: i64) {
-    let x: i64 = vc_tm_app2(ar, VC_OP_BVAND(), vc_tm_app2(ar, VC_OP_SELECT(), varr, i), vc_fold_c(ar, 255));
-    let hi: i64 = vc_tm_app2(ar, VC_OP_BVLSHR(), x, vc_fold_c(ar, 4));
-    let lo: i64 = vc_tm_app2(ar, VC_OP_BVAND(), x, vc_fold_c(ar, 15));
-    let at: i64 = vc_tm_app2(ar, VC_OP_BVMUL(), i, vc_fold_c(ar, 2));
-    let next: i64 = vc_tm_app2(ar, VC_OP_BVADD(), at, vc_fold_c(ar, 1));
+    let x: i64 = vc_tm_app2(ar, VC_OP_BVAND(), vc_tm_app2(ar, VC_OP_SELECT(), varr, i), vc_num_c64(ar, 255));
+    let hi: i64 = vc_tm_app2(ar, VC_OP_BVLSHR(), x, vc_num_c64(ar, 4));
+    let lo: i64 = vc_tm_app2(ar, VC_OP_BVAND(), x, vc_num_c64(ar, 15));
+    let at: i64 = vc_tm_app2(ar, VC_OP_BVMUL(), i, vc_num_c64(ar, 2));
+    let next: i64 = vc_tm_app2(ar, VC_OP_BVADD(), at, vc_num_c64(ar, 1));
     vc_str_axiom(ar, assumed, vc_tm_implies(ar, guard, vc_tm_app2(ar, VC_OP_EQ(), vc_str_byte(ar, arr, at), vc_fold_digit(ar, hi))));
     vc_str_axiom(ar, assumed, vc_tm_implies(ar, guard, vc_tm_app2(ar, VC_OP_EQ(), vc_str_byte(ar, arr, next), vc_fold_digit(ar, lo))));
 }
@@ -111,14 +108,14 @@ fn vc_str_hex_encode(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, 
         return;
     }
     let arr: i64 = vc_str_fresh_array(vv, ar, hdr, String::from("hx"));
-    let zero: i64 = vc_fold_c(ar, 0);
-    let len: i64 = vc_tm_app2(ar, VC_OP_BVMUL(), vlen, vc_fold_c(ar, 2));
+    let zero: i64 = vc_num_c64(ar, 0);
+    let len: i64 = vc_tm_app2(ar, VC_OP_BVMUL(), vlen, vc_num_c64(ar, 2));
     if vv.content {
         let cnt: i64 = vc_str_const(ar, vlen);
         if cnt >= 0 && cnt <= 16 {
             let mut j: i64 = 0;
             while j < cnt {
-                vc_fold_hex_at(ar, assumed, vc_tm_bool_const(ar, true), arr, varr, vc_fold_c(ar, j));
+                vc_fold_hex_at(ar, assumed, vc_tm_bool_const(ar, true), arr, varr, vc_num_c64(ar, j));
                 j = j + 1;
             }
         } else {
@@ -126,7 +123,7 @@ fn vc_str_hex_encode(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, 
             vv.quantified = true;
             let some: i64 = vc_tm_app2(ar, VC_OP_BVULT(), zero, vlen);
             vc_fold_hex_at(ar, assumed, some, arr, varr, zero);
-            vc_fold_hex_at(ar, assumed, some, arr, varr, vc_tm_app2(ar, VC_OP_BVSUB(), vlen, vc_fold_c(ar, 1)));
+            vc_fold_hex_at(ar, assumed, some, arr, varr, vc_tm_app2(ar, VC_OP_BVSUB(), vlen, vc_num_c64(ar, 1)));
         }
     }
     vc_fold_memo(vv, VC_FOLD_HEX_ENCODE(), varr, vlen, arr, len);
@@ -149,16 +146,16 @@ fn vc_fold_decode_known(vv: VcVec, ar: VcArena, assumed: Vec<i64>, sarr: i64, sl
     let mut ok: i64 = vc_tm_bool_const(ar, cnt % 2 == 0);
     let mut j: i64 = 0;
     while j < pairs {
-        ok = vc_tm_and(ar, ok, vc_tm_hexpair(ar, sarr, vc_fold_c(ar, j)));
+        ok = vc_tm_and(ar, ok, vc_tm_hexpair(ar, sarr, vc_num_c64(ar, j)));
         j = j + 1;
     }
     j = 0;
     while j < pairs {
-        let at: i64 = vc_fold_c(ar, j);
+        let at: i64 = vc_num_c64(ar, j);
         vc_str_axiom(ar, assumed, vc_tm_implies(ar, ok, vc_tm_app2(ar, VC_OP_EQ(), vc_tm_app2(ar, VC_OP_SELECT(), arr, at), vc_tm_hexval(ar, sarr, at))));
         j = j + 1;
     }
-    let len: i64 = vc_tm_app3(ar, VC_OP_ITE(), ok, vc_fold_c(ar, pairs), vc_fold_c(ar, 0));
+    let len: i64 = vc_tm_app3(ar, VC_OP_ITE(), ok, vc_num_c64(ar, pairs), vc_num_c64(ar, 0));
     vc_fold_memo(vv, VC_FOLD_HEX_DECODE(), sarr, slen, arr, len);
     out.push(arr);
     out.push(len);
@@ -173,24 +170,24 @@ fn vc_str_hex_decode(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, 
         out.push(vv.fm_len[known as u64]);
         return;
     }
-    let zero: i64 = vc_fold_c(ar, 0);
     let arr: i64 = vc_str_fresh_array(vv, ar, hdr, String::from("hd"));
     let cnt: i64 = vc_str_const(ar, slen);
     if cnt >= 0 && cnt <= VC_FOLD_UNFOLD() {
         vc_fold_decode_known(vv, ar, assumed, sarr, slen, cnt, arr, out);
         return;
     }
+    let zero: i64 = vc_num_c64(ar, 0);
     let e: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("hde")), VC_SORT_BOOL());
     let w: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("hdw")), 64);
-    let pairs: i64 = vc_tm_app2(ar, VC_OP_BVLSHR(), slen, vc_fold_c(ar, 1));
-    let even: i64 = vc_tm_app2(ar, VC_OP_EQ(), vc_tm_app2(ar, VC_OP_BVAND(), slen, vc_fold_c(ar, 1)), zero);
+    let pairs: i64 = vc_tm_app2(ar, VC_OP_BVLSHR(), slen, vc_num_c64(ar, 1));
+    let even: i64 = vc_tm_app2(ar, VC_OP_EQ(), vc_tm_app2(ar, VC_OP_BVAND(), slen, vc_num_c64(ar, 1)), zero);
     vc_str_axiom(ar, assumed, vc_tm_implies(ar, e, vc_tm_and(ar, even, vc_tm_qunhex(ar, arr, sarr, pairs))));
     let bad: i64 = vc_tm_and(ar, vc_tm_app2(ar, VC_OP_BVULT(), w, pairs), vc_tm_app1(ar, VC_OP_NOT(), vc_tm_hexpair(ar, sarr, w)));
     vc_str_axiom(ar, assumed, vc_tm_implies(ar, vc_tm_app1(ar, VC_OP_NOT(), e), vc_tm_or(ar, vc_tm_app1(ar, VC_OP_NOT(), even), bad)));
     vv.quantified = true;
     let some: i64 = vc_tm_and(ar, e, vc_tm_app2(ar, VC_OP_BVULT(), zero, pairs));
     vc_fold_pair_at(ar, assumed, some, arr, sarr, zero);
-    vc_fold_pair_at(ar, assumed, some, arr, sarr, vc_tm_app2(ar, VC_OP_BVSUB(), pairs, vc_fold_c(ar, 1)));
+    vc_fold_pair_at(ar, assumed, some, arr, sarr, vc_tm_app2(ar, VC_OP_BVSUB(), pairs, vc_num_c64(ar, 1)));
     let len: i64 = vc_tm_app3(ar, VC_OP_ITE(), e, pairs, zero);
     vc_fold_memo(vv, VC_FOLD_HEX_DECODE(), sarr, slen, arr, len);
     out.push(arr);

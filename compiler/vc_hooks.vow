@@ -98,9 +98,22 @@ fn vc_hook_opaque_find(vv: VcVec, fid: i64, arr: i64, len: i64) -> i64 {
     -1
 }
 
-// The Bool term "the operand of earlier call `i` equals `(arr, len)`", the guard of an Ackermann axiom.
-fn vc_hook_opaque_same(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, i: u64, arr: i64, len: i64) -> i64 {
-    vc_str_eq(vv, ar, hdr, assumed, arr, len, vv.ox_arr[i], vv.ox_len[i])
+// The earlier calls of function `fid` whose operand may equal `(arr, len)` without being the same
+// term: their indices on `idx` and, on `guards`, the Bool term "the two operands are equal" that
+// guards an Ackermann axiom (a call whose guard is statically false is left out).
+fn vc_hook_opaque_peers(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, fid: i64, arr: i64, len: i64, idx: Vec<u64>, guards: Vec<i64>) {
+    let n: u64 = vv.ox_fn.len();
+    let mut i: u64 = 0;
+    while i < n {
+        if vv.ox_fn[i] == fid {
+            let same: i64 = vc_str_eq(vv, ar, hdr, assumed, arr, len, vv.ox_arr[i], vv.ox_len[i]);
+            if !vc_tm_is_false(ar, same) {
+                idx.push(i);
+                guards.push(same);
+            }
+        }
+        i = i + 1;
+    }
 }
 
 fn vc_hook_opaque_record(vv: VcVec, fid: i64, arr: i64, len: i64, r0: i64, r1: i64) {
@@ -122,18 +135,16 @@ fn vc_hook_parse_opt(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, 
     }
     let some: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("hks")), VC_SORT_BOOL());
     let payload: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("hkv")), bits);
-    let n: u64 = vv.ox_fn.len();
-    let mut i: u64 = 0;
-    while i < n {
-        if vv.ox_fn[i] == fid {
-            let same: i64 = vc_hook_opaque_same(vv, ar, hdr, assumed, i, arr, len);
-            if !vc_tm_is_false(ar, same) {
-                let agree: i64 = vc_tm_and(ar, vc_tm_app2(ar, VC_OP_EQ(), some, vv.ox_r0[i]),
-                    vc_tm_implies(ar, some, vc_tm_app2(ar, VC_OP_EQ(), payload, vv.ox_r1[i])));
-                vc_str_axiom(ar, assumed, vc_tm_implies(ar, same, agree));
-            }
-        }
-        i = i + 1;
+    let peers: Vec<u64> = Vec::new();
+    let guards: Vec<i64> = Vec::new();
+    vc_hook_opaque_peers(vv, ar, hdr, assumed, fid, arr, len, peers, guards);
+    let mut k: u64 = 0;
+    while k < peers.len() {
+        let i: u64 = peers[k];
+        let agree: i64 = vc_tm_and(ar, vc_tm_app2(ar, VC_OP_EQ(), some, vv.ox_r0[i]),
+            vc_tm_implies(ar, some, vc_tm_app2(ar, VC_OP_EQ(), payload, vv.ox_r1[i])));
+        vc_str_axiom(ar, assumed, vc_tm_implies(ar, guards[k], agree));
+        k = k + 1;
     }
     vc_hook_opaque_record(vv, fid, arr, len, some, payload);
     vv.hk_vars.push(some);
@@ -160,16 +171,14 @@ fn vc_hook_text_fn(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, fi
         let empty: i64 = vc_tm_app2(ar, VC_OP_EQ(), len, vc_str_zero(ar));
         vc_str_axiom(ar, assumed, vc_tm_implies(ar, empty, vc_tm_app2(ar, VC_OP_EQ(), rl, vc_str_zero(ar))));
     }
-    let n: u64 = vv.ox_fn.len();
-    let mut i: u64 = 0;
-    while i < n {
-        if vv.ox_fn[i] == fid {
-            let same: i64 = vc_hook_opaque_same(vv, ar, hdr, assumed, i, arr, len);
-            if !vc_tm_is_false(ar, same) {
-                vc_str_axiom(ar, assumed, vc_tm_implies(ar, same, vc_str_eq(vv, ar, hdr, assumed, ra, rl, vv.ox_r0[i], vv.ox_r1[i])));
-            }
-        }
-        i = i + 1;
+    let peers: Vec<u64> = Vec::new();
+    let guards: Vec<i64> = Vec::new();
+    vc_hook_opaque_peers(vv, ar, hdr, assumed, fid, arr, len, peers, guards);
+    let mut k: u64 = 0;
+    while k < peers.len() {
+        let i: u64 = peers[k];
+        vc_str_axiom(ar, assumed, vc_tm_implies(ar, guards[k], vc_str_eq(vv, ar, hdr, assumed, ra, rl, vv.ox_r0[i], vv.ox_r1[i])));
+        k = k + 1;
     }
     vc_hook_opaque_record(vv, fid, arr, len, ra, rl);
     vv.hk_vars.push(ra);
