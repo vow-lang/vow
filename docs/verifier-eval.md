@@ -230,7 +230,7 @@ whose every counterexample is a capacity assertion.
 gate for the native corpus: `--corpus native` selects `tests/verify-native/*`
 only, and `--fail-on soundness` makes only `soundness` rows (not `weaker` ones,
 which have their own issues) fail the exit status. The `Native fixtures versus
-ESBMC` job of `.github/workflows/native-oracle.yml` runs exactly that on every
+ESBMC` workflow (`.github/workflows/native-esbmc-diff.yml`) runs exactly that on every
 pull request that touches a fixture, so a new `verify-native/pass` fixture
 cannot land with a bare `soundness` row.
 
