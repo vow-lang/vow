@@ -366,6 +366,41 @@ fn check_unwrap_abort_frame() -> i64 {
     0
 }
 
+// A field write to the struct a call returns is inside the subset once the call
+// is inlined (its result is a Phi of the callee's objects), while the same
+// write to an extern call's result is still outside it.
+fn check_field_write_to_call_result() -> i64 {
+    let c: Vec<IrInst> = Vec::new();
+    c.push(mk_inst_arg(0, ITY_I64(), 0));
+    c.push(mk_inst_alloc(1, 16));
+    c.push(mk_inst_field_set(2, 1, 0, 0));
+    c.push(mk_inst_return(3, 1));
+    let callee: IrFunction = fn_of(1, String::from("make"), ITY_PTR(), one(mk_block(0, c)));
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_arg(0, ITY_I64(), 0));
+    a.push(mk_inst_call_target(1, ITY_PTR(), args1(0), 1));
+    a.push(mk_inst_const_i64(2, 1));
+    a.push(mk_inst_field_set(3, 1, 1, 2));
+    a.push(mk_inst_return(4, 1));
+    let caller: IrFunction = fn_of(0, String::from("widen"), ITY_PTR(), one(mk_block(0, a)));
+    let fs: Vec<IrFunction> = Vec::new();
+    fs.push(caller);
+    fs.push(callee);
+    let m: IrModule = mk_module(fs);
+    if vc_module_skip_reason(m.functions[0], m).len() != 0 { return 1; }
+
+    let x: Vec<IrInst> = Vec::new();
+    x.push(mk_inst_arg(0, ITY_I64(), 0));
+    x.push(mk_inst_call_extern(1, ITY_PTR(), args1(0), String::from("__vow_vec_new")));
+    x.push(mk_inst_const_i64(2, 1));
+    x.push(mk_inst_field_set(3, 1, 1, 2));
+    x.push(mk_inst_return(4, 1));
+    let ext: IrFunction = fn_of(0, String::from("widen"), ITY_PTR(), one(mk_block(0, x)));
+    let em: IrModule = module3(ext, leaf(1, String::from("g")), leaf(2, String::from("m")));
+    if vc_module_skip_reason(em.functions[0], em).len() == 0 { return 2; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_cycles();
     if r == 0 { let d: i64 = check_diamond_is_acyclic(); if d != 0 { r = 100 + d; } }
@@ -377,5 +412,6 @@ fn main() -> i32 {
     if r == 0 { let d: i64 = check_budget(); if d != 0 { r = 700 + d; } }
     if r == 0 { let d: i64 = check_frame_marks(); if d != 0 { r = 800 + d; } }
     if r == 0 { let d: i64 = check_unwrap_abort_frame(); if d != 0 { r = 900 + d; } }
+    if r == 0 { let d: i64 = check_field_write_to_call_result(); if d != 0 { r = 1000 + d; } }
     i64_to_i32_wrap(r)
 }
