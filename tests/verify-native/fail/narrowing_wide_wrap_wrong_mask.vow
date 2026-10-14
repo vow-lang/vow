@@ -1,7 +1,7 @@
 // TEST: counterexample-fn "low_half"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
-// TEST: counterexample-violation "result as i128 == x & 127"
+// TEST: counterexample-violation "ensures result as i128 == x & 127"
 // A 128-bit source wraps to the low 16 bits: the mask is 65535, so a mask of 127 is
 // refuted by any operand with bit 7 to 15 set.
 module NarrowingWideWrapWrongMask

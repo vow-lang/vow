@@ -1,7 +1,7 @@
 // TEST: counterexample-fn "low_byte"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
-// TEST: counterexample-violation "result != 7"
+// TEST: counterexample-violation "ensures result != 7"
 // `i64_to_u8_wrap` is the truncating cast, so `low_byte(7)` (and `263`, `-249`, ...)
 // returns 7 and the postcondition is refuted with a replayable counterexample.
 module NarrowingWrapLowByteRefuted

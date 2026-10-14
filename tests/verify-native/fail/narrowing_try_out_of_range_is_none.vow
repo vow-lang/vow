@@ -1,7 +1,7 @@
 // TEST: counterexample-fn "narrow_or_minus_one"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
-// TEST: counterexample-violation "result == x"
+// TEST: counterexample-violation "ensures result == x"
 // An operand outside `i8` makes `i64_to_i8_try` return `None`, so the function yields
 // `-1`, not the operand: the claim that it is the identity is refuted by every
 // operand outside `i8` (the solver picks `x = 255`).
