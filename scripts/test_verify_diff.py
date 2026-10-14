@@ -400,6 +400,14 @@ class ContractsTest(unittest.TestCase):
         self.assertEqual(vd.MORE_PRECISE, cls)
         self.assertIn("requires is proven with its function", detail)
 
+    def test_native_divergence_directive_does_not_excuse_a_verified_fixture(self):
+        e = report(clause("f", "ensures", 1, "proven"))
+        n = report(clause("f", "ensures", 1, "unknown"))
+        self.assertEqual(
+            vd.WEAKER,
+            vd.compare_contracts("Verified", e, n, divergence="documented")[0],
+        )
+
     def test_native_divergence_directive_excuses_nothing_else(self):
         why = "documented"
         skipped = report(clause("f", "ensures", 1, "skipped"))

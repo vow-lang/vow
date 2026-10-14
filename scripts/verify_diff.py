@@ -105,7 +105,8 @@ CAPACITY_ARTIFACT = re.compile(
 # `proven`, for a reason the docs name (a `requires` is `proven` only when its
 # whole function is; a function's clause is `unknown` once a callee's clause
 # refutes the call tree). The reason is mandatory and only that one clause shape
-# is excused: any other disagreement in the fixture keeps its class.
+# is excused, and only in a fixture the corpus labels `VerifyFailed`: any other
+# disagreement in the fixture keeps its class, and so does a `Verified` fixture.
 NATIVE_DIVERGENCE = re.compile(
     r'^//\s*TEST:\s*native-divergence\s+"([^"]+)"\s*$', re.MULTILINE
 )
@@ -114,24 +115,24 @@ FN_DECL = re.compile(r"^\s*(?:pub\s+)?fn\s", re.MULTILINE)
 MAIN_DECL = re.compile(r"^\s*fn\s+main\s*\(", re.MULTILINE)
 
 
-def capacity_artifact(path):
-    """The reason of the fixture's `esbmc-capacity-artifact` directive, or None."""
+def directive_reason(pattern, path):
+    """The reason quoted by the first `pattern` directive of the file, or None."""
     try:
         with open(path, "r", encoding="utf-8") as fh:
-            m = CAPACITY_ARTIFACT.search(fh.read())
+            m = pattern.search(fh.read())
     except OSError:
         return None
     return m.group(1) if m else None
+
+
+def capacity_artifact(path):
+    """The reason of the fixture's `esbmc-capacity-artifact` directive, or None."""
+    return directive_reason(CAPACITY_ARTIFACT, path)
 
 
 def native_divergence(path):
     """The reason of the fixture's `native-divergence` directive, or None."""
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            m = NATIVE_DIVERGENCE.search(fh.read())
-    except OSError:
-        return None
-    return m.group(1) if m else None
+    return directive_reason(NATIVE_DIVERGENCE, path)
 
 
 def capacity_only(result):
@@ -373,7 +374,7 @@ def classify_clause(
     divergence instead of a weaker row.
     """
     e, n = esbmc["status"], native["status"]
-    if divergence and e == "proven" and n == "unknown":
+    if divergence and truth == "VerifyFailed" and e == "proven" and n == "unknown":
         return (
             MORE_PRECISE,
             f"documented native divergence ({divergence}); ESBMC reports the "

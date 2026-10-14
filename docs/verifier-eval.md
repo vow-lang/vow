@@ -224,14 +224,15 @@ precondition), is `more_precise`: the native report proves no clause of a
 function that can abort, where ESBMC judges the clause on the executions that
 continue past it. A fixture can also carry `// TEST: native-divergence "<why>"`
 (the reason is mandatory): a clause ESBMC calls `proven` and native `unknown` in
-that fixture is then `more_precise`, and nothing else in it is excused (a skipped,
-errored or refuted clause keeps its class). Three `verify-fail` fixtures carry it:
+that fixture is then `more_precise` when the corpus labels it `VerifyFailed`, and
+nothing else in it is excused (a skipped, errored or refuted clause keeps its class). Three `verify-fail` fixtures carry it:
 `callee_ensures_wrong_function` (`verify` stops at the callee, so the caller is never
 refuted there), and `float_enum_payload_wrong` and `string_substring_bytes_observed`
 (a `requires` clause is `proven` only when its whole function is, and the function's
-`ensures` fails; see `cli.md`, "Clause status"). The one row left on the allow-list
-is `verify-fail/verify_jobs_ce_before_soft` (an unbounded loop without an
-`invariant`, which ESBMC's k-induction closes).
+`ensures` fails; see `cli.md`, "Clause status"). The one row left is
+`verify-fail/verify_jobs_ce_before_soft` (an unbounded loop without an
+`invariant`, which ESBMC's k-induction closes; `cli.md`, "Verdict divergence from
+ESBMC", describes the symbolic-bound loop divergence).
 
 The signed `MIN / -1` rows are not excused by a directive: native refutes them, the
 runtime confirms it (`--replay-cex`), and the corpus programs that divided by a
