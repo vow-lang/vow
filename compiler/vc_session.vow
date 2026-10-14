@@ -108,10 +108,10 @@ fn vc_session_read_until(handle: i64, sentinel: String, deadline_us: i64, limit:
 // scope round trip. A solver without `push`/`pop` or `echo` support prints an
 // error and exits, which shows as end of file here.
 fn vc_session_start(ss: VcSession, bin: String, cs: VcClaims, k: u64, deadline_us: i64) -> bool [io] {
-    let handle: i64 = process_start_piped(bin, vc_solver_stdin_args());
+    let hello: String = vc_claim_header_text(cs, k);
+    let handle: i64 = process_start_piped(bin, vc_solver_stdin_args(hello));
     if handle < 0 { return false; }
     ss.handle = handle;
-    let hello: String = vc_claim_header_text(cs, k);
     hello.push_str(String::from("(push 1)\n(pop 1)\n(echo "));
     hello.push_str(vc_session_probe_sentinel());
     hello.push_str(String::from(")\n"));

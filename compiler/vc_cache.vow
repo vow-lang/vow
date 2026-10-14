@@ -38,7 +38,13 @@ fn vc_cache_salt(solver_id: String) -> String {
     s.push_str(String::from("\n"));
     s.push_str(solver_id);
     s.push_str(String::from("\n"));
-    let args: Vec<String> = vc_solver_args(String::from("<query>"));
+    s.push_str(vc_cache_args_text(vc_solver_args(String::from("<query>"), String::from("<file>"))));
+    s.push_str(vc_cache_args_text(vc_solver_args(String::from("(set-logic QF_BVFP)"), String::from("<file>"))));
+    s
+}
+
+fn vc_cache_args_text(args: Vec<String>) -> String {
+    let s: String = String::from("");
     let mut i: u64 = 0;
     while i < args.len() {
         s.push_str(args[i]);
