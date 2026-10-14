@@ -528,11 +528,13 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
 
 // The width of the key operand of a map call, or -1 when it says nothing about the
 // map's key type: an `i64` literal (a contract clause lowers a bare literal to
-// `i64` whatever the key type is). A `BTreeMap`'s key is always `i64`.
+// `i64` whatever the key type is), or any operand that folds to a constant (a
+// negative literal reaches the IR as `0 - 1` at type `i64`). A `BTreeMap`'s key is
+// always `i64`.
 fn vc_map_key_bits(w: VcWalk, inst: IrInst) -> i64 {
     if inst.ds.len() > 15 && string_starts_with(inst.ds, VC_MAP_BTREE_PREFIX()) == 1 { return 64; }
     let id: u64 = inst.args[1] as u64;
-    if w.lits[id] == 1 { return -1; }
+    if w.lits[id] == 1 || vc_is_bv(w.cs.arena, w.var_of[id]) { return -1; }
     if w.tys[id] == ITY_BOOL() { return 1; }
     vc_ty_bits(w.tys[id])
 }

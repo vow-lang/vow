@@ -931,7 +931,8 @@ addendum is that model (`compiler/vc_map.vow`, op table `compiler/vc_mapops.vow`
   That is also all a real map with 64-bit keys needs (any model of it extends to a map of that
   length, with keys to spare), so with `i64`/`u64` keys, and always for `BTreeMap`, a counterexample is a
   run and is reported. A `HashMap` key narrower than 64 bits, or one no operand shows (the IR types a
-  parameter map as a bare pointer; an `i64` literal says nothing about the key type), bounds the
+  parameter map as a bare pointer; an `i64` literal, or a key that folds to a constant such as a
+  negative literal's `0 - 1`, says nothing about the key type), bounds the
   length by its domain, which the model does not know. The presence array and length of such a base
   are listed in `VcClaims.map_vars`, and a hard `sat` that reaches them goes through the same re-check
   as a float-text hook (`vc_hook_recheck`): it is reported only when the claim fails for every array
