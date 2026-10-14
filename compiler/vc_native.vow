@@ -370,7 +370,7 @@ fn vc_run_claims(f: IrFunction, fr: VcFrames, cs: VcClaims, ss: VcSession, sites
             }
             if ans.verdict == VC_ANS_SAT() && !vc_claim_is_soft(cs, k) && !cs.step && !failed {
                 let left_ms: i64 = timeout_ms - (time_micros() - started) / 1000;
-                ans = vc_enrich_vec_model(cache, bin, cs, k, ans, vc_claim_reaches_hook(cs, sx, k), left_ms / 2, scratch);
+                ans = vc_enrich_vec_model(cache, bin, cs, k, ans, vc_claim_reaches(cs, sx, k, cs.hook_vars), left_ms / 2, scratch);
             }
             if ans.verdict == VC_ANS_UNSAT() {
                 vc_note_clause(acc, cs, k, VC_CLAUSE_UNSAT());
