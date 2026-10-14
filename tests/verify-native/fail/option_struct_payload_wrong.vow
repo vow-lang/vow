@@ -2,7 +2,6 @@
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
 // TEST: counterexample-value o.0 1
-// TEST: replay-skipped the payload of an Option parameter is a struct, which the replay harness does not rebuild (#1742)
 // A payload of `0` is not positive: the counterexample lists the tag `o.0` and the
 // slots of the payload object under its slot `o.1`.
 module OptionStructPayloadWrong

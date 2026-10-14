@@ -1,7 +1,6 @@
 // TEST: counterexample-fn "different"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
-// TEST: replay-skipped the payload of an Option parameter is a struct, which the replay harness does not rebuild (#1742)
 // The payloads of two parameters are two objects, so their fields may differ, while
 // the payload of one parameter is a single object.
 module OptionStructPayloadAgreeWrong

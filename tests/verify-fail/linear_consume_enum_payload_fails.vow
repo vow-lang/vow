@@ -28,4 +28,3 @@ fn unwrap_fd(o: Option<Handle>) -> i64 vow {
 fn main() -> i32 {
     0
 }
-// TEST: replay-skipped enum payload that is a linear struct is not rebuilt by the replay harness (#1742)
