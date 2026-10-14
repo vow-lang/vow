@@ -1,4 +1,7 @@
 // TEST: category model-drift
+// TEST: esbmc-model-artifact fn="push_through" blame=Callee vow_id=0 "ESBMC's C model copies a Vec at the merge, so a push or set through the merged `v` never reaches `a` or `b` and the claim fails; at runtime `v` is the Vec that was picked, and a debug-mode run of every function in this file over both values of every bool parameter and Vec parameters of sizes 0 to 5 satisfies every clause"
+// TEST: esbmc-model-artifact fn="push_in_a_later_block" blame=Callee vow_id=0 "ESBMC's C model copies a Vec at the merge, so a push or set through the merged `v` never reaches `a` or `b` and the claim fails; at runtime `v` is the Vec that was picked, and a debug-mode run of every function in this file over both values of every bool parameter and Vec parameters of sizes 0 to 5 satisfies every clause"
+// TEST: esbmc-model-artifact fn="set_through" blame=Callee vow_id=0 "ESBMC's C model copies a Vec at the merge, so a push or set through the merged `v` never reaches `a` or `b` and the claim fails; at runtime `v` is the Vec that was picked, and a debug-mode run of every function in this file over both values of every bool parameter and Vec parameters of sizes 0 to 5 satisfies every clause"
 // A Vec the function picks by a branch: reads see the picked one, and a write
 // through the merge reaches exactly the Vec it stands for, which every other name
 // for that Vec sees.
