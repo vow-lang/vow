@@ -145,7 +145,7 @@ fn vc_check_claim_oneshot(cache: VcCache, bin: String, cs: VcClaims, sx: VcSlice
         let sl: VcSlice = vc_slice_claim(sx, cs, k);
         if sl.dropped_asserts || sl.dropped_defs {
             let started: i64 = time_micros();
-            let small: String = vc_smt_render(cs.arena, vc_claim_script_selected(cs, k, sl.cmds, sl.assumed));
+            let small: String = vc_smt_render(cs.arena, vc_claim_script_sliced(cs, k, sl));
             let ans: VcSolverAnswer = vc_solver_check_cached(cache, bin, small, vc_claim_model_names(cs, k), vc_claim_model_widths(cs, k), budget_ms, scratch);
             if ans.verdict == VC_ANS_UNSAT() { return ans; }
             if !sl.dropped_asserts && vc_claim_is_soft(cs, k) { return ans; }
