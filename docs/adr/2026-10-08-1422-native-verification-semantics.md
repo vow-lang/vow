@@ -874,3 +874,15 @@ member exactly; no result is a fresh constant.
   backends prove every function.
   ESBMC's C model has no `i128_to_u128`/`u128_to_i128` arms and skips a function that calls them, so
   `tests/verify-native/pass/narrowing_sign_change_128.vow` is native-only (an extra proof).
+
+## Addendum (#1661): `bool` parameters
+
+A `GetArg` of type `Bool` is admitted. It is a `Bool`-sorted constant of the query
+(`vc_ty_sort` already maps `ITY_BOOL` to the Bool sort the aggregate field slots use) and a model
+entry typed `ITY_BOOL`, so a counterexample prints `flag = true`/`false` and replay rebuilds it
+from the `bool` literal it already accepts for a struct field. A `GetArg` whose type disagrees with
+its parameter is still `unsupported-opcode`.
+
+This also stops a `bool` flag from hiding the `Vec` functions that take one. A `Vec<bool>` element
+read stays skipped (see the `Return` of a raw `i64` slot in a `bool` function): the lowerer types
+the read `i64` and never narrows it to `bool`.

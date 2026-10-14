@@ -303,7 +303,13 @@ fn check_bool_param() -> i64 {
     i.push(mk_inst_return(1, 0));
     let p: Vec<i64> = Vec::new();
     p.push(ITY_BOOL());
-    if vc_skip_reason(one_block(String::from("b"), p, ITY_BOOL(), i)) != String::from("unsupported-opcode: GetArg[Bool]") { return 40; }
+    if vc_skip_reason(one_block(String::from("b"), p, ITY_BOOL(), i)).len() != 0 { return 40; }
+    let wrong: Vec<IrInst> = Vec::new();
+    wrong.push(mk_inst_arg(0, ITY_BOOL(), 0));
+    wrong.push(mk_inst_return(1, 0));
+    let ip: Vec<i64> = Vec::new();
+    ip.push(ITY_I64());
+    if vc_skip_reason(one_block(String::from("w"), ip, ITY_BOOL(), wrong)) != String::from("unsupported-opcode: GetArg[Bool]") { return 41; }
     0
 }
 
