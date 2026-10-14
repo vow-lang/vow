@@ -1,4 +1,3 @@
-// TEST: replay-skipped 128-bit parameter
 // TEST: counterexample-fn "build"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee

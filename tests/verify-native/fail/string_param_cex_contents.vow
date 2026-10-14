@@ -1,0 +1,19 @@
+// TEST: counterexample-fn "starts_with_a"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value s.len 1
+// A `String` parameter is listed as its length and its bytes (the low 8 bits of
+// each slot), and the replay pushes them into a fresh string.
+module StringParamCexContents
+
+fn starts_with_a(s: String) -> bool vow {
+  requires: s.len() == 1
+  ensures: result == false
+} {
+  s.byte_at(0) == 65
+}
+
+fn main() -> i32 [io] {
+  if starts_with_a(String::from("b")) { print_u64(1); }
+  0
+}

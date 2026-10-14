@@ -1,4 +1,3 @@
-// TEST: replay-skipped the replay harness takes scalar parameters of up to 64 bits
 // TEST: counterexample-fn "at_most_twenty"
 // TEST: counterexample-vow-id 1
 // TEST: counterexample-blame Callee

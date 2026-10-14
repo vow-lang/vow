@@ -157,17 +157,32 @@ fn vc_guard(cs: VcClaims, kind: i64, label: String, pc: i64, goal: i64, inst: Ir
 // slot each came from (a symbol's width is its sort: 0 for Bool). A slot read
 // at two sorts is `ambig` in every entry so reporting and replay can tell the
 // symbols apart.
-fn vc_claims_harvest_fields(cs: VcClaims, ag: VcAgg) {
+fn vc_claims_harvest_fields(cs: VcClaims, ag: VcAgg, vv: VcVec) {
     let mut i: u64 = 0;
-    while i < ag.ps_param.len() {
-        cs.model_names.push(vc_agg_symbol_name(ag.ps_param[i], ag.ps_slot[i], ag.ps_sort[i]));
-        cs.model_params.push(ag.ps_param[i]);
-        cs.model_tys.push(ag.ps_ty[i]);
-        cs.model_widths.push(ag.ps_sort[i]);
-        cs.model_slots.push(ag.ps_slot[i]);
-        cs.model_hdr.push(ag.ps_hdr[i]);
-        i = i + 1;
+    let mut v: u64 = 0;
+    while i < ag.ps_param.len() || v < vv.pv_param.len() {
+        if v < vv.pv_param.len() && (i >= ag.ps_param.len() || vv.pv_hdr[v] < ag.ps_hdr[i]) {
+            cs.model_names.push(vv.pv_len[v]);
+            cs.model_params.push(vv.pv_param[v]);
+            cs.model_tys.push(ITY_U64());
+            cs.model_widths.push(64);
+            cs.model_slots.push(VC_SLOT_VEC_LEN());
+            cs.model_hdr.push(vv.pv_hdr[v]);
+            v = v + 1;
+        } else {
+            cs.model_names.push(vc_agg_symbol_name(ag.ps_param[i], ag.ps_slot[i], ag.ps_sort[i]));
+            cs.model_params.push(ag.ps_param[i]);
+            cs.model_tys.push(ag.ps_ty[i]);
+            cs.model_widths.push(ag.ps_sort[i]);
+            cs.model_slots.push(ag.ps_slot[i]);
+            cs.model_hdr.push(ag.ps_hdr[i]);
+            i = i + 1;
+        }
     }
+    cs.vec_param = vv.pv_param;
+    cs.vec_arr = vv.pv_arr;
+    cs.vec_len = vv.pv_len;
+    cs.vec_hdr = vv.pv_hdr;
     let mut j: u64 = 0;
     while j < cs.model_slots.len() {
         let mut amb: i64 = 0;
@@ -644,6 +659,10 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         model_hdr: Vec::new(),
         model_ambig: Vec::new(),
         hook_vars: Vec::new(),
+        vec_param: Vec::new(),
+        vec_arr: Vec::new(),
+        vec_len: Vec::new(),
+        vec_hdr: Vec::new(),
     };
     vc_script_set_logic(hdr, String::from("QF_BV"));
     vc_script_set_option(hdr, String::from(":produce-models"), String::from("true"));
@@ -703,7 +722,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         }
         oi = oi + 1;
     }
-    vc_claims_harvest_fields(cs, w.ag);
+    vc_claims_harvest_fields(cs, w.ag, w.vv);
     cs.hook_vars = w.vv.hk_vars;
     vc_script_replace_logic(hdr, vc_logic_name(vc_vec_count(w.vv) > 0, vc_function_has_float(f, tys), w.vv.quantified));
     cs

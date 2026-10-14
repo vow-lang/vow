@@ -76,6 +76,14 @@ struct VcVec {
     dc_key: Vec<i64>,
     dc_arr: Vec<i64>,
     dc_len: Vec<i64>,
+    // The `Vec` and `String` parameters, in the order the walk first read them:
+    // the parameter index, the names of the array and length constants, and the
+    // header position of the length declaration. A counterexample reads them back
+    // (`vc_vecmodel`).
+    pv_param: Vec<i64>,
+    pv_arr: Vec<String>,
+    pv_len: Vec<String>,
+    pv_hdr: Vec<i64>,
 }
 
 fn vc_vec_new_state(fl: VcFlow, n_blocks: u64) -> VcVec {
@@ -108,6 +116,10 @@ fn vc_vec_new_state(fl: VcFlow, n_blocks: u64) -> VcVec {
         dc_key: Vec::new(),
         dc_arr: Vec::new(),
         dc_len: Vec::new(),
+        pv_param: Vec::new(),
+        pv_arr: Vec::new(),
+        pv_len: Vec::new(),
+        pv_hdr: Vec::new(),
     }
 }
 
@@ -173,8 +185,15 @@ fn vc_vec_slot(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i
     let l_name: String = String::from(prefix);
     l_name.push_str(String::from("_vlen"));
     vv.base_arr[s as u64] = vc_agg_declare(ar, hdr, a_name, VC_SORT_ARRAY64());
+    let len_hdr: i64 = hdr.kinds.len() as i64;
     let len: i64 = vc_agg_declare(ar, hdr, l_name, 64);
     vv.base_len[s as u64] = len;
+    if kind == VC_OBJ_PARAM() {
+        vv.pv_param.push(ag.owners[obj as u64]);
+        vv.pv_arr.push(a_name);
+        vv.pv_len.push(l_name);
+        vv.pv_hdr.push(len_hdr);
+    }
     assumed.push(vc_tm_app2(ar, VC_OP_BVULT(), len, vc_vec_len_mask(ar)));
     s
 }

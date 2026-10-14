@@ -152,12 +152,30 @@ fn agg_src() -> String {
     s.push_str(String::from("fn fp(p: Pair) -> i64 { p.lo }\n"));
     s.push_str(String::from("fn ff(f: Flags) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fw(w: Wide) -> i64 { 0 }\n"));
+    s.push_str(String::from("struct Mid { a: i64, w: u128, b: i64 }\n"));
+    s.push_str(String::from("enum Pw { P(u128, i64), Q }\n"));
+    s.push_str(String::from("fn fmid(m: Mid) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fpw(p: Pw) -> i64 { 0 }\n"));
+    s.push_str(String::from("struct Fl { x: f64, n: i32 }\n"));
+    s.push_str(String::from("struct Fl32 { g: f32 }\n"));
+    s.push_str(String::from("struct Nest { w: Wide }\n"));
+    s.push_str(String::from("fn ffl(f: Fl) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn ffl32(g: Fl32) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fnest(n: Nest) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fh(h: Holder) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fs(s: Shape) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fo(o: Option<i64>) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fr(r: Result<i64, bool>) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fop(o: Option<Pair>) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fv(v: Vec<i64>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fvb(v: Vec<bool>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fvi8(v: Vec<i8>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fvu8(v: Vec<u8>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fvi32(v: Vec<i32>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fvu64(v: Vec<u64>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fvs(v: Vec<String>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fvf(v: Vec<f64>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fstr(s: String) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fref(p: &Pair) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fa(a: Alias) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fu(u: Unknown) -> i64 { 0 }\n"));
@@ -224,11 +242,13 @@ fn check_option_result_arg() -> i32 [io] {
 }
 
 fn check_unsupported_args_are_skipped_with_a_reason() -> i32 [io] {
-    if agg(String::from("fw"), 0, String::from("w.0=1")).reason.len() == 0 { return 131; }
+    if agg(String::from("fnest"), 0, String::from("")).reason.len() == 0 { return 131; }
+    if agg(String::from("ffl32"), 0, String::from("g.0=1")).reason.len() == 0 { return 147; }
     if agg(String::from("fh"), 0, String::from("")).reason.len() == 0 { return 132; }
     if agg(String::from("fop"), 0, String::from("o.0=1")).reason.len() == 0 { return 133; }
     if lit_of(String::from("fop"), String::from("o.0=0")) != String::from("Option::None") { return 146; }
-    if agg(String::from("fv"), 0, String::from("")).reason.len() == 0 { return 134; }
+    if agg(String::from("fvs"), 0, String::from("v.len=1")).reason.len() == 0 { return 134; }
+    if agg(String::from("fvf"), 0, String::from("v.len=1,v[0]=0")).reason.len() == 0 { return 148; }
     if agg(String::from("fref"), 0, String::from("")).reason.len() == 0 { return 135; }
     if agg(String::from("fa"), 0, String::from("")).reason.len() == 0 { return 136; }
     if agg(String::from("fu"), 0, String::from("")).reason.len() == 0 { return 137; }
@@ -260,7 +280,128 @@ fn check_alias_identities() -> i32 {
     0
 }
 
+fn scalar_lit(name: String, raw: String) -> String {
+    let r: ReplayArg = replay_scalar_literal(name, raw);
+    if r.reason.len() > 0 { return str2s(String::from("<skip: "), r.reason); }
+    r.lit
+}
+
+fn is_skip(name: String, raw: String) -> bool {
+    replay_scalar_literal(name, raw).reason.len() > 0
+}
+
+fn check_wide_and_float_fields() -> i32 [io] {
+    if lit_of(String::from("fw"), String::from("w.0=1,w.1=-5")) != String::from("Wide { a: 1, w: -5i128 }") { return 151; }
+    if lit_of(String::from("fw"), String::from("w.1=170141183460469231731687303715884105727")) != String::from("Wide { a: 0, w: 170141183460469231731687303715884105727i128 }") { return 152; }
+    if lit_of(String::from("fw"), String::from("w.1:128=7")) != String::from("Wide { a: 0, w: 7i128 }") { return 153; }
+    if lit_of(String::from("ffl"), String::from("f.0=2.5,f.1=-3")) != String::from("Fl { x: 2.5, n: -3 }") { return 154; }
+    if lit_of(String::from("ffl"), String::from("f.0:f64=-0.5")) != String::from("Fl { x: (0.0 - 0.5), n: 0 }") { return 155; }
+    if lit_of(String::from("ffl"), String::from("")) != String::from("Fl { x: 0.0, n: 0 }") { return 156; }
+    // A 128-bit field takes two slots, so the field after it is read three on.
+    if lit_of(String::from("fmid"), String::from("m.0=1,m.1=5,m.3=7")) != String::from("Mid { a: 1, w: 5u128, b: 7 }") { return 157; }
+    if lit_of(String::from("fmid"), String::from("m.2=9")) != String::from("Mid { a: 0, w: 0u128, b: 0 }") { return 158; }
+    if lit_of(String::from("fpw"), String::from("p.0=0,p.1=5,p.3=7")) != String::from("Pw::P(5u128, 7)") { return 159; }
+    0
+}
+
+fn check_scalar_literals() -> i32 {
+    if scalar_lit(String::from("i32"), String::from("-2147483648")) != String::from("(-2147483647 - 1)") { return 161; }
+    if scalar_lit(String::from("u8"), String::from("255")) != String::from("255") { return 162; }
+    if !is_skip(String::from("u8"), String::from("256")) { return 163; }
+    if !is_skip(String::from("i8"), String::from("-129")) { return 164; }
+    if scalar_lit(String::from("u64"), String::from("18446744073709551615")) != String::from("18446744073709551615u64") { return 165; }
+    if scalar_lit(String::from("bool"), String::from("true")) != String::from("true") { return 166; }
+    if !is_skip(String::from("bool"), String::from("1")) { return 167; }
+    if scalar_lit(String::from("u128"), String::from("340282366920938463463374607431768211455")) != String::from("340282366920938463463374607431768211455u128") { return 168; }
+    if scalar_lit(String::from("i128"), String::from("-5")) != String::from("-5i128") { return 169; }
+    if scalar_lit(String::from("i128"), String::from("-170141183460469231731687303715884105728")) != String::from("(-170141183460469231731687303715884105727i128 - 1i128)") { return 170; }
+    if !is_skip(String::from("u128"), String::from("-1")) { return 171; }
+    if !is_skip(String::from("i128"), String::from("12x")) { return 172; }
+    if !is_skip(String::from("u128"), String::from("3402823669209384634633746074317682114550")) { return 173; }
+    0
+}
+
+fn check_float_literals() -> i32 {
+    if scalar_lit(String::from("f64"), String::from("2.5")) != String::from("2.5") { return 181; }
+    if scalar_lit(String::from("f64"), String::from("100")) != String::from("100.0") { return 182; }
+    if scalar_lit(String::from("f64"), String::from("-2.5")) != String::from("(0.0 - 2.5)") { return 183; }
+    if scalar_lit(String::from("f64"), String::from("-0")) != String::from("(0.0 * (0.0 - 1.0))") { return 184; }
+    if scalar_lit(String::from("f64"), String::from("NaN")) != String::from("(0.0 / 0.0)") { return 185; }
+    if scalar_lit(String::from("f64"), String::from("inf")) != String::from("(1.0 / 0.0)") { return 186; }
+    if scalar_lit(String::from("f64"), String::from("-inf")) != String::from("(0.0 - (1.0 / 0.0))") { return 187; }
+    if !is_skip(String::from("f64"), String::from("1e300")) { return 188; }
+    if !is_skip(String::from("f64"), String::from(".5")) { return 189; }
+    if !is_skip(String::from("f64"), String::from("1.")) { return 190; }
+    if !is_skip(String::from("f64"), String::from("1.2.3")) { return 191; }
+    if !is_skip(String::from("f64"), String::from("")) { return 192; }
+    if !is_skip(String::from("f32"), String::from("1.5")) { return 193; }
+    0
+}
+
+
+fn vec_lit(fname: String, kv: String) -> String [io] {
+    lit_of(fname, kv)
+}
+
+fn vec_head(ty: String) -> String {
+    str2s(String::from("{ let __replay_v: "), str2s(ty, String::from(" = Vec::new();")))
+}
+
+fn check_vec_arg() -> i32 [io] {
+    let empty: String = str2s(vec_head(String::from("Vec<i64>")), String::from(" __replay_v }"));
+    if vec_lit(String::from("fv"), String::from("")) != empty { return 201; }
+    if vec_lit(String::from("fv"), String::from("v.len=0")) != empty { return 202; }
+    let two: String = str2s(vec_head(String::from("Vec<i64>")), String::from(" __replay_v.push(5); __replay_v.push(-1); __replay_v }"));
+    if vec_lit(String::from("fv"), String::from("v.len=2,v[0]=5,v[1]=18446744073709551615")) != two { return 203; }
+    if agg(String::from("fv"), 0, String::from("v.len=0")).ty_text != String::from("Vec<i64>") { return 204; }
+    if agg(String::from("fv"), 0, String::from("v.len=2,v[0]=5")).reason.len() == 0 { return 205; }
+    if agg(String::from("fv"), 0, String::from("v.len=513")).reason.len() == 0 { return 206; }
+    if agg(String::from("fv"), 0, String::from("v.len=x")).reason.len() == 0 { return 207; }
+    let min: String = str2s(vec_head(String::from("Vec<i64>")), String::from(" __replay_v.push((-9223372036854775807 - 1)); __replay_v }"));
+    if vec_lit(String::from("fv"), String::from("v.len=1,v[0]=9223372036854775808")) != min { return 208; }
+    0
+}
+
+fn check_vec_elements_follow_the_element_type() -> i32 [io] {
+    let b: String = str2s(vec_head(String::from("Vec<bool>")), String::from(" __replay_v.push(true); __replay_v.push(false); __replay_v }"));
+    if vec_lit(String::from("fvb"), String::from("v.len=2,v[0]=1,v[1]=0")) != b { return 211; }
+    if agg(String::from("fvb"), 0, String::from("v.len=1,v[0]=2")).reason.len() == 0 { return 212; }
+    let i8s: String = str2s(vec_head(String::from("Vec<i8>")), String::from(" __replay_v.push(-1); __replay_v.push(127); __replay_v }"));
+    if vec_lit(String::from("fvi8"), String::from("v.len=2,v[0]=255,v[1]=383")) != i8s { return 213; }
+    let u8s: String = str2s(vec_head(String::from("Vec<u8>")), String::from(" __replay_v.push(255); __replay_v.push(1); __replay_v }"));
+    if vec_lit(String::from("fvu8"), String::from("v.len=2,v[0]=18446744073709551615,v[1]=257")) != u8s { return 214; }
+    let i32s: String = str2s(vec_head(String::from("Vec<i32>")), String::from(" __replay_v.push(-1); __replay_v.push((-2147483647 - 1)); __replay_v }"));
+    if vec_lit(String::from("fvi32"), String::from("v.len=2,v[0]=4294967295,v[1]=2147483648")) != i32s { return 215; }
+    let u64s: String = str2s(vec_head(String::from("Vec<u64>")), String::from(" __replay_v.push(18446744073709551615u64); __replay_v }"));
+    if vec_lit(String::from("fvu64"), String::from("v.len=1,v[0]=18446744073709551615")) != u64s { return 216; }
+    0
+}
+
+fn check_string_arg() -> i32 [io] {
+    let head: String = String::from("{ let __replay_s: String = String::from(\"\");");
+    if lit_of(String::from("fstr"), String::from("")) != str2s(head, String::from(" __replay_s }")) { return 221; }
+    let bytes: String = str2s(head, String::from(" __replay_s.push_byte(104); __replay_s.push_byte(1); __replay_s.push_byte(0); __replay_s }"));
+    if lit_of(String::from("fstr"), String::from("s.len=3,s[0]=104,s[1]=257,s[2]=0")) != bytes { return 222; }
+    if agg(String::from("fstr"), 0, String::from("s.len=1")).reason.len() == 0 { return 223; }
+    if agg(String::from("fstr"), 0, String::from("s.len=1,s[0]=x")).reason.len() == 0 { return 224; }
+    if agg(String::from("fstr"), 0, String::from("s.len=2,s[0]=1")).reason.len() == 0 { return 225; }
+    if agg(String::from("fstr"), 0, String::from("s.len=1,s[0]=65")).ty_text != String::from("String") { return 226; }
+    0
+}
+
 fn main() -> i32 [io] {
+    let rw: i32 = check_wide_and_float_fields();
+    if rw != 0 { return rw; }
+    let rs: i32 = check_scalar_literals();
+    if rs != 0 { return rs; }
+    let rf: i32 = check_float_literals();
+    if rf != 0 { return rf; }
+    let r16: i32 = check_vec_arg();
+    if r16 != 0 { return r16; }
+    let r17: i32 = check_vec_elements_follow_the_element_type();
+    if r17 != 0 { return r17; }
+    let r18: i32 = check_string_arg();
+    if r18 != 0 { return r18; }
     let r1: i32 = check_locates_main();
     if r1 != 0 { return r1; }
     let r2: i32 = check_ignores_text_mentions();

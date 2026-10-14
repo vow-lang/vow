@@ -15,4 +15,3 @@ fn same_length(s: String, a: u64, b: u64) -> String vow {
 fn main() -> i32 {
   0
 }
-// TEST: replay-skipped String parameter is not rebuilt by the replay harness (#1649)

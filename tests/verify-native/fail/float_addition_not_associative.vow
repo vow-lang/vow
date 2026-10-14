@@ -2,7 +2,6 @@
 // TEST: counterexample-fn "reassociate"
 // TEST: counterexample-vow-id 3
 // TEST: counterexample-blame Callee
-// TEST: replay-skipped float parameters are not rebuilt by the replay harness
 // Rounding after each addition makes `+` non-associative even on finite
 // operands, which an exact-real model would have proven.
 module FloatAdditionNotAssociative

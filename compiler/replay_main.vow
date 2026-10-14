@@ -260,6 +260,104 @@ fn replay_slot_value(pname: String, slot: i64, label: String, names: Vec<String>
     replay_cex_value(names, vals, suffixed)
 }
 
+// Source text of the `bool`, integer or `f64` value `raw`, as the counterexample
+// prints it, for the type named `name`; or the reason there is none. An `f32`
+// has no source form: the language has no `f32` literal and no cast to or from a
+// float, so a harness cannot build one.
+fn replay_scalar_literal(name: String, raw: String) -> ReplayArg {
+    if name == String::from("bool") {
+        if raw == String::from("true") || raw == String::from("false") { return replay_arg_ok(raw, name); }
+        return replay_arg_skip(str3r(String::from("value `"), raw, String::from("` is not a bool")));
+    }
+    if name == String::from("f64") { return replay_f64_literal(raw); }
+    if name == String::from("f32") {
+        return replay_arg_skip(String::from("f32 has no source literal (nor float casts), so replay cannot rebuild it"));
+    }
+    if name == String::from("i128") || name == String::from("u128") { return replay_wide_literal(name, raw); }
+    if replay_int_bits(name) == 0 {
+        return replay_arg_skip(str3r(String::from("type `"), name, String::from("` is not a scalar")));
+    }
+    if !replay_is_int_literal(raw) || !replay_int_fits(name, raw) {
+        return replay_arg_skip(str3r(String::from("value `"), raw, str3r(String::from("` is not a `"), name, String::from("`"))));
+    }
+    replay_arg_ok(replay_int_literal(name, raw), name)
+}
+
+// A 128-bit integer. Its literals carry the type suffix (a magnitude past `i64`
+// has no other spelling) and the most negative `i128` has no literal of its own.
+fn replay_wide_literal(name: String, raw: String) -> ReplayArg {
+    let signed: bool = name == String::from("i128");
+    let neg: bool = raw.len() > 0 && raw.byte_at(0) == 45;
+    let digits: u64 = { if neg { raw.len() - 1 } else { raw.len() } };
+    if !replay_is_int_literal(raw) || digits > 39 || (neg && !signed) {
+        return replay_arg_skip(str3r(String::from("value `"), raw, str3r(String::from("` is not a `"), name, String::from("`"))));
+    }
+    if raw == String::from("-170141183460469231731687303715884105728") {
+        return replay_arg_ok(String::from("(-170141183460469231731687303715884105727i128 - 1i128)"), name);
+    }
+    replay_arg_ok(str3r(raw, name, String::from("")), name)
+}
+
+// An `f64` from the text `format_f64_bits` gives (the shortest round-trip
+// decimal: `NaN`, `inf`, `-inf`, `-0`, `2.5`, `100`). The language has no
+// negative or non-finite literal, so those are built by arithmetic that is exact
+// in IEEE-754: `0.0 - x` negates a nonzero finite `x` and `0.0 * -1.0` is -0.
+fn replay_f64_literal(raw: String) -> ReplayArg {
+    let ty: String = String::from("f64");
+    if raw == String::from("NaN") { return replay_arg_ok(String::from("(0.0 / 0.0)"), ty); }
+    if raw == String::from("inf") { return replay_arg_ok(String::from("(1.0 / 0.0)"), ty); }
+    if raw == String::from("-inf") { return replay_arg_ok(String::from("(0.0 - (1.0 / 0.0))"), ty); }
+    if raw == String::from("-0") { return replay_arg_ok(String::from("(0.0 * (0.0 - 1.0))"), ty); }
+    let neg: bool = raw.len() > 0 && raw.byte_at(0) == 45;
+    let mut mag: String = String::from(raw);
+    if neg { mag = raw.substring(1, raw.len()); }
+    if !replay_is_float_magnitude(mag) {
+        return replay_arg_skip(str3r(String::from("value `"), raw, String::from("` is not an f64")));
+    }
+    let lit: String = String::from(mag);
+    if !mag.contains(String::from(".")) { lit.push_str(String::from(".0")); }
+    if neg { return replay_arg_ok(str3r(String::from("(0.0 - "), lit, String::from(")")), ty); }
+    replay_arg_ok(lit, ty)
+}
+
+// Digits with at most one interior `.`; no sign and no exponent.
+fn replay_is_float_magnitude(s: String) -> bool {
+    let n: u64 = s.len();
+    if n == 0 { return false; }
+    let mut dots: i64 = 0;
+    let mut i: u64 = 0;
+    while i < n {
+        let b: i64 = s.byte_at(i);
+        if b == 46 {
+            dots = dots + 1;
+            if i == 0 || i + 1 == n { return false; }
+        } else if b < 48 || b > 57 {
+            return false;
+        }
+        i = i + 1;
+    }
+    dots <= 1
+}
+
+// The suffix the counterexample puts on a slot of type `name` that the function
+// reads at two sorts.
+fn replay_slot_label(name: String) -> String {
+    if name == String::from("bool") || name == String::from("f64") || name == String::from("f32") {
+        return String::from(name);
+    }
+    if name == String::from("i128") || name == String::from("u128") { return String::from("128"); }
+    i64_to_string(replay_int_bits(name))
+}
+
+fn replay_is_scalar_name(name: String) -> bool {
+    name == String::from("bool") || name == String::from("f32") || name == String::from("f64") || name == String::from("i128") || name == String::from("u128") || replay_int_bits(name) > 0
+}
+
+fn replay_zero_text(name: String) -> String {
+    if name == String::from("bool") { return String::from("false"); }
+    String::from("0")
+}
+
 // Literal of the scalar (or `()`) a field of AST type `tid` holds at `slot`. A
 // slot the model never read cannot have influenced the path to the claim, so it
 // takes the zero value.
@@ -272,25 +370,16 @@ fn replay_field_arg(a: AstArena, tid: i64, pname: String, slot: i64, names: Vec<
         return replay_arg_skip(str3r(String::from("field of type `"), shown, String::from("` is not a scalar")));
     }
     let name: String = arena_str(a, type_a(a, tid));
-    if name == String::from("i128") || name == String::from("u128") {
-        return replay_arg_skip(str3r(String::from("field of type `"), name, String::from("` is 128-bit; replay does not rebuild it")));
-    }
-    if name == String::from("bool") {
-        let raw: String = replay_slot_value(pname, slot, String::from("bool"), names, vals);
-        if raw.len() == 0 || raw == String::from("false") { return replay_arg_ok(String::from("false"), shown); }
-        if raw == String::from("true") { return replay_arg_ok(String::from("true"), shown); }
-        return replay_arg_skip(str3r(String::from("slot value `"), raw, String::from("` is not a bool")));
-    }
-    let bits: i64 = replay_int_bits(name);
-    if bits == 0 {
+    if !replay_is_scalar_name(name) {
         return replay_arg_skip(str3r(String::from("field of type `"), shown, String::from("` is not a scalar")));
     }
-    let mut raw: String = replay_slot_value(pname, slot, i64_to_string(bits), names, vals);
-    if raw.len() == 0 { raw = String::from("0"); }
-    if !replay_is_int_literal(raw) || !replay_int_fits(name, raw) {
-        return replay_arg_skip(str3r(String::from("slot value `"), raw, str3r(String::from("` is not a `"), name, String::from("`"))));
+    let mut raw: String = replay_slot_value(pname, slot, replay_slot_label(name), names, vals);
+    if raw.len() == 0 { raw = replay_zero_text(name); }
+    let r: ReplayArg = replay_scalar_literal(name, raw);
+    if r.reason.len() > 0 {
+        return replay_arg_skip(str3r(String::from("field of type `"), shown, str3r(String::from("`: "), r.reason, String::from(""))));
     }
-    replay_arg_ok(replay_int_literal(name, raw), shown)
+    replay_arg_ok(r.lit, shown)
 }
 
 fn str3r(a: String, b: String, c: String) -> String {
@@ -300,15 +389,27 @@ fn str3r(a: String, b: String, c: String) -> String {
     out
 }
 
+// Slots a field of AST type `tid` takes in an aggregate: a 128-bit integer takes
+// two (the counterexample names the first), anything else one.
+fn replay_field_slots(a: AstArena, tid: i64) -> i64 {
+    if type_tag(a, tid) == TY_NAMED() {
+        let name: String = arena_str(a, type_a(a, tid));
+        if name == String::from("i128") || name == String::from("u128") { return 2; }
+    }
+    1
+}
+
 // `(f0, f1, ...)` or "" for no payload, from slot `first` on.
 fn replay_payload_args(a: AstArena, tids: Vec<i64>, pname: String, first: i64, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
     let out: String = String::from("");
+    let mut slot: i64 = first;
     let mut i: u64 = 0u64;
     while i < tids.len() {
-        let f: ReplayArg = replay_field_arg(a, tids[i], pname, first + i as i64, names, vals);
+        let f: ReplayArg = replay_field_arg(a, tids[i], pname, slot, names, vals);
         if f.reason.len() > 0 { return f; }
         if i > 0u64 { out.push_str(String::from(", ")); }
         out.push_str(f.lit);
+        slot = slot + replay_field_slots(a, tids[i]);
         i = i + 1u64;
     }
     replay_arg_ok(out, String::from(""))
@@ -323,9 +424,12 @@ fn replay_struct_arg(a: AstArena, sid: i64, pname: String, names: Vec<String>, v
     }
     let lit: String = String::from(sname);
     lit.push_str(String::from(" { "));
+    let mut slot: i64 = 0;
     let mut i: i64 = 0;
     while i < n {
-        let f: ReplayArg = replay_field_arg(a, list_get(a, fields_lid, i * 2 + 1), pname, i, names, vals);
+        let ftid: i64 = list_get(a, fields_lid, i * 2 + 1);
+        let f: ReplayArg = replay_field_arg(a, ftid, pname, slot, names, vals);
+        slot = slot + replay_field_slots(a, ftid);
         if f.reason.len() > 0 {
             let fname: String = arena_str(a, list_get(a, fields_lid, i * 2));
             return replay_arg_skip(str3r(String::from("field `"), fname, str3r(String::from("` of `"), sname, str3r(String::from("`: "), f.reason, String::from("")))));
@@ -431,6 +535,107 @@ fn replay_builtin_enum_arg(a: AstArena, tid: i64, pname: String, names: Vec<Stri
     replay_arg_ok(r.lit, print_type_text(a, tid))
 }
 
+// `Vec` and `String` parameters. The counterexample lists `<param>.len` and, for
+// each index below it, `<param>[<i>]`: the 8-byte slot the runtime keeps, as an
+// unsigned decimal (see `vc_vecmodel`). A parameter the model never read is
+// empty. The harness builds the value in a block: `{ let v: Vec<i64> =
+// Vec::new(); v.push(1); v }`.
+
+// Length of the `Vec`/`String` parameter `pname`; -1 when it was never read, -2
+// when the text is not a length.
+fn replay_vec_len(pname: String, names: Vec<String>, vals: Vec<String>) -> i64 {
+    let raw: String = replay_cex_value(names, vals, str3r(pname, String::from(".len"), String::from("")));
+    if raw.len() == 0 { return -1; }
+    match raw.parse_u64() {
+        Option::Some(v) => { if v > 512u64 { -2 } else { v as i64 } },
+        Option::None => { -2 },
+    }
+}
+
+// The slot of element `i`, or the reason it is missing.
+fn replay_vec_slot(pname: String, i: i64, names: Vec<String>, vals: Vec<String>) -> Option<u64> {
+    let key: String = str3r(pname, String::from("["), str3r(i64_to_string(i), String::from("]"), String::from("")));
+    replay_cex_value(names, vals, key).parse_u64()
+}
+
+// The value of element type `name` that reads back from the 8-byte slot `slot`:
+// a narrow integer is the slot's low bits (the verifier truncates on read), and a
+// `bool` slot must be 0 or 1.
+fn replay_slot_element(name: String, slot: u64) -> ReplayArg {
+    if name == String::from("bool") {
+        if slot == 0u64 { return replay_arg_ok(String::from("false"), name); }
+        if slot == 1u64 { return replay_arg_ok(String::from("true"), name); }
+        return replay_arg_skip(str3r(String::from("a bool element holds slot value "), uint_to_string(slot), String::from("")));
+    }
+    let bits: i64 = replay_int_bits(name);
+    if bits == 0 {
+        return replay_arg_skip(str3r(String::from("element type `"), name, String::from("` is not rebuilt by replay")));
+    }
+    if !replay_int_signed(name) {
+        if bits == 64 { return replay_scalar_literal(name, uint_to_string(slot)); }
+        return replay_scalar_literal(name, uint_to_string(slot & ((1u64 << (bits as u64)) - 1u64)));
+    }
+    if bits == 64 { return replay_scalar_literal(name, i64_to_string(slot as i64)); }
+    let low: i64 = (slot & ((1u64 << (bits as u64)) - 1u64)) as i64;
+    if (low >> (bits - 1)) & 1 == 1 { return replay_scalar_literal(name, i64_to_string(low - (1 << bits))); }
+    replay_scalar_literal(name, i64_to_string(low))
+}
+
+fn replay_vec_arg(a: AstArena, tid: i64, pname: String, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
+    let shown: String = print_type_text(a, tid);
+    let args_lid: i64 = type_b(a, tid);
+    if list_len(a, args_lid) != 1 || type_tag(a, list_get(a, args_lid, 0)) != TY_NAMED() {
+        return replay_arg_skip(str3r(String::from("parameter type `"), shown, String::from("` is not rebuilt by replay")));
+    }
+    let ename: String = arena_str(a, type_a(a, list_get(a, args_lid, 0)));
+    let len: i64 = replay_vec_len(pname, names, vals);
+    if len == -2 {
+        return replay_arg_skip(str3r(String::from("length of `"), pname, String::from("` is not a length replay can build")));
+    }
+    let lit: String = String::from("{ let __replay_v: ");
+    lit.push_str(shown);
+    lit.push_str(String::from(" = Vec::new();"));
+    let mut i: i64 = 0;
+    while i < len {
+        let slot: Option<u64> = replay_vec_slot(pname, i, names, vals);
+        let el: ReplayArg = match slot {
+            Option::Some(s) => { replay_slot_element(ename, s) },
+            Option::None => { replay_arg_skip(str3r(String::from("the counterexample does not give element "), i64_to_string(i), str3r(String::from(" of `"), pname, String::from("` (length too large to list)")))) },
+        };
+        if el.reason.len() > 0 { return el; }
+        lit.push_str(String::from(" __replay_v.push("));
+        lit.push_str(el.lit);
+        lit.push_str(String::from(");"));
+        i = i + 1;
+    }
+    lit.push_str(String::from(" __replay_v }"));
+    replay_arg_ok(lit, shown)
+}
+
+fn replay_string_arg(pname: String, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
+    let len: i64 = replay_vec_len(pname, names, vals);
+    if len == -2 {
+        return replay_arg_skip(str3r(String::from("length of `"), pname, String::from("` is not a length replay can build")));
+    }
+    let lit: String = String::from("{ let __replay_s: String = String::from(\"\");");
+    let mut i: i64 = 0;
+    while i < len {
+        match replay_vec_slot(pname, i, names, vals) {
+            Option::Some(s) => {
+                lit.push_str(String::from(" __replay_s.push_byte("));
+                lit.push_str(uint_to_string(s & 255u64));
+                lit.push_str(String::from(");"));
+            },
+            Option::None => {
+                return replay_arg_skip(str3r(String::from("the counterexample does not give byte "), i64_to_string(i), str3r(String::from(" of `"), pname, String::from("` (length too large to list)"))));
+            },
+        }
+        i = i + 1;
+    }
+    lit.push_str(String::from(" __replay_s }"));
+    replay_arg_ok(lit, String::from("String"))
+}
+
 // Source expression and type for argument `pi` of the function `fn_name`
 // declared in `m`, rebuilt from the counterexample's `<param>.<slot>` values.
 // `reason` says why it cannot be (nested aggregates, 128-bit fields, references,
@@ -450,13 +655,15 @@ fn replay_agg_arg(m: Module, fn_name: String, pi: i64, names: Vec<String>, vals:
     let tag: i64 = type_tag(a, tid);
     if tag == TY_NAMED() {
         let tname: String = arena_str(a, type_a(a, tid));
+        if tname == String::from("String") { return replay_string_arg(pname, names, vals); }
         let sid: i64 = replay_find_struct(m, tname);
         if sid >= 0 { return replay_struct_arg(a, sid, pname, names, vals); }
         let eid: i64 = replay_find_enum(m, tname);
         if eid >= 0 { return replay_enum_arg(a, eid, pname, names, vals); }
     }
     if tag == TY_GENERIC() {
+        if arena_str(a, type_a(a, tid)) == String::from("Vec") { return replay_vec_arg(a, tid, pname, names, vals); }
         return replay_builtin_enum_arg(a, tid, pname, names, vals);
     }
-    replay_arg_skip(str3r(String::from("parameter type `"), print_type_text(a, tid), String::from("` is not a struct, enum, Option or Result declared in this program")))
+    replay_arg_skip(str3r(String::from("parameter type `"), print_type_text(a, tid), String::from("` is not a struct, enum, Option, Result, Vec or String declared in this program")))
 }
