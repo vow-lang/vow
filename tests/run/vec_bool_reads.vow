@@ -1,0 +1,58 @@
+// TEST: stdout "10 1 0 1 3 1 1\n"
+// A `Vec<bool>` element read is a `bool` in every context: a branch, a return, a
+// negation, a conjunction, a struct field, a loop-carried flag and a `for` binding.
+module VecBoolReads
+
+struct Flags {
+  bits: Vec<bool>
+}
+
+fn at(v: Vec<bool>, i: u64) -> bool {
+  v[i]
+}
+
+fn count_set(v: Vec<bool>) -> u64 {
+  let mut n: u64 = 0;
+  for x in v {
+    if x { n = n + 1; }
+  }
+  n
+}
+
+fn any_flag(f: Flags) -> bool {
+  let mut seen: bool = false;
+  let mut i: u64 = 0;
+  while i < f.bits.len() {
+    seen = seen || f.bits[i];
+    i = i + 1;
+  }
+  seen
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<bool> = Vec::new();
+  v.push(true);
+  v.push(false);
+  v.push(true);
+  v.push(true);
+  let mut both: u64 = 0;
+  if v[0] && v[2] { both = 10; }
+  print_u64(both);
+  print_str(String::from(" "));
+  let one: bool = at(v, 0);
+  if one { print_i64(1); } else { print_i64(2); }
+  print_str(String::from(" "));
+  if !v[2] { print_i64(7); } else { print_i64(0); }
+  print_str(String::from(" "));
+  if v[0] != v[1] { print_i64(1); } else { print_i64(0); }
+  print_str(String::from(" "));
+  print_u64(count_set(v));
+  print_str(String::from(" "));
+  let f: Flags = Flags { bits: v };
+  if any_flag(f) { print_i64(1); } else { print_i64(0); }
+  print_str(String::from(" "));
+  v[1] = true;
+  if v[1] { print_i64(1); } else { print_i64(0); }
+  print_str(String::from("\n"));
+  0
+}

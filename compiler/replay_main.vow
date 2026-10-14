@@ -560,12 +560,12 @@ fn replay_vec_slot(pname: String, i: i64, names: Vec<String>, vals: Vec<String>)
 
 // The value of element type `name` that reads back from the 8-byte slot `slot`:
 // a narrow integer is the slot's low bits (the verifier truncates on read), and a
-// `bool` slot must be 0 or 1.
+// `bool` is true for any nonzero slot, which is how the lowerer reads it
+// (`narrow_vec_bool_elem`), so the model never tells two nonzero slots apart.
 fn replay_slot_element(name: String, slot: u64) -> ReplayArg {
     if name == String::from("bool") {
         if slot == 0u64 { return replay_arg_ok(String::from("false"), name); }
-        if slot == 1u64 { return replay_arg_ok(String::from("true"), name); }
-        return replay_arg_skip(str3r(String::from("a bool element holds slot value "), uint_to_string(slot), String::from("")));
+        return replay_arg_ok(String::from("true"), name);
     }
     let bits: i64 = replay_int_bits(name);
     if bits == 0 {
