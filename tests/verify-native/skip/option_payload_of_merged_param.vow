@@ -1,0 +1,24 @@
+// TEST: skip-reason unsupported-opcode
+// The payload is read from a merge of two parameters, not from a parameter: there
+// is no single object to take the payload of.
+module OptionPayloadOfMergedParam
+
+struct Handle {
+  fd: i64,
+}
+
+fn pick(c: bool, a: Option<Handle>, b: Option<Handle>) -> i64 vow {
+  ensures: result >= 0
+} {
+  let o: Option<Handle> = if c { a } else { b };
+  match o {
+    Option::Some(h) => {
+      if h.fd < 0 { 0 } else { h.fd }
+    },
+    Option::None => 0,
+  }
+}
+
+fn main() -> i32 {
+  0
+}

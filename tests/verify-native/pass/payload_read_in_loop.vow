@@ -1,0 +1,36 @@
+// TEST: category invariant
+module PayloadReadInLoop
+
+struct Handle {
+  fd: i64,
+}
+
+// The payload is read in every iteration of a loop that is cut by its invariant:
+// every read is the same object, so the count never exceeds the iterations.
+fn count_open(o: Option<Handle>, n: i64) -> i64 vow {
+  requires: n >= 0
+  ensures: result >= 0 && result <= n
+} {
+  let mut i: i64 = 0;
+  let mut acc: i64 = 0;
+  while i < n vow {
+    invariant: i >= 0 && i <= n,
+    invariant: acc >= 0 && acc <= i
+  } {
+    match o {
+      Option::Some(h) => {
+        if h.fd > 0 {
+          acc = acc + 1;
+        }
+      },
+      Option::None => {},
+    }
+    i = i + 1;
+  }
+  acc
+}
+
+fn main() -> i32 [io] {
+  print_i64(count_open(Option::Some(Handle { fd: 1 }), 3));
+  0
+}

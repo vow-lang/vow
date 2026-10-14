@@ -152,12 +152,86 @@ fn check_field_set_through_phi() -> i64 {
     0
 }
 
+// A pointer read out of a field of a parameter (the payload of an enum) is a
+// child object: its slots are symbols named by the path down to it.
+fn payload_fn(read_idx: i64) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_field_get(1, ITY_PTR(), 0, 1));
+    i.push(mk_inst_field_get(2, ITY_I64(), 1, read_idx));
+    i.push(mk_inst_field_get(3, ITY_PTR(), 0, 1));
+    i.push(mk_inst_field_get(4, ITY_I64(), 3, read_idx));
+    i.push(mk_inst(5, IOP_EQ(), ITY_BOOL(), args2(2, 4)));
+    i.push(mk_vow(6, IOP_VOW_ENS(), 5, 0));
+    i.push(mk_inst_return(7, 2));
+    one_block(String::from("payload"), ptr_param(), ITY_I64(), i)
+}
+
+fn check_payload_child_objects() -> i64 {
+    let f: IrFunction = payload_fn(0);
+    if vc_skip_reason(f).len() != 0 { return 130; }
+    // Two reads of the one slot are one object, so the equality is decided.
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 0 { return 131; }
+    if cs.model_names.len() != 1 { return 132; }
+    if cs.model_names[0] != String::from("p0c1f0s64") { return 133; }
+    if cs.model_paths[0] != String::from(".1") { return 134; }
+    if cs.model_params[0] != 0 || cs.model_slots[0] != 0 { return 135; }
+    // The parameter's own slot 0 and the child's slot 0 are two symbols.
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_field_get(1, ITY_PTR(), 0, 1));
+    i.push(mk_inst_field_get(2, ITY_I64(), 1, 0));
+    i.push(mk_inst_field_get(3, ITY_I64(), 0, 0));
+    i.push(mk_inst(4, IOP_EQ(), ITY_BOOL(), args2(2, 3)));
+    i.push(mk_vow(5, IOP_VOW_ENS(), 4, 0));
+    i.push(mk_inst_return(6, 2));
+    let both: VcClaims = vc_claims(one_block(String::from("both"), ptr_param(), ITY_I64(), i));
+    if both.model_names.len() != 2 { return 136; }
+    if both.model_names[0] != String::from("p0c1f0s64") || both.model_paths[0] != String::from(".1") { return 137; }
+    if both.model_names[1] != String::from("p0f0s64") || both.model_paths[1].len() != 0 { return 138; }
+    0
+}
+
+fn check_payload_gate_reasons() -> i64 {
+    // The base is an allocation: there is no parameter object to take a child of.
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_alloc(0, 16));
+    a.push(mk_inst_field_get(1, ITY_PTR(), 0, 1));
+    a.push(mk_inst_field_get(2, ITY_I64(), 1, 0));
+    a.push(mk_inst_return(3, 2));
+    let r: String = vc_skip_reason(one_block(String::from("built"), Vec::new(), ITY_I64(), a));
+    if r != String::from("unsupported-opcode: a pointer field is read from a value that is not a parameter or a field of one") { return 140; }
+    // The payload is a collection: its length is not a slot of an object.
+    let v: Vec<IrInst> = Vec::new();
+    v.push(mk_inst_arg(0, ITY_PTR(), 0));
+    v.push(mk_inst_field_get(1, ITY_PTR(), 0, 1));
+    v.push(mk_inst_call_extern(2, ITY_U64(), args1(1), String::from("__vow_vec_len")));
+    v.push(mk_inst_return(3, 2));
+    let r2: String = vc_skip_reason(one_block(String::from("vec"), ptr_param(), ITY_U64(), v));
+    if r2 != String::from("unsupported-opcode: a pointer read out of a field is used as a collection, a string or a value") { return 141; }
+    // A write to a parameter beside a payload read: the payload may be that parameter.
+    let w: Vec<IrInst> = Vec::new();
+    w.push(mk_inst_arg(0, ITY_PTR(), 0));
+    w.push(mk_inst_arg(1, ITY_PTR(), 1));
+    w.push(mk_inst_const_i64(2, 5));
+    w.push(mk_inst_field_set(3, 1, 0, 2));
+    w.push(mk_inst_field_get(4, ITY_PTR(), 0, 1));
+    w.push(mk_inst_field_get(5, ITY_I64(), 4, 0));
+    w.push(mk_inst_return(6, 5));
+    let two: Vec<i64> = Vec::new();
+    two.push(ITY_PTR());
+    two.push(ITY_PTR());
+    if vc_skip_reason(one_block(String::from("w"), two, ITY_I64(), w)).len() == 0 { return 142; }
+    0
+}
+
 fn check_unsupported_aggregate_shapes() -> i64 {
     let n: Vec<IrInst> = Vec::new();
     n.push(mk_inst_arg(0, ITY_PTR(), 0));
     n.push(mk_inst_field_get(1, ITY_PTR(), 0, 0));
     n.push(mk_inst_return(2, 1));
-    if vc_skip_reason(one_block(String::from("nested"), ptr_param(), ITY_PTR(), n)) != String::from("unsupported-opcode: FieldGet[ptr]") { return 30; }
+    if vc_skip_reason(one_block(String::from("nested"), ptr_param(), ITY_PTR(), n)).len() != 0 { return 30; }
 
     let w: Vec<IrInst> = Vec::new();
     w.push(mk_inst_arg(0, ITY_PTR(), 0));
@@ -774,6 +848,8 @@ fn main() -> i32 {
     if r == 0 { r = check_field_set_targets(); }
     if r == 0 { r = check_field_set_through_phi(); }
     if r == 0 { r = check_field_set_on_call_result(); }
+    if r == 0 { r = check_payload_child_objects(); }
+    if r == 0 { r = check_payload_gate_reasons(); }
     if r == 0 { r = check_unsupported_aggregate_shapes(); }
     if r == 0 { r = check_effects_and_unwrap_shape(); }
     if r == 0 { r = check_unwrap_claim(); }

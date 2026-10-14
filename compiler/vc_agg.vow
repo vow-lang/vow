@@ -11,14 +11,16 @@ use vc_flow
 // construction and `match` reduce to the i64/Bool terms the executor already
 // handles.
 //
-// Three kinds of object exist. An allocation (`RegionAlloc`) starts with no
+// Four kinds of object exist. An allocation (`RegionAlloc`) starts with no
 // field values and is written by `FieldSet`; a parameter's fields are
 // per-parameter symbols; a pointer Phi is the `ite` over its incoming objects.
 // A field nothing wrote is a fresh unconstrained constant, never 0: it is what
 // the other arm of a `Some`/`None` merge would leave in the payload slot. Slots
-// are read lazily, so a parameter needs no layout. A slot is keyed by index and
-// sort (Bool or a bit-vector width), because one enum slot can hold an i64
-// payload in one variant and a Bool in another. A 128-bit value is one term of
+// are read lazily, so a parameter needs no layout. A child is the object a
+// parameter holds in a pointer slot (the payload of an enum, `Option` or `Result`
+// parameter), one per parent and slot, whose own slots are symbols too. A slot is
+// keyed by index and sort (Bool or a bit-vector width), because one enum slot can
+// hold an i64 payload in one variant and a Bool in another. A 128-bit value is one term of
 // sort 128 that occupies slots `idx` and `idx + 1`.
 //
 // A write at path condition `pc` stores `ite(pc, new, old)`. This is exact
@@ -46,6 +48,7 @@ use vc_flow
 fn VC_OBJ_ALLOC() -> i64 { 0 }
 fn VC_OBJ_PARAM() -> i64 { 1 }
 fn VC_OBJ_PHI() -> i64 { 2 }
+fn VC_OBJ_CHILD() -> i64 { 3 }
 
 // Slot number of a parameter's identity in the parameter-symbol tables.
 fn VC_ALIAS_SLOT() -> i64 { -2 }
@@ -68,6 +71,9 @@ struct VcAgg {
     ps_sort: Vec<i64>,
     ps_ty: Vec<i64>,
     ps_hdr: Vec<i64>,
+    ps_obj: Vec<i64>,
+    ps_name: Vec<String>,
+    ps_path: Vec<String>,
     al_params: Vec<i64>,
     al_ids: Vec<i64>,
     junk: i64,
@@ -94,14 +100,18 @@ fn vc_agg_new(fl: VcFlow) -> VcAgg {
         ps_sort: Vec::new(),
         ps_ty: Vec::new(),
         ps_hdr: Vec::new(),
+        ps_obj: Vec::new(),
+        ps_name: Vec::new(),
+        ps_path: Vec::new(),
         al_params: Vec::new(),
         al_ids: Vec::new(),
         junk: 0,
     }
 }
 
-// `owner` is the parameter index of a parameter object and the block of a Phi
-// object (whose Phi is `phi`); -1 otherwise. `births` is the path condition an
+// `owner` is the parameter index of a parameter object, the block of a Phi
+// object (whose Phi is `phi`) and the parent object of a child (whose slot in it
+// is `phi`); -1 otherwise. `births` is the path condition an
 // allocation was created under; -1 for every other kind.
 fn vc_agg_push_obj(ag: VcAgg, kind: i64, owner: i64, phi: i64) -> i64 {
     let id: i64 = ag.kinds.len() as i64;
@@ -130,6 +140,38 @@ fn vc_agg_param(ag: VcAgg, k: i64) -> i64 {
         o = o + 1;
     }
     vc_agg_push_obj(ag, VC_OBJ_PARAM(), k, -1)
+}
+
+// The object held in pointer slot `slot` of the parameter or child `parent`: one
+// per slot, so two reads of a slot see the same fields.
+fn vc_agg_child(ag: VcAgg, parent: i64, slot: i64) -> i64 {
+    let mut o: u64 = 0;
+    while o < ag.kinds.len() {
+        if ag.kinds[o] == VC_OBJ_CHILD() && ag.owners[o] == parent && ag.phis[o] == slot {
+            return o as i64;
+        }
+        o = o + 1;
+    }
+    vc_agg_push_obj(ag, VC_OBJ_CHILD(), parent, slot)
+}
+
+// The parameter a parameter or child object belongs to.
+fn vc_agg_root_param(ag: VcAgg, obj: i64) -> i64 {
+    let mut o: i64 = obj;
+    while ag.kinds[o as u64] == VC_OBJ_CHILD() {
+        o = ag.owners[o as u64];
+    }
+    ag.owners[o as u64]
+}
+
+// ".<slot>" of each step from the parameter down to child `obj`, as a
+// counterexample names it (`o.1` is slot 1 of `o`, `o.1.0` slot 0 of what it holds).
+fn vc_agg_child_path(ag: VcAgg, obj: i64) -> String {
+    if ag.kinds[obj as u64] != VC_OBJ_CHILD() { return String::from(""); }
+    let out: String = vc_agg_child_path(ag, ag.owners[obj as u64]);
+    out.push_str(String::from("."));
+    out.push_str(i64_to_string(ag.phis[obj as u64]));
+    out
 }
 
 fn vc_agg_find(ag: VcAgg, obj: i64, idx: i64, sort: i64) -> i64 {
@@ -276,17 +318,46 @@ fn vc_agg_symbol_name(k: i64, idx: i64, sort: i64) -> String {
     name
 }
 
-// Declares the symbol of slot `idx` of parameter `k` at `sort` and records it
-// (`ps_*`, in declaration order) so a counterexample can read it back: `ps_hdr`
-// is its position in the header, `ps_ty` is filled in by the caller that knows
-// the IR type of the read.
-fn vc_agg_param_symbol(ag: VcAgg, ar: VcArena, hdr: SmtScript, k: i64, idx: i64, sort: i64) -> i64 {
+// Declares the symbol `name` for slot `idx` of the parameter `k` (or of its child
+// object `obj`, whose path from the parameter is `path`) at `sort` and records it
+// (`ps_*`, in declaration order) so a counterexample can read it back: `ps_hdr` is
+// its position in the header, `ps_ty` is filled in by the caller that knows the IR
+// type of the read.
+fn vc_agg_push_symbol(ag: VcAgg, ar: VcArena, hdr: SmtScript, k: i64, idx: i64, sort: i64, name: String, obj: i64, path: String) -> i64 {
     ag.ps_param.push(k);
     ag.ps_slot.push(idx);
     ag.ps_sort.push(sort);
     ag.ps_ty.push(-1);
     ag.ps_hdr.push(hdr.kinds.len() as i64);
-    vc_agg_declare(ar, hdr, vc_agg_symbol_name(k, idx, sort), sort)
+    ag.ps_obj.push(obj);
+    ag.ps_name.push(name);
+    ag.ps_path.push(path);
+    vc_agg_declare(ar, hdr, name, sort)
+}
+
+fn vc_agg_param_symbol(ag: VcAgg, ar: VcArena, hdr: SmtScript, k: i64, idx: i64, sort: i64) -> i64 {
+    vc_agg_push_symbol(ag, ar, hdr, k, idx, sort, vc_agg_symbol_name(k, idx, sort), -1, String::from(""))
+}
+
+// The symbol of slot `idx` of child object `obj` at `sort`, declared on first use.
+fn vc_agg_child_symbol(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, sort: i64) -> i64 {
+    let mut i: u64 = 0;
+    while i < ag.ps_obj.len() {
+        if ag.ps_obj[i] == obj && ag.ps_slot[i] == idx && ag.ps_sort[i] == sort {
+            return vc_tm_var(ar, ag.ps_name[i]);
+        }
+        i = i + 1;
+    }
+    let k: i64 = vc_agg_root_param(ag, obj);
+    let name: String = String::from("p");
+    name.push_str(i64_to_string(k));
+    name.push_str(String::from("c"));
+    name.push_str(i64_to_string(obj));
+    name.push_str(String::from("f"));
+    name.push_str(i64_to_string(idx));
+    name.push_str(String::from("s"));
+    name.push_str(i64_to_string(sort));
+    vc_agg_push_symbol(ag, ar, hdr, k, idx, sort, name, obj, vc_agg_child_path(ag, obj))
 }
 
 // Declares the identity of each parameter in `params` (ascending indices of the
@@ -324,7 +395,7 @@ fn vc_agg_same_object(ag: VcAgg, ar: VcArena, hdr: SmtScript, i: i64, j: i64) ->
 fn vc_agg_own_symbol(ag: VcAgg, ar: VcArena, hdr: SmtScript, k: i64, idx: i64, sort: i64) -> i64 {
     let mut i: u64 = 0;
     while i < ag.ps_param.len() {
-        if ag.ps_param[i] == k && ag.ps_slot[i] == idx && ag.ps_sort[i] == sort {
+        if ag.ps_param[i] == k && ag.ps_obj[i] < 0 && ag.ps_slot[i] == idx && ag.ps_sort[i] == sort {
             return vc_tm_var(ar, vc_agg_symbol_name(k, idx, sort));
         }
         i = i + 1;
@@ -370,6 +441,8 @@ fn vc_agg_get(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, sort: 
     let t: i64 = {
         if kind == VC_OBJ_PARAM() && s < 0 {
             vc_agg_param_initial(ag, ar, hdr, ag.owners[obj as u64], idx, sort)
+        } else if kind == VC_OBJ_CHILD() && s < 0 {
+            vc_agg_child_symbol(ag, ar, hdr, obj, idx, sort)
         } else if kind == VC_OBJ_PHI() {
             // Named like a scalar Phi: merges of merges would otherwise print
             // every shared subterm once per use and grow exponentially.

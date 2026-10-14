@@ -1,0 +1,44 @@
+module EnumStructPayload
+
+struct Handle {
+  fd: i64,
+  open: bool,
+}
+
+enum Slot {
+  Live(Handle),
+  Count(i64),
+  Empty,
+}
+
+fn describe(s: Slot) -> i64 vow {
+  ensures: result >= 0
+} {
+  match s {
+    Slot::Live(h) => {
+      if h.open && h.fd >= 0 { h.fd } else { 0 }
+    },
+    Slot::Count(n) => {
+      if n < 0 { 0 } else { n }
+    },
+    Slot::Empty => 0,
+  }
+}
+
+fn fd_or_code(r: Result<Handle, i64>) -> i64 vow {
+  ensures: result >= 0
+} {
+  match r {
+    Result::Ok(h) => {
+      if h.fd < 0 { 0 } else { h.fd }
+    },
+    Result::Err(e) => {
+      if e < 0 { 0 } else { e }
+    },
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(describe(Slot::Empty));
+  0
+}

@@ -1,0 +1,33 @@
+// TEST: counterexample-fn "inner_fd"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value o.0 1
+// TEST: counterexample-value o.1.0 1
+// TEST: replay-skipped the payload of an Option parameter is a struct
+// A payload that holds a payload: the slots of the inner object are listed under
+// the path of slots that reaches it (`o.1.1.0` is slot 0 of the object in slot 1
+// of the object in slot 1 of `o`).
+module NestedPayloadWrong
+
+struct Handle {
+  fd: i64,
+}
+
+fn inner_fd(o: Option<Option<Handle>>) -> i64 vow {
+  ensures: result > 0
+} {
+  match o {
+    Option::Some(inner) => {
+      match inner {
+        Option::Some(h) => h.fd,
+        Option::None => 1,
+      }
+    },
+    Option::None => 1,
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(inner_fd(Option::None));
+  0
+}

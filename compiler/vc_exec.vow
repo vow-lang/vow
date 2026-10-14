@@ -174,6 +174,7 @@ fn vc_claims_harvest_fields(cs: VcClaims, ag: VcAgg, vv: VcVec, ov: VcOverlay) {
         let ha: i64 = { if a < ov.param.len() { ov.hdr[a] } else { none } };
         if hv < hi && hv < ha {
             cs.model_names.push(vv.pv_len[v]);
+            cs.model_paths.push(String::from(""));
             cs.model_params.push(vv.pv_param[v]);
             cs.model_tys.push(ITY_U64());
             cs.model_widths.push(64);
@@ -189,7 +190,8 @@ fn vc_claims_harvest_fields(cs: VcClaims, ag: VcAgg, vv: VcVec, ov: VcOverlay) {
             cs.model_hdr.push(ha);
             a = a + 1;
         } else {
-            cs.model_names.push(vc_agg_symbol_name(ag.ps_param[i], ag.ps_slot[i], ag.ps_sort[i]));
+            cs.model_names.push(ag.ps_name[i]);
+            cs.model_paths.push(ag.ps_path[i]);
             cs.model_params.push(ag.ps_param[i]);
             cs.model_tys.push(ag.ps_ty[i]);
             cs.model_widths.push(ag.ps_sort[i]);
@@ -209,7 +211,7 @@ fn vc_claims_harvest_fields(cs: VcClaims, ag: VcAgg, vv: VcVec, ov: VcOverlay) {
         if cs.model_slots[j] >= 0 {
             let mut o: u64 = 0;
             while o < cs.model_slots.len() {
-                if o != j && cs.model_params[o] == cs.model_params[j] && cs.model_slots[o] == cs.model_slots[j] && cs.model_widths[o] != cs.model_widths[j] {
+                if o != j && cs.model_params[o] == cs.model_params[j] && cs.model_paths[o] == cs.model_paths[j] && cs.model_slots[o] == cs.model_slots[j] && cs.model_widths[o] != cs.model_widths[j] {
                     amb = 1;
                 }
                 o = o + 1;
@@ -429,6 +431,10 @@ fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
         let seen: u64 = ag.ps_param.len();
         vc_agg_write(ag, cs.arena, cs.header, w.obj_of[inst.args[0] as u64], inst.dv, vc_ty_sort(w.tys[val as u64]), w.var_of[val as u64], w.fl.block_pc[bi]);
         vc_agg_type_symbols(ag, seen, w.tys[val as u64]);
+        return true;
+    }
+    if op == IOP_FIELD_GET() && inst.ty == ITY_PTR() {
+        w.obj_of[inst.id as u64] = vc_agg_child(ag, w.obj_of[inst.args[0] as u64], inst.dv);
         return true;
     }
     if op == IOP_FIELD_GET() && w.tys[inst.args[0] as u64] == ITY_I64() {
@@ -924,6 +930,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         assumed_lens: Vec::new(),
         model_names: Vec::new(),
         model_params: Vec::new(),
+        model_paths: Vec::new(),
         model_tys: Vec::new(),
         model_widths: Vec::new(),
         model_slots: Vec::new(),
@@ -946,6 +953,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
             cs.model_slots.push(-1);
             vc_script_declare_const(hdr, vc_param_name(pi as i64), vc_ty_sort(f.params[pi]));
             cs.model_names.push(vc_param_name(pi as i64));
+            cs.model_paths.push(String::from(""));
             cs.model_params.push(pi as i64);
             cs.model_tys.push(f.params[pi]);
             cs.model_widths.push(vc_ty_sort(f.params[pi]));

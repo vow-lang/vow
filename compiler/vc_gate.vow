@@ -351,7 +351,7 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
         return inst.ty == ITY_PTR() && n == 0 && inst.dk == IDATA_CONST_STR() && inst.dv2 == VC_STR_RESOLVED();
     }
     if op == IOP_FIELD_GET() {
-        return (n == 1 && t0 == ITY_PTR() && inst.dv >= 0 && vc_field_access_ok(inst.dk, inst.ty))
+        return (n == 1 && t0 == ITY_PTR() && inst.dv >= 0 && (vc_field_access_ok(inst.dk, inst.ty) || (inst.dk == IDATA_FIELD() && inst.ty == ITY_PTR())))
             || vc_heap_field_get_ok(inst, t0);
     }
     if op == IOP_FIELD_SET() {
@@ -508,6 +508,10 @@ fn vc_skip_reason_with(src: IrFunction, calls: bool) -> String {
     let map_shape: String = vc_map_shape_detail(f, tys.len());
     if map_shape.len() > 0 {
         return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), map_shape);
+    }
+    let child: String = vc_agg_child_detail(f, tys.len());
+    if child.len() > 0 {
+        return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), child);
     }
     let stored: String = vc_heap_store_detail(f, tys);
     if stored.len() > 0 {

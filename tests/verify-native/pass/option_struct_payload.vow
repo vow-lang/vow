@@ -1,0 +1,59 @@
+module OptionStructPayload
+
+struct Handle {
+  fd: i64,
+}
+
+struct Pair {
+  lo: i64,
+  hi: i64,
+}
+
+fn unwrap_fd(o: Option<Handle>) -> i64 vow {
+  ensures: result >= 0
+} {
+  match o {
+    Option::Some(h) => {
+      let fd: i64 = h.fd;
+      if fd < 0 { 0 } else { fd }
+    },
+    Option::None => 0,
+  }
+}
+
+// Two matches read the same payload object, so the same field value.
+fn twice(o: Option<Handle>) -> i64 vow {
+  ensures: result == 0
+} {
+  let a: i64 = match o {
+    Option::Some(h) => h.fd,
+    Option::None => 0,
+  };
+  let b: i64 = match o {
+    Option::Some(h) => h.fd,
+    Option::None => 0,
+  };
+  a - b
+}
+
+// The payloads of two parameters are two objects with two fields each.
+fn mirrored(a: Option<Pair>, b: Option<Pair>) -> i64 vow {
+  ensures: result == 0 || result == 1
+} {
+  match a {
+    Option::Some(p) => {
+      match b {
+        Option::Some(q) => {
+          if p.lo == q.hi && p.hi == q.lo { 1 } else { 0 }
+        },
+        Option::None => 0,
+      }
+    },
+    Option::None => 0,
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(unwrap_fd(Option::Some(Handle { fd: 3 })));
+  0
+}

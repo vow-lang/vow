@@ -29,6 +29,7 @@ fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
         assumed_lens: Vec::new(),
         model_names: Vec::new(),
         model_params: Vec::new(),
+        model_paths: Vec::new(),
         model_tys: Vec::new(),
         model_widths: Vec::new(),
         model_slots: Vec::new(),
@@ -50,6 +51,8 @@ fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
     cs.model_names.push(String::from("p1"));
     cs.model_params.push(0);
     cs.model_params.push(1);
+    cs.model_paths.push(String::from(""));
+    cs.model_paths.push(String::from(""));
     cs.model_tys.push(ITY_I64());
     cs.model_tys.push(ITY_I64());
     cs.model_widths.push(64);
@@ -62,7 +65,12 @@ fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
 }
 
 fn push_field(cs: VcClaims, param: i64, slot: i64, ty: i64, width: i64, ambig: i64) {
+    push_path_field(cs, param, String::from(""), slot, ty, width, ambig);
+}
+
+fn push_path_field(cs: VcClaims, param: i64, path: String, slot: i64, ty: i64, width: i64, ambig: i64) {
     cs.model_names.push(String::from("f"));
+    cs.model_paths.push(path);
     cs.model_params.push(param);
     cs.model_tys.push(ty);
     cs.model_widths.push(width);
@@ -225,6 +233,7 @@ fn check_aggregate_fields() -> i64 {
     let fresh: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
     fresh.model_names.pop();
     fresh.model_params.pop();
+    fresh.model_paths.pop();
     fresh.model_tys.pop();
     fresh.model_widths.pop();
     fresh.model_slots.pop();
@@ -252,6 +261,7 @@ fn check_aggregate_fields() -> i64 {
     let amb: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
     amb.model_names.pop();
     amb.model_params.pop();
+    amb.model_paths.pop();
     amb.model_tys.pop();
     amb.model_widths.pop();
     amb.model_slots.pop();
@@ -264,6 +274,7 @@ fn check_aggregate_fields() -> i64 {
     let fl: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
     fl.model_names.pop();
     fl.model_params.pop();
+    fl.model_paths.pop();
     fl.model_tys.pop();
     fl.model_widths.pop();
     fl.model_slots.pop();
@@ -277,6 +288,7 @@ fn check_aggregate_fields() -> i64 {
     let al: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
     al.model_names.pop();
     al.model_params.pop();
+    al.model_paths.pop();
     al.model_tys.pop();
     al.model_widths.pop();
     al.model_slots.pop();
@@ -292,6 +304,7 @@ fn check_aggregate_fields() -> i64 {
     let eq: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
     eq.model_names.pop();
     eq.model_params.pop();
+    eq.model_paths.pop();
     eq.model_tys.pop();
     eq.model_widths.pop();
     eq.model_slots.pop();
@@ -332,6 +345,22 @@ fn check_aggregate_fields() -> i64 {
     let r3: VerifyResult = vc_claim_result(f, fresh, 0, early);
     if r3.var_names.len() != 1 { return 69; }
     if r3.var_values[0] != String::from("9") { return 70; }
+    // A field of the object a parameter holds in its slot 1 is named by the path
+    // down to it, so it is not the parameter's own slot 0.
+    let kid: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
+    kid.model_names.pop();
+    kid.model_params.pop();
+    kid.model_paths.pop();
+    kid.model_tys.pop();
+    kid.model_widths.pop();
+    kid.model_slots.pop();
+    kid.model_ambig.pop();
+    push_field(kid, 1, 0, ITY_I64(), 64, 0);
+    push_path_field(kid, 1, String::from(".1"), 0, ITY_I64(), 64, 0);
+    let r7: VerifyResult = vc_claim_result(f, kid, 0, ans);
+    if r7.var_names[1] != String::from("o.0") { return 78; }
+    if r7.var_names[2] != String::from("o.1.0") { return 79; }
+    if r7.var_values[2] != String::from("1") { return 80; }
     0
 }
 
