@@ -4,6 +4,10 @@
 // inductive.
 module HeapParamPushLoopsKeepAliasedLen
 
+// TEST: esbmc-model-artifact fn="zeros_then_copy" blame=None vow_id=4294967293 "ESBMC reads the Vec field b.items as a fresh Vec of nondeterministic length at each use, so the reads of b.items before the loops, in the second loop and in the postcondition are unrelated values and the claim fails; it also fails its own Vec capacity assertion for a parameter already at its model limit. The native model reads one field as one value and keeps the aliasing a parameter may have with it; a debug-mode replay over sizes 0 to 300 with the parameter distinct from and aliasing the field satisfies every clause"
+// TEST: esbmc-model-artifact fn="zeros_then_copy" blame=Callee vow_id=2 "ESBMC reads the Vec field b.items as a fresh Vec of nondeterministic length at each use, so the reads of b.items before the loops, in the second loop and in the postcondition are unrelated values and the claim fails; it also fails its own Vec capacity assertion for a parameter already at its model limit. The native model reads one field as one value and keeps the aliasing a parameter may have with it; a debug-mode replay over sizes 0 to 300 with the parameter distinct from and aliasing the field satisfies every clause"
+// TEST: esbmc-model-artifact fn="zeros_then_copy" blame=Callee vow_id=3 "ESBMC reads the Vec field b.items as a fresh Vec of nondeterministic length at each use, so the reads of b.items before the loops, in the second loop and in the postcondition are unrelated values and the claim fails; it also fails its own Vec capacity assertion for a parameter already at its model limit. The native model reads one field as one value and keeps the aliasing a parameter may have with it; a debug-mode replay over sizes 0 to 300 with the parameter distinct from and aliasing the field satisfies every clause"
+
 struct Bag { items: Vec<i64>, tag: i64 }
 
 fn zeros_then_copy(out: Vec<i64>, b: Bag) -> u64 vow {
