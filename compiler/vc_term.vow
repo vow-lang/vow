@@ -505,6 +505,78 @@ fn vc_simp_sub_quotient(ar: VcArena, x: i64, y: i64) -> i64 {
     vc_simp_quotient_rem(ar, x, ar.b[m as u64], ar.a[m as u64])
 }
 
+// The comparison `x op y` read as `v <= q` or, when `negated`, `v > q`, with
+// `q` the operand that may be a quotient; `ok` is false for the other four
+// comparisons and for every non-comparison.
+struct VcQuotCmp {
+    ok: bool,
+    v: i64,
+    q: i64,
+    negated: bool,
+    signed: bool,
+}
+
+fn vc_quot_cmp(op: i64, x: i64, y: i64) -> VcQuotCmp {
+    let signed: bool = op == VC_OP_BVSLE() || op == VC_OP_BVSGE() || op == VC_OP_BVSGT() || op == VC_OP_BVSLT();
+    if op == VC_OP_BVSLE() || op == VC_OP_BVULE() {
+        return VcQuotCmp { ok: true, v: x, q: y, negated: false, signed: signed };
+    }
+    if op == VC_OP_BVSGE() || op == VC_OP_BVUGE() {
+        return VcQuotCmp { ok: true, v: y, q: x, negated: false, signed: signed };
+    }
+    if op == VC_OP_BVSGT() || op == VC_OP_BVUGT() {
+        return VcQuotCmp { ok: true, v: x, q: y, negated: true, signed: signed };
+    }
+    if op == VC_OP_BVSLT() || op == VC_OP_BVULT() {
+        return VcQuotCmp { ok: true, v: y, q: x, negated: true, signed: signed };
+    }
+    VcQuotCmp { ok: false, v: -1, q: -1, negated: false, signed: signed }
+}
+
+// `v <= c / d` and `v > c / d`, for a constant `c` (non-negative when signed)
+// and a variable `v`, is a multiplication-overflow test: for `d > 0`,
+// `v <= floor(c / d)` holds iff the exact product `v * d` is at most `c`, which
+// is `not umulo(v, d) and v * d <= c` unsigned, and for signed values
+// `smulo(v, d) ? v < 0 : v * d <= c` (an overflowing product has the sign of
+// `v`). This is the `v <= MAX / d` guard against a wrapping multiply; the
+// solver cannot decide a query that mixes that division with the product
+// itself at 64 bits. The rewrite is an `ite` on `d > 0` whose else branch is
+// the original comparison, so a zero or negative divisor keeps its SMT-LIB
+// meaning. A constant `v` or a variable dividend is not the pattern and is left
+// to the solver.
+fn vc_simp_cmp_quotient(ar: VcArena, op: i64, x: i64, y: i64) -> i64 {
+    let shape: VcQuotCmp = vc_quot_cmp(op, x, y);
+    if !shape.ok { return -1; }
+    let v: i64 = shape.v;
+    let signed: bool = shape.signed;
+    if vc_is_bv(ar, v) { return -1; }
+    let n: i64 = vc_tm_def(ar, shape.q);
+    if n < 0 { return -1; }
+    let dop: i64 = { if signed { VC_OP_BVSDIV() } else { VC_OP_BVUDIV() } };
+    if ar.aux[n as u64] != dop { return -1; }
+    let c: i64 = ar.a[n as u64];
+    let d: i64 = ar.b[n as u64];
+    if !vc_is_bv(ar, c) || vc_is_bv(ar, d) { return -1; }
+    let w: i64 = ar.a[c as u64];
+    if w > 64 || (signed && vc_bvfold_sext(w, ar.aux[c as u64]) < 0) { return -1; }
+    let zero: i64 = vc_tm_bv(ar, w, 0, 0);
+    let prod: i64 = vc_tm_app2(ar, VC_OP_BVMUL(), v, d);
+    let gt: i64 = { if signed { VC_OP_BVSGT() } else { VC_OP_BVUGT() } };
+    let le: i64 = { if signed { VC_OP_BVSLE() } else { VC_OP_BVULE() } };
+    let pos: i64 = vc_tm_app2(ar, gt, d, zero);
+    let fits: i64 = vc_tm_app2(ar, le, prod, c);
+    let mulo: i64 = vc_tm_app2(ar, { if signed { VC_OP_BVSMULO() } else { VC_OP_BVUMULO() } }, v, d);
+    let mut inner: i64 = 0;
+    if signed {
+        inner = vc_tm_app3(ar, VC_OP_ITE(), mulo, vc_tm_app2(ar, VC_OP_BVSLT(), v, zero), fits);
+    } else {
+        inner = vc_tm_and(ar, vc_tm_app1(ar, VC_OP_NOT(), mulo), fits);
+    }
+    if shape.negated { inner = vc_tm_app1(ar, VC_OP_NOT(), inner); }
+    let original: i64 = vc_arena_intern(ar, VC_T_APP(), x, y, -1, op);
+    vc_tm_app3(ar, VC_OP_ITE(), pos, inner, original)
+}
+
 fn vc_simp_and(ar: VcArena, x: i64, y: i64) -> i64 {
     if vc_tm_is_true(ar, x) { return y; }
     if vc_tm_is_true(ar, y) { return x; }
@@ -538,6 +610,7 @@ fn vc_tm_app2(ar: VcArena, op: i64, x: i64, y: i64) -> i64 {
     }
     if r < 0 { r = vc_simp_identity(ar, op, x, y); }
     if r < 0 && op == VC_OP_BVSUB() { r = vc_simp_sub_quotient(ar, x, y); }
+    if r < 0 { r = vc_simp_cmp_quotient(ar, op, x, y); }
     if r >= 0 { return r; }
     vc_arena_intern(ar, VC_T_APP(), x, y, -1, op)
 }
