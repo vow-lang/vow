@@ -1,8 +1,9 @@
 // TEST: stdout "0"
-// The writers are total. A value that has no encoding (a type, an InstData kind) is written as the
-// byte 255, which no decoder tag accepts, so decoding the bytes is an InvalidKind error rather than
-// a trap in the encoder; a value wider than its wire field is reduced to the field's width; a vow
-// entry with fewer names than ids writes the pairs there are. In-range values keep their bytes.
+// The writers are total on the values the wire format has a width for: a value wider than its
+// field is reduced to the field's width (the verifier cannot bound the elements of a `Vec`), and a
+// vow entry with fewer names than ids writes the pairs there are. In-range values keep their
+// bytes (`vmod_region_roundtrip`); a value with no encoding at all still aborts
+// (`vmod_rejects_invalid_instdata_encode`).
 module Main
 
 use ir
@@ -26,31 +27,6 @@ fn push_u32(v: Vec<i64>, a: i64, b: i64, c: i64, d: i64) {
     v.push(b);
     v.push(c);
     v.push(d);
-}
-
-fn unencodable_integer_ty() -> i64 {
-    let out: Vec<i64> = Vec::new();
-    write_integer_ty(out, 99);
-    let want: Vec<i64> = Vec::new();
-    want.push(255);
-    if expect_bytes(out, want) != 0 { return 1; }
-    let r: ModuleReader = reader_new(out);
-    let _ty: i64 = read_integer_ty(r);
-    if r.err_kind != DEC_INVALID_KIND() || r.err_label != String::from("IntegerWidth") || r.err_value != 255 { return 1; }
-    0
-}
-
-fn unencodable_inst_data() -> i64 {
-    let out: Vec<i64> = Vec::new();
-    let inst: IrInst = ir_inst_new(0, IOP_CONST_I64(), ITY_I64(), Vec::new(), 99, 0, 0, String::from(""));
-    write_inst_data(out, inst);
-    let want: Vec<i64> = Vec::new();
-    want.push(255);
-    if expect_bytes(out, want) != 0 { return 1; }
-    let r: ModuleReader = reader_new(out);
-    let _d: WireInstData = read_inst_data(r);
-    if r.err_kind != DEC_INVALID_KIND() || r.err_label != String::from("InstData") || r.err_value != 255 { return 1; }
-    0
 }
 
 fn wide_inst_fields() -> i64 {
@@ -126,7 +102,7 @@ fn short_names() -> i64 {
 }
 
 fn main() -> i32 [io] {
-    let fail: i64 = unencodable_integer_ty() + unencodable_inst_data() + wide_inst_fields() + wide_region() + short_names();
+    let fail: i64 = wide_inst_fields() + wide_region() + short_names();
     print_i64(fail);
     0
 }

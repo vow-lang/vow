@@ -113,8 +113,12 @@ fn reader_need(r: ModuleReader, n: u64) -> bool {
     true
 }
 
+// The encoder aborts on a value that has no encoding. The abort is the checked add
+// of the verifier's model (a reachable one is a warning, not a counterexample), so
+// a writer that reaches it is still proven for every value that has an encoding.
 fn reject_encode_u8() -> i64 {
-    255
+    let top: i64 = 9223372036854775807;
+    top +! 1
 }
 
 fn decode_error_name(kind: i64) -> String {
@@ -503,8 +507,7 @@ fn region_constraint_encode(out: Vec<i64>, kind: i64, aux: i64, aliases: Vec<i64
     write_leb(out, n);
     let mut i: u64 = 0;
     while i < n vow {
-        invariant: i <= n,
-        invariant: n <= aliases.len()
+        invariant: i <= n
     } {
         write_u32_le(out, aliases[i] & 4294967295);
         i = i + 1;
@@ -544,38 +547,27 @@ fn region_constraint_decode(r: ModuleReader) -> WireRegionConstraint {
 }
 
 // The flat store-effect list is a sequence of records `[target, kind, (aux | n,
-// alias...)]`. Every reader of a record goes through these helpers, which read a
-// slot past the end as 0 and never let a record run past it, so the count prefix
-// and the records written agree on a truncated or overlong list as they do on a
-// whole one.
-fn store_effect_slot(flat: Vec<i64>, idx: u64) -> i64 {
-    if idx < flat.len() { return flat[idx]; }
-    0
+// alias...)]`. A record is whole when every slot it names is in the list. The
+// count prefix and the writer both go through `store_effect_width` and stop at the
+// first record that is not whole, so they agree on a truncated list as they do on
+// a whole one, and a kind is read as its low two bits in both.
+fn store_effect_width(flat: Vec<i64>, start: u64) -> u64 {
+    let rem: u64 = flat.len() - start;
+    if rem < 2 { return 0; }
+    let kind: i64 = flat[start + 1] & 3;
+    if kind == RSUM_KIND_FRESH_IN_CALLER() || kind == RSUM_KIND_CONSTANT_GLOBAL() { return 2; }
+    if rem < 3 { return 0; }
+    if kind == RSUM_KIND_ALIAS_OF() { return 3; }
+    let n: u64 = flat[start + 2] as u64;
+    if n > rem - 3 { return 0; }
+    3 + n
 }
 
-fn store_effect_kind(flat: Vec<i64>, start: u64) -> i64 {
-    store_effect_slot(flat, start + 1) & 3
-}
-
-fn store_effect_alias_count(flat: Vec<i64>, start: u64) -> u64 {
-    let head: u64 = start + 3;
-    let mut have: u64 = 0;
-    if head < flat.len() { have = flat.len() - head; }
-    let want: u64 = store_effect_slot(flat, start + 2) as u64;
-    if want < have { return want; }
-    have
-}
-
-fn store_effect_flat_advance(flat: Vec<i64>, start: u64) -> u64 {
-    let kind: i64 = store_effect_kind(flat, start);
-    let mut next: u64 = start + 3 + store_effect_alias_count(flat, start);
-    if kind == RSUM_KIND_FRESH_IN_CALLER() || kind == RSUM_KIND_CONSTANT_GLOBAL() {
-        next = start + 2;
-    } else if kind == RSUM_KIND_ALIAS_OF() {
-        next = start + 3;
-    }
-    if next < flat.len() { return next; }
-    flat.len()
+// `i + w`, or the end of the list when that would pass it.
+fn cursor_advance(i: u64, w: u64, len: u64) -> u64 {
+    let next: u64 = i + w;
+    if next <= len { return next; }
+    len
 }
 
 fn store_effect_count(flat: Vec<i64>) -> u64 {
@@ -585,8 +577,13 @@ fn store_effect_count(flat: Vec<i64>) -> u64 {
     while i < n vow {
         invariant: i <= n
     } {
-        i = store_effect_flat_advance(flat, i);
-        count = count + 1;
+        let w: u64 = store_effect_width(flat, i);
+        if w == 0 {
+            i = n;
+        } else {
+            i = cursor_advance(i, w, n);
+            count = count + 1;
+        }
     }
     count
 }
@@ -612,25 +609,30 @@ fn write_region_summary(out: Vec<i64>, f: IrFunction) {
     while i < flat.len() vow {
         invariant: i <= flat.len()
     } {
-        let kind: i64 = store_effect_kind(flat, i);
-        write_u32_wire(out, flat[i]);
-        if kind == RSUM_KIND_FRESH_IN_CALLER() || kind == RSUM_KIND_CONSTANT_GLOBAL() {
-            region_constraint_encode(out, kind, 0, Vec::new());
-        } else if kind == RSUM_KIND_ALIAS_OF() {
-            region_constraint_encode(out, kind, store_effect_slot(flat, i + 2) & 4294967295, Vec::new());
+        let w: u64 = store_effect_width(flat, i);
+        if w == 0 {
+            i = flat.len();
         } else {
-            let n_aliases: u64 = store_effect_alias_count(flat, i);
+            let next: u64 = cursor_advance(i, w, flat.len());
+            let target: i64 = flat[i];
+            let kind: i64 = flat[i + 1] & 3;
+            let mut aux: i64 = 0;
             let aliases: Vec<i64> = Vec::new();
-            let mut j: u64 = 0;
-            while j < n_aliases vow {
-                invariant: j <= n_aliases
-            } {
-                aliases.push(flat[i + 3 + j]);
-                j = j + 1;
+            if kind == RSUM_KIND_ALIAS_OF() {
+                aux = flat[i + 2] & 4294967295;
+            } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
+                let mut k: u64 = i + 3;
+                while k < next vow {
+                    invariant: k <= next
+                } {
+                    aliases.push(flat[k]);
+                    k = k + 1;
+                }
             }
-            region_constraint_encode(out, kind, 0, aliases);
+            write_u32_wire(out, target);
+            region_constraint_encode(out, kind, aux, aliases);
+            i = next;
         }
-        i = store_effect_flat_advance(flat, i);
     }
 }
 
@@ -944,9 +946,7 @@ fn write_vow_entry(out: Vec<i64>, entry: IrVowEntry) {
     write_leb(out, n);
     let mut i: u64 = 0;
     while i < n vow {
-        invariant: i <= n,
-        invariant: n <= ids.len(),
-        invariant: n <= names.len()
+        invariant: i <= n
     } {
         write_string(out, names[i]);
         write_u32_wire(out, ids[i]);

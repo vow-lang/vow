@@ -2121,9 +2121,9 @@ for dir in tests/multi/*/; do
     fi
 
     # Validate // TEST: exit directive (the vmod decode-reject fixtures exit 1
-    # after printing the structured decode error; the encoder is total, so an
-    # unencodable value is the byte 255 that the decoder rejects, see
-    # vmod_encode_unencodable_value).
+    # after printing the structured decode error; the encode-side invariant
+    # trap in vmod_rejects_invalid_instdata_encode still exits 134, the
+    # reserved runtime-abort code — see #877).
     expected_exit=$(sed -n 's|^// TEST: exit \([0-9]*\)$|\1|p' "$main_file" | head -1)
     if [ -n "$expected_exit" ]; then
         actual_exit=0
