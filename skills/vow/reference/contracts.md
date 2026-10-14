@@ -177,15 +177,18 @@ This is a *differential test*, **not part of the proof**. The static verdict and
 
 ## Integer Contracts
 
-### Non-zero Guard
+### Division Guard
 
 ```vow
 fn divide(x: i64, y: i64) -> i64 vow {
     requires: y != 0
+    requires: x >= -9223372036854775807 || y != -1
 } {
     x / y
 }
 ```
+
+Signed `/` has two abort cases, and the true domain of `divide` excludes both: a zero divisor, and `i64::MIN / -1`, whose quotient is not representable (the runtime aborts with `ArithmeticOverflow` for it exactly as for a zero divisor). The second clause is that overflow guard (`x >= -9223372036854775807` is `x != i64::MIN`), a real part of the function's domain and not a verifier bound; `requires: y != 0` alone is not the whole domain. The native backend proves each as an obligation, so it refutes the one-clause version with `x = i64::MIN`, `y = -1`. The ESBMC C model does not check `MIN / -1` (see `cli.md` → "Verdict divergence from ESBMC"). Unsigned division has only the zero-divisor case.
 
 ### Range Bounds
 

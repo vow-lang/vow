@@ -1,4 +1,5 @@
 // TEST: category callee-blame
+// TEST: native-divergence "the call tree of `f` is refuted at callee `g`'s ensures, so native leaves `f`'s own clause unknown; ESBMC proves it in isolation"
 // TEST: counterexample-fn "g"
 // TEST: counterexample-blame Callee
 // TEST: counterexample-vow-id 0
