@@ -177,9 +177,9 @@ reason = "reads or stores a collection through a struct field or a Vec element (
 
 [[skip]]
 function = "reader_read_string"
-code = "unsupported-opcode"
-issue = 1677
-reason = "passes a reader struct to reader_read_count and reader_read_u8 (module_io.vow)"
+code = "non-modelable-callee"
+issue = 1704
+reason = "its callee reader_fail stores a String into a field of the reader parameter (module_io.vow)"
 
 [[skip]]
 function = "sort_local_names"
