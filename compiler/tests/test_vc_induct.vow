@@ -376,6 +376,38 @@ fn check_vec_written_in_loop() -> i64 {
     0
 }
 
+// A loop header that opens a region starts with its marker, ahead of the Phis:
+// the havoc of a written Vec lands after the Phis, behind that marker.
+fn check_vec_written_in_region_header() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(vec_new_inst(40));
+    let body: Vec<IrInst> = Vec::new();
+    body.push(mk_inst_call_extern(50, ITY_UNIT(), pair(40, 0), String::from("__vow_vec_push_val")));
+    let f: IrFunction = count_up_with(pre, body);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        if f.blocks[bi].id == 1 {
+            let head: Vec<IrInst> = Vec::new();
+            head.push(mk_inst(60, IOP_REGION_OPEN(), ITY_UNIT(), Vec::new()));
+            let hb: IrBlock = f.blocks[bi];
+            let mut k: u64 = 0;
+            while k < hb.insts.len() {
+                head.push(hb.insts[k]);
+                k = k + 1;
+            }
+            f.blocks[bi] = mk_block(1, head);
+        }
+        bi = bi + 1;
+    }
+    let c: VcInduct = vc_induct_cut(f);
+    if c.status != VC_INDUCT_OK() { return 1; }
+    if count_marker(c.f, VC_INTERNAL_HAVOC_VEC()) != 1 { return 2; }
+    if !well_formed(c.f) { return 3; }
+    let h: IrBlock = block_by_id(c.f, 1);
+    if h.insts.len() < 3 || h.insts[0].op != IOP_REGION_OPEN() || !vc_is_havoc_vec(h.insts[2]) { return 4; }
+    0
+}
+
 // A Vec only read in the loop keeps its state: no marker.
 fn check_vec_read_in_loop() -> i64 {
     let pre: Vec<IrInst> = Vec::new();
@@ -482,6 +514,7 @@ fn main() -> i32 {
     if r == 0 { r = check_not_applicable() + 300; if r == 300 { r = 0; } }
     if r == 0 { r = check_ptr_phi() + 400; if r == 400 { r = 0; } }
     if r == 0 { r = check_vec_written_in_loop() + 500; if r == 500 { r = 0; } }
+    if r == 0 { r = check_vec_written_in_region_header() + 540; if r == 540 { r = 0; } }
     if r == 0 { r = check_vec_read_in_loop() + 550; if r == 550 { r = 0; } }
     if r == 0 { r = check_vec_havoc_refused() + 570; if r == 570 { r = 0; } }
     if r == 0 { r = check_vec_set_pop_in_loop() + 590; if r == 590 { r = 0; } }

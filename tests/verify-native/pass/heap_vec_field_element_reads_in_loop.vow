@@ -1,0 +1,28 @@
+module HeapVecFieldElementReadsInLoop
+
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn sum_nonneg(b: Bag) -> i64 vow {
+  ensures: result >= 0
+} {
+  let mut total: i64 = 0;
+  let mut i: u64 = 0;
+  while i < b.items.len() vow {
+    invariant: i <= b.items.len(),
+    invariant: total >= 0
+  } {
+    let x: i64 = b.items[i];
+    if x > 0 && total < 1000000 {
+      total = total + x % 1000;
+    }
+    i = i + 1;
+  }
+  total
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), tag: 1 };
+  b.items.push(5);
+  print_i64(sum_nonneg(b));
+  0
+}

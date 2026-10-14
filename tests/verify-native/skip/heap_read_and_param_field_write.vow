@@ -1,0 +1,20 @@
+// TEST: skip-reason unsupported-opcode
+// `b.n = ...` may write the very memory the Vec in `b.items` lives at if a handle
+// names `b`, so a function that reads through a handle and writes a parameter is
+// skipped (`FieldSet on a parameter of a function that reads ...`).
+module HeapReadAndParamFieldWrite
+
+struct Bag { items: Vec<i64>, n: i64 }
+
+fn refresh(b: Bag) -> i64 vow {
+  ensures: result >= 0
+} {
+  b.n = b.items.len() as i64;
+  b.n
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), n: 0 };
+  print_i64(refresh(b));
+  0
+}

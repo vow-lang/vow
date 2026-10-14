@@ -1,0 +1,21 @@
+// TEST: replay-skipped field 0 is a Vec, which the replay harness cannot build
+// TEST: counterexample-fn "diff"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// Two structs may hold two different Vecs, so their lengths need not be equal.
+module HeapVecFieldsNotOneVec
+
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn diff(a: Bag, b: Bag) -> u64 vow {
+  ensures: result == 0
+} {
+  a.items.len() - b.items.len()
+}
+
+fn main() -> i32 [io] {
+  let a: Bag = Bag { items: Vec::new(), tag: 1 };
+  let b: Bag = Bag { items: Vec::new(), tag: 2 };
+  print_u64(diff(a, b));
+  0
+}
