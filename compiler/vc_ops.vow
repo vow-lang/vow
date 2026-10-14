@@ -74,14 +74,14 @@ fn vc_op_modeled_core(op: i64) -> bool {
         || op == IOP_CONST_UNIT() || op == IOP_BRANCH() || op == IOP_JUMP() || op == IOP_UNREACHABLE()
         || op == IOP_PHI() || op == IOP_UPSILON()
         || op == IOP_REGION_ALLOC() || op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE()
-        || op == IOP_CONST_STR()
+        || op == IOP_CONST_STR() || op == IOP_LINEAR_CONSUME()
 }
 
 fn vc_op_unsupported(op: i64) -> bool {
     op == IOP_LOAD() || op == IOP_STORE()
         || op == IOP_DEBUG_CALL()
         || op == IOP_COMPLEXITY_DESCRIPTOR()
-        || op == IOP_LINEAR_CONSUME() || op == IOP_LINEAR_BORROW()
+        || op == IOP_LINEAR_BORROW()
 }
 
 // How the verifier treats an opcode. An opcode in none of the lists is

@@ -51,6 +51,8 @@ fn check_known_classes() -> i64 {
     if vc_op_model(IOP_REGION_ALLOC()) != VC_OPM_MODELED() { return 607; }
     if vc_op_model(IOP_REGION_OPEN()) != VC_OPM_MODELED() { return 608; }
     if vc_op_model(IOP_REGION_CLOSE()) != VC_OPM_MODELED() { return 609; }
+    if vc_op_model(IOP_LINEAR_CONSUME()) != VC_OPM_MODELED() { return 616; }
+    if vc_op_model(IOP_LINEAR_BORROW()) != VC_OPM_UNSUPPORTED() { return 617; }
     0
 }
 

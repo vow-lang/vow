@@ -1,0 +1,85 @@
+module VcLinear
+
+use ir
+use vc_loops
+
+// The native verifier reads the IR with `ITY_LPTR` erased to `ITY_PTR`: as data a
+// linear value is an ordinary aggregate. Codegen and the region pass keep the original.
+
+fn vc_lin_ty(ty: i64) -> i64 {
+    if ty == ITY_LPTR() { ITY_PTR() } else { ty }
+}
+
+fn vc_has_linear_ty(f: IrFunction) -> bool {
+    if f.return_ty == ITY_LPTR() { return true; }
+    let mut pi: u64 = 0;
+    while pi < f.params.len() {
+        if f.params[pi] == ITY_LPTR() { return true; }
+        pi = pi + 1;
+    }
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            if blk.insts[ii].ty == ITY_LPTR() { return true; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    false
+}
+
+fn vc_erase_linear_fn(f: IrFunction) -> IrFunction {
+    if !vc_has_linear_ty(f) { return f; }
+    let g: IrFunction = vc_function_shell(f);
+    g.return_ty = vc_lin_ty(f.return_ty);
+    let params: Vec<i64> = Vec::new();
+    let mut pi: u64 = 0;
+    while pi < f.params.len() {
+        params.push(vc_lin_ty(f.params[pi]));
+        pi = pi + 1;
+    }
+    g.params = params;
+    g.local_names_ids = f.local_names_ids;
+    g.local_names_strs = f.local_names_strs;
+    g.rsum_return_kind = f.rsum_return_kind;
+    g.rsum_return_aux = f.rsum_return_aux;
+    g.rsum_return_aliases = f.rsum_return_aliases;
+    g.rsum_store_effects = f.rsum_store_effects;
+    g.rsum_param_regions = f.rsum_param_regions;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let nb: IrBlock = ir_block_new(blk.id);
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.ty == ITY_LPTR() {
+                let out: IrInst = vc_clone_inst(inst, inst.id, inst.args, inst.dv, inst.dv2);
+                out.ty = ITY_PTR();
+                nb.insts.push(out);
+            } else {
+                nb.insts.push(inst);
+            }
+            ii = ii + 1;
+        }
+        g.blocks.push(nb);
+        bi = bi + 1;
+    }
+    g
+}
+
+fn vc_erase_linear(m: IrModule) -> IrModule {
+    let out: IrModule = ir_module_new(m.name);
+    let mut fi: u64 = 0;
+    while fi < m.functions.len() {
+        out.functions.push(vc_erase_linear_fn(m.functions[fi]));
+        fi = fi + 1;
+    }
+    out.strings = m.strings;
+    out.struct_layouts = m.struct_layouts;
+    out.enum_layouts = m.enum_layouts;
+    out.warnings = m.warnings;
+    out
+}
