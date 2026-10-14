@@ -118,6 +118,8 @@ fn VC_VEC_GET() -> i64 { 3 }
 fn VC_VEC_SET() -> i64 { 4 }
 fn VC_VEC_LEN() -> i64 { 5 }
 fn VC_VEC_POP() -> i64 { 6 }
+// `vec_sort(v)`: a new `Vec` holding the sorted elements of `v` (`vc_vec`, `VC_T_QSORT`).
+fn VC_VEC_SORT() -> i64 { 43 }
 
 // Dispatched on the symbol's length, so a call to anything else costs one
 // comparison instead of one per operation.
@@ -127,6 +129,8 @@ fn vc_vec_op_kind(sym: String) -> i64 {
         if sym == String::from("__vow_vec_new") { return VC_VEC_NEW(); }
         if sym == String::from("__vow_vec_len") { return VC_VEC_LEN(); }
         if sym == String::from("__vow_vec_pop") { return VC_VEC_POP(); }
+    } else if n == 14 {
+        if sym == String::from("__vow_vec_sort") { return VC_VEC_SORT(); }
     } else if n == 17 {
         if sym == String::from("__vow_vec_get_val") { return VC_VEC_GET(); }
         if sym == String::from("__vow_vec_set_val") { return VC_VEC_SET(); }

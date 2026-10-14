@@ -187,3 +187,36 @@ fn vc_qb_hex_decode(r: String, s: String, m: String) -> String {
     let body: String = vc_qb_and(vc_qb_pair_valid(), vc_qb_eq(vc_qb_select(r, i), vc_qb_pair_value()));
     vc_qb_forall(m, vc_qb_with_pair(s, i, body))
 }
+
+// `vec_sort` (`VC_T_QSORT`): `o` is the sorted permutation of `s` over the first `n` slots,
+//   forall i < j < n. o[i] <=s o[j]                                          (sorted)
+//   forall i < n. p[i] < n, q[p[i]] = i, o[i] = s[p[i]], q[i] < n, p[q[i]] = i
+//                                         (a permutation, with its inverse)
+// where `p[x]` is `pq[2x]` and `q[x]` is `pq[2x + 1]`. The sorted permutation of a sequence is
+// unique, so `o` is determined: the encoding is exact, not an over-approximation.
+fn vc_qb_perm(pq: String, x: String, inverse: bool) -> String {
+    let twice: String = vc_qb_add(x, x);
+    if inverse {
+        return vc_qb_select(pq, vc_qb_add(twice, vc_qb_c(1)));
+    }
+    vc_qb_select(pq, twice)
+}
+
+fn vc_qb_sort(o: String, s: String, pq: String, n: String) -> String {
+    let i: String = vc_qb_i();
+    let j: String = String::from("vq_j");
+    let ordered: String = vc_qb_app2(String::from("bvsle"), vc_qb_select(o, i), vc_qb_select(o, j));
+    let guard: String = vc_qb_and(vc_qb_ult(i, j), vc_qb_ult(j, n));
+    let sorted: String = String::from("(forall ((vq_i (_ BitVec 64)) (vq_j (_ BitVec 64))) (=> ");
+    sorted.push_str(guard);
+    sorted.push_str(String::from(" "));
+    sorted.push_str(ordered);
+    sorted.push_str(String::from("))"));
+    let p_i: String = vc_qb_perm(pq, i, false);
+    let q_i: String = vc_qb_perm(pq, i, true);
+    let forward: String = vc_qb_and(vc_qb_ult(p_i, n), vc_qb_eq(vc_qb_perm(pq, p_i, true), i));
+    let value: String = vc_qb_eq(vc_qb_select(o, i), vc_qb_select(s, p_i));
+    let backward: String = vc_qb_and(vc_qb_ult(q_i, n), vc_qb_eq(vc_qb_perm(pq, q_i, false), i));
+    let perm: String = vc_qb_forall(n, vc_qb_and(forward, vc_qb_and(value, backward)));
+    vc_qb_and(sorted, perm)
+}
