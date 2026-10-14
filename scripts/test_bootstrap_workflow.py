@@ -524,6 +524,41 @@ class NativeOracleWorkflowTest(unittest.TestCase):
             with self.subTest(cron=cron):
                 self.assertTrue(cron.endswith("* * *"), "expected a daily cron")
 
+    def test_runs_on_pull_requests_that_touch_the_oracle_inputs(self) -> None:
+        # A new fixture is only checked for an undocumented replay gap by this
+        # workflow, so it has to run before the merge, not only after it.
+        workflow_header = header(self.text)
+
+        self.assertRegex(
+            workflow_header, r"pull_request:\s*\n\s*branches:\s*\[main\]\s*\n\s*paths:"
+        )
+        for path in (
+            "compiler/vc_*.vow",
+            "compiler/replay*",
+            "tests/verify*/**",
+            "scripts/verifier_runtime.py",
+            "scripts/verify_*.py",
+            ".github/workflows/native-oracle.yml",
+        ):
+            with self.subTest(path=path):
+                self.assertIn(f'- "{path}"', workflow_header)
+
+    def test_classifier_reads_the_pull_request_range(self) -> None:
+        changes = job_blocks(self.text)["changes"]
+
+        self.assertIn("github.event.pull_request.base.sha", changes)
+        self.assertIn("github.event.pull_request.head.sha", changes)
+        self.assertIn("needs.changes.outputs.code == 'true'", self.text)
+
+    def test_only_pull_request_runs_are_cancelled_by_a_newer_push(self) -> None:
+        workflow_header = header(self.text)
+
+        self.assertRegex(
+            workflow_header,
+            r"cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}",
+        )
+        self.assertIn("github.run_id", workflow_header)
+
     def test_keeps_read_only_repository_permissions(self) -> None:
         workflow_header = header(self.text)
 

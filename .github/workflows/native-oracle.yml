@@ -20,13 +20,38 @@ name: Native verifier oracles
 # product code depends on it. Neither oracle needs ESBMC, so the compiler is
 # built with `bootstrap.sh --no-verify`.
 #
-# Off the pull-request path, like bootstrap.yml and full-test.yml: the job is
-# bootstrap-class in runtime. A false proof is attributed to the merge that
-# introduced it because it runs on every push to `main`; the nightly run is the
-# backstop and rotates the generated-corpus seed.
+# Runs on pull requests that touch what the oracles exercise, so a fixture or
+# verifier change is checked before it merges instead of reddening `main`
+# afterwards (#1649: new fixtures need a documented `replay-skipped` note the
+# oracle only enforces here). A shard takes ~3-8 minutes with a warm Rust cache,
+# so the four shards are affordable per PR. Pull requests run the same pinned
+# seeds as pushes, and a docs-only change is skipped by the classifier below.
+# `main` still runs it on every push (a false proof is attributed to the merge
+# that introduced it) and nightly, which rotates the generated-corpus seed.
+#
+# The `paths:` filter is deliberate: it stays off changes the oracles cannot
+# observe. `main` has no required checks, so a workflow skipped by `paths:`
+# cannot leave a required check Pending; add this workflow's jobs to a ruleset
+# only together with a job-level gate in place of `paths:`.
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
+    paths:
+      - "compiler/vc_*.vow"
+      - "compiler/replay*"
+      - "tests/verify*/**"
+      - "examples/**"
+      - "scripts/verifier_runtime.py"
+      - "scripts/verify_*.py"
+      - "scripts/z3_crosscheck.py"
+      - "scripts/candidate_isolation.py"
+      - "scripts/gen_corpus.py"
+      - "scripts/gen_verifier_corpus.py"
+      - ".github/actions/install-bitwuzla/**"
+      - ".github/actions/install-z3/**"
+      - ".github/workflows/native-oracle.yml"
   schedule:
     # 05:37 UTC -- clear of cargo-mutants (02:17), bootstrap (03:53),
     # equivalence (04:41), arena-verify (06:29) and full-test (07:20).
@@ -37,6 +62,12 @@ on:
         description: Generated-corpus seed (default 1431 for the equivalence axis, 1473 for the verifier axis)
         required: false
         type: string
+
+# A new push to a pull request supersedes its running shards; pushes to `main`
+# and scheduled runs are never cancelled, so each merge keeps its own verdict.
+concurrency:
+  group: native-oracle-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -55,8 +86,8 @@ jobs:
           persist-credentials: false
       - id: classify
         env:
-          BASE_SHA: ${{ github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python3 scripts/ci_docs_only.py --base "$BASE_SHA" --head "$HEAD_SHA" >> "$GITHUB_OUTPUT"
 
   oracles:

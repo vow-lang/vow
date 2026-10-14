@@ -449,7 +449,8 @@ could not run (missing `vowc`, `esbmc` or `bitwuzla`, a malformed skip list).
 Two CI-only checks hold `vowc verify --backend native` to a second opinion
 (epic #1398, issue #1431). Both run from
 [`native-oracle.yml`](../.github/workflows/native-oracle.yml) on every push to
-`main` and nightly, sharded four ways, over `tests/verify`, `tests/verify-fail`,
+`main`, nightly, and on pull requests that touch the verifier, replay harness,
+oracle scripts or fixtures, sharded four ways, over `tests/verify`, `tests/verify-fail`,
 `tests/verify-native/{pass,fail,unknown}`, `examples/` and two `gen_corpus.py`
 corpora (see [Generated verifier corpus](#generated-verifier-corpus)). The seeds
 are pinned on pushes (`1431` equivalence axis, `1473` verifier axis), the UTC
