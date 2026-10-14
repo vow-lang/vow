@@ -4724,6 +4724,15 @@ pub extern "C" fn __vow_process_stderr_for(handle: i64) -> *mut u8 {
     unsafe { with_root_arena(|arena| alloc_bytes_string(arena, &bytes)) }
 }
 
+/// Delay before poll `round` of `__vow_process_wait_timeout`: 50 us doubling to
+/// a 10 ms cap. A fixed 10 ms quantum was longer than most solver queries, so
+/// every short child cost an extra few milliseconds of sleep on top of its run.
+fn wait_poll_delay(round: u32) -> std::time::Duration {
+    const FIRST_US: u64 = 50;
+    const CAP_US: u64 = 10_000;
+    std::time::Duration::from_micros((FIRST_US << round.min(8)).min(CAP_US))
+}
+
 /// Wait for a process with a timeout in milliseconds.
 /// Returns exit code on success, -2 on timeout, -1 on error.
 #[unsafe(no_mangle)]
@@ -4747,6 +4756,7 @@ pub extern "C" fn __vow_process_wait_timeout(handle: i64, timeout_ms: i64) -> i6
             let piped = piped::lookup(handle);
             let timeout = std::time::Duration::from_millis(timeout_ms.max(0) as u64);
             let start = std::time::Instant::now();
+            let mut round: u32 = 0;
             let result = loop {
                 if let Some(p) = &piped {
                     p.pump();
@@ -4756,10 +4766,12 @@ pub extern "C" fn __vow_process_wait_timeout(handle: i64, timeout_ms: i64) -> i6
                         break Ok(process_status_code(handle, status));
                     }
                     Ok(None) => {
-                        if start.elapsed() >= timeout {
+                        let elapsed = start.elapsed();
+                        if elapsed >= timeout {
                             break Err(-2i64); // timeout
                         }
-                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        std::thread::sleep(wait_poll_delay(round).min(timeout - elapsed));
+                        round = round.saturating_add(1);
                     }
                     Err(_) => {
                         break Err(-1i64); // error
@@ -6232,6 +6244,31 @@ mod tests {
         assert!(gone, "grandchild {grandchild} survived the group kill");
         __vow_process_kill(handle);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wait_poll_delay_starts_short_doubles_and_caps() {
+        use std::time::Duration;
+        assert_eq!(wait_poll_delay(0), Duration::from_micros(50));
+        assert_eq!(wait_poll_delay(1), Duration::from_micros(100));
+        assert_eq!(wait_poll_delay(7), Duration::from_micros(6_400));
+        assert_eq!(wait_poll_delay(8), Duration::from_millis(10));
+        assert_eq!(wait_poll_delay(u32::MAX), Duration::from_millis(10));
+        let mut prev = Duration::ZERO;
+        for round in 0..64 {
+            let d = wait_poll_delay(round);
+            assert!(d >= prev && d <= Duration::from_millis(10));
+            prev = d;
+        }
+    }
+
+    #[test]
+    fn wait_timeout_does_not_overshoot_a_short_deadline() {
+        let handle = spawn_capped("sh", &["-c".to_string(), "sleep 30".to_string()], 0);
+        let start = std::time::Instant::now();
+        assert_eq!(__vow_process_wait_timeout(handle, 25), -2);
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+        __vow_process_kill(handle);
     }
 
     #[test]
