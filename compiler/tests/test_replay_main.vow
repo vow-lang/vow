@@ -177,6 +177,7 @@ fn agg_src() -> String {
     s.push_str(String::from("fn fvu128(v: Vec<u128>) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fvs(v: Vec<String>) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fvf(v: Vec<f64>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fvf32(v: Vec<f32>) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fstr(s: String) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fref(p: &Pair) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fa(a: Alias) -> i64 { 0 }\n"));
@@ -395,6 +396,22 @@ fn check_wide_vec_elements() -> i32 [io] {
     0
 }
 
+// A `Vec<f64>` whose elements the function reads as floats is marked `<param>.elem=f64` and
+// lists each element as the float's decimal text, an integer-valued one included; without the
+// mark an element is a raw slot, which replay cannot tell from a float, so it is skipped.
+fn check_float_vec_elements() -> i32 [io] {
+    let kv: String = String::from("v.len=3,v.elem=f64,v[0]=3,v[1]=-2.5,v[2]=NaN");
+    let want: String = str2s(vec_head(String::from("Vec<f64>")), String::from(" __replay_v.push(3.0); __replay_v.push((0.0 - 2.5)); __replay_v.push((0.0 / 0.0)); __replay_v }"));
+    if vec_lit(String::from("fvf"), kv) != want { return 241; }
+    if agg(String::from("fvf"), 0, String::from("v.len=1,v[0]=3")).reason.len() == 0 { return 242; }
+    if agg(String::from("fvf"), 0, String::from("v.len=1,v.elem=f32,v[0]=3")).reason.len() == 0 { return 243; }
+    if agg(String::from("fvf"), 0, String::from("v.len=2,v.elem=f64,v[0]=3")).reason.len() == 0 { return 244; }
+    if agg(String::from("fvf"), 0, String::from("v.len=1,v.elem=f64,v[0]=x")).reason.len() == 0 { return 245; }
+    if agg(String::from("fvf32"), 0, String::from("v.len=1,v.elem=f32,v[0]=2.5")).reason.len() == 0 { return 246; }
+    if vec_lit(String::from("fvf"), String::from("v.len=0,v.elem=f64")) != str2s(vec_head(String::from("Vec<f64>")), String::from(" __replay_v }")) { return 247; }
+    0
+}
+
 fn check_string_arg() -> i32 [io] {
     let head: String = String::from("{ let __replay_s: String = String::from(\"\");");
     if lit_of(String::from("fstr"), String::from("")) != str2s(head, String::from(" __replay_s }")) { return 221; }
@@ -448,5 +465,7 @@ fn main() -> i32 [io] {
     if r12 != 0 { return r12; }
     let r13: i32 = check_alias_identities();
     if r13 != 0 { return r13; }
+    let r19: i32 = check_float_vec_elements();
+    if r19 != 0 { return r19; }
     0
 }

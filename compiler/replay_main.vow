@@ -587,9 +587,28 @@ fn replay_wide_element(pname: String, i: i64, name: String, names: Vec<String>, 
     replay_wide_literal(name, raw)
 }
 
+// Element `i` of a `Vec<f64>` parameter. The counterexample marks a `Vec` whose elements the
+// function reads as floats with `<param>.elem` = `f64`, and then lists each element as the
+// float's decimal text; without the mark an element is a raw slot, which a float cannot rebuild.
+fn replay_float_element(pname: String, i: i64, name: String, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
+    let marked: String = replay_cex_value(names, vals, str3r(pname, String::from(".elem"), String::from("")));
+    if marked != name {
+        return replay_arg_skip(str3r(String::from("element type `"), name, String::from("` is not rebuilt by replay")));
+    }
+    let key: String = str3r(pname, String::from("["), str3r(i64_to_string(i), String::from("]"), String::from("")));
+    let raw: String = replay_cex_value(names, vals, key);
+    if raw.len() == 0 {
+        return replay_arg_skip(str3r(String::from("the counterexample does not give element "), i64_to_string(i), str3r(String::from(" of `"), pname, String::from("` (length too large to list)"))));
+    }
+    replay_f64_literal(raw)
+}
+
 fn replay_vec_element(pname: String, i: i64, name: String, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
     if name == String::from("i128") || name == String::from("u128") {
         return replay_wide_element(pname, i, name, names, vals);
+    }
+    if name == String::from("f64") {
+        return replay_float_element(pname, i, name, names, vals);
     }
     match replay_vec_slot(pname, i, names, vals) {
         Option::Some(s) => { replay_slot_element(name, s) },

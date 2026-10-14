@@ -525,6 +525,7 @@ fn vc_walk_str(w: VcWalk, bi: u64, inst: IrInst, pc: i64, kind: i64, s: i64) {
         vc_define(w, inst, vc_str_flag(ar, inst, m));
     } else {
         let obj: i64 = vc_walk_new_obj(w, bi, inst);
+        if kind == VC_STR_CLONE() { vc_vec_set_src(vv, obj, w.obj_of[inst.args[0] as u64]); }
         let mut narr: i64 = arr;
         let mut nlen: i64 = len;
         if kind == VC_STR_SUBSTRING() || kind == VC_STR_SUBSTR() {
