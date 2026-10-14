@@ -1,0 +1,30 @@
+// TEST: replay-skipped field 0 is a Vec, which the replay harness cannot build
+// TEST: counterexample-fn "set_first"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// `out` may be the `Vec` that `b.items` holds, and then writing `out[0]` changes the element
+// read through the field: the claim that it does not is refuted.
+module HeapParamSetAliasesFieldElement
+
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn set_first(out: Vec<i64>, b: Bag) -> bool vow {
+  ensures: result
+} {
+  if out.len() > 0 && b.items.len() > 0 {
+    let before: i64 = b.items[0];
+    out[0] = before + 1;
+    b.items[0] == before
+  } else {
+    true
+  }
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), tag: 1 };
+  b.items.push(5);
+  let out: Vec<i64> = Vec::new();
+  out.push(7);
+  if set_first(out, b) { print_i64(1); }
+  0
+}
