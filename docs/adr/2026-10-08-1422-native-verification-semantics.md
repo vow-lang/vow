@@ -1261,12 +1261,21 @@ overlay of the #1703 addendum reads through it.
   addresses of the objects its edges supply. Only parameter entries are listed in a counterexample.
   The class of an entry (`Vec`, `String`, struct) is the class of the stored value's uses
   (`vc_overlay_class_table`), so a `String` operation never names a `Vec` entry.
-- **Imprecision, never unsoundness.** A handle loaded from existing memory is not assumed different
-  from the address of an object the function stored, so the model has runs the program has not (a
-  loaded handle that is a fresh object). That can only add a counterexample no run reaches.
-  Two struct parameters stay possibly one object, so storing one into the other's field can
-  overwrite the slot the parameter has to be (`o.inner = i` with `o` and `i` one object); the
-  fixtures that store a struct into a parameter's field build the stored struct themselves.
+- **Handles from the given memory are not fresh objects.** A 64-bit term read out of the memory
+  the function was given (a parameter's field symbol, a field or an element read through a handle)
+  is assumed different from the address of every object the function allocates, whichever of the two
+  was introduced first (`vc_overlay_note_loaded`, `vc_overlay_scan_params`). That is a fact about
+  allocation, not a bound: a fresh object is no object that existed before it. Without it a read of
+  a parameter's field before and after a store into a fresh struct could differ, because only the
+  second read would consider the stored object (`ptr_field_loaded_handle_is_not_fresh.vow`).
+- **Absent state.** An object the function allocated has a `Vec` state only in the blocks its
+  creation reaches; the overlay skips an entry whose state is absent in the block of the read
+  (`ptr_field_object_absent_on_other_branch.vow`).
+- **Imprecision, never unsoundness.** Two struct parameters stay possibly one object, so storing one
+  into the other's field can overwrite the slot the parameter has to be (`o.inner = i` with `o` and
+  `i` one object); the fixtures that store a struct into a parameter's field build the stored struct
+  themselves. A pointer's class is the class of its uses, so a stored object that is only ever read
+  through the field is not consulted for a collection read (it reads as the array does).
 - **What stays skipped.** A write through a handle (`h.items.push(1)` where `h.items` is read from
   memory) and a `Vec` merged by a Phi (#1662) are as before. The `unsupported-opcode` details `pointer
   written into a field of a value that is not an allocation` and `a field that holds a pointer is read

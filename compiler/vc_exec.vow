@@ -407,6 +407,15 @@ fn vc_walk_wide_access(w: VcWalk, bi: u64, inst: IrInst) {
     }
 }
 
+// A 64-bit value read out of the memory the function was given (`base`, or a parameter field
+// symbol the aggregate model declared for this read) is not the address of an object the
+// function allocated (`vc_overlay`). Only a function that stores a pointer has such addresses.
+fn vc_note_loaded(w: VcWalk, base: i64, ty: i64) {
+    if w.ov.class_of.len() == 0 || ty != ITY_I64() { return; }
+    vc_overlay_scan_params(w.ov, w.ag, w.cs.arena, w.cs.assumed);
+    vc_overlay_note_loaded(w.ov, w.cs.arena, w.cs.assumed, base);
+}
+
 // Aggregate instructions: pointers are objects (`obj_of`), never terms; a field
 // read defines a scalar value.
 fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
@@ -432,7 +441,7 @@ fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
         let mut ty: i64 = w.tys[val as u64];
         if ty == ITY_PTR() {
             // The slot holds the address of the object (`vc_overlay`).
-            term = vc_overlay_addr_of(w.ov, ag, cs.arena, cs.header, cs.assumed, w.obj_of[val as u64], w.ov.class_of[val as u64]);
+            term = vc_overlay_addr_of(w.ov, ag, cs.arena, cs.header, cs.assumed, w.obj_of[val as u64], vc_overlay_class_of(w.ov, val));
             ty = ITY_I64();
         }
         let seen: u64 = ag.ps_param.len();
@@ -448,6 +457,7 @@ fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
         let h: i64 = w.var_of[inst.args[0] as u64];
         let base: i64 = vc_heap_field(w.hp, cs.arena, cs.header, h, inst.dv, inst.ty);
         vc_define(w, inst, vc_overlay_field(w.ov, ag, cs.arena, cs.header, h, inst.dv, inst.ty, base));
+        vc_note_loaded(w, base, inst.ty);
         return true;
     }
     if op == IOP_FIELD_GET() {
@@ -455,6 +465,7 @@ fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
         let t: i64 = vc_agg_get(ag, cs.arena, cs.header, w.obj_of[inst.args[0] as u64], inst.dv, vc_ty_sort(inst.ty));
         vc_agg_type_symbols(ag, seen, inst.ty);
         vc_define(w, inst, t);
+        vc_note_loaded(w, -1, inst.ty);
         return true;
     }
     if op == IOP_PHI() && inst.ty == ITY_PTR() {
@@ -618,6 +629,7 @@ fn vc_walk_handle_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64, kind: i64) {
     vc_guard(cs, VC_CLAIM_VEC_BOUNDS(), VC_LABEL_VEC_BOUNDS(), pc, vc_vec_in_bounds(ar, idx, len), inst);
     let base: i64 = vc_heap_elem(w.hp, ar, hdr, h, idx);
     vc_define(w, inst, vc_overlay_elem(w.ov, w.ag, w.vv, ar, hdr, cs.assumed, b, h, idx, rcls, false, base));
+    vc_note_loaded(w, base, ITY_I64());
 }
 
 // `vec_sort(v)`: a new `Vec` of `v`'s length whose slots are the sorted permutation of
