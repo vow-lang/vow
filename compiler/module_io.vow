@@ -931,49 +931,56 @@ fn sort_local_names(ids: Vec<i64>, names: Vec<String>) -> SortedLocalNames vow {
     let used: Vec<i64> = Vec::new();
     let mut i: u64 = 0;
     while i < ids.len() vow {
-        invariant: i <= ids.len()
+        invariant: i <= ids.len(),
+        invariant: used.len() == i
     } {
         used.push(0);
         i = i + 1;
     }
     let out_ids: Vec<i64> = Vec::new();
     let out_names: Vec<String> = Vec::new();
-    let mut remaining: u64 = ids.len();
-    while remaining > 0 vow {
-        invariant: remaining <= ids.len(),
-        invariant: out_ids.len() <= ids.len()
+    while true vow {
+        invariant: used.len() == ids.len(),
+        invariant: out_ids.len() == out_names.len()
     } {
-        let mut best_idx: i64 = -1;
+        let mut found: bool = false;
+        let mut best_idx: u64 = 0;
         let mut best_id: i64 = 0;
         i = 0;
         while i < ids.len() vow {
-            invariant: i <= ids.len()
+            invariant: i <= ids.len(),
+            invariant: used.len() == ids.len(),
+            invariant: !found || best_idx < ids.len()
         } {
             if used[i] == 0 {
                 let cur: i64 = ids[i];
-                if best_idx == -1 || cur < best_id {
-                    best_idx = i as i64;
+                if !found || cur < best_id {
+                    found = true;
+                    best_idx = i;
                     best_id = cur;
                 }
             }
             i = i + 1;
         }
+        if !found {
+            break;
+        }
         // Keep the last name for duplicate ids to mirror Rust's HashMap insert semantics.
-        let mut chosen_idx: i64 = best_idx;
+        let mut chosen_idx: u64 = best_idx;
         i = 0;
         while i < ids.len() vow {
             invariant: i <= ids.len(),
-            invariant: remaining <= ids.len()
+            invariant: used.len() == ids.len(),
+            invariant: chosen_idx < ids.len()
         } {
             if used[i] == 0 && ids[i] == best_id {
                 used[i] = 1;
-                remaining = remaining -! 1;
-                chosen_idx = i as i64;
+                chosen_idx = i;
             }
             i = i + 1;
         }
-        out_ids.push(ids[chosen_idx as u64]);
-        out_names.push(names[chosen_idx as u64]);
+        out_ids.push(ids[chosen_idx]);
+        out_names.push(names[chosen_idx]);
     }
     SortedLocalNames { ids: out_ids, names: out_names }
 }
