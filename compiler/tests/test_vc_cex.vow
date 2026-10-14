@@ -430,6 +430,53 @@ fn check_wide_vec_contents() -> i64 {
     0
 }
 
+// The elements of a float `Vec` print as the float their slot holds, an `f32` from the
+// low 32 bits only, and keep the 64-bit element width of a raw slot.
+fn check_float_vec_contents() -> i64 {
+    let f: IrFunction = vec_fn();
+    let values: Vec<i64> = Vec::new();
+    let highs: Vec<i64> = Vec::new();
+    values.push(5);
+    highs.push(0);
+    values.push(2);
+    highs.push(0);
+    values.push(4612811918334230528);
+    highs.push(0);
+    values.push(-4616189618054758400);
+    highs.push(0);
+    let ans: VcSolverAnswer = VcSolverAnswer { verdict: VC_ANS_SAT(), values: values, highs: highs, raw: String::from("") };
+    let cs: VcClaims = vec_claims();
+    cs.vec_wide[0] = ITY_F64();
+    let r: VerifyResult = vc_claim_result(f, cs, 0, ans);
+    if r.var_names.len() != 4 { return 100; }
+    if r.var_names[2] != String::from("v[0]") || r.var_values[2] != String::from("2.5") { return 101; }
+    if r.var_names[3] != String::from("v[1]") || r.var_values[3] != String::from("-1") { return 102; }
+    if vc_cex_elem_widths(cs, vc_cex_vecs(cs, 0), 2)[0] != 64 { return 103; }
+    let c32: VcClaims = vec_claims();
+    c32.vec_wide[0] = ITY_F32();
+    let v32: Vec<i64> = Vec::new();
+    v32.push(5);
+    v32.push(2);
+    v32.push(1075838976 + 8589934592);
+    v32.push(3212836864);
+    let h32: Vec<i64> = Vec::new();
+    h32.push(0);
+    h32.push(0);
+    h32.push(0);
+    h32.push(0);
+    let a32: VcSolverAnswer = VcSolverAnswer { verdict: VC_ANS_SAT(), values: v32, highs: h32, raw: String::from("") };
+    let r32: VerifyResult = vc_claim_result(f, c32, 0, a32);
+    if r32.var_values[2] != String::from("2.5") || r32.var_values[3] != String::from("-1") { return 104; }
+    // an integer element type never reads as a float
+    let ci: VcClaims = vec_claims();
+    ci.vec_wide[0] = ITY_I64();
+    let ri: VerifyResult = vc_claim_result(f, ci, 0, ans);
+    if ri.var_values[2] != String::from("4612811918334230528") { return 105; }
+    if vc_cex_float_ty(ci, 0) != -1 || vc_cex_wide_ty(ci, 0) != -1 { return 106; }
+    if vc_cex_float_ty(cs, 0) != ITY_F64() || vc_cex_wide_ty(cs, 0) != -1 { return 107; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_sat_ensures();
     if r == 0 { r = check_sat_abort_claims(); }
@@ -440,5 +487,6 @@ fn main() -> i32 {
     if r == 0 { r = check_aggregate_fields(); }
     if r == 0 { r = check_vec_contents(); }
     if r == 0 { r = check_wide_vec_contents(); }
+    if r == 0 { r = check_float_vec_contents(); }
     i64_to_i32_wrap(r)
 }

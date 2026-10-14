@@ -221,6 +221,11 @@ struct VcWalk {
     wslot: Vec<i64>,
     wobj: Vec<i64>,
     widx: Vec<i64>,
+    // The object of the `Vec` a one-slot `get` read, for every value that read is,
+    // and the float type of every value a float was stored into a slot as (`vc_fp`);
+    // -1 for every other value. They tell a counterexample which parameters hold floats.
+    elem_obj: Vec<i64>,
+    bits_ty: Vec<i64>,
     tys: Vec<i64>,
     lits: Vec<i64>,
     dvs: Vec<i64>,
@@ -280,6 +285,29 @@ fn vc_exec_arith(w: VcWalk, inst: IrInst, pc: i64) -> i64 {
     value
 }
 
+// A float entering or leaving the 8-byte slot of a `Vec` element (`vc_fp`). A read is
+// `to_fp` of the slot. A write is the constant's own bits, else a fresh bit pattern
+// assumed to be one of the float, so a write and a read of the same float agree
+// (`to_fp(b) = x`) and the slot itself stays a plain 64-bit element for the array.
+fn vc_exec_float_bits(w: VcWalk, inst: IrInst, pc: i64) -> i64 {
+    let cs: VcClaims = w.cs;
+    let ar: VcArena = cs.arena;
+    let x: i64 = w.var_of[inst.args[0] as u64];
+    let ft: i64 = vc_fp_op_ty(inst.op);
+    if vc_fp_is_from_bits(inst.op) {
+        let obj: i64 = w.elem_obj[inst.args[0] as u64];
+        if obj >= 0 { vc_vec_mark_elem(w.vv, w.ag, obj, ft); }
+        return vc_fp_from_slot(ar, ft, x);
+    }
+    w.bits_ty[inst.id as u64] = ft;
+    let konst: i64 = vc_fp_const_slot(ar, ft, x);
+    if konst >= 0 { return konst; }
+    let width: i64 = { if ft == ITY_F32() { 32 } else { 64 } };
+    let fresh: i64 = vc_agg_junk(w.ag, ar, cs.header, width);
+    vc_assume(cs, pc, vc_fp_slot_fact(ar, ft, fresh, x));
+    vc_fp_slot_value(ar, ft, fresh)
+}
+
 // Value of a defined, non-control instruction.
 fn vc_exec_value(w: VcWalk, inst: IrInst, pc: i64) -> i64 {
     let cs: VcClaims = w.cs;
@@ -296,6 +324,7 @@ fn vc_exec_value(w: VcWalk, inst: IrInst, pc: i64) -> i64 {
     if op == IOP_NOT() { return vc_tm_app1(ar, VC_OP_NOT(), w.var_of[inst.args[0] as u64]); }
     if op == IOP_INT_CAST() { return vc_cast(ar, inst.dv, inst.ty, w.var_of[inst.args[0] as u64]); }
     if vc_fp_is_neg(op) { return vc_tm_app1(ar, VC_OP_FPNEG(), w.var_of[inst.args[0] as u64]); }
+    if vc_fp_is_to_bits(op) || vc_fp_is_from_bits(op) { return vc_exec_float_bits(w, inst, pc); }
     let lhs: i64 = w.var_of[inst.args[0] as u64];
     let rhs: i64 = w.var_of[inst.args[1] as u64];
     if op == IOP_SHL() || op == IOP_SHR() {
@@ -350,11 +379,11 @@ fn vc_walk_wide_access(w: VcWalk, bi: u64, inst: IrInst) {
     let s: i64 = w.wslot[r];
     let arr: i64 = vc_vec_cur_arr(vv, s, b);
     if inst.op == IOP_FIELD_GET() {
-        vc_vec_mark_wide(vv, w.ag, w.wobj[r], inst.ty);
+        vc_vec_mark_elem(vv, w.ag, w.wobj[r], inst.ty);
         vc_define(w, inst, vc_wide_read(ar, arr, w.widx[r]));
     } else {
         let val: i64 = inst.args[1];
-        vc_vec_mark_wide(vv, w.ag, w.wobj[r], w.tys[val as u64]);
+        vc_vec_mark_elem(vv, w.ag, w.wobj[r], w.tys[val as u64]);
         vc_vec_write(vv, ar, cs.header, s, b, vc_wide_write(ar, arr, w.widx[r], w.var_of[val as u64]), vc_vec_cur_len(vv, s, b));
     }
 }
@@ -553,6 +582,13 @@ fn vc_walk_sort(w: VcWalk, bi: u64, inst: IrInst, pc: i64) {
     vv.quantified = true;
 }
 
+// A `Vec` that a float was pushed or written into holds floats: a counterexample lists
+// the elements of such a parameter as floats, not as raw slots.
+fn vc_mark_stored_float(w: VcWalk, obj: i64, val: i64) {
+    let ft: i64 = w.bits_ty[val as u64];
+    if ft >= 0 { vc_vec_mark_elem(w.vv, w.ag, obj, ft); }
+}
+
 // A `Vec` call (`vc_vec`). `get` and `len` define a value, the rest change the
 // object's state in this block; an index out of bounds is a hard claim, assumed
 // afterwards like the other aborts.
@@ -618,6 +654,7 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
     } else if vc_vec_kind_is_wide(kind) {
         vc_walk_wide_call(w, bi, inst, pc, kind, s);
     } else if kind == VC_VEC_PUSH() {
+        vc_mark_stored_float(w, w.obj_of[inst.args[0] as u64], inst.args[1]);
         let elem: i64 = vc_vec_elem64(ar, w.tys[inst.args[1] as u64], w.var_of[inst.args[1] as u64]);
         vc_assume(cs, pc, vc_vec_push_guard(ar, vc_vec_cur_len(vv, s, b)));
         vc_vec_push(vv, ar, hdr, s, b, elem);
@@ -626,7 +663,9 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
         vc_guard(cs, VC_CLAIM_VEC_BOUNDS(), VC_LABEL_VEC_BOUNDS(), pc, vc_vec_in_bounds(ar, idx, vc_vec_cur_len(vv, s, b)), inst);
         if kind == VC_VEC_GET() {
             vc_define(w, inst, vc_tm_app2(ar, VC_OP_SELECT(), vc_vec_cur_arr(vv, s, b), idx));
+            w.elem_obj[inst.id as u64] = w.obj_of[inst.args[0] as u64];
         } else {
+            vc_mark_stored_float(w, w.obj_of[inst.args[0] as u64], inst.args[2]);
             let elem: i64 = vc_vec_elem64(ar, w.tys[inst.args[2] as u64], w.var_of[inst.args[2] as u64]);
             vc_vec_set(vv, ar, hdr, s, b, idx, elem);
         }
@@ -898,6 +937,8 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         wslot: dom_fill(tys.len(), -1),
         wobj: dom_fill(tys.len(), -1),
         widx: dom_fill(tys.len(), -1),
+        elem_obj: dom_fill(tys.len(), -1),
+        bits_ty: dom_fill(tys.len(), -1),
         tys: tys,
         lits: vc_literal_table(f, tys),
         dvs: dom_fill(tys.len(), 0),

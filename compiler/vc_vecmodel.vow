@@ -66,10 +66,24 @@ fn vc_cex_vecs(cs: VcClaims, k: u64) -> Vec<i64> {
     out
 }
 
-// Element type of the 128-bit elements of parameter `v` of `cs.vec_*`, or -1 for
-// one-slot elements.
-fn vc_cex_wide_ty(cs: VcClaims, v: i64) -> i64 {
+// Element type of the elements of parameter `v` of `cs.vec_*` the function reads or
+// writes as something other than a raw slot, or -1.
+fn vc_cex_elem_ty(cs: VcClaims, v: i64) -> i64 {
     if (v as u64) < cs.vec_wide.len() { return cs.vec_wide[v as u64]; }
+    -1
+}
+
+// Element type of the 128-bit elements of parameter `v`, or -1 for one-slot elements.
+fn vc_cex_wide_ty(cs: VcClaims, v: i64) -> i64 {
+    let ty: i64 = vc_cex_elem_ty(cs, v);
+    if ty == ITY_I128() || ty == ITY_U128() { return ty; }
+    -1
+}
+
+// Element type of the float elements of parameter `v`, or -1.
+fn vc_cex_float_ty(cs: VcClaims, v: i64) -> i64 {
+    let ty: i64 = vc_cex_elem_ty(cs, v);
+    if vc_ty_is_float(ty) { return ty; }
     -1
 }
 

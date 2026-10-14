@@ -105,7 +105,8 @@ fn vc_alias_value_source(cs: VcClaims, vals: Vec<i64>, n: u64, j: u64) -> u64 {
 // length when the answer carries the contents (`vc_enrich_vec_model`: `n`
 // regular entries, then the same number of raw 8-byte slots per parameter of
 // `vc_cex_vecs`). A slot prints as its unsigned 64-bit value; an element of a
-// wide `Vec` (`vc_wide`) is one 128-bit entry and prints in its own type.
+// wide `Vec` (`vc_wide`) is one 128-bit entry and prints in its own type; an element
+// of a float `Vec` (`vc_fp`) prints as the float its slot holds.
 fn vc_append_vec_contents(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnswer, n: u64, names: Vec<String>, values: Vec<String>) {
     if ans.values.len() <= n { return; }
     let vecs: Vec<i64> = vc_cex_vecs(cs, k);
@@ -124,8 +125,11 @@ fn vc_append_vec_contents(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnsw
                 key.push_str(String::from("]"));
                 names.push(key);
                 let wide: i64 = vc_cex_wide_ty(cs, vecs[p]);
+                let float_ty: i64 = vc_cex_float_ty(cs, vecs[p]);
                 if wide >= 0 {
                     values.push(vc_format_int(wide, ans.values[at], ans.highs[at]));
+                } else if float_ty >= 0 {
+                    values.push(vc_format_float(float_ty, ans.values[at]));
                 } else {
                     values.push(uint_to_string(ans.values[at] as u64));
                 }
