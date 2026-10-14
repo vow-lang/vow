@@ -82,8 +82,6 @@ fn vc_op_unsupported(op: i64) -> bool {
         || op == IOP_DEBUG_CALL()
         || op == IOP_COMPLEXITY_DESCRIPTOR()
         || op == IOP_LINEAR_BORROW()
-        || op == IOP_F32_TO_BITS() || op == IOP_F64_TO_BITS()
-        || op == IOP_BITS_TO_F32() || op == IOP_BITS_TO_F64()
 }
 
 // How the verifier treats an opcode. An opcode in none of the lists is
