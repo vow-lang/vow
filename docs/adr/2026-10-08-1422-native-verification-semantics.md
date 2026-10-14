@@ -1098,10 +1098,10 @@ addendum is that model (`compiler/vc_map.vow`, op table `compiler/vc_mapops.vow`
 ESBMC's `Verified` (an artifact of its capacity) to `unknown`. Maps stored in a struct field, passed
 to a function, or with a `String`/`Vec`/struct value stay `Skipped`.
 
-## Addendum (#1726): what a loop and a handle read may assume about a `Vec`
+## Addendum (#1726): loops and handle reads of the `.vmod` writers
 
 The `.vmod` writers of `compiler/module_io.vow` copy collections held in struct fields into a `Vec`
-parameter inside nested loops. Three rules of the model were too weak or too strict for that shape,
+parameter inside nested loops. Four rules of the model were too weak or too strict for that shape,
 and each is a property of the language, not of the function.
 
 - **A read consults its own class.** A handle read by a `String` operation names a `String`, one
@@ -1127,8 +1127,12 @@ and each is a property of the language, not of the function.
   The function used to be left to bounded unwinding, which cannot decide a loop over an unbounded
   length (`tests/verify-native/pass/loop_vec_born_in_outer_loop.vow`).
 
-A reachable abort is a soft claim, and a function with one runs its unrolled rounds after the
-inductive proof to find the warnings. An abort inside an inlined helper of a nested-loop function
-(the `.vmod` encoder's old "reject" trap, `+!` on `i64::MAX`) therefore turns a 3 second proof into a
-timeout; the writers are total instead (an unencodable value is the byte 255, which no decoder tag
-accepts), which is also what lets them be proven.
+A reachable abort is a soft claim, and a function with one used to run its unrolled rounds after the
+inductive proof to find the warnings, each round of nested loops ten times the cost of the one before it
+(`tests/verify-native/pass/loop_nested_checked_add_warning.vow` timed out). The inductive cut already
+knows which aborts any run can reach, because it over-approximates every run: the sites of its `sat`
+answers on soft claims (`VcInduction.sites`). A soft claim the cut proves `unsat` is never a warning, so a
+proof whose cut reaches no abort ends the check, and otherwise the rounds end at the first one whose sites
+cover the cut's (`vc_sites_cover`). The warnings are the same set; only rounds that could add none are
+skipped. This is what lets a writer reach the encoder's abort on a value that has no encoding
+(`reject_encode_u8`, a checked add) and still be proven for every value that has one.

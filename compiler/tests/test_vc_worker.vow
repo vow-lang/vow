@@ -297,6 +297,28 @@ fn check_clause_flag_is_checked() -> i64 {
     0
 }
 
+fn site(owner: i64, ostart: i64) -> ParsedArithSite {
+    ParsedArithSite { cause: String::from("overflow in +!"), owner: owner, ostart: ostart, olen: 6 }
+}
+
+// The search for warnings ends once a round has found every abort the inductive cut can reach.
+fn check_sites_cover() -> i64 {
+    let none: Vec<ParsedArithSite> = Vec::new();
+    let have: Vec<ParsedArithSite> = Vec::new();
+    have.push(site(3, 17));
+    have.push(site(3, 40));
+    if !vc_sites_cover(have, none) || !vc_sites_cover(none, none) { return 1; }
+    let want: Vec<ParsedArithSite> = Vec::new();
+    want.push(site(3, 40));
+    if !vc_sites_cover(have, want) { return 2; }
+    want.push(site(3, 99));
+    if vc_sites_cover(have, want) { return 3; }
+    let other: Vec<ParsedArithSite> = Vec::new();
+    other.push(site(4, 40));
+    if vc_sites_cover(have, other) || vc_sites_cover(none, want) { return 4; }
+    0
+}
+
 fn main() -> i32 [io, read] {
     let mut r: i64 = check_round_trip();
     if r == 0 { r = check_leading_noise_is_skipped(); }
@@ -313,5 +335,6 @@ fn main() -> i32 [io, read] {
     if r == 0 { r = check_stopped_outcome_keeps_earlier_failure(); }
     if r == 0 { r = check_stale_tag_never_decodes(); }
     if r == 0 { r = check_clause_flag_is_checked(); }
+    if r == 0 { r = check_sites_cover(); }
     i64_to_i32_wrap(r)
 }
