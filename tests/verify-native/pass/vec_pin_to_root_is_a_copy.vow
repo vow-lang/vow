@@ -1,0 +1,44 @@
+module VecPinToRootIsACopy
+
+// `pin_to_root` always deep-copies its `Vec` into root storage (the runtime never returns
+// its argument), so the model treats it as a clone: same length and elements, and a separate
+// object the caller can change without touching the original.
+fn same_length(v: Vec<i64>) -> bool vow {
+  ensures: result == true
+} {
+  pin_to_root(v).len() == v.len()
+}
+
+fn same_element(v: Vec<i64>, i: u64) -> bool vow {
+  requires: i < v.len()
+  ensures: result == true
+} {
+  let p: Vec<i64> = pin_to_root(v);
+  p[i] == v[i]
+}
+
+fn original_untouched(v: Vec<i64>) -> bool vow {
+  ensures: result == true
+} {
+  let before: u64 = v.len();
+  let p: Vec<i64> = pin_to_root(v);
+  p.push(7);
+  v.len() == before && p.len() == before + 1u64
+}
+
+fn written_copy_leaves_the_original(v: Vec<i64>, x: i64) -> bool vow {
+  requires: v.len() > 0
+  ensures: result == true
+} {
+  let first: i64 = v[0];
+  let p: Vec<i64> = pin_to_root(v);
+  p[0] = x;
+  v[0] == first && p[0] == x
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  print_u64(pin_to_root(v).len());
+  0
+}

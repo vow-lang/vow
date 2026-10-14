@@ -653,8 +653,8 @@ fn check_vec_ops_rejected() -> i64 {
     // A symbol outside the Vec table stays an unmodelled builtin.
     let clear: IrFunction = vec_fn_with(String::from("__vow_vec_clear"), ITY_UNIT(), args1(2), none);
     if vc_skip_reason(clear) != String::from("unmodeled-builtin: __vow_vec_clear") { return 10; }
-    let raw: IrFunction = vec_fn_with(String::from("__vow_vec_from_raw_parts_copy_val"), ITY_PTR(), args1(2), none);
-    if vc_reason_code(vc_skip_reason(raw)) != VC_SKIP_UNMODELED_BUILTIN() { return 11; }
+    let arena: IrFunction = vec_fn_with(String::from("__vow_vec_from_raw_parts_copy_val_in_arena"), ITY_PTR(), args2(2, 2), none);
+    if vc_reason_code(vc_skip_reason(arena)) != VC_SKIP_UNMODELED_BUILTIN() { return 11; }
     // A pointer element (nested Vec, String, struct) is not one 8-byte slot of a scalar.
     let ptr_push: IrFunction = vec_fn_with(String::from("__vow_vec_push_val"), ITY_UNIT(), args2(2, 2), none);
     if vc_reason_code(vc_skip_reason(ptr_push)) != VC_SKIP_UNSUPPORTED_OPCODE() { return 12; }
@@ -683,6 +683,35 @@ fn check_vec_sort() -> i64 {
     bad.push(mk_inst_return(5, 4));
     let g: IrFunction = one_block(String::from("g"), Vec::new(), ITY_I64(), bad);
     if vc_reason_code(vc_skip_reason(g)) != VC_SKIP_UNSUPPORTED_OPCODE() { return 41; }
+    0
+}
+
+// Vec::from_raw_parts_copy(ptr, len) and pin_to_root(v) are the `String` operations of the same
+// shape: an i64 source and a u64 length, a Vec operand.
+fn check_vec_copy_ops() -> i64 {
+    let extra: Vec<IrInst> = Vec::new();
+    extra.push(mk_inst_arg(30, ITY_I64(), 0));
+    extra.push(mk_inst(31, IOP_CONST_U64(), ITY_U64(), Vec::new()));
+    let ps: Vec<i64> = Vec::new();
+    ps.push(ITY_I64());
+    let insts: Vec<IrInst> = vec_new_insts();
+    let mut k: u64 = 0;
+    while k < extra.len() {
+        insts.push(extra[k]);
+        k = k + 1;
+    }
+    insts.push(mk_inst_call_extern(32, ITY_PTR(), args2(30, 31), String::from("__vow_vec_from_raw_parts_copy_val")));
+    insts.push(mk_inst_call_extern(33, ITY_PTR(), args1(32), String::from("__vow_vec_pin_to_root_val")));
+    insts.push(mk_inst_call_extern(34, ITY_U64(), args1(33), String::from("__vow_vec_len")));
+    insts.push(mk_inst_return(35, 34));
+    let f: IrFunction = one_block(String::from("c"), ps, ITY_U64(), insts);
+    if vc_skip_reason(f).len() != 0 { return 30; }
+    let bad: Vec<IrInst> = vec_new_insts();
+    bad.push(mk_inst_call_extern(32, ITY_PTR(), args1(2), String::from("__vow_vec_from_raw_parts_copy_val")));
+    bad.push(mk_inst_const_i64(33, 0));
+    bad.push(mk_inst_return(34, 33));
+    let g: IrFunction = one_block(String::from("g"), Vec::new(), ITY_I64(), bad);
+    if vc_reason_code(vc_skip_reason(g)) != VC_SKIP_UNSUPPORTED_OPCODE() { return 31; }
     0
 }
 
@@ -725,6 +754,7 @@ fn main() -> i32 {
     if r == 0 { r = check_vec_ops_accepted(); }
     if r == 0 { r = check_vec_ops_rejected(); }
     if r == 0 { r = check_vec_sort(); }
+    if r == 0 { r = check_vec_copy_ops(); }
     if r == 0 { r = check_scalar_calls(); }
     if r == 0 { r = check_effects(); }
     if r == 0 { r = check_branches_accepted(); }

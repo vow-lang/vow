@@ -1,0 +1,49 @@
+// TEST: esbmc-capacity-artifact "ESBMC fails its Vec capacity assertion for a huge raw-parts length; the postcondition holds on every returning run"
+module VecFromRawParts
+
+// `Vec::from_raw_parts_copy(p, n)` copies nothing for a null source or a zero length
+// and otherwise yields `n` one-slot elements of unknown contents. There is no cap on
+// `n`: a length at the runtime's capacity limit traps, so a returning run is below it.
+fn null_source_is_empty(n: u64) -> bool vow {
+  ensures: result == true
+} {
+  let v: Vec<i64> = Vec::from_raw_parts_copy(0, n);
+  v.len() == 0
+}
+
+fn zero_length_is_empty(p: i64) -> bool vow {
+  ensures: result == true
+} {
+  let v: Vec<i64> = Vec::from_raw_parts_copy(p, 0);
+  v.len() == 0
+}
+
+fn copies_the_length(p: i64, n: u64) -> bool vow {
+  requires: p != 0
+  ensures: result == true
+} {
+  let v: Vec<i64> = Vec::from_raw_parts_copy(p, n);
+  v.len() == n
+}
+
+fn pushes_after_the_copy(p: i64) -> bool vow {
+  requires: p != 0
+  ensures: result == true
+} {
+  let v: Vec<u8> = Vec::from_raw_parts_copy(p, 3);
+  v.push(9u8);
+  v.len() == 4 && v[3] == 9u8
+}
+
+// 10^19 is past the capacity limit: the call returns only for a null source,
+// whose result is empty whatever the length.
+fn huge_length_returns_only_when_empty(p: i64) -> bool vow {
+  ensures: result == true
+} {
+  let v: Vec<i64> = Vec::from_raw_parts_copy(p, 10000000000000000000);
+  v.len() == 0 || v.len() == 10000000000000000000
+}
+
+fn main() -> i32 {
+  0
+}

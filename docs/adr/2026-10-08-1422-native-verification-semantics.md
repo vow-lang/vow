@@ -444,8 +444,8 @@ of this change and stay `Skipped`.
   mutate the source; a later write to it does not move the result. Pinned by
   `tests/verify-native/pass/vec_sort_properties.vow` and `fail/vec_sort_first_is_maximum_wrong.vow`.
 - **Skipped classes, fail closed.** Any other `__vow_vec_*` symbol
-  (`clear`, `truncate`, `reserve`, `from_raw_parts_copy`,
-  `pin_to_root`, the wide-slot variants, the `_in_arena` variants) is
+  (`clear`, `truncate`, `reserve`, the wide-slot variants, the `_in_arena`
+  variants) is
   `unmodeled-builtin`; a pushed or stored value, or a `get` result, that is not
   `Bool` or an integer of up to 64 bits, and an index that is not 64-bit, is
   `unsupported-opcode`. The shape rule (`vc_vec_shape_detail`) rejects, as
@@ -698,8 +698,8 @@ machinery.
   `scripts/verify_diff.py` reads a `// TEST: esbmc-capacity-artifact "<why>"` directive: when
   it is present and every ESBMC counterexample is a capacity assertion, a native proof is
   `more_precise` with the explanation in the row; without the directive, or for any other
-  ESBMC counterexample, it stays a `soundness` finding. The Vec fixtures stay skipped until
-  #1613.
+  ESBMC counterexample, it stays a `soundness` finding. The `Vec` fixtures follow in the #1660
+  addendum.
 - **Verdict impact.** Stronger or equal to the C model, whose `string_eq` is a
   cached nondeterministic Bool and whose strings are capped at `string_max`. Every
   `tests/verify/string_*.vow` fixture matches ESBMC; the new `pass/` fixtures
@@ -966,3 +966,22 @@ A `Vec<bool>` parameter's slots are therefore unconstrained 64-bit values, and a
 list a nonzero slot such as `18446744073709551615` for a `true` element. Replay maps any nonzero
 slot of a `bool` element to `true` (it used to skip on a slot other than 0 or 1), which is exactly
 how the model reads it.
+
+## Addendum (#1660): `Vec::from_raw_parts_copy` and `pin_to_root` on a `Vec`
+
+`__vow_vec_from_raw_parts_copy_val(p, n)` and `__vow_vec_pin_to_root_val(v)` are the `String`
+operations of the same shape (`VC_STR_FROM_RAW_PARTS`, `VC_STR_CLONE`, `compiler/vc_ops.vow`): the
+runtime copies `n` 8-byte slots for a non-null source and a non-zero length, and `pin_to_root` is
+`from_raw_parts_copy` of the source's own slots. The model is the `String` one: a fresh array and
+the length `0` for a null source or `n == 0`, else `n`, assuming `n` below the capacity mask (a
+length at the mask traps in `set_vow_vec_capacity` and never returns); a clone shares the array
+and length at that point and is a separate object afterwards.
+
+**The corpus ruling.** The harness decision of the #1423 addendum above (a native proof of a true
+property that ESBMC refutes only through its capacity assertion is `more_precise`, by the
+`// TEST: esbmc-capacity-artifact` directive) now covers these `Vec` fixtures too, and the
+`tests/verify-fail/raw_parts_copy_{const_fn,folded_arith,folded_phi,vec}_*` fixtures gain the
+directive. Each one's postcondition (`result == 1`) holds on every returning run; they were never
+failing programs, only programs ESBMC's model capacity could not represent. The directive is
+read from the file, so a fixture whose ESBMC counterexample is anything but a capacity assertion
+stays a `soundness` finding.
