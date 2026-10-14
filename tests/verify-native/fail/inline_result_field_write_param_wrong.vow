@@ -1,0 +1,24 @@
+// TEST: counterexample-fn "through_pick"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The write reaches only the parameter the call returned, so the other keeps its own `lo`.
+module InlineResultFieldWriteParamWrong
+
+struct P { lo: i64, hi: i64 }
+
+fn first(a: P, b: P, c: bool) -> P {
+  if c { a } else { b }
+}
+
+fn through_pick(a: P, b: P, c: bool) -> i64 vow {
+  ensures: result == 5
+} {
+  let r: P = first(a, b, c);
+  r.lo = 5;
+  if c { b.lo } else { a.lo }
+}
+
+fn main() -> i32 [io] {
+  print_i64(through_pick(P { lo: 1, hi: 2 }, P { lo: 3, hi: 4 }, true));
+  0
+}
