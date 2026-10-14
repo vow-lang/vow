@@ -1,7 +1,7 @@
 // TEST: category unverifiable
 // TEST: skip-reason unsupported-opcode
-// A `Vec` of floats is not modelled: neither compiler can generate code for one
-// (#1681; the lowerer types the slot read as `i64`), so the gate skips it.
+// The native verifier does not model a `Vec` of floats, and neither compiler can
+// generate code for one yet (#1681: the lowerer types the slot read as `i64`).
 module FloatVecSkipped
 
 fn count(x: f64) -> u64 vow {
