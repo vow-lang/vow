@@ -3,12 +3,8 @@ module VcLinear
 use ir
 use vc_loops
 
-// Linearity is the type checker's business: a `linear struct` value is consumed
-// exactly once, and the lowerer marks that with `LinearConsume`, a no-op for the
-// verifier. As data a linear value is an ordinary aggregate, so the native
-// verifier reads the IR with the linear pointer type (`ITY_LPTR`) erased to the
-// plain pointer type (`ITY_PTR`). Codegen and the region pass keep the
-// distinction; only the copy handed to the verifier loses it.
+// The native verifier reads the IR with `ITY_LPTR` erased to `ITY_PTR`: as data a
+// linear value is an ordinary aggregate. Codegen and the region pass keep the original.
 
 fn vc_lin_ty(ty: i64) -> i64 {
     if ty == ITY_LPTR() { ITY_PTR() } else { ty }
@@ -34,8 +30,6 @@ fn vc_has_linear_ty(f: IrFunction) -> bool {
     false
 }
 
-// `f` with every linear pointer type read as a plain pointer. `f` itself is not
-// changed; it is returned as it is when it mentions no linear type.
 fn vc_erase_linear_fn(f: IrFunction) -> IrFunction {
     if !vc_has_linear_ty(f) { return f; }
     let g: IrFunction = vc_function_shell(f);
@@ -47,6 +41,13 @@ fn vc_erase_linear_fn(f: IrFunction) -> IrFunction {
         pi = pi + 1;
     }
     g.params = params;
+    g.local_names_ids = f.local_names_ids;
+    g.local_names_strs = f.local_names_strs;
+    g.rsum_return_kind = f.rsum_return_kind;
+    g.rsum_return_aux = f.rsum_return_aux;
+    g.rsum_return_aliases = f.rsum_return_aliases;
+    g.rsum_store_effects = f.rsum_store_effects;
+    g.rsum_param_regions = f.rsum_param_regions;
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
         let blk: IrBlock = f.blocks[bi];
@@ -69,8 +70,6 @@ fn vc_erase_linear_fn(f: IrFunction) -> IrFunction {
     g
 }
 
-// `m` with every function read through `vc_erase_linear_fn`, in the same order.
-// The driver and each worker build this once, so function indices agree.
 fn vc_erase_linear(m: IrModule) -> IrModule {
     let out: IrModule = ir_module_new(m.name);
     let mut fi: u64 = 0;
