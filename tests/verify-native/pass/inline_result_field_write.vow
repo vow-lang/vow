@@ -1,5 +1,7 @@
 module InlineResultFieldWrite
 
+// TEST: esbmc-model-artifact fn="widen" blame=Callee vow_id=0 "ESBMC leaves the struct returned by the uncontracted callee make unconstrained and unrelated to its arguments, so the field write after the call does not combine with the returned fields; the native model inlines the call and relates the result to its arguments"
+
 struct P { lo: i64, hi: i64 }
 
 fn make(lo: i64) -> P {

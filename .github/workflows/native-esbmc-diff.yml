@@ -1,0 +1,92 @@
+name: Native fixtures versus ESBMC
+
+# Gate item 1 of epic #1398: no `soundness` row, that is no program the native
+# verifier proves that ESBMC refutes unless the fixture carries a written
+# `// TEST: esbmc-*-artifact` explanation (#1729). `tests/verify-native` is the
+# corpus that grows fastest, so a new `verify-native/pass` fixture whose ESBMC
+# refutation is unexplained fails here, on its own pull request, instead of
+# surfacing at the next full gate run.
+#
+# Only `soundness` rows fail the job (`--fail-on soundness`): the `weaker` rows
+# are tracked by their own issues, and a harness problem (a missing tool, an
+# unusable verify result) still exits 2. A separate workflow rather than a job
+# of `native-oracle.yml` because that one deliberately never installs ESBMC, so
+# a native-backend regression cannot hide behind a quiet fallback to it.
+#
+# The `paths:` filter stays off changes the differential cannot observe, and
+# `main` has no required checks, so a workflow skipped by `paths:` cannot leave
+# a required check Pending.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    paths:
+      - "compiler/vc_*.vow"
+      - "tests/verify*/**"
+      - "scripts/verify_diff.py"
+      - "scripts/verify_eval.py"
+      - ".github/actions/install-bitwuzla/**"
+      - ".github/actions/install-esbmc/**"
+      - ".github/workflows/native-esbmc-diff.yml"
+  workflow_dispatch:
+
+# A new push to a pull request supersedes its running job; pushes to `main`
+# keep their own verdict.
+concurrency:
+  group: native-esbmc-diff-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Classify changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 scripts/ci_docs_only.py --base "$BASE_SHA" --head "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+  differential:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    name: Native fixtures versus ESBMC
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install ESBMC
+        uses: ./.github/actions/install-esbmc
+      - name: Install Bitwuzla
+        uses: ./.github/actions/install-bitwuzla
+      - name: Build the self-hosted compiler
+        # Verification does not change codegen; the differential below is what
+        # verifies, with both backends.
+        run: scripts/bootstrap.sh --no-verify
+      - name: Differential over tests/verify-native
+        run: |
+          python3 scripts/verify_diff.py --vowc build/vowc --corpus native \
+            --fail-on soundness --jobs 2 --timeout 120 \
+            --output "$RUNNER_TEMP/verify-diff-native.json"
+      - name: Upload the differential report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verify-diff-native
+          path: ${{ runner.temp }}/verify-diff-native.json
+          if-no-files-found: warn

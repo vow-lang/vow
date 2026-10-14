@@ -749,9 +749,9 @@ def build_report(vowc, rows, command="verify"):
     }
 
 
-def exit_code(report):
+def exit_code(report, failing=FAILING_CLASSES):
     summary = report["summary"]
-    if any(summary[c] for c in FAILING_CLASSES):
+    if any(summary[c] for c in failing):
         return 1
     if summary[HARNESS]:
         return 2
@@ -799,6 +799,20 @@ def main(argv=None):
         "--filter", default=None, help="only fixtures whose name contains this"
     )
     ap.add_argument(
+        "--corpus",
+        choices=("all", "native"),
+        default="all",
+        help="`all` (default) is tests/verify* plus tests/verify-native/*; "
+        "`native` is tests/verify-native/* only",
+    )
+    ap.add_argument(
+        "--fail-on",
+        choices=("weaker", "soundness"),
+        default="weaker",
+        help="rows that make the exit status 1: `weaker` (default) is weaker and "
+        "soundness rows, `soundness` is soundness rows only",
+    )
+    ap.add_argument(
         "--output", default=None, help="write the JSON report here instead of stdout"
     )
     ap.add_argument(
@@ -834,7 +848,11 @@ def main(argv=None):
     try:
         fixtures = [
             (sub, exp)
-            for sub, exp in collect(args.filter)
+            for sub, exp in (
+                collect_native(args.filter)
+                if args.corpus == "native"
+                else collect(args.filter)
+            )
             if not exp.skip_reason and (args.command != "test" or has_main(exp.path))
         ]
         if not fixtures:
@@ -859,7 +877,8 @@ def main(argv=None):
     else:
         sys.stdout.write(text)
     print_summary(report, sys.stderr)
-    return exit_code(report)
+    failing = (SOUNDNESS,) if args.fail_on == "soundness" else FAILING_CLASSES
+    return exit_code(report, failing)
 
 
 if __name__ == "__main__":

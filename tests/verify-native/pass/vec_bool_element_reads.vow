@@ -1,5 +1,7 @@
 module VecBoolElementReads
 
+// TEST: esbmc-capacity-artifact "ESBMC fails its own Vec capacity assertion on the push to a Vec parameter in push_true_reads_true; the postcondition holds for every Vec length"
+
 fn flag_at(v: Vec<bool>, i: u64) -> bool vow {
   requires: i < v.len(),
   ensures: result == v[i]

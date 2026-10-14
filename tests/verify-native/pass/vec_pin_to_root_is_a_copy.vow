@@ -1,5 +1,7 @@
 module VecPinToRootIsACopy
 
+// TEST: esbmc-capacity-artifact "ESBMC fails its own Vec capacity assertion on the push to the fresh pin_to_root copy; the postcondition holds for every Vec length"
+
 // `pin_to_root` always deep-copies its `Vec` into root storage (the runtime never returns
 // its argument), so the model treats it as a clone: same length and elements, and a separate
 // object the caller can change without touching the original.

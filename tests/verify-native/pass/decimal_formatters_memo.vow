@@ -1,5 +1,9 @@
 module DecimalFormattersMemo
 
+// TEST: esbmc-model-artifact fn="repeated_call_agrees" blame=Callee vow_id=0 "ESBMC leaves the text of int_to_string and uint_to_string unconstrained (a fresh String of nondeterministic length) and models string_eq as a nondeterministic Bool, so it cannot relate the text to its operand; the native model is exact"
+// TEST: esbmc-model-artifact fn="signed_and_unsigned_differ" blame=Callee vow_id=1 "ESBMC leaves the text of int_to_string and uint_to_string unconstrained (a fresh String of nondeterministic length) and models string_eq as a nondeterministic Bool, so it cannot relate the text to its operand; the native model is exact"
+// TEST: esbmc-model-artifact fn="signed_and_unsigned_agree" blame=Callee vow_id=1 "ESBMC leaves the text of int_to_string and uint_to_string unconstrained (a fresh String of nondeterministic length) and models string_eq as a nondeterministic Bool, so it cannot relate the text to its operand; the native model is exact"
+
 // Calls on one operand share one string, and signedness is part of what is shared: the
 // signed and the unsigned text of a negative `i64` are different strings, so the second
 // call must not reuse the first.

@@ -400,6 +400,15 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(1, code(vd.SOUNDNESS, vd.HARNESS))
         self.assertEqual(2, code(vd.MATCH, vd.HARNESS))
 
+    def test_soundness_only_gate_lets_weaker_rows_pass(self):
+        def code(*classes):
+            report = vd.build_report("vowc", [fake_row(c) for c in classes])
+            return vd.exit_code(report, (vd.SOUNDNESS,))
+
+        self.assertEqual(0, code(vd.MATCH, vd.WEAKER))
+        self.assertEqual(1, code(vd.WEAKER, vd.SOUNDNESS))
+        self.assertEqual(2, code(vd.WEAKER, vd.HARNESS))
+
     def test_summary_counts(self):
         report = vd.build_report("vowc", [fake_row(vd.MATCH), fake_row(vd.WEAKER)])
         self.assertEqual(
@@ -792,6 +801,47 @@ class MainTest(unittest.TestCase):
         )
         self.assertEqual(0, code)
         self.assertEqual(1, json.loads(out)["summary"]["match"])
+
+    def test_fail_on_soundness_ignores_weaker_rows(self):
+        weaker = {"esbmc": {"status": "Verified"}, "native": {"status": "Skipped"}}
+        self.assertEqual(1, self.run_main([], weaker)[0])
+        self.assertEqual(0, self.run_main(["--fail-on", "soundness"], weaker)[0])
+
+    def test_fail_on_soundness_still_fails_a_soundness_row(self):
+        code, out = self.run_main(
+            ["--fail-on", "soundness"],
+            {
+                "esbmc": {
+                    "status": "VerifyFailed",
+                    "counterexamples": [
+                        {"function": "f", "blame": "Callee", "vow_id": 0}
+                    ],
+                },
+                "native": {"status": "Verified"},
+            },
+        )
+        self.assertEqual(vd.SOUNDNESS, json.loads(out)["rows"][0]["class"])
+        self.assertEqual(1, code)
+
+    def test_corpus_native_collects_only_the_native_fixtures(self):
+        exp = vd.verify_eval.Expect("tests/verify-native/pass/x.vow", "Verified")
+        proven = {"status": "Verified"}
+        with (
+            mock.patch.object(vd, "preflight", return_value=[]),
+            mock.patch.object(vd, "collect", side_effect=AssertionError("all")),
+            mock.patch.object(
+                vd, "collect_native", return_value=[("verify-native/pass", exp)]
+            ),
+            mock.patch.object(vd, "function_count", return_value=1),
+            mock.patch.object(
+                vd,
+                "run_backend",
+                side_effect=lambda v, b, p, t, n, c="verify": (proven, 0.0),
+            ),
+            mock.patch.object(sys, "stdout", io.StringIO()),
+            mock.patch.object(sys, "stderr", io.StringIO()),
+        ):
+            self.assertEqual(0, vd.main(["--corpus", "native"]))
 
     def test_empty_selection_is_a_harness_failure(self):
         with (

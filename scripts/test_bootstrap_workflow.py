@@ -635,6 +635,45 @@ class NativeOracleWorkflowTest(unittest.TestCase):
         self.assertEqual({}, collisions)
 
 
+class NativeEsbmcDiffWorkflowTest(unittest.TestCase):
+    """The native-corpus ESBMC differential (#1729) stays wired and blocking."""
+
+    def setUp(self) -> None:
+        self.text = (WORKFLOWS / "native-esbmc-diff.yml").read_text(encoding="utf-8")
+        self.job = job_blocks(self.text)["differential"]
+
+    def test_runs_on_pull_requests_that_touch_a_fixture(self) -> None:
+        workflow_header = header(self.text)
+
+        self.assertRegex(
+            workflow_header, r"pull_request:\s*\n\s*branches:\s*\[main\]\s*\n\s*paths:"
+        )
+        self.assertRegex(workflow_header, r"push:\s*\n\s*branches:\s*\[main\]")
+        self.assertIn('- "tests/verify*/**"', workflow_header)
+        self.assertIn('- "compiler/vc_*.vow"', workflow_header)
+
+    def test_fails_only_on_soundness_rows_over_the_native_corpus(self) -> None:
+        self.assertIn("scripts/verify_diff.py", self.job)
+        self.assertIn("--corpus native", self.job)
+        self.assertIn("--fail-on soundness", self.job)
+
+    def test_installs_esbmc_and_bitwuzla_before_it_builds(self) -> None:
+        for step in (
+            "uses: ./.github/actions/install-esbmc",
+            "uses: ./.github/actions/install-bitwuzla",
+        ):
+            with self.subTest(step=step):
+                self.assertIn(step, self.job)
+                self.assertLess(
+                    self.job.index(step), self.job.index("scripts/bootstrap.sh")
+                )
+
+    def test_failures_are_blocking_and_permissions_read_only(self) -> None:
+        self.assertNotIn("continue-on-error", self.text)
+        self.assertNotIn("|| true", self.text)
+        self.assertRegex(header(self.text), r"permissions:\s*\n\s*contents:\s*read")
+
+
 class CompilerNativeVerifyWorkflowTest(unittest.TestCase):
     """The whole-compiler native verification (#1432) stays wired and blocking."""
 

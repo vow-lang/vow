@@ -1,5 +1,7 @@
 module InlineStructArgMutate
 
+// TEST: esbmc-model-artifact fn="twice" blame=Callee vow_id=1 "ESBMC does not carry the write of the uncontracted callee bump to its struct argument back to the caller (c.n stays 5 after two calls); the native model tracks the write"
+
 struct Counter { n: i64 }
 
 fn bump(c: Counter) {
