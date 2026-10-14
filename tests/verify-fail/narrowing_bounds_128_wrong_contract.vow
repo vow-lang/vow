@@ -2,6 +2,7 @@
 // TEST: counterexample-violation "ensures result as i128 == value"
 // TEST: counterexample-blame Callee
 // TEST: counterexample-vow-id 0
+// TEST: replay-skipped 128-bit parameter is not supported by the replay harness (#1649)
 module NarrowingBounds128WrongContract
 
 // Pins the saturation models of the i128-to-i8 seam from the fail side: the

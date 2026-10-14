@@ -2,6 +2,7 @@
 // TEST: counterexample-fn "extend"
 // TEST: counterexample-vow-id 2
 // TEST: counterexample-blame Callee
+// TEST: replay-skipped Vec<i64> parameter is not rebuilt by the replay harness (#1649)
 module VecLoopParamPushWrongPost
 
 fn extend(v: Vec<i64>, n: u64) vow {
