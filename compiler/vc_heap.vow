@@ -83,6 +83,14 @@ fn vc_heap_field(hp: VcHeap, ar: VcArena, hdr: SmtScript, h: i64, slot: i64, ty:
     vc_cast(ar, ITY_I64(), ty, raw)
 }
 
+// Adds `fact` to `assumed` once.
+fn vc_heap_assume(ar: VcArena, assumed: Vec<i64>, fact: i64) {
+    if ar.assumed[fact as u64] != 1 {
+        ar.assumed[fact as u64] = 1;
+        assumed.push(fact);
+    }
+}
+
 // The length of the collection at `h`. Its first read adds the runtime's own
 // fact that a length is below the capacity mask to `assumed`.
 fn vc_heap_len(hp: VcHeap, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, h: i64) -> i64 {
@@ -90,11 +98,7 @@ fn vc_heap_len(hp: VcHeap, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, h: i6
         hp.len_arr = vc_agg_declare(ar, hdr, String::from("hlen"), VC_SORT_ARRAY64());
     }
     let len: i64 = vc_tm_app2(ar, VC_OP_SELECT(), hp.len_arr, h);
-    let fact: i64 = vc_tm_app2(ar, VC_OP_BVULT(), len, vc_tm_bv(ar, 64, 9223372036854775807, 0));
-    if ar.assumed[fact as u64] != 1 {
-        ar.assumed[fact as u64] = 1;
-        assumed.push(fact);
-    }
+    vc_heap_assume(ar, assumed, vc_tm_app2(ar, VC_OP_BVULT(), len, vc_tm_bv(ar, 64, 9223372036854775807, 0)));
     len
 }
 

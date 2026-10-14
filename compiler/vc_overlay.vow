@@ -120,13 +120,6 @@ fn vc_overlay_params(f: IrFunction, tys: Vec<i64>, vec: bool) -> Vec<i64> {
     out
 }
 
-fn vc_overlay_assume(ar: VcArena, assumed: Vec<i64>, fact: i64) {
-    if ar.assumed[fact as u64] != 1 {
-        ar.assumed[fact as u64] = 1;
-        assumed.push(fact);
-    }
-}
-
 fn vc_overlay_add(ov: VcOverlay, ar: VcArena, hdr: SmtScript, k: i64, is_vec: bool) {
     let name: String = String::from("p");
     name.push_str(i64_to_string(k));
@@ -168,7 +161,7 @@ fn vc_overlay_enable(ov: VcOverlay, ag: VcAgg, ar: VcArena, hdr: SmtScript, assu
         while j < ov.addr.len() {
             let eq: i64 = vc_tm_app2(ar, VC_OP_EQ(), ov.addr[i], ov.addr[j]);
             let same: i64 = vc_overlay_same(ov, ag, ar, hdr, i, j);
-            vc_overlay_assume(ar, assumed, vc_tm_app2(ar, VC_OP_EQ(), eq, same));
+            vc_heap_assume(ar, assumed, vc_tm_app2(ar, VC_OP_EQ(), eq, same));
             j = j + 1;
         }
         i = i + 1;
