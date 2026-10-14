@@ -602,6 +602,11 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
     if op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE() {
         return;
     }
+    // A consume discharges an ownership obligation the type checker enforced; the
+    // value it names is read as any other aggregate and stays readable.
+    if op == IOP_LINEAR_CONSUME() {
+        return;
+    }
     if vc_inst_scalar_kind(inst) == VC_SCALAR_HASH_U64() {
         vc_define(w, inst, vc_num_hash_mix(cs.arena, w.var_of[inst.args[0] as u64]));
         return;

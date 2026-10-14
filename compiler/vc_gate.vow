@@ -301,6 +301,7 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
         return inst.ty == ITY_PTR() && n == 0 && inst.dk == IDATA_ALLOC_SIZE() && inst.dv >= 8;
     }
     if op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE() { return n == 0; }
+    if op == IOP_LINEAR_CONSUME() { return n == 1 && t0 == ITY_PTR() && inst.ty == ITY_UNIT(); }
     if op == IOP_CONST_STR() {
         return inst.ty == ITY_PTR() && n == 0 && inst.dk == IDATA_CONST_STR() && inst.dv2 == VC_STR_RESOLVED();
     }
