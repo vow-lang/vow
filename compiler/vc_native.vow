@@ -603,8 +603,11 @@ fn vc_verify_function_mode(f: IrFunction, m: IrModule, timeout_ms: i64, scratch:
             let st: VcInduction = vc_step_attempt(f, closed, inl.frames, bound, started, timeout_ms, scratch, cache, slicing);
             if st.proves {
                 ind = VcInduction { proves: true, soft: st.soft || r.soft, sites: st.sites };
-                if (!ind.soft || ind.sites.len() == 0) && (!frozen.ended || vc_undecided(frozen)) {
+                if !ind.soft && (!frozen.ended || vc_undecided(frozen)) {
                     return vc_with_clauses(vc_proven_with(Vec::new()), vc_clause_acc_new(), targets, all_claims, true);
+                }
+                if (!frozen.ended || vc_undecided(frozen)) && vc_sites_cover(sites, ind.sites) {
+                    return vc_with_clauses(vc_proven_with(sites), vc_clause_acc_new(), targets, all_claims, true);
                 }
             }
         }
