@@ -1,0 +1,33 @@
+// TEST: stdout "2 3 255 255 255 255 2 1 0 0 255 255 255 255 \n"
+// An alias list element is written as the low 32 bits of the i64 (the wire
+// format's u32), so a negative or oversized element is truncated to four
+// bytes instead of breaking the u32 writer's precondition. A valid element
+// keeps its exact little-endian bytes.
+module Main
+
+use ir
+use module_io
+
+fn print_bytes(out: Vec<i64>) [io] {
+    let mut i: u64 = 0;
+    while i < out.len() vow {
+        invariant: i <= out.len()
+    } {
+        print_i64(out[i]);
+        print_str(String::from(" "));
+        i = i + 1;
+    }
+}
+
+fn main() -> i32 [io] {
+    let aliases: Vec<i64> = Vec::new();
+    aliases.push(-1);
+    aliases.push(258);
+    aliases.push(4294967295);
+
+    let out: Vec<i64> = Vec::new();
+    region_constraint_encode(out, RSUM_KIND_ALIAS_OF_ANY(), 0, aliases);
+    print_bytes(out);
+    print_str(String::from("\n"));
+    0
+}

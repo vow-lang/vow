@@ -273,7 +273,9 @@ fn read_i64_bits(r: ModuleReader) -> i64 {
 
 fn write_leb(out: Vec<i64>, v: u64) {
     let mut n: u64 = v;
-    loop {
+    while true vow {
+        invariant: n <= v
+    } {
         let byte: u64 = n - (n / 128) * 128;
         n = n / 128;
         if n == 0 {
@@ -482,7 +484,7 @@ fn region_constraint_encode(out: Vec<i64>, kind: i64, aux: i64, aliases: Vec<i64
     while i < n vow {
         invariant: i <= n
     } {
-        write_u32_le(out, aliases[i]);
+        write_u32_bits(out, aliases[i]);
         i = i + 1;
     }
 }
