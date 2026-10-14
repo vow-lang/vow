@@ -34,8 +34,8 @@ use vc_heap
 // operation names a `Vec`, so a read consults only the parameters of its own class:
 // the type checker never lets a `String` field hold a `Vec` parameter, and the
 // model would otherwise let `s.len()` of a field `s` be the length of an unrelated
-// `Vec` parameter the loop is pushing to. A parameter the function uses through an
-// operation that takes either (`pin_to_root`) belongs to both classes.
+// `Vec` parameter the loop is pushing to. A parameter the function uses as both (which
+// the type checker rules out) belongs to both classes.
 
 fn VC_OV_STRUCT() -> i64 { 0 }
 fn VC_OV_VEC() -> i64 { 1 }
@@ -82,22 +82,17 @@ fn vc_overlay_close(f: IrFunction, flags: Vec<i64>) {
     }
 }
 
-// True for the extern of an operation that takes a `String` object.
-fn vc_overlay_is_string_op(inst: IrInst) -> bool {
-    inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && string_starts_with(inst.ds, VC_STR_PREFIX()) == 1
-}
-
-// The class bits an operation puts on its object operands: a `String` operation names
-// a `String`, an operation that takes either (`pin_to_root`) both, any other `Vec`.
+// The class of the object operand of a collection operation of kind `k`: a `String` for
+// the `__vow_string_*` operations and the three text helpers that take a string and have no
+// such prefix, a `Vec` for every other.
 fn vc_overlay_op_class(inst: IrInst, k: i64) -> i64 {
-    if vc_overlay_is_string_op(inst) { return VC_OV_STRING(); }
-    if k == VC_STR_CLONE() { return VC_OV_VEC() + VC_OV_STRING(); }
+    if string_starts_with(inst.ds, VC_STR_PREFIX()) == 1 { return VC_OV_STRING(); }
+    if k == VC_STR_HASH() || k == VC_STR_PARSE_F64() || k == VC_STR_HEX_DECODE() { return VC_OV_STRING(); }
     VC_OV_VEC()
 }
 
 // The pointer parameters, ascending, that the function uses as an object of class
-// `cls` (`VC_OV_VEC`, `VC_OV_STRING`; an operation that takes either counts for both)
-// or, for `VC_OV_STRUCT`, as a struct.
+// `cls` (`VC_OV_VEC`, `VC_OV_STRING`) or, for `VC_OV_STRUCT`, as a struct.
 fn vc_overlay_params(f: IrFunction, tys: Vec<i64>, cls: i64) -> Vec<i64> {
     let n_ids: u64 = tys.len();
     let flags: Vec<i64> = dom_fill(n_ids, 0);

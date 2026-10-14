@@ -1106,9 +1106,10 @@ and each is a property of the language, not of the function.
 
 - **A read consults its own class.** A handle read by a `String` operation names a `String`, one
   read by a `Vec` operation names a `Vec` (the type checker never lets a `String` field hold a
-  `Vec`). `VcOverlay.cls` tags every overlay parameter `Vec` (1), `String` (2) or both (3: an
-  operation that takes either, `pin_to_root`), and `vc_overlay_len`/`vc_overlay_elem` take the class
-  of the operation (`vc_overlay_op_class`, from the runtime symbol's `__vow_string_` prefix). Without
+  `Vec`). `VcOverlay.cls` tags every overlay parameter `Vec` (1) or `String` (2) (3 for a parameter
+  used as both, which the type checker rules out), and `vc_overlay_len`/`vc_overlay_elem` take the
+  class of the operation (`vc_overlay_op_class`: the runtime symbol's `__vow_string_` prefix, or one
+  of the three text helpers without it, `hash_str`, `parse_f64_bits`, `hex_decode`). Without
   it, `s.len()` of a `String` field `s` could be the length of the `Vec` parameter the loop pushes
   to, and the havoc of that parameter at the loop header broke every bound cached before the loop.
   Two `Vec` parameters and a field `Vec` stay possibly one object, as before.
