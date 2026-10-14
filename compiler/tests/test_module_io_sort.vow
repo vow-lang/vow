@@ -1,0 +1,54 @@
+module TestModuleIoSort
+
+use ir
+use module_io
+
+// `sort_local_names` orders the local-name table by ascending id, emits one
+// entry per distinct id and keeps the last name given to a duplicate id.
+
+fn push_pair(ids: Vec<i64>, names: Vec<String>, id: i64, name: String) {
+    ids.push(id);
+    names.push(name);
+}
+
+fn main() -> i32 {
+    let e_ids: Vec<i64> = Vec::new();
+    let e_names: Vec<String> = Vec::new();
+    let empty: SortedLocalNames = sort_local_names(e_ids, e_names);
+    if empty.ids.len() != 0 { return 1; }
+    if empty.names.len() != 0 { return 2; }
+
+    let ids: Vec<i64> = Vec::new();
+    let names: Vec<String> = Vec::new();
+    push_pair(ids, names, 9, String::from("nine"));
+    push_pair(ids, names, 2, String::from("two"));
+    push_pair(ids, names, 5, String::from("five-a"));
+    push_pair(ids, names, 2, String::from("two-b"));
+    push_pair(ids, names, 5, String::from("five-b"));
+    push_pair(ids, names, 2, String::from("two-c"));
+    push_pair(ids, names, 0, String::from("zero"));
+    let sorted: SortedLocalNames = sort_local_names(ids, names);
+    let s_ids: Vec<i64> = sorted.ids;
+    let s_names: Vec<String> = sorted.names;
+    if s_ids.len() != 4 { return 3; }
+    if s_names.len() != 4 { return 4; }
+    if s_ids[0] != 0 { return 5; }
+    if s_ids[1] != 2 { return 6; }
+    if s_ids[2] != 5 { return 7; }
+    if s_ids[3] != 9 { return 8; }
+    if s_names[0] != String::from("zero") { return 9; }
+    if s_names[1] != String::from("two-c") { return 10; }
+    if s_names[2] != String::from("five-b") { return 11; }
+    if s_names[3] != String::from("nine") { return 12; }
+
+    let n_ids: Vec<i64> = Vec::new();
+    let n_names: Vec<String> = Vec::new();
+    push_pair(n_ids, n_names, -3, String::from("neg"));
+    push_pair(n_ids, n_names, 4, String::from("pos"));
+    let signed: SortedLocalNames = sort_local_names(n_ids, n_names);
+    if signed.ids.len() != 2 { return 13; }
+    let sg_ids: Vec<i64> = signed.ids;
+    if sg_ids[0] != -3 { return 14; }
+    if sg_ids[1] != 4 { return 15; }
+    0
+}
