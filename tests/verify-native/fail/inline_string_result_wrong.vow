@@ -1,0 +1,19 @@
+// TEST: counterexample-fn "size"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+module InlineStringResultWrong
+
+fn greeting() -> String {
+  String::from("hi")
+}
+
+fn size() -> u64 vow {
+  ensures: result == 3
+} {
+  greeting().len()
+}
+
+fn main() -> i32 [io] {
+  print_i64(size() as i64);
+  0
+}

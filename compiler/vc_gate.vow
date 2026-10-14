@@ -193,16 +193,24 @@ fn vc_scalar_value_ty(ty: i64) -> bool {
     ty == ITY_BOOL() || vc_ty_is_int(ty) || vc_ty_is_float(ty)
 }
 
+// A value that can cross a call or a return: a scalar, or an aggregate or
+// collection object (a pointer), which the splicer substitutes by the caller's
+// own object.
+fn vc_call_value_ty(ty: i64) -> bool {
+    vc_scalar_value_ty(ty) || ty == ITY_PTR()
+}
+
 // A call of a user function the splicer can inline: every argument and the
-// result are integer, float or Bool (or the result is Unit). Aggregates do not cross a
-// call yet.
-fn vc_call_scalar(inst: IrInst, tys: Vec<i64>) -> bool {
+// result is a scalar or an object (or the result is Unit). The object model
+// (`vc_agg`, `vc_vec`) keeps one object per value, so a callee that reads or
+// mutates an argument acts on the caller's object, and a result is the callee's
+// returned object.
+fn vc_call_inlinable(inst: IrInst, tys: Vec<i64>) -> bool {
     if inst.dk != IDATA_CALL_TARGET() { return false; }
-    if inst.ty != ITY_UNIT() && !vc_scalar_value_ty(inst.ty) { return false; }
+    if inst.ty != ITY_UNIT() && !vc_call_value_ty(inst.ty) { return false; }
     let mut k: u64 = 0;
     while k < inst.args.len() {
-        let t: i64 = vc_arg_ty(tys, inst, k);
-        if !vc_scalar_value_ty(t) { return false; }
+        if !vc_call_value_ty(vc_arg_ty(tys, inst, k)) { return false; }
         k = k + 1;
     }
     true
@@ -323,7 +331,7 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
         }
         let nar: VcNarrow = vc_narrow_of(inst);
         if nar.kind != VC_NAR_NONE() { return vc_narrow_shape_ok(nar, inst, t0); }
-        return calls && vc_call_scalar(inst, tys);
+        return calls && vc_call_inlinable(inst, tys);
     }
     if vc_is_arith_op(op) {
         return vc_ty_is_int(inst.ty) && n == 2 && vc_operand_ok(inst, tys, lits, 0, inst.ty)
@@ -457,7 +465,7 @@ fn vc_skip_reason_with(src: IrFunction, calls: bool) -> String {
         return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), shape);
     }
     if has_vec {
-        let vec_shape: String = vc_vec_shape_detail(f, tys.len());
+        let vec_shape: String = vc_vec_shape_detail(f, tys.len(), calls);
         if vec_shape.len() > 0 {
             return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), vec_shape);
         }

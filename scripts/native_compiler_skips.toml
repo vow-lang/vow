@@ -9,15 +9,9 @@
 
 [[skip]]
 function = "span_pack_to_here"
-code = "unsupported-opcode"
-issue = 1677
-reason = "calls span_end_here with a Parser struct argument"
-
-[[skip]]
-function = "skill_support_content"
-code = "unsupported-opcode"
-issue = 1677
-reason = "calls helpers that return a String"
+code = "non-modelable-callee"
+issue = 1676
+reason = "its callee span_end_here reads a Vec out of a Parser struct field"
 
 [[skip]]
 function = "lctx_is_terminated"
@@ -58,164 +52,134 @@ reason = "uses a HashMap"
 [[skip]]
 function = "module_encode"
 code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+issue = 1676
+reason = "reads or stores a collection through a struct field or a Vec element (module_io.vow)"
 
 [[skip]]
 function = "module_decode"
 code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+issue = 1676
+reason = "reads or stores a collection through a struct field or a Vec element (module_io.vow)"
 
 [[skip]]
 function = "read_block"
 code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+issue = 1676
+reason = "reads or stores a collection through a struct field or a Vec element (module_io.vow)"
 
 [[skip]]
 function = "read_enum_layout"
 code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+issue = 1676
+reason = "reads or stores a collection through a struct field or a Vec element (module_io.vow)"
 
 [[skip]]
 function = "read_function"
 code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+issue = 1676
+reason = "reads or stores a collection through a struct field or a Vec element (module_io.vow)"
 
 [[skip]]
 function = "read_inst"
 code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+issue = 1676
+reason = "reads or stores a collection through a struct field or a Vec element (module_io.vow)"
 
 [[skip]]
 function = "read_region_summary"
 code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+issue = 1676
+reason = "reads or stores a collection through a struct field or a Vec element (module_io.vow)"
 
 [[skip]]
 function = "read_struct_layout"
 code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+issue = 1676
+reason = "reads or stores a collection through a struct field or a Vec element (module_io.vow)"
 
 [[skip]]
 function = "read_variant"
 code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+issue = 1676
+reason = "reads or stores a collection through a struct field or a Vec element (module_io.vow)"
 
 [[skip]]
 function = "read_vow_entry"
 code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+issue = 1676
+reason = "reads or stores a collection through a struct field or a Vec element (module_io.vow)"
 
 [[skip]]
 function = "reader_read_effects"
-code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+code = "non-modelable-callee"
+issue = 1676
+reason = "reads or stores a collection through a struct field or a Vec element (module_io.vow)"
 
 [[skip]]
 function = "reader_read_leb"
-code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+code = "non-modelable-callee"
+issue = 1676
+reason = "reads or stores a collection through a struct field or a Vec element (module_io.vow)"
 
 [[skip]]
 function = "region_constraint_decode"
 code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
-
-[[skip]]
-function = "region_constraint_encode"
-code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
-
-[[skip]]
-function = "region_encode"
-code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+issue = 1676
+reason = "reads or stores a collection through a struct field or a Vec element (module_io.vow)"
 
 [[skip]]
 function = "write_block"
 code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
-
-[[skip]]
-function = "write_effects"
-code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+issue = 1676
+reason = "reads or stores a collection through a struct field or a Vec element (module_io.vow)"
 
 [[skip]]
 function = "write_enum_layout"
 code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+issue = 1676
+reason = "reads or stores a collection through a struct field or a Vec element (module_io.vow)"
 
 [[skip]]
 function = "write_function"
 code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+issue = 1676
+reason = "reads or stores a collection through a struct field or a Vec element (module_io.vow)"
 
 [[skip]]
 function = "write_inst"
 code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
-
-[[skip]]
-function = "write_integer_ty"
-code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+issue = 1676
+reason = "reads or stores a collection through a struct field or a Vec element (module_io.vow)"
 
 [[skip]]
 function = "write_region_summary"
 code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
-
-[[skip]]
-function = "write_string"
-code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+issue = 1676
+reason = "reads or stores a collection through a struct field or a Vec element (module_io.vow)"
 
 [[skip]]
 function = "write_struct_layout"
 code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+issue = 1676
+reason = "reads or stores a collection through a struct field or a Vec element (module_io.vow)"
 
 [[skip]]
 function = "write_variant"
 code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+issue = 1676
+reason = "reads or stores a collection through a struct field or a Vec element (module_io.vow)"
 
 [[skip]]
 function = "write_vow_entry"
 code = "unsupported-opcode"
-issue = 1677
-reason = "passes a Vec buffer or a reader struct to another function (module_io.vow)"
+issue = 1676
+reason = "reads or stores a collection through a struct field or a Vec element (module_io.vow)"
 
 [[skip]]
 function = "reader_read_string"
-code = "unsupported-opcode"
-issue = 1677
-reason = "passes a reader struct to reader_read_count and reader_read_u8 (module_io.vow)"
+code = "non-modelable-callee"
+issue = 1704
+reason = "its callee reader_fail stores a String into a field of the reader parameter (module_io.vow)"
 
 [[skip]]
 function = "sort_local_names"

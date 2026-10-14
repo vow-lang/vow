@@ -116,6 +116,13 @@ fn check_phi_after_region_markers() -> i64 {
     let marked: Vec<IrInst> = Vec::new();
     marked.push(region_marker(30, IOP_REGION_OPEN()));
     if vc_skip_reason(diamond_lead(true, marked)).len() != 0 { return 23; }
+    let closed: Vec<IrInst> = Vec::new();
+    closed.push(region_marker(32, IOP_REGION_CLOSE()));
+    let missing: String = vc_skip_reason(diamond_lead(false, closed));
+    if missing != String::from("unsupported-opcode: Phi input missing from a predecessor") { return 25; }
+    let opened: Vec<IrInst> = Vec::new();
+    opened.push(region_marker(33, IOP_REGION_OPEN()));
+    if vc_skip_reason(diamond_lead(false, opened)) != missing { return 26; }
     let real: Vec<IrInst> = Vec::new();
     real.push(mk_inst_const_i64(31, 5));
     if vc_skip_reason(diamond_lead(true, real)) != String::from("unsupported-opcode: Phi after the head of its block") { return 24; }
@@ -551,7 +558,7 @@ fn check_reason_codes() -> i64 {
 }
 
 // A call of a user function is accepted only when its arguments and result are
-// scalar, and only by the check that inlines it afterwards.
+// scalars or objects (pointers), and only by the check that inlines it afterwards.
 fn check_scalar_calls() -> i64 {
     let ok: Vec<IrInst> = Vec::new();
     ok.push(mk_inst_arg(0, ITY_I64(), 0));
@@ -573,13 +580,15 @@ fn check_scalar_calls() -> i64 {
     agg.push(mk_inst_alloc(0, 16));
     agg.push(mk_inst_call_target(1, ITY_I64(), args1(0), 7));
     agg.push(mk_inst_return(2, 1));
-    if vc_skip_reason_calls(one_block(String::from("a"), Vec::new(), ITY_I64(), agg)).len() == 0 { return 4; }
+    if vc_skip_reason(one_block(String::from("a"), Vec::new(), ITY_I64(), agg)).len() == 0 { return 4; }
+    if vc_skip_reason_calls(one_block(String::from("a"), Vec::new(), ITY_I64(), agg)).len() != 0 { return 7; }
 
     let ptr_result: Vec<IrInst> = Vec::new();
     ptr_result.push(mk_inst_arg(0, ITY_I64(), 0));
     ptr_result.push(mk_inst_call_target(1, ITY_PTR(), args1(0), 7));
     ptr_result.push(mk_inst_return(2, 0));
-    if vc_skip_reason_calls(one_block(String::from("r"), p, ITY_I64(), ptr_result)).len() == 0 { return 5; }
+    if vc_skip_reason(one_block(String::from("r"), p, ITY_I64(), ptr_result)).len() == 0 { return 5; }
+    if vc_skip_reason_calls(one_block(String::from("r"), p, ITY_I64(), ptr_result)).len() != 0 { return 8; }
 
     let ext: Vec<IrInst> = Vec::new();
     ext.push(mk_inst_arg(0, ITY_I64(), 0));

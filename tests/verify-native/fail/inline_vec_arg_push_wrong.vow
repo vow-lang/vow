@@ -1,0 +1,24 @@
+// TEST: counterexample-fn "grow"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The callee pushes twice onto the caller's Vec, so a claim of three is refuted.
+module InlineVecArgPushWrong
+
+fn push_two(v: Vec<i64>, a: i64, b: i64) {
+  v.push(a);
+  v.push(b);
+}
+
+fn grow(v: Vec<i64>) -> u64 vow {
+  ensures: result == 3
+} {
+  let n: u64 = v.len();
+  push_two(v, 1, 2);
+  v.len() - n
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  print_u64(grow(v));
+  0
+}

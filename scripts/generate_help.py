@@ -1212,6 +1212,7 @@ def inject_skill_vow(
             "}",
             "",
             "fn skill_support_content(index: u64) -> String {",
+            '    if index >= skill_support_count() { return String::from(""); }',
             "    skill_support_content_index_guard(index);",
         ]
     )

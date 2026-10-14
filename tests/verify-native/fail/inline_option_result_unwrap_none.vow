@@ -1,0 +1,28 @@
+// Native-only: ESBMC skips `[panic]` functions.
+// TEST: counterexample-fn "pick"
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-blame None
+// TEST: counterexample-violation "unwrap() called on None"
+// Without the precondition the callee can return None, and the caller unwraps it.
+module InlineOptionResultUnwrapNone
+
+fn first_positive(a: i64, b: i64) -> Option<i64> {
+  if a > 0 {
+    Option::Some(a)
+  } else if b > 0 {
+    Option::Some(b)
+  } else {
+    Option::None
+  }
+}
+
+fn pick(a: i64, b: i64) -> i64 [panic] vow {
+  ensures: result > 0
+} {
+  first_positive(a, b).unwrap()
+}
+
+fn main() -> i32 [io, panic] {
+  print_i64(pick(0, 3));
+  0
+}
