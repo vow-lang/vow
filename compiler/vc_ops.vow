@@ -109,7 +109,7 @@ fn vc_is_unwrap_abort(inst: IrInst) -> bool {
 // length (`vc_vec`). They are listed here by runtime symbol, like the unwrap
 // abort, and not in the builtin catalogue: the catalogue is keyed by Vow builtin
 // name and its entries need a grammar row. A symbol not listed (`clear`,
-// `truncate`, `reserve`, `from_raw_parts_copy`, the wide-slot variants, ...) is an
+// `truncate`, `reserve`, the wide-slot variants, ...) is an
 // unmodelled builtin.
 fn VC_VEC_NONE() -> i64 { 0 }
 fn VC_VEC_NEW() -> i64 { 1 }
@@ -136,6 +136,10 @@ fn vc_vec_op_kind(sym: String) -> i64 {
         if sym == String::from("__vow_vec_set_val") { return VC_VEC_SET(); }
     } else if n == 18 {
         if sym == String::from("__vow_vec_push_val") { return VC_VEC_PUSH(); }
+    } else if n == 25 {
+        if sym == String::from("__vow_vec_pin_to_root_val") { return VC_STR_CLONE(); }
+    } else if n == 33 {
+        if sym == String::from("__vow_vec_from_raw_parts_copy_val") { return VC_STR_FROM_RAW_PARTS(); }
     }
     vc_str_op_kind(sym)
 }
