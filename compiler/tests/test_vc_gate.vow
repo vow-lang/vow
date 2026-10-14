@@ -134,8 +134,8 @@ fn check_phi_input_missing() -> i64 {
 }
 
 // `diamond`'s join block with `lead` inserted before its Phi.
-fn diamond_with_lead(lead: IrInst) -> IrFunction {
-    let f: IrFunction = diamond(true);
+fn diamond_with_lead(lead: IrInst, feed_else: bool) -> IrFunction {
+    let f: IrFunction = diamond(feed_else);
     let m: IrBlock = f.blocks[3];
     let moved: Vec<IrInst> = Vec::new();
     moved.push(lead);
@@ -152,8 +152,10 @@ fn diamond_with_lead(lead: IrInst) -> IrFunction {
 // ends the head of the block.
 fn check_phi_head_after_region_open() -> i64 {
     let open: IrInst = mk_inst(9, IOP_REGION_OPEN(), ITY_UNIT(), Vec::new());
-    if vc_skip_reason(diamond_with_lead(open)).len() != 0 { return 22; }
-    let r: String = vc_skip_reason(diamond_with_lead(mk_inst_const_i64(9, 1)));
+    if vc_skip_reason(diamond_with_lead(open, true)).len() != 0 { return 22; }
+    let missing: String = vc_skip_reason(diamond_with_lead(open, false));
+    if missing != String::from("unsupported-opcode: Phi input missing from a predecessor") { return 24; }
+    let r: String = vc_skip_reason(diamond_with_lead(mk_inst_const_i64(9, 1), true));
     if r != String::from("unsupported-opcode: Phi after the head of its block") { return 23; }
     0
 }

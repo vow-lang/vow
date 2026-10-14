@@ -187,6 +187,8 @@ fn vc_upsilon_detail(f: IrFunction, tys: Vec<i64>, succ: Vec<i64>, rpo: Vec<i64>
                                 return String::from("Phi input missing from a predecessor");
                             }
                             pi = pi + 1;
+                        } else if pinst.op == IOP_REGION_OPEN() {
+                            pi = pi + 1;
                         } else {
                             scanning = false;
                         }
