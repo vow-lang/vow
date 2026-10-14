@@ -1,0 +1,20 @@
+// TEST: replay-skipped the abort is a bounds check, which the replay harness does not reproduce
+// TEST: counterexample-fn "at"
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-blame None
+// TEST: counterexample-violation "index out of bounds"
+// A wide element read is bounds-checked like a one-slot one.
+module WideVecIndexOutOfBounds
+
+fn at(v: Vec<i128>, i: u64) -> i128 vow {
+  ensures: result == result
+} {
+  v[i]
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i128> = Vec::new();
+  v.push(3);
+  print_i64(i128_to_i32_wrap(at(v, 0)) as i64);
+  0
+}

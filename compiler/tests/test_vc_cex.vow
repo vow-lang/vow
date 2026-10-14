@@ -401,6 +401,34 @@ fn check_vec_contents() -> i64 {
     0
 }
 
+// The elements of a wide `Vec` are 128-bit entries printed in their own type, from
+// both limbs of the answer.
+fn check_wide_vec_contents() -> i64 {
+    let f: IrFunction = vec_fn();
+    let cs: VcClaims = vec_claims();
+    cs.vec_wide[0] = ITY_I128();
+    let values: Vec<i64> = Vec::new();
+    let highs: Vec<i64> = Vec::new();
+    values.push(5);
+    highs.push(0);
+    values.push(2);
+    highs.push(0);
+    values.push(7);
+    highs.push(0);
+    values.push(0);
+    highs.push(-9223372036854775808);
+    let ans: VcSolverAnswer = VcSolverAnswer { verdict: VC_ANS_SAT(), values: values, highs: highs, raw: String::from("") };
+    let r: VerifyResult = vc_claim_result(f, cs, 0, ans);
+    if r.var_names.len() != 4 { return 90; }
+    if r.var_names[2] != String::from("v[0]") || r.var_values[2] != String::from("7") { return 91; }
+    if r.var_names[3] != String::from("v[1]") || r.var_values[3] != String::from("-170141183460469231731687303715884105728") { return 92; }
+    let cu: VcClaims = vec_claims();
+    cu.vec_wide[0] = ITY_U128();
+    let ru: VerifyResult = vc_claim_result(f, cu, 0, ans);
+    if ru.var_values[3] != String::from("170141183460469231731687303715884105728") { return 93; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_sat_ensures();
     if r == 0 { r = check_sat_abort_claims(); }
@@ -410,5 +438,6 @@ fn main() -> i32 {
     if r == 0 { r = check_callee_clauses(); }
     if r == 0 { r = check_aggregate_fields(); }
     if r == 0 { r = check_vec_contents(); }
+    if r == 0 { r = check_wide_vec_contents(); }
     i64_to_i32_wrap(r)
 }
