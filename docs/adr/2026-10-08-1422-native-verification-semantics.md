@@ -444,10 +444,10 @@ of this change and stay `Skipped`.
   mutate the source; a later write to it does not move the result. Pinned by
   `tests/verify-native/pass/vec_sort_properties.vow` and `fail/vec_sort_first_is_maximum_wrong.vow`.
 - **Skipped classes, fail closed.** Any other `__vow_vec_*` symbol
-  (`clear`, `truncate`, `reserve`, the wide-slot variants, the `_in_arena`
-  variants) is
+  (`clear`, `truncate`, `reserve`, the `_in_arena` variants) is
   `unmodeled-builtin`; a pushed or stored value, or a `get` result, that is not
-  `Bool` or an integer of up to 64 bits, and an index that is not 64-bit, is
+  `Bool` or an integer (128-bit ones through the `_wide_ptr` helpers, see the
+  addendum of #1663), and an index that is not 64-bit, is
   `unsupported-opcode`. The shape rule (`vc_vec_shape_detail`) rejects, as
   `unsupported-opcode`, a Vec used as a struct (`FieldGet`/`FieldSet`), a Vec
   passed to a call that is not inlined (the check of a callee before the
