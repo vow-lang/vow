@@ -1,0 +1,25 @@
+// `p` may be the struct that `q.next` holds (or `p.next` itself): after `p.val` is written,
+// the value read through `next` is the old one or the one written, and nothing else.
+module HeapParamFieldWriteThenNextRead
+
+struct Node { val: i64, next: Node }
+
+fn bump_one(p: Node) -> bool vow {
+  ensures: result
+} {
+  let before: i64 = p.next.val;
+  p.val = before + 1;
+  p.next.val == before || p.next.val == before + 1
+}
+
+fn bump_two(p: Node, q: Node) -> bool vow {
+  ensures: result
+} {
+  let before: i64 = q.next.val;
+  p.val = before + 1;
+  q.next.val == before || q.next.val == before + 1
+}
+
+fn main() -> i32 [io] {
+  0
+}

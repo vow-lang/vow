@@ -1,0 +1,21 @@
+// A `Vec` parameter that is pushed onto may be the very `Vec` a field holds: the length
+// read through the field afterwards is the old one or one more, never less.
+module HeapParamPushThenFieldLen
+
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn push_one(out: Vec<i64>, b: Bag) -> bool vow {
+  ensures: result
+} {
+  let before: u64 = b.items.len();
+  out.push(1);
+  let after: u64 = b.items.len();
+  after == before || after == before + 1
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), tag: 1 };
+  let out: Vec<i64> = Vec::new();
+  if push_one(out, b) { print_i64(1); }
+  0
+}

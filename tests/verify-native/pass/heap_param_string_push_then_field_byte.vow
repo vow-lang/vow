@@ -1,0 +1,23 @@
+// A byte appended to a `String` parameter while a byte is read from a `String` held in a field:
+// `out` may be that `String`, and the byte read through the field stays in `0..=255` either way.
+module HeapParamStringPushThenFieldByte
+
+struct Label { text: String, n: i64 }
+
+fn tag_then_first(out: String, l: Label) -> i64 vow {
+  ensures: result >= 0 && result < 256
+} {
+  out.push_byte(7);
+  if l.text.len() > 0 {
+    l.text.byte_at(0)
+  } else {
+    0
+  }
+}
+
+fn main() -> i32 [io] {
+  let l: Label = Label { text: String::from("a"), n: 1 };
+  let out: String = String::new();
+  print_i64(tag_then_first(out, l));
+  0
+}

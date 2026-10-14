@@ -1,0 +1,26 @@
+// A loop that pushes onto a `Vec` parameter while its bound is the length of a `Vec` held in a
+// field: `out` may be that `Vec`, and the invariant `i <= b.items.len()` is still inductive.
+module HeapParamPushLoopReadsFieldLen
+
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn copy_all(out: Vec<i64>, b: Bag) -> u64 vow {
+  ensures: result == b.items.len()
+} {
+  let mut i: u64 = 0;
+  while i < b.items.len() vow {
+    invariant: i <= b.items.len()
+  } {
+    out.push(b.items[i]);
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), tag: 1 };
+  b.items.push(5);
+  let out: Vec<i64> = Vec::new();
+  print_u64(copy_all(out, b));
+  0
+}

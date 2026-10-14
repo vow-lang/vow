@@ -464,21 +464,33 @@ of this change and stay `Skipped`.
   keyed by a 128-bit concatenation, so no array holds an array) and are never
   written (`compiler/vc_heap.vow`). This is exact, not a bound: two reads of
   one handle agree, handles merge through Phis, fields and elements like any
-  term, and no length or field is capped. It is sound only while nothing in
-  the function can change that memory, which the gate enforces instead of the
-  model: a handle cannot be written (a `FieldSet` or a mutating `Vec`/`String`
-  operation needs an object), and a function that reads through a handle is
-  `Skipped` if it writes a parameter or a collection parameter, because a
-  parameter may be the very object a handle names. A fresh value the function
-  builds cannot be at an address it loaded, so building one is unaffected. The
-  weaker alternative (assume a field `Vec` is distinct from every `Vec`
-  parameter, as two `Vec` parameters are) was rejected: it would prove a
-  property that fails when they are one `Vec`. The exact model that lets a
-  function mutate its parameters (the parameters' own state becomes entries of
-  the same arrays) is not built, nor is the model of a pointer written into a
-  `Vec` or into a parameter's field. A pointer written into a field of a fresh
-  struct is admitted as a write with no effect when nothing reads that field
-  back.
+  term, and no length or field is capped. The arrays are never written, so
+  they are exact for everything the function cannot change: a handle cannot
+  be written (a `FieldSet` or a mutating `Vec`/`String` operation needs an
+  object), and a fresh value the function builds cannot be at an address it
+  loaded. A parameter may be the very object a handle names, so a function
+  that reads through a handle and writes a parameter (#1703) lays its
+  parameters over the arrays (`compiler/vc_overlay.vow`): each `Vec`/`String`
+  parameter and each struct parameter it uses carries a free 64-bit address,
+  and a read through `h` is `ite(h == address(p), state of p, ..., array[h])`
+  over the parameters of the class the read can name, where the state of a
+  parameter is the object model the function already keeps for it
+  (`vc_vec`, `vc_agg`) at the current point of the walk. That is exact and
+  has no quantifier. The alternative the issue sketched, storing the
+  parameters' writes into the shared arrays, makes a loop cut havoc a whole
+  array and needs a quantified frame for every address the loop does not
+  touch; the overlay reuses the per-object havoc the cut already has. A
+  `Vec` is never a struct, so only `Vec`/`String` parameters meet a length,
+  element or byte read and only struct parameters a field read; two
+  `Vec`/`String` parameters are distinct objects, two struct parameters are
+  one object exactly when their identities say so (`vc_agg`). The IR erases
+  the type of a parameter, so a handle may stand for any parameter of its
+  class even where the source types differ. The weaker alternative (assume a
+  field `Vec` is distinct from every `Vec` parameter, as two `Vec` parameters
+  are) was rejected: it would prove a property that fails when they are one
+  `Vec`. The model of a pointer written into a `Vec` or into a parameter's
+  field is not built. A pointer written into a field of a fresh struct is
+  admitted as a write with no effect when nothing reads that field back.
 - **Induction.** A loop body that writes a Vec (`push`, `set`, `pop`) is cut for
   invariant-based induction (#1645): the cut puts a `__vc_havoc_vec` marker for
   each Vec the loop writes at the top of the header proper, which gives it an

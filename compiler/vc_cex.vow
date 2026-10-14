@@ -41,6 +41,11 @@ fn vc_model_symbol_name(f: IrFunction, cs: VcClaims, j: u64) -> String {
         named.push_str(String::from(".len"));
         return named;
     }
+    if cs.model_slots[j] == VC_SLOT_ADDR() {
+        let named: String = String::from(base);
+        named.push_str(String::from(".addr"));
+        return named;
+    }
     if cs.model_slots[j] < 0 {
         return base;
     }
