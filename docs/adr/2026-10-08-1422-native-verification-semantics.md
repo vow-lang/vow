@@ -488,9 +488,8 @@ of this change and stay `Skipped`.
   class even where the source types differ. The weaker alternative (assume a
   field `Vec` is distinct from every `Vec` parameter, as two `Vec` parameters
   are) was rejected: it would prove a property that fails when they are one
-  `Vec`. The model of a pointer written into a `Vec` or into a parameter's
-  field is not built. A pointer written into a field of a fresh struct is
-  admitted as a write with no effect when nothing reads that field back.
+  `Vec`. The model of a pointer written into a `Vec` is not built; the one
+  for a pointer written into a field is the #1704 addendum below.
 - **Induction.** A loop body that writes a Vec (`push`, `set`, `pop`) is cut for
   invariant-based induction (#1645): the cut puts a `__vc_havoc_vec` marker for
   each Vec the loop writes at the top of the header proper, which gives it an
@@ -1240,3 +1239,40 @@ Three builtins that were `unmodeled-builtin` are opaque total functions of their
   `unknown/string_split_count_opaque.vow` and `fail/string_join_no_parts_wrong.vow`.
 
 `String::from_cstr` and the arena variants remain `unmodeled-builtin` (`vc_str_unmodeled_reason`).
+
+## Addendum: a pointer written into a field (#1704)
+
+A pointer stored into a field used to be admitted only as a write with no effect into a fresh
+allocation that nothing read back; any other store, and any read back, was `Skipped`. A pointer in a
+slot is now its object's 64-bit address, kept in the ordinary scalar slot of `vc_agg`, and the
+overlay of the #1703 addendum reads through it.
+
+- **Why an address and not an object in the slot.** A slot is written under a path condition
+  (`ite(pc, new, old)`), merged by Phis, copied between aliasing parameters and havoced at a loop cut,
+  all for a 64-bit term. An object id in the slot would need the same four mechanisms again for
+  objects, and an object Phi on top. The address reuses them: the IR already types the field read
+  back `i64` (a handle), and a read through a handle is `ite(h == address(o), state of o, ...,
+  array[h])` over the entries of the overlay (`vc_overlay_addr_of`). A merge of two stored objects
+  is an `ite` of two addresses and the read is the `ite` of their states.
+- **Entries.** A parameter that is stored takes its overlay entry (`p<k>_haddr`) even when the
+  function's reads would not have needed one; an object the function allocated takes a free
+  address `o<n>_haddr` on its first store, assumed distinct from every other entry (an allocation is
+  no other object, a parameter or an earlier allocation). A pointer Phi is the `ite` of the
+  addresses of the objects its edges supply. Only parameter entries are listed in a counterexample.
+  The class of an entry (`Vec`, `String`, struct) is the class of the stored value's uses
+  (`vc_overlay_class_table`), so a `String` operation never names a `Vec` entry.
+- **Imprecision, never unsoundness.** A handle loaded from existing memory is not assumed different
+  from the address of an object the function stored, so the model has runs the program has not (a
+  loaded handle that is a fresh object). That can only add a counterexample no run reaches.
+  Two struct parameters stay possibly one object, so storing one into the other's field can
+  overwrite the slot the parameter has to be (`o.inner = i` with `o` and `i` one object); the
+  fixtures that store a struct into a parameter's field build the stored struct themselves.
+- **What stays skipped.** A write through a handle (`h.items.push(1)` where `h.items` is read from
+  memory) and a `Vec` merged by a Phi (#1662) are as before. The `unsupported-opcode` details `pointer
+  written into a field of a value that is not an allocation` and `a field that holds a pointer is read
+  back` are gone.
+- **What this does not unskip.** The `reader_*` functions of `compiler/module_io.vow` that store a
+  `String` into a parameter's field (`reader_fail`) no longer fail the gate, but they are loops that
+  write the reader's fields, which the cut does not havoc, so a native run ends in `unknown`
+  (`unwinding assertion`). They stay in `scripts/native_compiler_skips.toml` only while they are
+  skipped; see the pull request for the census.

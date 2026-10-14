@@ -1,0 +1,22 @@
+// Two fields hold two objects: each read returns the object stored in that field.
+module PtrFieldTwoFieldsTwoObjects
+
+struct Pair { ids: Vec<i64>, names: Vec<i64> }
+
+fn lens() -> u64 vow {
+  ensures: result == 5
+} {
+  let a: Vec<i64> = Vec::new();
+  a.push(1);
+  let b: Vec<i64> = Vec::new();
+  b.push(1);
+  b.push(2);
+  b.push(3);
+  let p: Pair = Pair { ids: a, names: b };
+  p.ids.len() + p.names.len() + 1
+}
+
+fn main() -> i32 [io] {
+  print_u64(lens());
+  0
+}

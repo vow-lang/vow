@@ -1,0 +1,25 @@
+// TEST: replay-skipped field 0 is a struct, which the replay harness cannot build
+// TEST: counterexample-fn "attach"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The field is the struct the function built, so a write to it before the read is seen:
+// the old value 1 is refuted.
+module PtrFieldStructParamStoreOtherWrong
+
+struct Inner { a: i64, b: i64 }
+struct Outer { inner: Inner, c: i64 }
+
+fn attach(o: Outer) -> bool vow {
+  ensures: result
+} {
+  let i: Inner = Inner { a: 1, b: 2 };
+  o.inner = i;
+  i.a = 42;
+  o.inner.a == 1
+}
+
+fn main() -> i32 [io] {
+  let o: Outer = Outer { inner: Inner { a: 0, b: 0 }, c: 3 };
+  if attach(o) { print_i64(1); }
+  0
+}

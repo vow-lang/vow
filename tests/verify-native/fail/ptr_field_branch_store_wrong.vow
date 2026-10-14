@@ -1,0 +1,28 @@
+// TEST: counterexample-fn "held_len"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// On the path that skips the store the field still holds the one-element Vec.
+module PtrFieldBranchStoreWrong
+
+struct Holder { items: Vec<i64>, tag: i64 }
+
+fn held_len(c: bool) -> u64 vow {
+  ensures: result == 3
+} {
+  let one: Vec<i64> = Vec::new();
+  one.push(1);
+  let three: Vec<i64> = Vec::new();
+  three.push(1);
+  three.push(2);
+  three.push(3);
+  let h: Holder = Holder { items: one, tag: 0 };
+  if !c {
+    h.items = three;
+  }
+  h.items.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(held_len(true));
+  0
+}
