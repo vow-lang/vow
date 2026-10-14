@@ -365,7 +365,8 @@ fn check_vec_arg() -> i32 [io] {
 fn check_vec_elements_follow_the_element_type() -> i32 [io] {
     let b: String = str2s(vec_head(String::from("Vec<bool>")), String::from(" __replay_v.push(true); __replay_v.push(false); __replay_v }"));
     if vec_lit(String::from("fvb"), String::from("v.len=2,v[0]=1,v[1]=0")) != b { return 211; }
-    if agg(String::from("fvb"), 0, String::from("v.len=1,v[0]=2")).reason.len() == 0 { return 212; }
+    let wide_true: String = str2s(vec_head(String::from("Vec<bool>")), String::from(" __replay_v.push(true); __replay_v.push(true); __replay_v }"));
+    if vec_lit(String::from("fvb"), String::from("v.len=2,v[0]=2,v[1]=18446744073709551615")) != wide_true { return 212; }
     let i8s: String = str2s(vec_head(String::from("Vec<i8>")), String::from(" __replay_v.push(-1); __replay_v.push(127); __replay_v }"));
     if vec_lit(String::from("fvi8"), String::from("v.len=2,v[0]=255,v[1]=383")) != i8s { return 213; }
     let u8s: String = str2s(vec_head(String::from("Vec<u8>")), String::from(" __replay_v.push(255); __replay_v.push(1); __replay_v }"));

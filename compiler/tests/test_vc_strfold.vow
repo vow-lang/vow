@@ -1,0 +1,395 @@
+module TestVcStrfold
+
+use ir
+use vc_ops
+use vc_strops
+use vc_term
+use vc_smt
+use vc_qbind
+use vc_gate
+use vc_exec
+use vc_str
+use vc_slice
+use vc_native
+use verifier
+use tests.builders
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn args2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = args1(a);
+    v.push(b);
+    v
+}
+
+fn ptrs(n: u64) -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < n {
+        p.push(ITY_PTR());
+        i = i + 1;
+    }
+    p
+}
+
+fn one_block(params: Vec<i64>, ret: i64, insts: Vec<IrInst>) -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(1, String::from("f"), params, ret, blocks)
+}
+
+fn contains(hay: String, needle: String) -> bool {
+    str_find_str(hay, needle) >= 0
+}
+
+fn count_of(hay: String, needle: String) -> i64 {
+    let mut n: i64 = 0;
+    let mut from: u64 = 0;
+    while from < hay.len() {
+        let at: i64 = str_find_str(hay.substring(from, hay.len()), needle);
+        if at < 0 { return n; }
+        n = n + 1;
+        from = from + at as u64 + needle.len();
+    }
+    n
+}
+
+fn query(cs: VcClaims, k: u64) -> String {
+    vc_smt_render(cs.arena, vc_claim_script(cs, k))
+}
+
+fn mk_ens(id: i64, pred: i64, vow_id: i64) -> IrInst {
+    ir_inst_new(id, IOP_VOW_ENS(), ITY_UNIT(), args1(pred), IDATA_VOW_ID(), vow_id, 0, String::from(""))
+}
+
+fn mk_eq(id: i64, a: i64, b: i64) -> IrInst {
+    ir_inst_new(id, IOP_EQ(), ITY_BOOL(), args2(a, b), IDATA_NONE(), 0, 0, String::from(""))
+}
+
+fn call1(id: i64, ty: i64, s: i64, sym: String) -> IrInst {
+    mk_inst_call_extern(id, ty, args1(s), sym)
+}
+
+fn str_len(id: i64, s: i64) -> IrInst {
+    call1(id, ITY_U64(), s, String::from("__vow_string_len"))
+}
+
+// fn f(s: String, t: String) -> bool { hash_str(s) == hash_str(<second>) } with `ensures: result`.
+fn hash_pair(second: i64) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_PTR(), 1));
+    insts.push(call1(2, ITY_U64(), 0, String::from("__vow_hash_str")));
+    insts.push(call1(3, ITY_U64(), second, String::from("__vow_hash_str")));
+    insts.push(mk_eq(4, 2, 3));
+    insts.push(mk_ens(5, 4, 0));
+    insts.push(mk_inst_return(6, 4));
+    one_block(ptrs(2), ITY_BOOL(), insts)
+}
+
+// fn f(v: Vec<u8>, w: Vec<u8>) -> bool { hex_encode(v).len() == hex_encode(w).len() } with `ensures: result`
+// (`bytes`: the function also reads byte 0 of the first text, so the digits are asserted).
+fn encode_lens(bytes: bool) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_PTR(), 1));
+    insts.push(call1(2, ITY_PTR(), 0, String::from("__vow_hex_encode")));
+    insts.push(call1(3, ITY_PTR(), 1, String::from("__vow_hex_encode")));
+    insts.push(str_len(4, 2));
+    insts.push(str_len(5, 3));
+    insts.push(mk_eq(6, 4, 5));
+    let mut res: i64 = 6;
+    if bytes {
+        insts.push(mk_inst_const_i64(9, 0));
+        insts.push(mk_inst_call_extern(10, ITY_I64(), args2(2, 9), String::from("__vow_string_byte_at")));
+        insts.push(mk_inst_const_i64(11, 48));
+        insts.push(mk_eq(12, 10, 11));
+        res = 12;
+    }
+    insts.push(mk_ens(7, res, 0));
+    insts.push(mk_inst_return(8, res));
+    one_block(ptrs(2), ITY_BOOL(), insts)
+}
+
+// fn f(s: String, t: String) -> bool { hex_decode(s).len() == hex_decode(t).len() } with `ensures: result`.
+fn decode_lens() -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_PTR(), 1));
+    insts.push(call1(2, ITY_PTR(), 0, String::from("__vow_hex_decode")));
+    insts.push(call1(3, ITY_PTR(), 1, String::from("__vow_hex_decode")));
+    insts.push(call1(4, ITY_U64(), 2, String::from("__vow_vec_len")));
+    insts.push(call1(5, ITY_U64(), 3, String::from("__vow_vec_len")));
+    insts.push(mk_eq(6, 4, 5));
+    insts.push(mk_ens(7, 6, 0));
+    insts.push(mk_inst_return(8, 6));
+    one_block(ptrs(2), ITY_BOOL(), insts)
+}
+
+// fn f(s: String, t: String) -> bool { let a = parse(s); let b = parse(<second>); a.tag == b.tag } with `ensures: result`.
+fn parse_tags(sym: String, second: i64) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_PTR(), 1));
+    insts.push(call1(2, ITY_PTR(), 0, sym));
+    insts.push(call1(3, ITY_PTR(), second, sym));
+    insts.push(mk_inst_field_get(4, ITY_I64(), 2, 0));
+    insts.push(mk_inst_field_get(5, ITY_I64(), 3, 0));
+    insts.push(mk_eq(6, 4, 5));
+    insts.push(mk_ens(7, 6, 0));
+    insts.push(mk_inst_return(8, 6));
+    one_block(ptrs(2), ITY_BOOL(), insts)
+}
+
+// fn f(s: String) -> bool { <text fn>(s).len() <= s.len() } with `ensures: result`.
+fn text_len_le(sym: String) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(call1(1, ITY_PTR(), 0, sym));
+    insts.push(str_len(2, 1));
+    insts.push(str_len(3, 0));
+    insts.push(ir_inst_new(4, IOP_LE(), ITY_BOOL(), args2(2, 3), IDATA_NONE(), 0, 0, String::from("")));
+    insts.push(mk_ens(5, 4, 0));
+    insts.push(mk_inst_return(6, 4));
+    one_block(ptrs(1), ITY_BOOL(), insts)
+}
+
+fn check_op_table() -> i64 {
+    if vc_vec_op_kind(String::from("__vow_hash_str")) != VC_STR_HASH() { return 1; }
+    if vc_vec_op_kind(String::from("__vow_hex_encode")) != VC_STR_HEX_ENCODE() { return 2; }
+    if vc_vec_op_kind(String::from("__vow_hex_decode")) != VC_STR_HEX_DECODE() { return 3; }
+    if vc_vec_op_kind(String::from("__vow_string_trim")) != VC_STR_TRIM() { return 4; }
+    if vc_vec_op_kind(String::from("__vow_string_to_upper")) != VC_STR_TO_UPPER() { return 5; }
+    if vc_vec_op_kind(String::from("__vow_string_to_lower")) != VC_STR_TO_LOWER() { return 6; }
+    if vc_vec_op_kind(String::from("__vow_string_parse_i64_opt")) != VC_STR_PARSE_INT() { return 7; }
+    if vc_vec_op_kind(String::from("__vow_string_parse_u64_opt")) != VC_STR_PARSE_INT() { return 8; }
+    if vc_str_unmodeled_reason(String::from("__vow_string_parse_u64_opt")).len() != 0 { return 27; }
+    if vc_str_unmodeled_reason(String::from("__vow_string_parse_i8_opt_in_arena")).len() == 0 { return 28; }
+    if vc_vec_op_kind(String::from("__vow_string_parse_u128_opt")) != VC_STR_PARSE_INT() { return 9; }
+    if vc_vec_op_kind(String::from("__vow_string_replace")) != VC_STR_NONE() { return 10; }
+    if vc_vec_op_kind(String::from("__vow_string_split")) != VC_STR_NONE() { return 11; }
+    if vc_vec_op_kind(String::from("__vow_string_join")) != VC_STR_NONE() { return 12; }
+    if vc_vec_op_kind(String::from("__vow_hex_encode_in_arena")) != VC_STR_NONE() { return 13; }
+    if vc_vec_op_kind(String::from("__vow_hash_str_in_arena")) != VC_STR_NONE() { return 14; }
+    if vc_vec_op_kind(String::from("__vow_string_parse_i64_opt_in_arena")) != VC_STR_NONE() { return 15; }
+    if vc_vec_op_kind(String::from("__vow_string_parse_i24_opt")) != VC_STR_NONE() { return 16; }
+    if vc_vec_op_kind(String::from("__vow_string_parse_f64_opt")) != VC_STR_NONE() { return 17; }
+    if vc_vec_op_kind(String::from("__vow_string_parse__opt")) != VC_STR_NONE() { return 18; }
+    if vc_str_parse_bits(String::from("__vow_string_parse_i8_opt")) != 8 { return 19; }
+    if vc_str_parse_bits(String::from("__vow_string_parse_u16_opt")) != 16 { return 20; }
+    if vc_str_parse_bits(String::from("__vow_string_parse_i32_opt")) != 32 { return 21; }
+    if vc_str_parse_bits(String::from("__vow_string_parse_u64_opt")) != 64 { return 22; }
+    if vc_str_parse_bits(String::from("__vow_string_parse_i128_opt")) != 128 { return 23; }
+    if vc_str_parse_key(String::from("__vow_string_parse_i8_opt")) == vc_str_parse_key(String::from("__vow_string_parse_u8_opt")) { return 24; }
+    if vc_str_parse_key(String::from("__vow_string_parse_i8_opt")) == vc_str_parse_key(String::from("__vow_string_parse_i16_opt")) { return 25; }
+    if vc_str_parse_key(String::from("__vow_string_parse_i8_opt")) <= VC_STR_TO_LOWER() { return 26; }
+    0
+}
+
+// Which kinds create an object, take object operands and read bytes: hex_encode and the text
+// functions make a string, `parse_*` makes an `Option` (not a `Vec` or `String` slot), and a
+// `Vec` operand of hex_encode is an object operand like a string's.
+fn check_kind_predicates() -> i64 {
+    if !vc_str_kind_creates(VC_STR_HEX_ENCODE()) || !vc_str_kind_creates(VC_STR_HEX_DECODE()) { return 30; }
+    if !vc_str_kind_creates(VC_STR_TRIM()) || !vc_str_kind_creates(VC_STR_TO_UPPER()) || !vc_str_kind_creates(VC_STR_TO_LOWER()) { return 31; }
+    if vc_str_kind_creates(VC_STR_PARSE_INT()) || vc_str_kind_creates(VC_STR_HASH()) { return 32; }
+    if vc_str_kind_no_object_operand(VC_STR_HEX_ENCODE()) || vc_str_kind_no_object_operand(VC_STR_HASH()) { return 33; }
+    if !vc_str_kind_reads_bytes(VC_STR_HASH()) || !vc_str_kind_reads_bytes(VC_STR_HEX_DECODE()) { return 34; }
+    if !vc_str_kind_reads_bytes(VC_STR_PARSE_INT()) || !vc_str_kind_reads_bytes(VC_STR_TRIM()) { return 35; }
+    if vc_str_kind_reads_bytes(VC_STR_HEX_ENCODE()) { return 36; }
+    if !vc_str_kind_is_string_op(VC_STR_HASH()) || !vc_str_kind_is_string_op(VC_STR_TO_LOWER()) { return 37; }
+    if vc_vec_kind_mutates(VC_STR_HASH()) || vc_vec_kind_mutates(VC_STR_HEX_DECODE()) || vc_vec_kind_mutates(VC_STR_TRIM()) { return 38; }
+    if !vc_kind_is_binder(VC_T_QFOLD()) || !vc_kind_is_binder(VC_T_QHEX()) || !vc_kind_is_binder(VC_T_QUNHEX()) { return 39; }
+    if !vc_kind_is_binder(VC_T_HEXPAIR()) || !vc_kind_is_binder(VC_T_HEXVAL()) || vc_kind_is_binder(VC_T_APP()) { return 40; }
+    0
+}
+
+fn check_gate() -> i64 {
+    if vc_skip_reason(hash_pair(0)).len() != 0 { return 50; }
+    if vc_skip_reason(encode_lens(false)).len() != 0 { return 51; }
+    if vc_skip_reason(decode_lens()).len() != 0 { return 52; }
+    if vc_skip_reason(parse_tags(String::from("__vow_string_parse_u8_opt"), 1)).len() != 0 { return 53; }
+    if vc_skip_reason(text_len_le(String::from("__vow_string_trim"))).len() != 0 { return 54; }
+    if vc_skip_reason(text_len_le(String::from("__vow_string_to_upper"))).len() != 0 { return 55; }
+    // A hash that returns a pointer, a decode that takes two operands: not these builtins.
+    let bad: Vec<IrInst> = Vec::new();
+    bad.push(mk_inst_arg(0, ITY_PTR(), 0));
+    bad.push(call1(1, ITY_PTR(), 0, String::from("__vow_hash_str")));
+    bad.push(mk_inst_return(2, 1));
+    if vc_skip_reason(one_block(ptrs(1), ITY_PTR(), bad)).len() == 0 { return 56; }
+    let two: Vec<IrInst> = Vec::new();
+    two.push(mk_inst_arg(0, ITY_PTR(), 0));
+    two.push(mk_inst_arg(1, ITY_PTR(), 1));
+    two.push(mk_inst_call_extern(2, ITY_PTR(), args2(0, 1), String::from("__vow_hex_decode")));
+    two.push(mk_inst_return(3, 2));
+    if vc_skip_reason(one_block(ptrs(2), ITY_PTR(), two)).len() == 0 { return 57; }
+    // `replace`, `split` and `join` keep their skip.
+    let rep: Vec<IrInst> = Vec::new();
+    rep.push(mk_inst_arg(0, ITY_PTR(), 0));
+    rep.push(call1(1, ITY_PTR(), 0, String::from("__vow_string_replace")));
+    rep.push(mk_inst_return(2, 1));
+    if vc_reason_code(vc_skip_reason(one_block(ptrs(1), ITY_PTR(), rep))) != VC_SKIP_UNMODELED_BUILTIN() { return 58; }
+    0
+}
+
+// The query of `hash_str` on two parameter strings: one prefix array per call, defined by the
+// base fact and the step binder (an FNV-1a step of the runtime), in an assumption.
+fn check_hash_definition_is_rendered() -> i64 {
+    let cs: VcClaims = vc_claims(hash_pair(1));
+    if cs.kinds.len() != 1 { return 60; }
+    let q: String = query(cs, 0);
+    if count_of(q, String::from("(bvmul (bvxor (select hh")) != 2 { return 61; }
+    if count_of(q, String::from("(_ bv1099511628211 64)")) != 2 { return 62; }
+    if count_of(q, String::from("#xcbf29ce484222325")) != 2 { return 63; }
+    if !contains(q, String::from("(forall ((vq_i (_ BitVec 64))) (=> (bvult vq_i p0_vlen) (= (select hh")) { return 64; }
+    if !contains(q, String::from("(set-logic ABV)")) { return 65; }
+    if contains(q, String::from("(assert (not (forall")) { return 66; }
+    0
+}
+
+// The same operand terms are one hash: no second array, and `h == h` leaves no claim.
+fn check_hash_same_operand_shares() -> i64 {
+    let cs: VcClaims = vc_claims(hash_pair(0));
+    if cs.kinds.len() != 0 { return 70; }
+    let two: VcClaims = vc_claims(hash_pair(1));
+    if two.assumed.len() <= cs.assumed.len() { return 71; }
+    0
+}
+
+// `hex_encode`'s result has length `2 |v|` and the digits come from the encode binder; two
+// vectors give two binders, and the doubled length stays below the capacity mask (an assumption
+// of the path).
+fn check_encode_definition_is_rendered() -> i64 {
+    let plain: VcClaims = vc_claims(encode_lens(false));
+    if plain.kinds.len() != 1 { return 80; }
+    let p: String = query(plain, 0);
+    if contains(p, String::from("forall")) { return 81; }
+    if count_of(p, String::from("(bvmul p0_vlen #x0000000000000002)")) < 1 { return 82; }
+    let cs: VcClaims = vc_claims(encode_lens(true));
+    if cs.kinds.len() != 2 { return 83; }
+    let q: String = query(cs, 1);
+    if count_of(q, String::from("(let ((vq_x (bvand (select p")) != 2 { return 84; }
+    if !contains(q, String::from("(bvmul vq_i (_ bv2 64))")) { return 85; }
+    if !contains(q, String::from("(ite (bvult (bvlshr vq_x (_ bv4 64)) (_ bv10 64))")) { return 86; }
+    0
+}
+
+// `hex_decode`'s result: a Bool for "the string decodes" with the witness pair of the false
+// direction, the decode binder under the true one, and the two instances at the first and the
+// last pair.
+fn check_decode_definition_is_rendered() -> i64 {
+    let cs: VcClaims = vc_claims(decode_lens());
+    if cs.kinds.len() != 1 { return 90; }
+    let q: String = query(cs, 0);
+    if !contains(q, String::from("(declare-const hde")) { return 91; }
+    if !contains(q, String::from("(declare-const hdw")) { return 92; }
+    if count_of(q, String::from("(forall ((vq_i (_ BitVec 64))) (=> (bvult vq_i (bvlshr p")) != 2 { return 93; }
+    if !contains(q, String::from("(let ((vq_a (bvand (select p0_varr (bvmul #x0000000000000000 (_ bv2 64)))")) { return 94; }
+    if !contains(q, String::from("(bvult (bvsub vq_a (_ bv48 64)) (_ bv10 64))")) { return 95; }
+    0
+}
+
+// fn f() -> bool { hex_decode("0a1b").len() == 2 } with `ensures: result`: a literal of known length
+// decodes with no binder.
+fn decode_literal() -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(ir_inst_new(0, IOP_CONST_STR(), ITY_PTR(), Vec::new(), IDATA_CONST_STR(), 0, VC_STR_RESOLVED(), String::from("0a1b")));
+    insts.push(call1(1, ITY_PTR(), 0, String::from("__vow_string_literal")));
+    insts.push(call1(2, ITY_PTR(), 1, String::from("__vow_hex_decode")));
+    insts.push(call1(3, ITY_U64(), 2, String::from("__vow_vec_len")));
+    insts.push(ir_inst_new(4, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_I64(), 2, 0, String::from("")));
+    insts.push(mk_eq(5, 3, 4));
+    insts.push(mk_ens(6, 5, 0));
+    insts.push(mk_inst_return(7, 5));
+    one_block(Vec::new(), ITY_BOOL(), insts)
+}
+
+// A decode of a short known length is quantifier-free: the pairs are ground macros, the length is
+// `ite(decodes, 2, 0)` and each byte is tied to its pair under `decodes`.
+fn check_decode_of_known_length_is_ground() -> i64 {
+    let f: IrFunction = decode_literal();
+    if vc_skip_reason(f).len() != 0 { return 140; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 141; }
+    let q: String = query(cs, 0);
+    if contains(q, String::from("forall")) { return 142; }
+    if contains(q, String::from("(declare-const hde")) { return 143; }
+    if !contains(q, String::from("(set-logic QF_ABV)")) { return 144; }
+    if count_of(q, String::from("(let ((vq_a")) < 4 { return 145; }
+    0
+}
+
+// The binder templates, pinned to the byte: a digit, an FNV step, a pair.
+fn check_templates() -> i64 {
+    let step: String = vc_qb_fold(String::from("h"), String::from("s"), String::from("n"));
+    let want: String = String::from("(forall ((vq_i (_ BitVec 64))) (=> (bvult vq_i n) (= (select h (bvadd vq_i (_ bv1 64))) (bvmul (bvxor (select h vq_i) (bvand (select s vq_i) #x00000000000000ff)) (_ bv1099511628211 64)))))");
+    if step != want { return 100; }
+    let pair: String = vc_qb_hexpair(String::from("s"), String::from("i"));
+    if !string_starts_with_text(pair, String::from("(let ((vq_a (bvand (select s (bvmul i (_ bv2 64))) #x00000000000000ff))) (let ((vq_b (bvand (select s (bvadd (bvmul i (_ bv2 64)) (_ bv1 64))) #x00000000000000ff))) ")) { return 101; }
+    if !contains(pair, String::from("(= vq_a (_ bv43 64))")) { return 102; }
+    let val: String = vc_qb_hexval(String::from("s"), String::from("i"));
+    if !contains(val, String::from("(ite (= vq_a (_ bv43 64)) ")) { return 103; }
+    if !contains(val, String::from("(bvmul ")) || !contains(val, String::from("(_ bv16 64)")) { return 104; }
+    0
+}
+
+fn string_starts_with_text(s: String, p: String) -> bool {
+    string_starts_with(s, p) == 1
+}
+
+// A parse call is an opaque `Option`: a Some flag (Bool) and a payload of the parsed width,
+// both hook constants; calls on distinct strings add the congruence axiom, calls on one operand
+// share the result, and parsers of different widths never share.
+fn check_parse_hook() -> i64 {
+    let one: VcClaims = vc_claims(parse_tags(String::from("__vow_string_parse_u8_opt"), 0));
+    if one.kinds.len() != 0 { return 110; }
+    if one.hook_vars.len() != 2 { return 111; }
+    let cs: VcClaims = vc_claims(parse_tags(String::from("__vow_string_parse_u8_opt"), 1));
+    if cs.kinds.len() != 1 { return 112; }
+    if cs.hook_vars.len() != 4 { return 113; }
+    let q: String = query(cs, 0);
+    if !contains(q, String::from("(declare-const hks0 Bool)")) { return 114; }
+    if !contains(q, String::from("(declare-const hkv1 (_ BitVec 8))")) { return 115; }
+    if !contains(q, String::from("(declare-const hks2 Bool)")) { return 116; }
+    if !contains(q, String::from("(= hks2 hks0)")) { return 117; }
+    if !contains(q, String::from("(or (not hks2) (= hkv3 hkv1))")) { return 118; }
+    let wide: VcClaims = vc_claims(parse_tags(String::from("__vow_string_parse_i128_opt"), 1));
+    if !contains(query(wide, 0), String::from("(declare-const hkv1 (_ BitVec 128))")) { return 119; }
+    if !vc_claim_reaches_hook(cs, vc_slicer_new(cs), 0) { return 120; }
+    0
+}
+
+// A text function's result keeps the facts every run has: a length below the capacity mask,
+// `trim` never longer than its operand, a case map keeping the empty string empty.
+fn check_text_hook_facts() -> i64 {
+    let trim: VcClaims = vc_claims(text_len_le(String::from("__vow_string_trim")));
+    if trim.kinds.len() != 1 { return 130; }
+    let q: String = query(trim, 0);
+    if !contains(q, String::from("(bvult hkn1 #x7fffffffffffffff)")) { return 131; }
+    if !contains(q, String::from("(assert (bvule hkn1 p0_vlen))")) { return 132; }
+    let up: VcClaims = vc_claims(text_len_le(String::from("__vow_string_to_upper")));
+    let u: String = query(up, 0);
+    if contains(u, String::from("(assert (bvule hkn1 p0_vlen))")) { return 133; }
+    if !contains(u, String::from("(bvult hkn1 #x7fffffffffffffff)")) { return 134; }
+    if !contains(u, String::from("(or (not (= p0_vlen #x0000000000000000)) (= hkn1 #x0000000000000000))")) { return 135; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_op_table();
+    if r == 0 { r = check_kind_predicates(); }
+    if r == 0 { r = check_gate(); }
+    if r == 0 { r = check_hash_definition_is_rendered(); }
+    if r == 0 { r = check_hash_same_operand_shares(); }
+    if r == 0 { r = check_encode_definition_is_rendered(); }
+    if r == 0 { r = check_decode_definition_is_rendered(); }
+    if r == 0 { r = check_decode_of_known_length_is_ground(); }
+    if r == 0 { r = check_templates(); }
+    if r == 0 { r = check_parse_hook(); }
+    if r == 0 { r = check_text_hook_facts(); }
+    i64_to_i32_wrap(r)
+}

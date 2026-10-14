@@ -774,8 +774,9 @@ def _pure_c_model(op):
 
 
 # The native verifier models the String slice builtins by runtime symbol
-# (`vc_str`, #1426), the float text hooks (`vc_hooks`, #1646) and the numeric
-# builtins (`vc_numeric`, #1654), and none of the others yet. The two pure hash
+# (`vc_str`, #1426), the float text hooks (`vc_hooks`, #1646), the numeric
+# builtins (`vc_numeric`, #1654) and the folds, codecs and opaque total functions
+# of #1654 (`vc_strfold`, `vc_hooks`), and none of the others yet. The pure hash
 # builtins still say whether the ESBMC C model knows them.
 VERIFIER_KNOWN_NAMES = {
     "string_substr",
@@ -788,6 +789,22 @@ VERIFIER_KNOWN_NAMES = {
     "uint_to_string",
     "int128_to_string",
     "uint128_to_string",
+    "hash_str",
+    "hex_encode",
+    "hex_decode",
+    "string_trim",
+    "string_to_upper",
+    "string_to_lower",
+    "parse_i8",
+    "parse_i16",
+    "parse_i32",
+    "parse_i64",
+    "parse_i128",
+    "parse_u8",
+    "parse_u16",
+    "parse_u32",
+    "parse_u128",
+    "vec_sort",
 }
 
 
@@ -2202,7 +2219,7 @@ class VerifierModelDriftTest(unittest.TestCase):
 
     def test_real_pure_hash_builtins_say_what_the_native_verifier_models(self):
         by_name = {op["name"]: op for op in go.load_catalogue(REPO_ROOT)}
-        for name, model in (("hash_u64", "known"), ("hash_str", "unmodeled")):
+        for name, model in (("hash_u64", "known"), ("hash_str", "known")):
             with self.subTest(op=name):
                 self.assertEqual(by_name[name]["effects"], "[]")
                 self.assertEqual(by_name[name]["verifier_model"], model)

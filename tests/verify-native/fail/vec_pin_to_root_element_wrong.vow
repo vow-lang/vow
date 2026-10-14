@@ -1,0 +1,20 @@
+// TEST: counterexample-fn "first_plus_one"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// The copy has the original's elements, not the original's elements plus one.
+module VecPinToRootElementWrong
+
+fn first_plus_one(v: Vec<i64>) -> i64 vow {
+  requires: v.len() > 0,
+  requires: v[0] < 9223372036854775807,
+  ensures: result == v[0] + 1
+} {
+  pin_to_root(v)[0]
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  print_i64(first_plus_one(v));
+  0
+}

@@ -398,8 +398,7 @@
       "return": "u64",
       "doc_signature": "fn(s: String) -> u64",
       "effects": "[]",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "FNV-1a is a left fold over every byte of a string of unbounded length (`h = (h ^ b) * 0x100000001B3` from the offset basis `0xCBF29CE484222325`): the array model has no closed form for it, so a caller is skipped instead of given an unconstrained hash.",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -531,8 +530,7 @@
       "doc_signature": "fn(data: Vec<u8>) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "Doubles the length and maps each element to two digit bytes (`0123456789abcdef` at the high and the low nibble of the element's low 8 bits): a per-index map between two arrays, which the single equality binder of the String model cannot state, so a caller is skipped.",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -543,8 +541,7 @@
       "doc_signature": "fn(s: String) -> Vec<u8>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "A strict decoder: it returns an empty `Vec` unless the whole string is UTF-8, of even length and every pair parses with `u8::from_str_radix(pair, 16)` (which also accepts a leading `+`); the result is built by a per-pair map the array model has no binder for, so a caller is skipped.",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -555,8 +552,7 @@
       "doc_signature": "fn(s: String) -> Option<i64>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "The runtime parses the text after a Unicode `trim()` with Rust's `str::parse` (an optional sign, then an unbounded run of ASCII digits, leading zeros allowed, accumulated with a range check; `None` for invalid UTF-8): the value is a fold over the digits with no closed form in the array model, and the `Option` result needs a call-created aggregate. A nondeterministic or opaque result would make a caller's counterexample spurious (a `VerifierBug` under `--replay-cex`), so a caller is skipped instead.",
+      "verifier_model": "known",
       "c_model": "base_and_arena"
     },
     {
@@ -567,8 +563,7 @@
       "doc_signature": "fn(s: String) -> Option<i8>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "The runtime parses the text after a Unicode `trim()` with Rust's `str::parse` (an optional sign, then an unbounded run of ASCII digits, leading zeros allowed, accumulated with a range check; `None` for invalid UTF-8): the value is a fold over the digits with no closed form in the array model, and the `Option` result needs a call-created aggregate. A nondeterministic or opaque result would make a caller's counterexample spurious (a `VerifierBug` under `--replay-cex`), so a caller is skipped instead.",
+      "verifier_model": "known",
       "c_model": "base"
     },
     {
@@ -579,8 +574,7 @@
       "doc_signature": "fn(s: String) -> Option<i16>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "The runtime parses the text after a Unicode `trim()` with Rust's `str::parse` (an optional sign, then an unbounded run of ASCII digits, leading zeros allowed, accumulated with a range check; `None` for invalid UTF-8): the value is a fold over the digits with no closed form in the array model, and the `Option` result needs a call-created aggregate. A nondeterministic or opaque result would make a caller's counterexample spurious (a `VerifierBug` under `--replay-cex`), so a caller is skipped instead.",
+      "verifier_model": "known",
       "c_model": "base"
     },
     {
@@ -591,8 +585,7 @@
       "doc_signature": "fn(s: String) -> Option<i32>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "The runtime parses the text after a Unicode `trim()` with Rust's `str::parse` (an optional sign, then an unbounded run of ASCII digits, leading zeros allowed, accumulated with a range check; `None` for invalid UTF-8): the value is a fold over the digits with no closed form in the array model, and the `Option` result needs a call-created aggregate. A nondeterministic or opaque result would make a caller's counterexample spurious (a `VerifierBug` under `--replay-cex`), so a caller is skipped instead.",
+      "verifier_model": "known",
       "c_model": "base"
     },
     {
@@ -603,8 +596,7 @@
       "doc_signature": "fn(s: String) -> Option<i128>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "The runtime parses the text after a Unicode `trim()` with Rust's `str::parse` (an optional sign, then an unbounded run of ASCII digits, leading zeros allowed, accumulated with a range check; `None` for invalid UTF-8): the value is a fold over the digits with no closed form in the array model, and the `Option` result needs a call-created aggregate. A nondeterministic or opaque result would make a caller's counterexample spurious (a `VerifierBug` under `--replay-cex`), so a caller is skipped instead. A 128-bit payload also occupies two slots of the `Option`.",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -615,8 +607,7 @@
       "doc_signature": "fn(s: String) -> Option<u8>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "The runtime parses the text after a Unicode `trim()` with Rust's `str::parse` (an optional sign, then an unbounded run of ASCII digits, leading zeros allowed, accumulated with a range check; `None` for invalid UTF-8): the value is a fold over the digits with no closed form in the array model, and the `Option` result needs a call-created aggregate. A nondeterministic or opaque result would make a caller's counterexample spurious (a `VerifierBug` under `--replay-cex`), so a caller is skipped instead.",
+      "verifier_model": "known",
       "c_model": "base"
     },
     {
@@ -627,8 +618,7 @@
       "doc_signature": "fn(s: String) -> Option<u16>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "The runtime parses the text after a Unicode `trim()` with Rust's `str::parse` (an optional sign, then an unbounded run of ASCII digits, leading zeros allowed, accumulated with a range check; `None` for invalid UTF-8): the value is a fold over the digits with no closed form in the array model, and the `Option` result needs a call-created aggregate. A nondeterministic or opaque result would make a caller's counterexample spurious (a `VerifierBug` under `--replay-cex`), so a caller is skipped instead.",
+      "verifier_model": "known",
       "c_model": "base"
     },
     {
@@ -639,8 +629,7 @@
       "doc_signature": "fn(s: String) -> Option<u32>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "The runtime parses the text after a Unicode `trim()` with Rust's `str::parse` (an optional sign, then an unbounded run of ASCII digits, leading zeros allowed, accumulated with a range check; `None` for invalid UTF-8): the value is a fold over the digits with no closed form in the array model, and the `Option` result needs a call-created aggregate. A nondeterministic or opaque result would make a caller's counterexample spurious (a `VerifierBug` under `--replay-cex`), so a caller is skipped instead.",
+      "verifier_model": "known",
       "c_model": "base"
     },
     {
@@ -651,8 +640,7 @@
       "doc_signature": "fn(s: String) -> Option<u128>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "The runtime parses the text after a Unicode `trim()` with Rust's `str::parse` (an optional sign, then an unbounded run of ASCII digits, leading zeros allowed, accumulated with a range check; `None` for invalid UTF-8): the value is a fold over the digits with no closed form in the array model, and the `Option` result needs a call-created aggregate. A nondeterministic or opaque result would make a caller's counterexample spurious (a `VerifierBug` under `--replay-cex`), so a caller is skipped instead. A 128-bit payload also occupies two slots of the `Option`.",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -771,8 +759,7 @@
       "doc_signature": "fn(s: String) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "`str::trim` removes Unicode White_Space (multi-byte sequences such as U+00A0 and U+3000 included) from both ends and the runtime returns the empty string for invalid UTF-8; the model has neither a UTF-8 decoder nor the whitespace class, and a byte-wise ASCII approximation would be unsound.",
+      "verifier_model": "known",
       "c_model": "base_and_arena"
     },
     {
@@ -783,8 +770,7 @@
       "doc_signature": "fn(s: String) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "`str::to_uppercase` applies Unicode full case mapping, so a non-ASCII character can map to several (the German sharp s becomes `SS`) and the length can change, and the runtime returns the empty string for invalid UTF-8; the model has no case-mapping table, and an ASCII-only byte map would be unsound.",
+      "verifier_model": "known",
       "c_model": "base_and_arena"
     },
     {
@@ -795,8 +781,7 @@
       "doc_signature": "fn(s: String) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "`str::to_lowercase` applies Unicode full case mapping, so a non-ASCII character can map to several and the length can change, and the runtime returns the empty string for invalid UTF-8; the model has no case-mapping table, and an ASCII-only byte map would be unsound.",
+      "verifier_model": "known",
       "c_model": "base_and_arena"
     },
     {
@@ -808,7 +793,7 @@
       "effects": "[]",
       "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled",
-      "verifier_skip_reason": "Validates all three strings as UTF-8 (the empty string otherwise), then `str::replace`: left-to-right non-overlapping matches whose count sets the result length, and an empty `from` inserts `to` between every character; the result is a fold over the match positions with no closed form.",
+      "verifier_skip_reason": "Validates all three strings as UTF-8 (the empty string otherwise), then `str::replace`: left-to-right non-overlapping matches whose count sets the result length, and an empty `from` inserts `to` between every character; the result is a fold over the match positions with no closed form. The opaque total-function route that `string_trim` takes needs a congruence over all three operands (equal `s`, `from` and `to` give equal results), which the hook tables do not carry, so a caller is skipped instead of given an unconstrained text.",
       "c_model": "unmodeled"
     },
     {
@@ -831,8 +816,7 @@
       "doc_signature": "fn(v: Vec<i64>) -> Vec<i64>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
-      "verifier_skip_reason": "Sortedness plus permutation of an unbounded Vec needs quantifiers over index pairs and a multiset equality; not encoded.",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     }
   ],

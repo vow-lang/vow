@@ -1,3 +1,4 @@
+// TEST: esbmc-capacity-artifact "ESBMC fails its Vec capacity assertion for a constant length beyond its model; the runtime copies any length it can allocate, and the postcondition holds on every returning run"
 // TEST: category overflow
 // TEST: counterexample-vow-id 4294967293
 // TEST: counterexample-fn "big"

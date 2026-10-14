@@ -1,0 +1,88 @@
+// TEST: category invariant
+// Selection sort by id with three nested loops over symbolic-length Vecs (the
+// shape of sort_local_names in compiler/module_io.vow, #1707). Every loop
+// carries the facts its reads need (lengths, and that a found index is in
+// range), so each loop is cut and the function is proven inductively without
+// bounded unwinding.
+module VecSelectionSortNested
+
+fn sort_ids(ids: Vec<i64>, names: Vec<i64>) -> Vec<i64> vow {
+  requires: ids.len() == names.len()
+} {
+  let used: Vec<i64> = Vec::new();
+  let mut i: u64 = 0;
+  while i < ids.len() vow {
+    invariant: i <= ids.len(),
+    invariant: used.len() == i
+  } {
+    used.push(0);
+    i = i + 1;
+  }
+  let out_ids: Vec<i64> = Vec::new();
+  let out_names: Vec<i64> = Vec::new();
+  while true vow {
+    invariant: used.len() == ids.len(),
+    invariant: out_ids.len() == out_names.len()
+  } {
+    let mut found: bool = false;
+    let mut best_idx: u64 = 0;
+    let mut best_id: i64 = 0;
+    i = 0;
+    while i < ids.len() vow {
+      invariant: i <= ids.len(),
+      invariant: used.len() == ids.len(),
+      invariant: !found || best_idx < ids.len()
+    } {
+      if used[i] == 0 {
+        let cur: i64 = ids[i];
+        if !found || cur < best_id {
+          found = true;
+          best_idx = i;
+          best_id = cur;
+        }
+      }
+      i = i + 1;
+    }
+    if !found {
+      break;
+    }
+    let mut chosen_idx: u64 = best_idx;
+    i = 0;
+    while i < ids.len() vow {
+      invariant: i <= ids.len(),
+      invariant: used.len() == ids.len(),
+      invariant: chosen_idx < ids.len()
+    } {
+      if used[i] == 0 && ids[i] == best_id {
+        used[i] = 1;
+        chosen_idx = i;
+      }
+      i = i + 1;
+    }
+    out_ids.push(ids[chosen_idx]);
+    out_names.push(names[chosen_idx]);
+  }
+  out_ids
+}
+
+fn main() -> i32 [io] {
+  let ids: Vec<i64> = Vec::new();
+  let names: Vec<i64> = Vec::new();
+  ids.push(7);
+  names.push(70);
+  ids.push(3);
+  names.push(30);
+  ids.push(7);
+  names.push(71);
+  ids.push(5);
+  names.push(50);
+  let sorted: Vec<i64> = sort_ids(ids, names);
+  let mut i: u64 = 0;
+  while i < sorted.len() vow {
+    invariant: i <= sorted.len()
+  } {
+    print_i64(sorted[i]);
+    i = i + 1;
+  }
+  0
+}

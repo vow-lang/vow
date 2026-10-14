@@ -2881,6 +2881,26 @@ fn lower_narrow_literal(ctx: LowerCtx, a: AstArena, eid: i64, original: i64, ty:
     original
 }
 
+// `__vow_vec_get_val` returns a `Vec<bool>` element as the runtime's 8-byte slot,
+// typed `i64`. Comparing it with zero gives the read the `bool` type the program gave
+// it, so every later use (branch, return, `!`, `&&`) sees a `bool`. Twin of
+// `narrow_vec_bool_elem` in vow-ir/src/lower/mod.rs.
+fn narrow_vec_bool_elem(ctx: LowerCtx, raw: i64, origin: i64) -> i64 {
+    let zero: i64 = emit_integer_zero(ctx, ITY_I64(), origin);
+    let cmp_args: Vec<i64> = Vec::new();
+    cmp_args.push(raw);
+    cmp_args.push(zero);
+    lctx_emit(ctx, IOP_NE(), ITY_BOOL(), cmp_args, IDATA_INTEGER(), ITY_I64(), 0, String::from(""), origin)
+}
+
+// True when the `for` loop iterates a `Vec` whose declared element type is `bool`.
+fn foreach_elem_is_bool(ctx: LowerCtx, iter_id: i64) -> bool {
+    let elem_tid: i64 = lctx_generic_ast_arg_tid(
+        ctx, lctx_get_declared_ast_tid(ctx, iter_id), String::from("Vec"), 0
+    );
+    elem_tid != -1 && lctx_lower_ast_ty(ctx, elem_tid) == ITY_BOOL()
+}
+
 // Lower a from_raw_parts_copy length argument in its u64 context so an
 // integer literal becomes a ConstU64 rather than a wrapped ConstI64.
 fn lower_raw_parts_len(
@@ -4073,7 +4093,12 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
         let elem_id: i64 = if foreach_wide_ty != -1 {
             lctx_emit_wide_vec_elem_get(ctx, iter_id, idx_phi, foreach_wide_ty, origin)
         } else {
-            lctx_emit(ctx, IOP_CALL(), ITY_I64(), get_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_get_val"), origin)
+            let raw_elem: i64 = lctx_emit(ctx, IOP_CALL(), ITY_I64(), get_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_get_val"), origin);
+            if foreach_elem_is_bool(ctx, iter_id) {
+                narrow_vec_bool_elem(ctx, raw_elem, origin)
+            } else {
+                raw_elem
+            }
         };
         lctx_project_vec_index_metadata(ctx, iter_id, elem_id);
         let iter_elem_ast_tid: i64 = lctx_generic_ast_arg_tid(
@@ -4833,7 +4858,11 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
         call_args.push(idx_id);
         let raw_result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_get_val"), origin);
         let elem_ty: i64 = lctx_lower_ast_ty(ctx, elem_ast_tid);
-        let result: i64 = lower_narrow_literal(ctx, a, eid, raw_result, elem_ty);
+        let result: i64 = if elem_ty == ITY_BOOL() {
+            narrow_vec_bool_elem(ctx, raw_result, origin)
+        } else {
+            lower_narrow_literal(ctx, a, eid, raw_result, elem_ty)
+        };
         lctx_project_vec_index_metadata(ctx, vec_ptr, result);
         lctx_tag_declared_ast_tid(ctx, result, elem_ast_tid);
         return result;

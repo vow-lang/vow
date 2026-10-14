@@ -202,14 +202,15 @@ fn vc_claim_result(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnswer) -> 
     vc_verify_result(VERIFY_ERROR(), -1, Vec::new(), Vec::new(), ans.raw)
 }
 
-// A counterexample depends on the value `parse_f64_bits` or the text
-// `format_f64_bits` returns, which the model leaves unconstrained: it may not be a
-// run, so the claim is neither proven nor refuted.
+// A counterexample depends on the value `parse_f64_bits` or a `parse_*` returns, or the
+// text `format_f64_bits`, `string_trim`, `string_to_upper` or `string_to_lower` returns,
+// which the model leaves unconstrained: it may not be a run, so the claim is neither
+// proven nor refuted.
 fn vc_opaque_hook_label() -> String { String::from("opaque builtin result") }
 
 fn vc_opaque_hook_reason() -> String {
     let out: String = vc_opaque_hook_label();
-    out.push_str(String::from(": the counterexample depends on the value of parse_f64_bits or the text of format_f64_bits, which the native verifier does not model"));
+    out.push_str(String::from(": the counterexample depends on the result of parse_f64_bits, format_f64_bits, a parse_* builtin, string_trim, string_to_upper or string_to_lower, which the native verifier models only as a total function of its operands"));
     out
 }
 

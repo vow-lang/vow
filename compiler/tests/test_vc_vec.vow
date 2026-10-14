@@ -224,7 +224,7 @@ fn check_shape_rejections() -> i64 {
     let builtin: Vec<IrInst> = Vec::new();
     builtin.push(mk_inst_arg(0, ITY_PTR(), 0));
     builtin.push(mk_inst_call_extern(1, ITY_U64(), args1(0), String::from("__vow_vec_len")));
-    builtin.push(mk_inst_call_extern(2, ITY_U64(), args1(0), String::from("__vow_string_trim")));
+    builtin.push(mk_inst_call_extern(2, ITY_U64(), args1(0), String::from("__vow_string_replace")));
     builtin.push(mk_inst_return(3, 2));
     let to_builtin: IrFunction = one_block(ptr_u64_params(), ITY_U64(), builtin);
     if vc_vec_shape_detail(to_builtin, 8, false) != String::from("Vec passed to an unmodelled builtin") { return 62; }

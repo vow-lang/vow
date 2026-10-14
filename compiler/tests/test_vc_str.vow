@@ -119,7 +119,6 @@ fn check_op_table() -> i64 {
     if vc_vec_op_kind(String::from("__vow_vec_clear")) != VC_STR_NONE() { return 18; }
     let rest: Vec<String> = Vec::new();
     rest.push(String::from("__vow_string_from_cstr"));
-    rest.push(String::from("__vow_string_parse_u64_opt"));
     rest.push(String::from("__vow_string_new_in_arena"));
     rest.push(String::from("__vow_string_push_str_in_arena"));
     rest.push(String::from("__vow_string_substring_in_arena"));
