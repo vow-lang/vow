@@ -20,6 +20,10 @@ if ! [[ "$VMEM_LIMIT_KB" =~ ^[0-9]+$ ]]; then
     echo "Error: VOW_BOOTSTRAP_VMEM_KB must be a non-negative integer (got: '$VMEM_LIMIT_KB')" >&2
     exit 1
 fi
+if ! [[ "$NATIVE_JOBS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: VOW_BOOTSTRAP_NATIVE_JOBS must be a positive integer (got: '$NATIVE_JOBS')" >&2
+    exit 1
+fi
 
 usage() {
     echo "Usage: $0 [--skip-cargo] [--no-verify] [--native-verify] [--stage3-no-verify] [--no-cache] [--help|-h]"

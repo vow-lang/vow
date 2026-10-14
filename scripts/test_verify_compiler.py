@@ -419,6 +419,16 @@ class CompareGateTest(unittest.TestCase):
         self.assertTrue(gate["criteria"]["no_new_timeouts"])
 
 
+class PartialRootsTest(unittest.TestCase):
+    def test_a_root_subset_does_not_make_skip_entries_stale(self):
+        skips = {"g": {"code": "unmodeled-builtin", "issue": 1, "reason": "r"}}
+        run = [summary({"f": "PROVEN"})]
+        self.assertFalse(vc.stage_criteria([("a", run)], skips)["passed"])
+        self.assertTrue(
+            vc.stage_criteria([("a", run)], skips, all_roots=False)["passed"]
+        )
+
+
 class StageGateTest(unittest.TestCase):
     def stages(self, *natives_per_stage):
         return [(f"stage{i}", natives) for i, natives in enumerate(natives_per_stage)]
@@ -532,6 +542,16 @@ class MeasureTest(unittest.TestCase):
         ) as run:
             vc.measure("vowc", "native", "p.vow", 1, None, 100, 1)
         self.assertEqual(1, run.call_count)
+
+    def test_summary_reads_the_sample_of_the_modal_verdict(self):
+        bad = self.sample(1.0, stderr="  f: FAILED\n")
+        bad["result"] = {
+            "status": "VerifyFailed",
+            "counterexamples": [{"function": "f"}],
+        }
+        good = self.sample(2.0)
+        result = vc.summarise([bad, good, self.sample(3.0)])
+        self.assertEqual({"f": "PROVEN"}, result["functions"])
 
 
 class MainTest(unittest.TestCase):

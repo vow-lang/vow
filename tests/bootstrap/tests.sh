@@ -336,6 +336,14 @@ test_native_verify_is_skipped_when_the_fixed_point_diverges() {
     assert_not_contains "$(cat "$invocations")" "verify_compiler.py" "native_diverges invocations"
 }
 
+test_native_verify_jobs_must_be_a_positive_integer() {
+    local paths stdout
+    paths=$(VOW_BOOTSTRAP_NATIVE_JOBS='2; true' run_bootstrap_expect_failure native_jobs_bad --no-verify --native-verify)
+    stdout=$(sed -n '1p' <<<"$paths")
+
+    assert_not_contains "$(cat "$stdout")" "Stage 1" "native_jobs_bad stdout"
+}
+
 test_combined_flags_warn_and_preserve_no_verify_precedence
 test_single_flags_do_not_warn
 test_default_sequence
@@ -352,5 +360,6 @@ test_native_verify_is_off_by_default
 test_native_verify_runs_alongside_the_esbmc_pass
 test_native_verify_failure_fails_bootstrap_without_promotion
 test_native_verify_is_skipped_when_the_fixed_point_diverges
+test_native_verify_jobs_must_be_a_positive_integer
 
 echo "bootstrap tests passed"

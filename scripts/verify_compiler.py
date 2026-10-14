@@ -189,9 +189,13 @@ def capacity_functions(result):
 def summarise(sample_set):
     """One backend's summary over its timed samples (median cost, modal outcome)."""
     summary = verify_perf.summarise_backend(sample_set)
-    first = sample_set[0]
-    result = first["result"] or {}
-    summary["functions"] = progress_verdicts(first["stderr"])
+    modal = sample_set[
+        [verify_diff.verdict_of(s["result"]) for s in sample_set].index(
+            summary["verdict"]
+        )
+    ]
+    result = modal["result"] or {}
+    summary["functions"] = progress_verdicts(modal["stderr"])
     summary["skipped"] = skipped_functions(result)
     summary["capacity_functions"] = capacity_functions(result)
     summary["diagnostic_counts"] = dict(
@@ -308,7 +312,7 @@ def timed_row(root, esbmc, native, skips):
     }
 
 
-def compare_criteria(rows, skips, perf_gate, runs, pinned=True):
+def compare_criteria(rows, skips, perf_gate, runs, pinned=True, all_roots=True):
     """Gate over the comparison rows."""
     gate = verify_perf.evaluate_gate(rows, runs)
     verdict_failures = [
@@ -319,7 +323,7 @@ def compare_criteria(rows, skips, perf_gate, runs, pinned=True):
     problems = [
         f"{row['fixture']}: {p}" for row in rows for p in row["native_problems"]
     ]
-    stale = stale_skips([row["native"] for row in rows], skips)
+    stale = stale_skips([row["native"] for row in rows], skips) if all_roots else []
     criteria = {
         "verdict_parity": not verdict_failures,
         "native_acceptable": not problems,
@@ -358,7 +362,7 @@ def fingerprint(native):
     }
 
 
-def stage_criteria(by_stage, skips):
+def stage_criteria(by_stage, skips, all_roots=True):
     """Gate over native-only runs: `by_stage` is `[(vowc, [native summary per root])]`."""
     problems, disagreements = [], []
     reference = by_stage[0]
@@ -371,7 +375,11 @@ def stage_criteria(by_stage, skips):
                 disagreements.append(
                     f"{vowc} differs from {reference[0]} on root #{index}"
                 )
-    stale = stale_skips([n for _, natives in by_stage for n in natives], skips)
+    stale = (
+        stale_skips([n for _, natives in by_stage for n in natives], skips)
+        if all_roots
+        else []
+    )
     criteria = {
         "native_acceptable": not problems,
         "stages_agree": not disagreements,
@@ -437,7 +445,12 @@ def run_compare(args, roots, skips):
         "mode": "compare",
         "rows": rows,
         "gate": compare_criteria(
-            rows, skips, not args.no_perf_gate, args.runs, esbmc_pinned()
+            rows,
+            skips,
+            not args.no_perf_gate,
+            args.runs,
+            esbmc_pinned(),
+            not args.root,
         ),
     }
     return report
@@ -466,7 +479,7 @@ def run_native_only(args, roots, skips):
             }
             for vowc, natives in by_stage
         ],
-        "gate": stage_criteria(by_stage, skips),
+        "gate": stage_criteria(by_stage, skips, not args.root),
     }
 
 
