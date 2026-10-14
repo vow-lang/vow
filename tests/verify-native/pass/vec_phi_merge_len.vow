@@ -1,5 +1,4 @@
-// TEST: skip-reason unsupported-opcode
-module VecPhiMergeSkipped
+module VecPhiMergeLen
 
 fn pick(c: i64) -> u64 vow {
   ensures: result <= 2

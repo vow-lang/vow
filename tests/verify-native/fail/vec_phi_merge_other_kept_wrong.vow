@@ -1,0 +1,24 @@
+// TEST: counterexample-fn "keeps"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value c true
+// The write reaches the picked Vec only: when `c` holds `a` is the picked one, so
+// `b[0]` keeps its own value and `result == 5` is refuted.
+module VecPhiMergeOtherKeptWrong
+
+fn keeps(c: bool) -> i64 vow {
+  ensures: result == 5
+} {
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  a.push(1);
+  b.push(2);
+  let v: Vec<i64> = if c { a } else { b };
+  v[0] = 5;
+  if c { b[0] } else { a[0] }
+}
+
+fn main() -> i32 [io] {
+  print_i64(keeps(true));
+  0
+}

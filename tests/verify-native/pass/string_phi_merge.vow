@@ -1,0 +1,35 @@
+module StringPhiMerge
+
+fn pick(c: bool) -> u64 vow {
+  ensures: (c && result == 3) || (!c && result == 4)
+} {
+  let s: String = if c { String::from("foo") } else { String::from("barx") };
+  s.len()
+}
+
+fn append_to_the_pick(c: bool) -> u64 vow {
+  ensures: (c && result == 5) || (!c && result == 6)
+} {
+  let s: String = if c { String::from("foo") } else { String::from("barx") };
+  s.push_str(String::from("zz"));
+  s.len()
+}
+
+fn first_byte_of_the_pick(c: bool) -> i64 vow {
+  ensures: (c && result == 102) || (!c && result == 98)
+} {
+  let s: String = if c { String::from("foo") } else { String::from("barx") };
+  s.byte_at(0)
+}
+
+fn equal_after_the_merge(c: bool) -> bool vow {
+  ensures: result == c
+} {
+  let s: String = if c { String::from("yes") } else { String::from("no") };
+  s == String::from("yes")
+}
+
+fn main() -> i32 [io] {
+  print_u64(pick(true));
+  0
+}

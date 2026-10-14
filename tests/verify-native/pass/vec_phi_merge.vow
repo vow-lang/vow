@@ -1,0 +1,90 @@
+// TEST: category model-drift
+// A Vec the function picks by a branch: reads see the picked one, and a write
+// through the merge reaches exactly the Vec it stands for, which every other name
+// for that Vec sees.
+module VecPhiMerge
+
+fn push_through(c: bool) -> u64 vow {
+  ensures: result == 2
+} {
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  b.push(1);
+  let v: Vec<i64> = if c { a } else { b };
+  v.push(7);
+  a.len() + b.len()
+}
+
+fn push_in_a_later_block(c: bool, d: bool) -> u64 vow {
+  ensures: (d && result == 3) || (!d && result == 2)
+} {
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  b.push(1);
+  b.push(2);
+  let v: Vec<i64> = if c { a } else { b };
+  if d {
+    v.push(7);
+  }
+  a.len() + b.len()
+}
+
+fn element_of_the_pick(c: bool) -> i64 vow {
+  ensures: (c && result == 10) || (!c && result == 20)
+} {
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  a.push(10);
+  b.push(20);
+  let v: Vec<i64> = if c { a } else { b };
+  v[0]
+}
+
+fn set_through(c: bool) -> i64 vow {
+  ensures: result == 5
+} {
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  a.push(1);
+  b.push(2);
+  let v: Vec<i64> = if c { a } else { b };
+  v[0] = 5;
+  if c { a[0] } else { b[0] }
+}
+
+fn untouched_one_keeps_its_value(c: bool) -> i64 vow {
+  ensures: (c && result == 2) || (!c && result == 1)
+} {
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  a.push(1);
+  b.push(2);
+  let v: Vec<i64> = if c { a } else { b };
+  v[0] = 5;
+  if c { b[0] } else { a[0] }
+}
+
+fn three_way(k: i64) -> u64 vow {
+  ensures: result <= 2
+} {
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  let c: Vec<i64> = Vec::new();
+  b.push(1);
+  c.push(1);
+  c.push(2);
+  let v: Vec<i64> = if k < 0 { a } else if k == 0 { b } else { c };
+  v.len()
+}
+
+fn params(a: Vec<i64>, b: Vec<i64>, c: bool) -> u64 vow {
+  ensures: (c && result == a.len()) || (!c && result == b.len())
+} {
+  let v: Vec<i64> = if c { a } else { b };
+  v.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(push_through(true));
+  0
+}

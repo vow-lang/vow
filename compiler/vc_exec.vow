@@ -969,7 +969,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         cs: cs,
         fl: fl,
         ag: vc_agg_new(fl),
-        vv: vc_vec_new_state(fl, nb),
+        vv: vc_vec_new_state(fl, ar, nb),
         hp: vc_heap_new(),
         mp: vc_map_new_state(fl, nb),
         ov: vc_overlay_new(),
