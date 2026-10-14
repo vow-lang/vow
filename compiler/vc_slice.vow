@@ -239,21 +239,7 @@ fn vc_slice_claim(sx: VcSlicer, cs: VcClaims, k: u64) -> VcSlice {
     sl
 }
 
-// The query of claim `k` restricted to `sl`: the shape of `vc_claim_script`
-// with the commands and assumptions of the cone only.
+// The cone's query uses the shared constructor for command assembly and tail.
 fn vc_claim_script_sliced(cs: VcClaims, k: u64, sl: VcSlice) -> SmtScript {
-    let hdr: SmtScript = cs.header;
-    let s: SmtScript = vc_script_new();
-    let mut i: u64 = 0;
-    while i < sl.cmds.len() {
-        let c: u64 = sl.cmds[i] as u64;
-        vc_script_push(s, hdr.kinds[c], hdr.names[c], hdr.vals[c], hdr.sorts[c], hdr.terms[c]);
-        i = i + 1;
-    }
-    let mut j: u64 = 0;
-    while j < sl.assumed.len() {
-        vc_script_assert(s, cs.assumed[sl.assumed[j] as u64]);
-        j = j + 1;
-    }
-    vc_claim_script_finish(s, cs, k)
+    vc_claim_script_selected(cs, k, sl.cmds, sl.assumed)
 }

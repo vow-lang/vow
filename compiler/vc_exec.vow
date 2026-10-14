@@ -4,6 +4,7 @@ use ir
 use vc_ops
 use vc_term
 use vc_smt
+use vc_query
 use vc_int
 use vc_fp
 use vc_gate
@@ -88,37 +89,6 @@ fn VC_LABEL_UNWIND() -> String { String::from("unwinding assertion") }
 fn VC_LABEL_VEC_BOUNDS() -> String { String::from("vec bounds") }
 fn VC_LABEL_STRING_BOUNDS() -> String { String::from("string bounds") }
 
-// One shared command list (`header`) and one append-only assumption list serve
-// every claim: claim `k` is the first `header_lens[k]` header commands, the
-// first `assumed_lens[k]` assumptions and its negated goal. Queries are built
-// on demand by `vc_claim_script`, so memory stays linear in the function size.
-struct VcClaims {
-    arena: VcArena,
-    header: SmtScript,
-    assumed: Vec<i64>,
-    kinds: Vec<i64>,
-    frames: Vec<i64>,
-    fr: VcFrames,
-    pre_only: bool,
-    step: bool,
-    hyp_now: bool,
-    vow_ids: Vec<i64>,
-    labels: Vec<String>,
-    ostarts: Vec<i64>,
-    olens: Vec<i64>,
-    negated_goals: Vec<i64>,
-    header_lens: Vec<i64>,
-    assumed_lens: Vec<i64>,
-    model_names: Vec<String>,
-    model_params: Vec<i64>,
-    model_tys: Vec<i64>,
-    model_widths: Vec<i64>,
-    model_slots: Vec<i64>,
-    model_hdr: Vec<i64>,
-    model_ambig: Vec<i64>,
-    hook_vars: Vec<i64>,
-}
-
 fn vc_value_name(id: i64) -> String {
     let out: String = String::from("v");
     out.push_str(i64_to_string(id));
@@ -182,40 +152,6 @@ fn vc_guard(cs: VcClaims, kind: i64, label: String, pc: i64, goal: i64, inst: Ir
     vc_assume(cs, pc, goal);
 }
 
-// Number of model symbols claim `k`'s query declares: the header is only
-// declared up to `header_lens[k]`, and `get-value` of a symbol declared later
-// is a solver error. Symbols are listed in declaration order, so these are the
-// first entries of every `model_*` list.
-fn vc_claim_model_count(cs: VcClaims, k: u64) -> u64 {
-    let mut n: u64 = 0;
-    while n < cs.model_hdr.len() && cs.model_hdr[n] < cs.header_lens[k] {
-        n = n + 1;
-    }
-    n
-}
-
-fn vc_claim_model_names(cs: VcClaims, k: u64) -> Vec<String> {
-    let out: Vec<String> = Vec::new();
-    let n: u64 = vc_claim_model_count(cs, k);
-    let mut j: u64 = 0;
-    while j < n {
-        out.push(cs.model_names[j]);
-        j = j + 1;
-    }
-    out
-}
-
-fn vc_claim_model_widths(cs: VcClaims, k: u64) -> Vec<i64> {
-    let out: Vec<i64> = Vec::new();
-    let n: u64 = vc_claim_model_count(cs, k);
-    let mut j: u64 = 0;
-    while j < n {
-        out.push(cs.model_widths[j]);
-        j = j + 1;
-    }
-    out
-}
-
 // Appends the scalar fields of aggregate parameters the walk read (declared
 // lazily, so only now are they all known) after the scalar parameters, with the
 // slot each came from (a symbol's width is its sort: 0 for Bool). A slot read
@@ -247,28 +183,6 @@ fn vc_claims_harvest_fields(cs: VcClaims, ag: VcAgg) {
         cs.model_ambig.push(amb);
         j = j + 1;
     }
-}
-
-// The tail every query of claim `k` ends in: its negated goal, the check and
-// the model request.
-fn vc_claim_script_finish(s: SmtScript, cs: VcClaims, k: u64) -> SmtScript {
-    vc_script_assert(s, cs.negated_goals[k]);
-    vc_script_check_sat(s);
-    vc_script_get_value(s, vc_claim_model_names(cs, k));
-    s
-}
-
-// The self-contained query that decides claim `k`.
-fn vc_claim_script(cs: VcClaims, k: u64) -> SmtScript {
-    let hdr: SmtScript = cs.header;
-    let s: SmtScript = vc_script_prefix(hdr, cs.header_lens[k] as u64);
-    let na: u64 = cs.assumed_lens[k] as u64;
-    let mut i: u64 = 0;
-    while i < na {
-        vc_script_assert(s, cs.assumed[i]);
-        i = i + 1;
-    }
-    vc_claim_script_finish(s, cs, k)
 }
 
 // Symbolic state shared by the block walk.
