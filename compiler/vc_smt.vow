@@ -310,6 +310,12 @@ fn vc_term_text(ar: VcArena, t: i64) -> String {
     if kind == VC_T_VAR() {
         return String::from(ar.strs[aux as u64]);
     }
+    if kind == VC_T_QSORT() {
+        let o: String = vc_term_text(ar, ar.a[t as u64]);
+        let src: String = vc_term_text(ar, ar.b[t as u64]);
+        let pq: String = vc_term_text(ar, ar.c[t as u64]);
+        return vc_qb_sort(o, src, pq, vc_term_text(ar, ar.aux[t as u64]));
+    }
     if kind == VC_T_QEQ() {
         return vc_qeq_text(ar, t);
     }

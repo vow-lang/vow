@@ -48,6 +48,7 @@ fn VC_T_QHEX() -> i64 { 9 }
 fn VC_T_QUNHEX() -> i64 { 10 }
 fn VC_T_HEXPAIR() -> i64 { 11 }
 fn VC_T_HEXVAL() -> i64 { 12 }
+fn VC_T_QSORT() -> i64 { 13 }
 
 fn VC_EXT_ZERO() -> i64 { 0 }
 fn VC_EXT_SIGN() -> i64 { 1 }
@@ -280,7 +281,7 @@ fn vc_tm_is_false(ar: VcArena, t: i64) -> bool {
 // of `hex_decode`. Their children are terms (`a`, `b`, `c`, `aux`, each -1 when unused).
 fn vc_kind_is_binder(kind: i64) -> bool {
     kind == VC_T_QEQ() || kind == VC_T_QLT() || kind == VC_T_QDIFF()
-        || (kind >= VC_T_QFOLD() && kind <= VC_T_HEXVAL())
+        || (kind >= VC_T_QFOLD() && kind <= VC_T_HEXVAL()) || kind == VC_T_QSORT()
 }
 
 // True for variables and constants: terms that are printed as they are and
@@ -690,6 +691,12 @@ fn vc_tm_qeq(ar: VcArena, a: i64, b: i64, k: i64, n: i64) -> i64 {
 // the bound `b`. Like `vc_tm_qeq`, built only inside an assumption.
 fn vc_tm_qlt(ar: VcArena, a: i64, b: i64, l: i64) -> i64 {
     vc_arena_intern(ar, VC_T_QLT(), a, b, -1, l)
+}
+
+// `out` is the sorted permutation of `src` over the first `len` slots, through the witness array
+// `pq` (see `vc_qb_sort`). Like the other binders, built only inside an assumption.
+fn vc_tm_qsort(ar: VcArena, out: i64, src: i64, pq: i64, len: i64) -> i64 {
+    vc_arena_intern(ar, VC_T_QSORT(), out, src, pq, len)
 }
 
 // `forall i <= l. low8(a[c[i]]) != low8(b[i + c[i]])`: at every start `i` up to `l` the Skolem

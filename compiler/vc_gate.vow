@@ -256,6 +256,7 @@ fn vc_vec_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
     }
     if kind == VC_VEC_LEN() { return n == 1 && inst.ty == ITY_U64(); }
     if kind == VC_VEC_POP() { return n == 1 && inst.ty == ITY_UNIT(); }
+    if kind == VC_VEC_SORT() { return n == 1 && inst.ty == ITY_PTR(); }
     false
 }
 

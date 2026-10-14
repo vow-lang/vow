@@ -432,8 +432,19 @@ of this change and stay `Skipped`.
   `v.len() as i64 >= 0` true, which `tests/verify/string_param_verify.vow`
   records for the ESBMC model as well. No other bound on a length, index or
   capacity is introduced anywhere; in particular there is no `len <= 128`.
+- **`vec_sort` is exact for any length** (`vc_walk_sort`, `VC_T_QSORT`). The result is a new
+  object of the source's length with a fresh array `o`, tied to the source array `s` (the term
+  `v` has at the call) by one assumption: `forall i < j < n. o[i] <=s o[j]` (sorted) and, through a
+  fresh witness array `pq` read as a permutation `p` and its inverse `q` (`p[x] = pq[2x]`,
+  `q[x] = pq[2x+1]`), `forall i < n. p[i] < n, q[p[i]] = i, o[i] = s[p[i]], q[i] < n, p[q[i]] = i`.
+  The sorted permutation of a sequence is unique, so the assumption defines `o` and cannot make a
+  query unsatisfiable: it is not an over-approximation, and no bound on `n` appears. It is a
+  binder next to `VC_T_QEQ` and obeys the same rule: built only in an assumption, never in a goal.
+  A query that holds one is asked with quantifiers like the `String` ones. Sorting does not
+  mutate the source; a later write to it does not move the result. Pinned by
+  `tests/verify-native/pass/vec_sort_properties.vow` and `fail/vec_sort_first_is_maximum_wrong.vow`.
 - **Skipped classes, fail closed.** Any other `__vow_vec_*` symbol
-  (`clear`, `truncate`, `reserve`, `sort`, `from_raw_parts_copy`,
+  (`clear`, `truncate`, `reserve`, `from_raw_parts_copy`,
   `pin_to_root`, the wide-slot variants, the `_in_arena` variants) is
   `unmodeled-builtin`; a pushed or stored value, or a `get` result, that is not
   `Bool` or an integer of up to 64 bits, and an index that is not 64-bit, is

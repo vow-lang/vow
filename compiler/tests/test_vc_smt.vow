@@ -219,6 +219,49 @@ fn check_array_vocabulary() -> i64 {
     0
 }
 
+// The binder of `vec_sort`: sorted by `bvsle`, and a permutation through the witness array
+// `pq` (`p[x] = pq[2x]`, `q[x] = pq[2x + 1]`). Pinned in full, since a binder that were too
+// weak or too strong would prove or refute the wrong programs.
+fn check_sort_binder() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let out: i64 = vc_tm_var(ar, String::from("o"));
+    let src: i64 = vc_tm_var(ar, String::from("s"));
+    let pq: i64 = vc_tm_var(ar, String::from("w"));
+    let len: i64 = vc_tm_var(ar, String::from("n"));
+    let t: i64 = vc_tm_qsort(ar, out, src, pq, len);
+    if !vc_kind_is_binder(ar.kinds[t as u64]) { return 1100; }
+    if vc_tm_qsort(ar, out, src, pq, len) != t { return 1101; }
+    if vc_tm_qsort(ar, src, out, pq, len) == t { return 1102; }
+    let p: String = String::from("(select w (bvadd vq_i vq_i))");
+    let q: String = String::from("(select w (bvadd (bvadd vq_i vq_i) (_ bv1 64)))");
+    let want: String = String::from("(and (forall ((vq_i (_ BitVec 64)) (vq_j (_ BitVec 64))) ");
+    want.push_str(String::from("(=> (and (bvult vq_i vq_j) (bvult vq_j n)) (bvsle (select o vq_i) (select o vq_j)))) "));
+    want.push_str(String::from("(forall ((vq_i (_ BitVec 64))) (=> (bvult vq_i n) (and "));
+    want.push_str(String::from("(and (bvult "));
+    want.push_str(p);
+    want.push_str(String::from(" n) (= (select w (bvadd (bvadd "));
+    want.push_str(p);
+    want.push_str(String::from(" "));
+    want.push_str(p);
+    want.push_str(String::from(") (_ bv1 64))) vq_i)) (and (= (select o vq_i) (select s "));
+    want.push_str(p);
+    want.push_str(String::from(")) (and (bvult "));
+    want.push_str(q);
+    want.push_str(String::from(" n) (= (select w (bvadd "));
+    want.push_str(q);
+    want.push_str(String::from(" "));
+    want.push_str(q);
+    want.push_str(String::from(")) vq_i)))))))"));
+    let s: SmtScript = vc_script_new();
+    vc_script_assert(s, t);
+    let text: String = vc_smt_render(ar, s);
+    let expect: String = String::from("(assert ");
+    expect.push_str(want);
+    expect.push_str(String::from(")\n"));
+    if text != expect { return 1103; }
+    0
+}
+
 fn check_render_range() -> i64 {
     let ar: VcArena = vc_arena_new();
     let s: SmtScript = vc_script_new();
@@ -250,6 +293,7 @@ fn main() -> i32 {
     if r == 0 { r = check_prefix_is_independent(); }
     if r == 0 { r = check_get_value_without_names_is_omitted(); }
     if r == 0 { r = check_unmapped_operator_is_not_a_known_symbol(); }
+    if r == 0 { r = check_sort_binder(); }
     if r == 0 { r = check_render_range(); }
     i64_to_i32_wrap(r)
 }

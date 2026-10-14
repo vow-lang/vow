@@ -393,7 +393,7 @@ fn vc_vec_shape_detail(f: IrFunction, n_ids: u64, calls: bool) -> String {
             let k: i64 = vc_inst_vec_kind(inst);
             if k != VC_VEC_NONE() {
                 any = true;
-                if k == VC_VEC_NEW() || vc_str_kind_creates(k) {
+                if k == VC_VEC_NEW() || k == VC_VEC_SORT() || vc_str_kind_creates(k) {
                     if inst.id >= 0 { is_vec[inst.id as u64] = 1; }
                 }
                 // The operands of a creating call are integers (`new`) or the

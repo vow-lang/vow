@@ -475,6 +475,27 @@ fn vc_walk_handle_vec(w: VcWalk, inst: IrInst, pc: i64, kind: i64) {
     vc_define(w, inst, vc_heap_elem(w.hp, ar, cs.header, h, idx));
 }
 
+// `vec_sort(v)`: a new `Vec` of `v`'s length whose slots are the sorted permutation of
+// `v`'s (`VC_T_QSORT`, assumed on the paths that reach the call). The result array and the
+// witness array of the permutation are fresh; the source array is the term `v` has now, so a
+// later write to `v` does not move the result.
+fn vc_walk_sort(w: VcWalk, bi: u64, inst: IrInst, pc: i64) {
+    let cs: VcClaims = w.cs;
+    let ar: VcArena = cs.arena;
+    let hdr: SmtScript = cs.header;
+    let vv: VcVec = w.vv;
+    let b: i64 = bi as i64;
+    let s: i64 = vc_vec_slot(vv, w.ag, ar, hdr, cs.assumed, w.obj_of[inst.args[0] as u64]);
+    let src: i64 = vc_vec_cur_arr(vv, s, b);
+    let len: i64 = vc_vec_cur_len(vv, s, b);
+    let obj: i64 = vc_walk_new_obj(w, bi, inst);
+    let out: i64 = vc_str_fresh_array(vv, ar, hdr, String::from("so"));
+    let pq: i64 = vc_str_fresh_array(vv, ar, hdr, String::from("sp"));
+    vc_vec_create_with(vv, ar, hdr, obj, b, out, len);
+    vc_assume(cs, pc, vc_tm_qsort(ar, out, src, pq, len));
+    vv.quantified = true;
+}
+
 // A `Vec` call (`vc_vec`). `get` and `len` define a value, the rest change the
 // object's state in this block; an index out of bounds is a hard claim, assumed
 // afterwards like the other aborts.
@@ -524,6 +545,10 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
     }
     if w.tys[inst.args[0] as u64] == ITY_I64() {
         vc_walk_handle_vec(w, inst, pc, kind);
+        return true;
+    }
+    if kind == VC_VEC_SORT() {
+        vc_walk_sort(w, bi, inst, pc);
         return true;
     }
     let s: i64 = vc_vec_slot(vv, w.ag, ar, hdr, cs.assumed, w.obj_of[inst.args[0] as u64]);
