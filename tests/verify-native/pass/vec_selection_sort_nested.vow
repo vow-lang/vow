@@ -3,7 +3,9 @@
 // shape of sort_local_names in compiler/module_io.vow, #1707). Every loop
 // carries the facts its reads need (lengths, and that a found index is in
 // range), so each loop is cut and the function is proven inductively without
-// bounded unwinding.
+// bounded unwinding. The driver in main carries no vow block: a contracted
+// function with an effect is Skipped (function-has-effects), which would turn
+// the whole run into Skipped instead of Verified.
 module VecSelectionSortNested
 
 fn sort_ids(ids: Vec<i64>, names: Vec<i64>) -> Vec<i64> vow {
@@ -78,9 +80,7 @@ fn main() -> i32 [io] {
   names.push(50);
   let sorted: Vec<i64> = sort_ids(ids, names);
   let mut i: u64 = 0;
-  while i < sorted.len() vow {
-    invariant: i <= sorted.len()
-  } {
+  while i < sorted.len() {
     print_i64(sorted[i]);
     i = i + 1;
   }

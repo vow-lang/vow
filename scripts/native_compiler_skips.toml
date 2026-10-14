@@ -9,9 +9,9 @@
 
 [[skip]]
 function = "decl_unprintable_enum"
-code = "unsupported-opcode"
-issue = 1676
-reason = "reads a Vec held in a struct nested in a struct parameter (the HashMap it fills is modelled, #1678)"
+code = "non-modelable-callee"
+issue = 1663
+reason = "calls arena_str, which returns a String element of a Vec held in a struct (ast.vow)"
 
 [[skip]]
 function = "module_encode"
