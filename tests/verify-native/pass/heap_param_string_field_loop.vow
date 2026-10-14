@@ -3,6 +3,9 @@
 // stays a bound of the string while the loop writes `out`.
 module HeapParamStringFieldLoop
 
+// TEST: esbmc-model-artifact fn="copy_text" blame=None vow_id=4294967293 "ESBMC reads the String field d.text as a fresh String of nondeterministic length at each use, so the reads of d.text in the bound, in byte_at and in the postcondition are unrelated values and the claim fails; it also fails its own Vec capacity assertion for a parameter already at its model limit. The native model reads one field as one value and keeps the aliasing a parameter may have with it; a debug-mode replay over sizes 0 to 300 satisfies every clause; the parameter is a Vec and cannot alias a String"
+// TEST: esbmc-model-artifact fn="copy_text" blame=Callee vow_id=1 "ESBMC reads the String field d.text as a fresh String of nondeterministic length at each use, so the reads of d.text in the bound, in byte_at and in the postcondition are unrelated values and the claim fails; it also fails its own Vec capacity assertion for a parameter already at its model limit. The native model reads one field as one value and keeps the aliasing a parameter may have with it; a debug-mode replay over sizes 0 to 300 satisfies every clause; the parameter is a Vec and cannot alias a String"
+
 struct Doc { text: String, tag: i64 }
 
 fn copy_text(out: Vec<i64>, d: Doc) -> u64 vow {

@@ -2,6 +2,8 @@
 // `out` may be that `String`, and the byte read through the field stays in `0..=255` either way.
 module HeapParamStringPushThenFieldByte
 
+// TEST: esbmc-model-artifact fn="tag_then_first" blame=None vow_id=4294967293 "ESBMC reads the String field l.text as a fresh String of nondeterministic length at each use, so the reads of l.text.len() and l.text.byte_at(0) are unrelated values and the claim fails; it also fails its own String capacity assertion for a parameter already at its model limit. The native model reads one field as one value and keeps the aliasing a parameter may have with it; a debug-mode replay over sizes 0 to 300 with the parameter distinct from and aliasing the field satisfies every clause"
+
 struct Label { text: String, n: i64 }
 
 fn tag_then_first(out: String, l: Label) -> i64 vow {
