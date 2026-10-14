@@ -1,5 +1,5 @@
 // TEST: counterexample-fn "first_plus_one"
-// TEST: counterexample-vow-id 1
+// TEST: counterexample-vow-id 2
 // TEST: counterexample-blame Callee
 // The copy has the original's elements, not the original's elements plus one.
 module VecPinToRootElementWrong
