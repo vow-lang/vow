@@ -7,6 +7,7 @@ use vc_exec
 use vc_smt
 use vc_term
 use vc_cex
+use vc_vecmodel
 use tests.builders
 
 fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
@@ -482,7 +483,11 @@ fn check_float_vec_contents() -> i64 {
     if r.var_names[2] != String::from("v.elem") || r.var_values[2] != String::from("f64") { return 108; }
     if r.var_names[3] != String::from("v[0]") || r.var_values[3] != String::from("2.5") { return 101; }
     if r.var_names[4] != String::from("v[1]") || r.var_values[4] != String::from("-1") { return 102; }
-    if vc_cex_elem_widths(cs, vc_cex_vecs(cs, 0), 2)[0] != 64 { return 103; }
+    let script: SmtScript = vc_script_new();
+    let requested: Vec<String> = Vec::new();
+    let widths: Vec<i64> = Vec::new();
+    vc_append_vec_projection(cs, vc_cex_vecs(cs, 0), 2, script, requested, widths);
+    if widths.len() != 2 || widths[0] != 64 || widths[1] != 64 { return 103; }
     let c32: VcClaims = vec_claims();
     c32.vec_wide[0] = ITY_F32();
     let v32: Vec<i64> = Vec::new();
@@ -509,6 +514,117 @@ fn check_float_vec_contents() -> i64 {
     0
 }
 
+// The answer tail is parameter-major even when lengths differ, and its unused
+// slots must not shift the next parameter's first element.
+fn mixed_vec_claims() -> VcClaims {
+    let cs: VcClaims = vec_claims();
+    cs.vec_wide[0] = ITY_I128();
+    let mut p: i64 = 2;
+    while p < 4 {
+        let stem: String = String::from("p");
+        stem.push_str(i64_to_string(p));
+        let len_name: String = String::from(stem);
+        len_name.push_str(String::from("_vlen"));
+        let arr_name: String = String::from(stem);
+        arr_name.push_str(String::from("_varr"));
+        cs.model_names.push(len_name);
+        cs.model_params.push(p);
+        cs.model_tys.push(ITY_U64());
+        cs.model_widths.push(64);
+        cs.model_slots.push(VC_SLOT_VEC_LEN());
+        cs.model_hdr.push(18 + p);
+        cs.model_ambig.push(0);
+        cs.vec_param.push(p);
+        cs.vec_arr.push(arr_name);
+        cs.vec_len.push(len_name);
+        cs.vec_hdr.push(18 + p);
+        cs.vec_wide.push(if p == 2 { ITY_F64() } else { -1 });
+        p = p + 1;
+    }
+    cs.header_lens[0] = 30;
+    cs
+}
+
+fn append_answer_entry(ans: VcSolverAnswer, low: i64, high: i64) {
+    ans.values.push(low);
+    ans.highs.push(high);
+}
+
+fn mixed_vec_answer(wide_len: i64, float_len: i64, raw_len: i64) -> VcSolverAnswer {
+    let ans: VcSolverAnswer = typed_answer(5, 0, wide_len, 0);
+    append_answer_entry(ans, float_len, 0);
+    append_answer_entry(ans, raw_len, 0);
+    append_answer_entry(ans, 7, 0);
+    append_answer_entry(ans, 0, -9223372036854775807 - 1);
+    append_answer_entry(ans, 4612811918334230528, 0);
+    append_answer_entry(ans, 99, 0);
+    append_answer_entry(ans, -1, 0);
+    append_answer_entry(ans, 99, 0);
+    ans
+}
+
+fn check_append_mixed_vec_contents() -> i64 {
+    let names: Vec<String> = Vec::new();
+    let values: Vec<String> = Vec::new();
+    names.push(String::from("existing"));
+    values.push(String::from("prefix"));
+    vc_append_vec_answer_contents(vec_fn(), mixed_vec_claims(), 0, mixed_vec_answer(2, 1, 1), names, values);
+    if names.len() != 6 || values.len() != 6 { return 110; }
+    if names[0] != String::from("existing") || values[0] != String::from("prefix") { return 111; }
+    if names[1] != String::from("v[0]") || values[1] != String::from("7") { return 112; }
+    if names[2] != String::from("v[1]") || values[2] != String::from("-170141183460469231731687303715884105728") { return 113; }
+    if names[3] != String::from("p2.elem") || values[3] != String::from("f64") { return 114; }
+    if names[4] != String::from("p2[0]") || values[4] != String::from("2.5") { return 115; }
+    if names[5] != String::from("p3[0]") || values[5] != String::from("18446744073709551615") { return 116; }
+    0
+}
+
+fn check_append_visible_vec_contents() -> i64 {
+    let cs: VcClaims = mixed_vec_claims();
+    cs.header_lens[0] = 10;
+    let names: Vec<String> = Vec::new();
+    let values: Vec<String> = Vec::new();
+    vc_append_vec_answer_contents(vec_fn(), cs, 0, vec_answer(5, 2, 11, 12, true), names, values);
+    if names.len() != 2 || values.len() != 2 { return 120; }
+    if names[0] != String::from("v[0]") || values[0] != String::from("11") { return 121; }
+    if names[1] != String::from("v[1]") || values[1] != String::from("12") { return 122; }
+    0
+}
+
+fn append_leaves_prefix(ans: VcSolverAnswer) -> bool {
+    let names: Vec<String> = Vec::new();
+    let values: Vec<String> = Vec::new();
+    names.push(String::from("existing"));
+    values.push(String::from("prefix"));
+    vc_append_vec_answer_contents(vec_fn(), mixed_vec_claims(), 0, ans, names, values);
+    names.len() == 1 && values.len() == 1
+        && names[0] == String::from("existing") && values[0] == String::from("prefix")
+}
+
+fn check_append_unusable_vec_tails() -> i64 {
+    let bare: VcSolverAnswer = mixed_vec_answer(2, 1, 1);
+    let mut i: i64 = 0;
+    while i < 6 {
+        bare.values.pop();
+        bare.highs.pop();
+        i = i + 1;
+    }
+    if !append_leaves_prefix(bare) { return 130; }
+    let malformed: VcSolverAnswer = mixed_vec_answer(2, 1, 1);
+    malformed.values.pop();
+    malformed.highs.pop();
+    if !append_leaves_prefix(malformed) { return 131; }
+    if !append_leaves_prefix(mixed_vec_answer(-1, -1, -1)) { return 132; }
+    if !append_leaves_prefix(mixed_vec_answer(3, 3, 3)) { return 133; }
+    let names: Vec<String> = Vec::new();
+    let values: Vec<String> = Vec::new();
+    vc_append_vec_answer_contents(vec_fn(), mixed_vec_claims(), 0, mixed_vec_answer(0, 0, 0), names, values);
+    // A zero-length float Vec still carries its element-type marker.
+    if names.len() != 1 || values.len() != 1 { return 134; }
+    if names[0] != String::from("p2.elem") || values[0] != String::from("f64") { return 135; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_sat_ensures();
     if r == 0 { r = check_sat_abort_claims(); }
@@ -520,5 +636,8 @@ fn main() -> i32 {
     if r == 0 { r = check_vec_contents(); }
     if r == 0 { r = check_wide_vec_contents(); }
     if r == 0 { r = check_float_vec_contents(); }
+    if r == 0 { r = check_append_mixed_vec_contents(); }
+    if r == 0 { r = check_append_visible_vec_contents(); }
+    if r == 0 { r = check_append_unusable_vec_tails(); }
     i64_to_i32_wrap(r)
 }
