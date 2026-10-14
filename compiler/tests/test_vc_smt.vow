@@ -251,7 +251,7 @@ fn check_sort_binder() -> i64 {
     want.push_str(q);
     want.push_str(String::from(" "));
     want.push_str(q);
-    want.push_str(String::from(")) vq_i))))))))"));
+    want.push_str(String::from(")) vq_i)))))))"));
     let s: SmtScript = vc_script_new();
     vc_script_assert(s, t);
     let text: String = vc_smt_render(ar, s);
