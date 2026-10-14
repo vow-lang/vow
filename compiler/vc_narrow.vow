@@ -89,7 +89,21 @@ fn vc_narrow_parse(sym: String) -> VcNarrow {
     let dst: i64 = vc_narrow_ity(rest.substring(0, us as u64));
     let kind: i64 = vc_narrow_kind_of(rest.substring((us as u64) + 1, rest.len()));
     if dst < 0 || kind == VC_NAR_NONE() { return vc_narrow_none(); }
+    if !vc_narrow_pair_exists(kind, src, dst) { return vc_narrow_none(); }
     VcNarrow { kind: kind, src: src, dst: dst }
+}
+
+// The members the language defines (docs/spec/grammar.md "Type Cast"): a source
+// strictly wider than a `u8`, `i8`, `i16`, `u16`, `i32` or `u32` destination, `u32` to
+// `i32`, and the 128-bit sign changes, which have no `try`. A symbol outside that
+// set is no runtime function, so it is not modelled.
+fn vc_narrow_pair_exists(kind: i64, src: i64, dst: i64) -> bool {
+    let sw: i64 = vc_ty_bits(src);
+    let dw: i64 = vc_ty_bits(dst);
+    if dw <= 32 && sw > dw { return true; }
+    if src == ITY_U32() && dst == ITY_I32() { return true; }
+    if kind == VC_NAR_TRY() { return false; }
+    (src == ITY_I128() && dst == ITY_U128()) || (src == ITY_U128() && dst == ITY_I128())
 }
 
 // The narrowing intrinsic an instruction calls, or `kind == VC_NAR_NONE`.
@@ -98,17 +112,13 @@ fn vc_narrow_of(inst: IrInst) -> VcNarrow {
     vc_narrow_parse(inst.ds)
 }
 
-// Operand and result types of a call to `nar`. A `sat` or `try` runs only from a
-// source at least as wide as the destination, and a `try` cell holds a payload of
-// at most one 8-byte slot, so every other shape is not modelled.
+// Operand and result types of a call to `nar`: the operand is the symbol's source
+// type, the result its destination (`ptr` for `try`: an `Option` cell holding a payload
+// of at most one 8-byte slot, since every `try` destination is 32 bits or narrower).
 fn vc_narrow_shape_ok(nar: VcNarrow, inst: IrInst, arg_ty: i64) -> bool {
     if inst.args.len() != 1 || arg_ty != nar.src { return false; }
-    let sw: i64 = vc_ty_bits(nar.src);
-    let dw: i64 = vc_ty_bits(nar.dst);
-    if nar.kind == VC_NAR_WRAP() { return inst.ty == nar.dst; }
-    if dw > sw { return false; }
-    if nar.kind == VC_NAR_SAT() { return inst.ty == nar.dst; }
-    inst.ty == ITY_PTR() && dw <= 64
+    if nar.kind == VC_NAR_TRY() { return inst.ty == ITY_PTR(); }
+    inst.ty == nar.dst
 }
 
 // The destination's bounds as constants of the destination's width: the smallest

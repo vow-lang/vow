@@ -46,8 +46,18 @@ fn check_parse() -> i64 {
     if c.kind != VC_NAR_TRY() || c.src != ITY_I16() || c.dst != ITY_I8() { return 3; }
     let d: VcNarrow = nar(String::from("__vow_u128_to_i128_wrap"));
     if d.kind != VC_NAR_WRAP() || d.src != ITY_U128() || d.dst != ITY_I128() { return 4; }
-    let e: VcNarrow = nar(String::from("__vow_i8_to_u8_try"));
-    if e.kind != VC_NAR_TRY() || e.src != ITY_I8() || e.dst != ITY_U8() { return 5; }
+    if nar(String::from("__vow_i8_to_u8_try")).kind != VC_NAR_NONE() { return 5; }
+    if nar(String::from("__vow_i8_to_i64_wrap")).kind != VC_NAR_NONE() { return 15; }
+    if nar(String::from("__vow_u8_to_u8_wrap")).kind != VC_NAR_NONE() { return 16; }
+    if nar(String::from("__vow_i64_to_i128_wrap")).kind != VC_NAR_NONE() { return 17; }
+    if nar(String::from("__vow_i64_to_u64_sat")).kind != VC_NAR_NONE() { return 18; }
+    if nar(String::from("__vow_i128_to_u128_try")).kind != VC_NAR_NONE() { return 19; }
+    if nar(String::from("__vow_u128_to_i128_try")).kind != VC_NAR_NONE() { return 21; }
+    let t: VcNarrow = nar(String::from("__vow_u32_to_i32_try"));
+    if t.kind != VC_NAR_TRY() || t.src != ITY_U32() || t.dst != ITY_I32() { return 22; }
+    let u: VcNarrow = nar(String::from("__vow_i128_to_i8_try"));
+    if u.kind != VC_NAR_TRY() || u.src != ITY_I128() || u.dst != ITY_I8() { return 23; }
+    if nar(String::from("__vow_u128_to_i128_sat")).kind != VC_NAR_SAT() { return 24; }
     if nar(String::from("__vow_i64_to_u8_try_in_arena")).kind != VC_NAR_NONE() { return 6; }
     if nar(String::from("__vow_hash_u64")).kind != VC_NAR_NONE() { return 7; }
     if nar(String::from("__vow_i64_to_f64_wrap")).kind != VC_NAR_NONE() { return 8; }
