@@ -496,8 +496,8 @@ of this change and stay `Skipped`.
   each Vec the loop writes at the top of the header proper, which gives it an
   arbitrary array and an arbitrary length below the capacity mask, as a header Phi
   gets an arbitrary value (see the addendum below). A function is still not cut
-  when a mutated receiver is a String or is defined inside a loop that mutates it;
-  bounded unwinding decides such a function alone, and `vc_step_applicable`
+  when a mutated receiver is a String; bounded unwinding decides such a function
+  alone (a receiver born inside a loop is cut, see the #1726 addendum), and `vc_step_applicable`
   (k-induction) still refuses a Vec-written loop. A loop that only reads a Vec is
   cut with no marker.
 - **Aliasing.** Two `Vec` parameters are distinct objects, as they are for
@@ -749,10 +749,9 @@ bounded verdict stands, so a false contract never becomes `Verified`. The array 
 havocked too, so a fact about contents holds only if the invariant states it
 (`tests/verify-native/unknown/vec_loop_contents_not_in_invariant.vow`).
 
-Refused, so the whole function stays with bounded unwinding: a String receiver and
-a receiver defined in a loop that mutates it (an object born in the loop it is
-havocked by has no state the model could name). The k-induction step case
-(`vc_step_applicable`) is unchanged and still refuses a Vec-written loop.
+Refused, so the whole function stays with bounded unwinding: a String receiver
+(a receiver born in a loop is cut, see the #1726 addendum). The k-induction step
+case (`vc_step_applicable`) is unchanged and still refuses a Vec-written loop.
 
 ## Addendum (#1646): `parse_f64_bits` and `format_f64_bits`
 
@@ -1098,3 +1097,38 @@ addendum is that model (`compiler/vc_map.vow`, op table `compiler/vc_mapops.vow`
 `M08`/`M09`). A property over a `HashMap<u8, _>` parameter's length or keys can degrade from
 ESBMC's `Verified` (an artifact of its capacity) to `unknown`. Maps stored in a struct field, passed
 to a function, or with a `String`/`Vec`/struct value stay `Skipped`.
+
+## Addendum (#1726): what a loop and a handle read may assume about a `Vec`
+
+The `.vmod` writers of `compiler/module_io.vow` copy collections held in struct fields into a `Vec`
+parameter inside nested loops. Three rules of the model were too weak or too strict for that shape,
+and each is a property of the language, not of the function.
+
+- **A read consults its own class.** A handle read by a `String` operation names a `String`, one
+  read by a `Vec` operation names a `Vec` (the type checker never lets a `String` field hold a
+  `Vec`). `VcOverlay.cls` tags every overlay parameter `Vec` (1), `String` (2) or both (3: an
+  operation that takes either, `pin_to_root`), and `vc_overlay_len`/`vc_overlay_elem` take the class
+  of the operation (`vc_overlay_op_class`, from the runtime symbol's `__vow_string_` prefix). Without
+  it, `s.len()` of a `String` field `s` could be the length of the `Vec` parameter the loop pushes
+  to, and the havoc of that parameter at the loop header broke every bound cached before the loop.
+  Two `Vec` parameters and a field `Vec` stay possibly one object, as before.
+- **A loop that only pushes never shortens a `Vec`.** The `__vc_havoc_vec` marker carries 1 in its
+  data value when every mutation in the loop (nested loops included) is a `push` (`VcVecHavocs.grow`).
+  The executor then assumes, on the paths that reach the marker, that the havoced length is not below
+  the length the loop was entered with (`vc_assume` of `entry <= havoced`). That is a fact about
+  the loop, not about the invariant: a pop, set or String operation leaves the marker at 0 and the
+  length arbitrary (`tests/verify-native/fail/loop_pop_shrinks_vec.vow`). The element prefix is not
+  preserved, since that needs a quantifier. Its effect is on a length cached before the loop: after a
+  `push`-only loop an aliased field `Vec` is still at least as long as the cached bound
+  (`tests/verify-native/pass/heap_param_push_loops_keep_aliased_len.vow`).
+- **A `Vec` born in a loop is cut.** A receiver defined inside loop `j` gets no marker at `j`'s
+  header (each iteration creates it afresh and no pointer Phi carries it across the back edge,
+  `vc_induct_ptr_phi`); it still gets one at the header of every inner loop it was born outside of.
+  The function used to be left to bounded unwinding, which cannot decide a loop over an unbounded
+  length (`tests/verify-native/pass/loop_vec_born_in_outer_loop.vow`).
+
+A reachable abort is a soft claim, and a function with one runs its unrolled rounds after the
+inductive proof to find the warnings. An abort inside an inlined helper of a nested-loop function
+(the `.vmod` encoder's old "reject" trap, `+!` on `i64::MAX`) therefore turns a 3 second proof into a
+timeout; the writers are total instead (an unencodable value is the byte 255, which no decoder tag
+accepts), which is also what lets them be proven.

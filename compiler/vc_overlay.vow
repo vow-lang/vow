@@ -29,17 +29,28 @@ use vc_heap
 // and a direct read of one parameter agree. Two `Vec`/`String` parameters are
 // distinct objects (as in `vc_vec`), a `Vec` is never a struct, and two struct
 // parameters are one object exactly when their identities say so (`vc_agg`).
+//
+// A handle read by a `String` operation names a `String`, and one read by a `Vec`
+// operation names a `Vec`, so a read consults only the parameters of its own class:
+// the type checker never lets a `String` field hold a `Vec` parameter, and the
+// model would otherwise let `s.len()` of a field `s` be the length of an unrelated
+// `Vec` parameter the loop is pushing to. A parameter the function uses through an
+// operation that takes either (`pin_to_root`) belongs to both classes.
+
+fn VC_OV_STRUCT() -> i64 { 0 }
+fn VC_OV_VEC() -> i64 { 1 }
+fn VC_OV_STRING() -> i64 { 2 }
 
 struct VcOverlay {
     param: Vec<i64>,
-    is_vec: Vec<bool>,
+    cls: Vec<i64>,
     addr: Vec<i64>,
     names: Vec<String>,
     hdr: Vec<i64>,
 }
 
 fn vc_overlay_new() -> VcOverlay {
-    VcOverlay { param: Vec::new(), is_vec: Vec::new(), addr: Vec::new(), names: Vec::new(), hdr: Vec::new() }
+    VcOverlay { param: Vec::new(), cls: Vec::new(), addr: Vec::new(), names: Vec::new(), hdr: Vec::new() }
 }
 
 // Marks, in `flags`, every value that a `Vec` operation or a field access names as
@@ -71,9 +82,23 @@ fn vc_overlay_close(f: IrFunction, flags: Vec<i64>) {
     }
 }
 
-// The pointer parameters, ascending, that the function uses as a `Vec` or a
-// `String` (`vec`) or as a struct (`!vec`).
-fn vc_overlay_params(f: IrFunction, tys: Vec<i64>, vec: bool) -> Vec<i64> {
+// True for the extern of an operation that takes a `String` object.
+fn vc_overlay_is_string_op(inst: IrInst) -> bool {
+    inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && string_starts_with(inst.ds, VC_STR_PREFIX()) == 1
+}
+
+// The class bits an operation puts on its object operands: a `String` operation names
+// a `String`, an operation that takes either (`pin_to_root`) both, any other `Vec`.
+fn vc_overlay_op_class(inst: IrInst, k: i64) -> i64 {
+    if vc_overlay_is_string_op(inst) { return VC_OV_STRING(); }
+    if k == VC_STR_CLONE() { return VC_OV_VEC() + VC_OV_STRING(); }
+    VC_OV_VEC()
+}
+
+// The pointer parameters, ascending, that the function uses as an object of class
+// `cls` (`VC_OV_VEC`, `VC_OV_STRING`; an operation that takes either counts for both)
+// or, for `VC_OV_STRUCT`, as a struct.
+fn vc_overlay_params(f: IrFunction, tys: Vec<i64>, cls: i64) -> Vec<i64> {
     let n_ids: u64 = tys.len();
     let flags: Vec<i64> = dom_fill(n_ids, 0);
     let mut bi: u64 = 0;
@@ -83,11 +108,12 @@ fn vc_overlay_params(f: IrFunction, tys: Vec<i64>, vec: bool) -> Vec<i64> {
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
             let k: i64 = vc_inst_vec_kind(inst);
-            if vec && k != VC_VEC_NONE() && !vc_str_kind_no_object_operand(k) && inst.args.len() > 0 {
+            if cls != VC_OV_STRUCT() && k != VC_VEC_NONE() && !vc_str_kind_no_object_operand(k) && inst.args.len() > 0
+                && (vc_overlay_op_class(inst, k) & cls) != 0 {
                 flags[inst.args[0] as u64] = 1;
                 if vc_str_kind_two_strings(k) && inst.args.len() > 1 { flags[inst.args[1] as u64] = 1; }
             }
-            if !vec && (inst.op == IOP_FIELD_GET() || inst.op == IOP_FIELD_SET()) && inst.args.len() > 0
+            if cls == VC_OV_STRUCT() && (inst.op == IOP_FIELD_GET() || inst.op == IOP_FIELD_SET()) && inst.args.len() > 0
                 && vc_heap_ty(tys, inst.args[0]) == ITY_PTR() {
                 flags[inst.args[0] as u64] = 1;
             }
@@ -120,12 +146,12 @@ fn vc_overlay_params(f: IrFunction, tys: Vec<i64>, vec: bool) -> Vec<i64> {
     out
 }
 
-fn vc_overlay_add(ov: VcOverlay, ar: VcArena, hdr: SmtScript, k: i64, is_vec: bool) {
+fn vc_overlay_add(ov: VcOverlay, ar: VcArena, hdr: SmtScript, k: i64, cls: i64) {
     let name: String = String::from("p");
     name.push_str(i64_to_string(k));
     name.push_str(String::from("_haddr"));
     ov.param.push(k);
-    ov.is_vec.push(is_vec);
+    ov.cls.push(cls);
     ov.names.push(name);
     ov.hdr.push(hdr.kinds.len() as i64);
     ov.addr.push(vc_agg_declare(ar, hdr, name, 64));
@@ -135,7 +161,7 @@ fn vc_overlay_add(ov: VcOverlay, ar: VcArena, hdr: SmtScript, k: i64, is_vec: bo
 fn vc_overlay_same(ov: VcOverlay, ag: VcAgg, ar: VcArena, hdr: SmtScript, i: u64, j: u64) -> i64 {
     let pi: i64 = vc_agg_alias_pos(ag, ov.param[i]);
     let pj: i64 = vc_agg_alias_pos(ag, ov.param[j]);
-    if !ov.is_vec[i] && !ov.is_vec[j] && pi >= 0 && pj >= 0 {
+    if ov.cls[i] == VC_OV_STRUCT() && ov.cls[j] == VC_OV_STRUCT() && pi >= 0 && pj >= 0 {
         return vc_agg_same_object(ag, ar, hdr, pi, pj);
     }
     vc_tm_bool_const(ar, false)
@@ -144,15 +170,25 @@ fn vc_overlay_same(ov: VcOverlay, ag: VcAgg, ar: VcArena, hdr: SmtScript, i: u64
 // Declares the address of every parameter in the overlay and assumes the relation
 // between them: distinct unless both are structs the aggregate model lets alias, and
 // then equal exactly when their identities are.
-fn vc_overlay_enable(ov: VcOverlay, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, vecs: Vec<i64>, structs: Vec<i64>) {
+fn vc_overlay_enable(ov: VcOverlay, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, vecs: Vec<i64>, strs: Vec<i64>, structs: Vec<i64>) {
     let mut i: u64 = 0;
-    while i < vecs.len() {
-        vc_overlay_add(ov, ar, hdr, vecs[i], true);
-        i = i + 1;
+    let mut j: u64 = 0;
+    while i < vecs.len() || j < strs.len() {
+        if j >= strs.len() || (i < vecs.len() && vecs[i] < strs[j]) {
+            vc_overlay_add(ov, ar, hdr, vecs[i], VC_OV_VEC());
+            i = i + 1;
+        } else if i >= vecs.len() || strs[j] < vecs[i] {
+            vc_overlay_add(ov, ar, hdr, strs[j], VC_OV_STRING());
+            j = j + 1;
+        } else {
+            vc_overlay_add(ov, ar, hdr, vecs[i], VC_OV_VEC() + VC_OV_STRING());
+            i = i + 1;
+            j = j + 1;
+        }
     }
     i = 0;
     while i < structs.len() {
-        vc_overlay_add(ov, ar, hdr, structs[i], false);
+        vc_overlay_add(ov, ar, hdr, structs[i], VC_OV_STRUCT());
         i = i + 1;
     }
     i = 0;
@@ -172,12 +208,13 @@ fn vc_overlay_hit(ov: VcOverlay, ar: VcArena, i: u64, h: i64) -> i64 {
     vc_tm_app2(ar, VC_OP_EQ(), h, ov.addr[i])
 }
 
-// The length of the collection at `h`, given the array's value `base`.
-fn vc_overlay_len(ov: VcOverlay, ag: VcAgg, vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, b: i64, h: i64, base: i64) -> i64 {
+// The length of the collection at `h`, given the array's value `base`; `rcls` is the class
+// of the operation that reads it.
+fn vc_overlay_len(ov: VcOverlay, ag: VcAgg, vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, b: i64, h: i64, rcls: i64, base: i64) -> i64 {
     let mut acc: i64 = base;
     let mut i: u64 = 0;
     while i < ov.addr.len() {
-        if ov.is_vec[i] {
+        if (ov.cls[i] & rcls) != 0 {
             let s: i64 = vc_vec_slot(vv, ag, ar, hdr, assumed, vc_agg_param(ag, ov.param[i]));
             acc = vc_tm_app3(ar, VC_OP_ITE(), vc_overlay_hit(ov, ar, i, h), vc_vec_cur_len(vv, s, b), acc);
         }
@@ -188,11 +225,11 @@ fn vc_overlay_len(ov: VcOverlay, ag: VcAgg, vv: VcVec, ar: VcArena, hdr: SmtScri
 
 // Element `idx` of the collection at `h` as its 8-byte slot, or its low byte when
 // `bytes`, given the array's value `base`.
-fn vc_overlay_elem(ov: VcOverlay, ag: VcAgg, vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, b: i64, h: i64, idx: i64, bytes: bool, base: i64) -> i64 {
+fn vc_overlay_elem(ov: VcOverlay, ag: VcAgg, vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, b: i64, h: i64, idx: i64, rcls: i64, bytes: bool, base: i64) -> i64 {
     let mut acc: i64 = base;
     let mut i: u64 = 0;
     while i < ov.addr.len() {
-        if ov.is_vec[i] {
+        if (ov.cls[i] & rcls) != 0 {
             let s: i64 = vc_vec_slot(vv, ag, ar, hdr, assumed, vc_agg_param(ag, ov.param[i]));
             let mut cell: i64 = vc_tm_app2(ar, VC_OP_SELECT(), vc_vec_cur_arr(vv, s, b), idx);
             if bytes { cell = vc_tm_app2(ar, VC_OP_BVAND(), cell, vc_tm_bv(ar, 64, 255, 0)); }
@@ -208,7 +245,7 @@ fn vc_overlay_field(ov: VcOverlay, ag: VcAgg, ar: VcArena, hdr: SmtScript, h: i6
     let mut acc: i64 = base;
     let mut i: u64 = 0;
     while i < ov.addr.len() {
-        if !ov.is_vec[i] {
+        if ov.cls[i] == VC_OV_STRUCT() {
             let seen: u64 = ag.ps_param.len();
             let cell: i64 = vc_agg_get(ag, ar, hdr, vc_agg_param(ag, ov.param[i]), slot, vc_ty_sort(ty));
             vc_agg_type_symbols(ag, seen, ty);

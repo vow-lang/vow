@@ -1,0 +1,37 @@
+// Two loops push onto `out`, which may be the `Vec` that `b.items` holds. A loop that only
+// pushes never leaves its `Vec` shorter than it was on entry, so the length read before the
+// first loop is still a bound of `b.items` for the second: `n <= b.items.len()` is
+// inductive.
+module HeapParamPushLoopsKeepAliasedLen
+
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn zeros_then_copy(out: Vec<i64>, b: Bag) -> u64 vow {
+  ensures: result <= b.items.len()
+} {
+  let n: u64 = b.items.len();
+  let mut k: u64 = 0;
+  while k < n vow {
+    invariant: k <= n
+  } {
+    out.push(0);
+    k = k + 1;
+  }
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n,
+    invariant: n <= b.items.len()
+  } {
+    out.push(b.items[i]);
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), tag: 1 };
+  b.items.push(5);
+  let out: Vec<i64> = Vec::new();
+  print_u64(zeros_then_copy(out, b));
+  0
+}

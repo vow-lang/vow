@@ -1,0 +1,28 @@
+// TEST: category ensures
+// TEST: counterexample-fn shrink
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// A loop that pops leaves its `Vec` shorter, so the claim that the length did not drop is refuted:
+// only a loop that merely pushes is known not to shrink what it writes.
+module LoopPopShrinksVec
+
+fn shrink(out: Vec<i64>, n: u64) -> bool vow {
+  ensures: result
+} {
+  let before: u64 = out.len();
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n
+  } {
+    out.pop();
+    i = i + 1;
+  }
+  out.len() >= before
+}
+
+fn main() -> i32 [io] {
+  let out: Vec<i64> = Vec::new();
+  out.push(1);
+  if shrink(out, 1) { print_i64(1); }
+  0
+}

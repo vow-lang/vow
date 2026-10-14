@@ -150,6 +150,43 @@ fn push_then_field_len_fn() -> IrFunction {
     one_block(String::from("v"), two_ptr_params(), ITY_U64(), vp)
 }
 
+// out.push(1); n = string_len(b.0); ensures n == 0. `b.0` is a `String`, so it is not `out`.
+fn string_len_after_push_fn(len_sym: String) -> IrFunction {
+    let vp: Vec<IrInst> = Vec::new();
+    vp.push(mk_inst_arg(0, ITY_PTR(), 0));
+    vp.push(mk_inst_arg(1, ITY_PTR(), 1));
+    vp.push(mk_inst_field_get(2, ITY_I64(), 1, 0));
+    vp.push(mk_inst_const_i64(3, 1));
+    vp.push(mk_inst_call_extern(4, ITY_UNIT(), args2(0, 3), String::from("__vow_vec_push_val")));
+    vp.push(mk_inst_call_extern(5, ITY_U64(), args1(2), len_sym));
+    vp.push(mk_inst_const_i64(6, 0));
+    vp.push(mk_inst(7, IOP_EQ(), ITY_BOOL(), args2(5, 6)));
+    vp.push(mk_vow(8, IOP_VOW_ENS(), 7, 0));
+    vp.push(mk_inst_return(9, 5));
+    one_block(String::from("s"), two_ptr_params(), ITY_U64(), vp)
+}
+
+// A read of a handle consults only the parameters of its own class: a `String` operation never
+// names a `Vec` parameter, so the length of a `String` field is the array's, while the same
+// shape with a `Vec` operation may be the pushed `Vec`.
+fn check_overlay_read_classes() -> i64 {
+    let sf: IrFunction = string_len_after_push_fn(String::from("__vow_string_len"));
+    if vc_skip_reason(sf).len() != 0 { return 50; }
+    let tys: Vec<i64> = vc_ty_table(sf);
+    let vecs: Vec<i64> = vc_overlay_params(sf, tys, VC_OV_VEC());
+    let strs: Vec<i64> = vc_overlay_params(sf, tys, VC_OV_STRING());
+    if vecs.len() != 1 || vecs[0] != 0 { return 51; }
+    if strs.len() != 0 { return 52; }
+    let cs: VcClaims = vc_claims(sf);
+    if cs.kinds.len() != 1 { return 53; }
+    let q: String = query(cs, 0);
+    if q.contains(String::from("(= p1f0s64 p0_haddr)")) { return 54; }
+    if !q.contains(String::from("(select hlen p1f0s64)")) { return 55; }
+    let vf: IrFunction = string_len_after_push_fn(String::from("__vow_vec_len"));
+    if !query(vc_claims(vf), 0).contains(String::from("(= p1f0s64 p0_haddr)")) { return 56; }
+    0
+}
+
 // A function that reads through a handle and writes a parameter is modelled: the parameters
 // that may be what a handle names carry an address, and a read through the handle sees
 // their own state.
@@ -167,8 +204,8 @@ fn check_parameter_writes_overlaid() -> i64 {
     let vf: IrFunction = push_then_field_len_fn();
     if vc_skip_reason(vf).len() != 0 { return 22; }
     let tys: Vec<i64> = vc_ty_table(vf);
-    let vecs: Vec<i64> = vc_overlay_params(vf, tys, true);
-    let structs: Vec<i64> = vc_overlay_params(vf, tys, false);
+    let vecs: Vec<i64> = vc_overlay_params(vf, tys, VC_OV_VEC());
+    let structs: Vec<i64> = vc_overlay_params(vf, tys, VC_OV_STRUCT());
     if vecs.len() != 1 || vecs[0] != 0 { return 23; }
     if structs.len() != 1 || structs[0] != 1 { return 24; }
     let cs: VcClaims = vc_claims(vf);
@@ -272,6 +309,7 @@ fn main() -> i32 {
     let mut r: i64 = check_handle_reads_accepted();
     if r == 0 { r = check_handle_shapes_rejected(); }
     if r == 0 { r = check_parameter_writes_overlaid(); }
+    if r == 0 { r = check_overlay_read_classes(); }
     if r == 0 { r = check_pointer_stores(); }
     if r == 0 { r = check_exec_terms(); }
     if r == 0 { r = check_two_reads_one_handle(); }

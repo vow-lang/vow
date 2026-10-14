@@ -354,7 +354,7 @@ fn vec_new_inst(id: i64) -> IrInst {
 
 // A Vec allocated before the loop and written in its body is not a header Phi:
 // the header proper havocs its `(array, length)` with one marker, after the Phis
-// and nowhere else.
+// and nowhere else. A loop that only pushes marks it as growing (data value 1).
 fn check_vec_written_in_loop() -> i64 {
     let pre: Vec<IrInst> = Vec::new();
     pre.push(vec_new_inst(40));
@@ -368,6 +368,7 @@ fn check_vec_written_in_loop() -> i64 {
     let h: IrBlock = block_by_id(g, 1);
     let m: IrInst = h.insts[1];
     if !vc_is_havoc_vec(m) || m.args.len() != 1 || m.args[0] != 40 || m.ty != ITY_UNIT() { return 3; }
+    if m.dv != 1 { return 8; }
     if !vc_is_havoc(h.insts[0]) || vc_is_havoc_vec(h.insts[0]) { return 4; }
     if m.id <= dom_max_inst_id(f) || vc_is_havoc_vec(h.insts[2]) { return 5; }
     if !well_formed(g) { return 6; }
@@ -420,13 +421,22 @@ fn check_vec_read_in_loop() -> i64 {
     0
 }
 
-// A Vec born in the loop that writes it, a String written in a loop and a
-// receiver the model cannot name leave the function uncut.
-fn check_vec_havoc_refused() -> i64 {
+// A Vec born in the loop that writes it is created afresh by every iteration, so its
+// header gets no marker and the function is still cut.
+fn check_vec_born_in_loop() -> i64 {
     let born: Vec<IrInst> = Vec::new();
     born.push(vec_new_inst(41));
     born.push(mk_inst_call_extern(42, ITY_UNIT(), pair(41, 0), String::from("__vow_vec_push_val")));
-    if vc_induct_cut(count_up_with(Vec::new(), born)).status != VC_INDUCT_NA() { return 1; }
+    let c: VcInduct = vc_induct_cut(count_up_with(Vec::new(), born));
+    if c.status != VC_INDUCT_OK() { return 1; }
+    if count_marker(c.f, VC_INTERNAL_HAVOC_VEC()) != 0 { return 2; }
+    if !well_formed(c.f) { return 3; }
+    0
+}
+
+// A String written in a loop and a receiver the model cannot name leave the
+// function uncut.
+fn check_vec_havoc_refused() -> i64 {
 
     let pre: Vec<IrInst> = Vec::new();
     pre.push(mk_inst_call_extern(40, ITY_PTR(), Vec::new(), String::from("__vow_string_new")));
@@ -461,6 +471,8 @@ fn check_vec_set_pop_in_loop() -> i64 {
     let c: VcInduct = vc_induct_cut(count_up_with(pre, body));
     if c.status != VC_INDUCT_OK() { return 1; }
     if count_marker(c.f, VC_INTERNAL_HAVOC_VEC()) != 1 { return 2; }
+    let h: IrBlock = block_by_id(c.f, 1);
+    if h.insts[1].dv != 0 { return 3; }
     0
 }
 
@@ -570,6 +582,7 @@ fn main() -> i32 {
     if r == 0 { r = check_vec_written_in_loop() + 500; if r == 500 { r = 0; } }
     if r == 0 { r = check_vec_written_in_region_header() + 540; if r == 540 { r = 0; } }
     if r == 0 { r = check_vec_read_in_loop() + 550; if r == 550 { r = 0; } }
+    if r == 0 { r = check_vec_born_in_loop() + 560; if r == 560 { r = 0; } }
     if r == 0 { r = check_vec_havoc_refused() + 570; if r == 570 { r = 0; } }
     if r == 0 { r = check_map_written_in_loop() + 580; if r == 580 { r = 0; } }
     if r == 0 { r = check_map_havoc_refused() + 585; if r == 585 { r = 0; } }

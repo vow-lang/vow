@@ -1,0 +1,27 @@
+// A loop that pushes onto a `Vec` parameter while it reads the bytes of a `String` held in a
+// field: a `String` read never names a `Vec` parameter, so the bound `n` read before the loop
+// stays a bound of the string while the loop writes `out`.
+module HeapParamStringFieldLoop
+
+struct Doc { text: String, tag: i64 }
+
+fn copy_text(out: Vec<i64>, d: Doc) -> u64 vow {
+  ensures: result == d.text.len()
+} {
+  let n: u64 = d.text.len();
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n
+  } {
+    out.push(d.text.byte_at(i));
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  let d: Doc = Doc { text: String::from("ab"), tag: 1 };
+  let out: Vec<i64> = Vec::new();
+  print_u64(copy_text(out, d));
+  0
+}
