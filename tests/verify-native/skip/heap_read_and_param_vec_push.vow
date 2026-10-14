@@ -1,0 +1,20 @@
+// TEST: skip-reason unsupported-opcode
+// `out` may be the Vec `b.items` names, so pushing onto a Vec parameter while
+// reading the length of a Vec held in a field is skipped.
+module HeapReadAndParamVecPush
+
+struct Bag { items: Vec<i64>, n: i64 }
+
+fn copy_len(out: Vec<i64>, b: Bag) -> u64 vow {
+  ensures: result >= 1
+} {
+  out.push(b.items.len() as i64);
+  out.len()
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), n: 0 };
+  let out: Vec<i64> = Vec::new();
+  print_u64(copy_len(out, b));
+  0
+}

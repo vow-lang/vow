@@ -1,0 +1,234 @@
+module TestVcHeap
+
+use ir
+use vc_term
+use vc_smt
+use vc_gate
+use vc_ops
+use vc_heap
+use vc_exec
+use tests.builders
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn args2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v.push(b);
+    v
+}
+
+fn mk_vow(id: i64, op: i64, pred: i64, vow_id: i64) -> IrInst {
+    ir_inst_new(id, op, ITY_UNIT(), args1(pred), IDATA_VOW_ID(), vow_id, 0, String::from(""))
+}
+
+fn ptr_u64_params() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    p.push(ITY_U64());
+    p
+}
+
+fn ptr_param() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    p
+}
+
+fn one_block(name: String, params: Vec<i64>, ret: i64, insts: Vec<IrInst>) -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(1, name, params, ret, blocks)
+}
+
+fn query(cs: VcClaims, k: u64) -> String {
+    vc_smt_render(cs.arena, vc_claim_script(cs, k))
+}
+
+fn count_of(hay: String, needle: String) -> i64 {
+    let mut n: i64 = 0;
+    let mut i: u64 = 0;
+    while i + needle.len() <= hay.len() {
+        if hay.substring(i, i + needle.len()) == needle {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    n
+}
+
+// last_op(b, i) = b.0[i].0, ensures result >= 0: a Vec in field 0 of the parameter,
+// read at index `i`, then field 0 of the element.
+fn last_op_fn() -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_arg(1, ITY_U64(), 1));
+    i.push(mk_inst_field_get(2, ITY_I64(), 0, 0));
+    i.push(mk_inst_call_extern(3, ITY_I64(), args2(2, 1), String::from("__vow_vec_get_val")));
+    i.push(mk_inst_field_get(4, ITY_I64(), 3, 0));
+    i.push(mk_inst_const_i64(5, 0));
+    i.push(mk_inst(6, IOP_GE(), ITY_BOOL(), args2(4, 5)));
+    i.push(mk_vow(7, IOP_VOW_ENS(), 6, 0));
+    i.push(mk_inst_return(8, 4));
+    one_block(String::from("last_op"), ptr_u64_params(), ITY_I64(), i)
+}
+
+fn check_handle_reads_accepted() -> i64 {
+    if vc_skip_reason(last_op_fn()).len() != 0 { return 1; }
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_field_get(1, ITY_I64(), 0, 0));
+    i.push(mk_inst_call_extern(2, ITY_U64(), args1(1), String::from("__vow_vec_len")));
+    i.push(mk_inst_return(3, 2));
+    if vc_skip_reason(one_block(String::from("n"), ptr_param(), ITY_U64(), i)).len() != 0 { return 2; }
+    let s: Vec<IrInst> = Vec::new();
+    s.push(mk_inst_arg(0, ITY_PTR(), 0));
+    s.push(mk_inst_arg(1, ITY_U64(), 1));
+    s.push(mk_inst_field_get(2, ITY_I64(), 0, 0));
+    s.push(mk_inst_call_extern(3, ITY_I64(), args2(2, 1), String::from("__vow_string_byte_at")));
+    s.push(mk_inst_return(4, 3));
+    if vc_skip_reason(one_block(String::from("b"), ptr_u64_params(), ITY_I64(), s)).len() != 0 { return 3; }
+    0
+}
+
+// A handle only supports reads: a float or 128-bit field, a mutation and every
+// other collection operation stay outside the model.
+fn check_handle_shapes_rejected() -> i64 {
+    let fl: Vec<IrInst> = Vec::new();
+    fl.push(mk_inst_arg(0, ITY_PTR(), 0));
+    fl.push(mk_inst_field_get(1, ITY_I64(), 0, 0));
+    fl.push(mk_inst_field_get(2, ITY_F64(), 1, 0));
+    fl.push(mk_inst_return(3, 2));
+    if vc_skip_reason(one_block(String::from("f"), ptr_param(), ITY_F64(), fl)).len() == 0 { return 10; }
+    let wide: Vec<IrInst> = Vec::new();
+    wide.push(mk_inst_arg(0, ITY_PTR(), 0));
+    wide.push(mk_inst_field_get(1, ITY_I64(), 0, 0));
+    wide.push(mk_inst_field_get_wide(2, ITY_I128(), 1, 0));
+    wide.push(mk_inst_return(3, 2));
+    if vc_skip_reason(one_block(String::from("w"), ptr_param(), ITY_I128(), wide)).len() == 0 { return 11; }
+    let push: Vec<IrInst> = Vec::new();
+    push.push(mk_inst_arg(0, ITY_PTR(), 0));
+    push.push(mk_inst_field_get(1, ITY_I64(), 0, 0));
+    push.push(mk_inst_call_extern(2, ITY_UNIT(), args2(1, 1), String::from("__vow_vec_push_val")));
+    push.push(mk_inst_return(3, 1));
+    if vc_skip_reason(one_block(String::from("p"), ptr_param(), ITY_I64(), push)).len() == 0 { return 12; }
+    let set: Vec<IrInst> = Vec::new();
+    set.push(mk_inst_arg(0, ITY_PTR(), 0));
+    set.push(mk_inst_field_get(1, ITY_I64(), 0, 0));
+    set.push(mk_inst_const_i64(2, 3));
+    set.push(mk_inst_field_set(3, 1, 0, 2));
+    set.push(mk_inst_return(4, 2));
+    if vc_skip_reason(one_block(String::from("s"), ptr_param(), ITY_I64(), set)).len() == 0 { return 13; }
+    0
+}
+
+// A function that reads through a handle must not write what a handle may name.
+fn check_parameter_writes_rejected() -> i64 {
+    let wr: Vec<IrInst> = Vec::new();
+    wr.push(mk_inst_arg(0, ITY_PTR(), 0));
+    wr.push(mk_inst_field_get(1, ITY_I64(), 0, 0));
+    wr.push(mk_inst_call_extern(2, ITY_U64(), args1(1), String::from("__vow_vec_len")));
+    wr.push(mk_inst_const_i64(3, 5));
+    wr.push(mk_inst_field_set(4, 0, 1, 3));
+    wr.push(mk_inst_return(5, 2));
+    let r: String = vc_skip_reason(one_block(String::from("w"), ptr_param(), ITY_U64(), wr));
+    if !r.contains(String::from("FieldSet on a parameter of a function that reads")) { return 20; }
+
+    let vp: Vec<IrInst> = Vec::new();
+    vp.push(mk_inst_arg(0, ITY_PTR(), 0));
+    vp.push(mk_inst_arg(1, ITY_PTR(), 1));
+    vp.push(mk_inst_field_get(2, ITY_I64(), 1, 0));
+    vp.push(mk_inst_call_extern(3, ITY_U64(), args1(2), String::from("__vow_vec_len")));
+    vp.push(mk_inst_const_i64(4, 1));
+    vp.push(mk_inst_call_extern(5, ITY_UNIT(), args2(0, 4), String::from("__vow_vec_push_val")));
+    vp.push(mk_inst_return(6, 3));
+    let two: Vec<i64> = Vec::new();
+    two.push(ITY_PTR());
+    two.push(ITY_PTR());
+    let q: String = vc_skip_reason(one_block(String::from("v"), two, ITY_U64(), vp));
+    if !q.contains(String::from("Vec or String parameter mutated by a function that reads")) { return 21; }
+
+    // A fresh Vec the function builds may be pushed to: no handle can name it.
+    let fresh: Vec<IrInst> = Vec::new();
+    fresh.push(mk_inst_arg(0, ITY_PTR(), 0));
+    fresh.push(mk_inst_field_get(1, ITY_I64(), 0, 0));
+    fresh.push(mk_inst_call_extern(2, ITY_U64(), args1(1), String::from("__vow_vec_len")));
+    fresh.push(mk_inst_const_i64(3, 0));
+    fresh.push(mk_inst_const_i64(4, 8));
+    fresh.push(mk_inst_call_extern(5, ITY_PTR(), args2(3, 4), String::from("__vow_vec_new")));
+    fresh.push(mk_inst_const_i64(6, 1));
+    fresh.push(mk_inst_call_extern(7, ITY_UNIT(), args2(5, 6), String::from("__vow_vec_push_val")));
+    fresh.push(mk_inst_return(8, 2));
+    if vc_skip_reason(one_block(String::from("f"), ptr_param(), ITY_U64(), fresh)).len() != 0 { return 22; }
+    0
+}
+
+// Pointers written into the fields of an allocation: nothing may read one back.
+fn store_fn(read_back: bool, target_is_param: bool) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_alloc(1, 16));
+    let mut base: i64 = 1;
+    if target_is_param { base = 0; }
+    i.push(mk_inst_field_set(2, base, 0, 0));
+    if read_back { i.push(mk_inst_field_get(3, ITY_I64(), 1, 0)); }
+    i.push(mk_inst_return(4, 1));
+    one_block(String::from("s"), ptr_param(), ITY_PTR(), i)
+}
+
+fn check_pointer_stores() -> i64 {
+    if vc_skip_reason(store_fn(false, false)).len() != 0 { return 30; }
+    let back: String = vc_skip_reason(store_fn(true, false));
+    if back != String::from("unsupported-opcode: a field that holds a pointer is read back") { return 31; }
+    let onto: String = vc_skip_reason(store_fn(false, true));
+    if !onto.contains(String::from("pointer written into a field of a value that is not an allocation")) { return 32; }
+    0
+}
+
+// Every read of one handle is one array read, and a length is below the capacity
+// mask for every handle that is read.
+fn check_exec_terms() -> i64 {
+    let cs: VcClaims = vc_claims(last_op_fn());
+    if cs.kinds.len() != 2 { return 40; }
+    let head: String = vc_smt_render(cs.arena, cs.header);
+    if !head.contains(String::from("(declare-const hlen (Array (_ BitVec 64) (_ BitVec 64)))")) { return 41; }
+    if !head.contains(String::from("(declare-const helem (Array (_ BitVec 128) (_ BitVec 64)))")) { return 42; }
+    if !head.contains(String::from("(declare-const hf0 (Array (_ BitVec 64) (_ BitVec 64)))")) { return 43; }
+    let bounds: String = query(cs, 0);
+    if !bounds.contains(String::from("(bvult p1 (select hlen p0f0s64))")) { return 44; }
+    if !bounds.contains(String::from("(bvult (select hlen p0f0s64) #x7fffffffffffffff)")) { return 45; }
+    if !query(cs, 1).contains(String::from("(select helem (concat p0f0s64 p1))")) { return 46; }
+    if !vc_smt_render(cs.arena, cs.header).contains(String::from("QF_ABV")) { return 47; }
+    0
+}
+
+fn check_two_reads_one_handle() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_field_get(1, ITY_I64(), 0, 0));
+    i.push(mk_inst_call_extern(2, ITY_U64(), args1(1), String::from("__vow_vec_len")));
+    i.push(mk_inst_field_get(3, ITY_I64(), 0, 0));
+    i.push(mk_inst_call_extern(4, ITY_U64(), args1(3), String::from("__vow_vec_len")));
+    i.push(mk_inst(5, IOP_EQ(), ITY_BOOL(), args2(2, 4)));
+    i.push(mk_vow(6, IOP_VOW_ENS(), 5, 0));
+    i.push(mk_inst_return(7, 5));
+    let cs: VcClaims = vc_claims(one_block(String::from("t"), ptr_param(), ITY_BOOL(), i));
+    if cs.kinds.len() != 0 { return 50; }
+    if count_of(vc_smt_render(cs.arena, cs.header), String::from("declare-const hlen")) != 1 { return 51; }
+    if cs.assumed.len() != 1 { return 52; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_handle_reads_accepted();
+    if r == 0 { r = check_handle_shapes_rejected(); }
+    if r == 0 { r = check_parameter_writes_rejected(); }
+    if r == 0 { r = check_pointer_stores(); }
+    if r == 0 { r = check_exec_terms(); }
+    if r == 0 { r = check_two_reads_one_handle(); }
+    i64_to_i32_wrap(r)
+}

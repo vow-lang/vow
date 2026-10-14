@@ -455,6 +455,13 @@ fn vc_inline(f: IrFunction, m: IrModule, cap: i64) -> VcInlined {
     VcInlined { f: vc_resolve_str_literals(g, m), frames: frames, status: status }
 }
 
+// True when an argument of type `arg` may stand for a parameter of type `param`:
+// the same type, or a handle (`i64`, see `vc_heap`) for an object parameter,
+// because the IR types a pointer loaded out of a field or a `Vec` element `i64`.
+fn vc_param_accepts(param: i64, arg: i64) -> bool {
+    arg == param || (param == ITY_PTR() && arg == ITY_I64())
+}
+
 // "" when every call of `g` agrees with its callee's signature: arity, argument
 // types and result type. The lowerer never emits a mismatch; a call that would
 // make the splice read the wrong type is rejected rather than guessed at.
@@ -472,7 +479,7 @@ fn vc_call_signature_detail(g: IrFunction, fns: Vec<IrFunction>, idx_of: Vec<i64
         let mut ok: bool = inst.args.len() == callee.params.len() && inst.ty == callee.return_ty;
         let mut k: u64 = 0;
         while ok && k < inst.args.len() {
-            if vc_arg_ty(tys, inst, k) != callee.params[k] { ok = false; }
+            if !vc_param_accepts(callee.params[k], vc_arg_ty(tys, inst, k)) { ok = false; }
             k = k + 1;
         }
         if !ok {

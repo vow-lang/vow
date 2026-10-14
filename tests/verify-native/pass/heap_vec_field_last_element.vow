@@ -1,0 +1,20 @@
+module HeapVecFieldLastElement
+
+struct Inst { op: i64 }
+struct Block { insts: Vec<Inst> }
+
+fn last_op(b: Block) -> i64 vow {
+  requires: b.insts.len() > 0
+  ensures: result == b.insts[b.insts.len() - 1].op
+} {
+  let n: u64 = b.insts.len();
+  let last: Inst = b.insts[n - 1];
+  last.op
+}
+
+fn main() -> i32 [io] {
+  let b: Block = Block { insts: Vec::new() };
+  b.insts.push(Inst { op: 7 });
+  print_i64(last_op(b));
+  0
+}

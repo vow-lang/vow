@@ -1,0 +1,20 @@
+// TEST: skip-reason unsupported-opcode
+// The model keeps no object in a field: a Vec stored in a struct field that the
+// function reads back stays skipped.
+module HeapPointerFieldReadBack
+
+struct Pair { ids: Vec<i64>, n: i64 }
+
+fn built_len() -> u64 vow {
+  ensures: result == 1
+} {
+  let ids: Vec<i64> = Vec::new();
+  ids.push(1);
+  let p: Pair = Pair { ids: ids, n: 0 };
+  p.ids.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(built_len());
+  0
+}

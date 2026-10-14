@@ -1,0 +1,21 @@
+// TEST: replay-skipped field 0 is a String, which the replay harness cannot build
+// TEST: counterexample-fn "first_byte"
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-blame None
+// TEST: counterexample-violation "index out of bounds"
+// Nothing says the String in `l.text` has a byte, so reading byte 0 is refuted.
+module HeapStringFieldByteOob
+
+struct Label { text: String, n: i64 }
+
+fn first_byte(l: Label) -> i64 vow {
+  ensures: result == result
+} {
+  l.text.byte_at(0)
+}
+
+fn main() -> i32 [io] {
+  let l: Label = Label { text: String::from("a"), n: 1 };
+  print_i64(first_byte(l));
+  0
+}

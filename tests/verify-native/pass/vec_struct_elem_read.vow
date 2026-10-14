@@ -1,0 +1,17 @@
+module VecStructElemRead
+
+struct Inst { op: i64 }
+struct Block { insts: Vec<Inst> }
+
+fn last_is_terminal(b: Block) -> bool vow {
+    ensures: true
+} {
+    let n: u64 = b.insts.len();
+    if n == 0 { return false; }
+    let last: Inst = b.insts[n - 1];
+    last.op >= 0
+}
+
+fn main() -> i32 [io] {
+    0
+}

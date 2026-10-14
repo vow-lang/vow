@@ -1,0 +1,23 @@
+module HeapVecFieldTwoReadsAgree
+
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn same_len(b: Bag) -> bool vow {
+  ensures: result
+} {
+  let first: u64 = b.items.len();
+  let second: u64 = b.items.len();
+  first == second
+}
+
+fn len_bound(b: Bag) -> bool vow {
+  ensures: result
+} {
+  b.items.len() as i64 >= 0
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), tag: 1 };
+  if same_len(b) && len_bound(b) { print_i64(1); }
+  0
+}
