@@ -613,9 +613,18 @@ model-parsing modules around it.
 - **Negation.** Unary `-` on a float lowers to `NegF32`/`NegF64` (#1647) and is
   `fp.neg`: an exact sign flip, so the single-NaN limit above is its only
   imprecision (`fp.neg` of the NaN is the NaN).
-- **Still skipped.** Float `%` (`float-rem-unsupported`) and a
-  `Vec` of floats (`unsupported-opcode`; a `Vec` element is a 64-bit vector and
-  SMT-LIB cannot convert a float to one bit-exactly).
+- **Still skipped.** Float `%` (`float-rem-unsupported`).
+- **`Vec` of floats (#1656, #1681).** The lowerer moves a float into and out of the
+  runtime's 8-byte `Vec` slot with `F32ToBits`/`F64ToBits` and `BitsToF32`/`BitsToF64`,
+  a bit reinterpretation. SMT-LIB converts a bit-vector to a float (`to_fp`) but has no
+  conversion back, so the array stays one of 64-bit slots and the executor encodes the
+  read as `to_fp` of the slot (an `f32` of its low 32 bits). A write is the bits of a
+  float constant, else a fresh bit-vector `b` assumed to satisfy `to_fp(b) = x`; such a
+  `b` exists for every `x`, so the assumption never prunes a path. Equal floats read back
+  equal, and the only information lost is a NaN's payload, which the single-NaN model of
+  this section never had. A float array element instead (an `Array BV64 Float64`) would
+  have changed the sort of every `Vec` term, the element listing and the loop cut for a
+  type few programs store.
 - **Cost.** Bit-blasting `fp.mul` and `fp.div` at 53 bits is expensive, so a hard
   nonlinear float property can end `unknown` or `timeout`, never `proven`. The
   float fixtures are part of the performance corpus (`scripts/verify_perf.py`

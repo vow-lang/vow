@@ -98,8 +98,9 @@ struct VcVec {
     pv_arr: Vec<String>,
     pv_len: Vec<String>,
     pv_hdr: Vec<i64>,
-    // The element type (`ITY_I128`/`ITY_U128`) of each of those parameters whose
-    // elements the function reads or writes as 128-bit values (`vc_wide`), else -1.
+    // The element type of each of those parameters whose elements the function reads
+    // or writes as something other than a raw 64-bit slot: `ITY_I128`/`ITY_U128`
+    // (`vc_wide`) or `ITY_F32`/`ITY_F64` (`vc_fp`), else -1.
     pv_wide: Vec<i64>,
 }
 
@@ -226,9 +227,9 @@ fn vc_vec_slot(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i
 }
 
 // Records that the function reads or writes the elements of `obj` as `ty` (a 128-bit
-// integer): a counterexample then lists them as 128-bit values. Only a parameter's
-// contents are ever listed.
-fn vc_vec_mark_wide(vv: VcVec, ag: VcAgg, obj: i64, ty: i64) {
+// integer or a float): a counterexample then lists them as values of that type. Only
+// a parameter's contents are ever listed.
+fn vc_vec_mark_elem(vv: VcVec, ag: VcAgg, obj: i64, ty: i64) {
     if ag.kinds[obj as u64] != VC_OBJ_PARAM() { return; }
     let mut j: u64 = 0;
     while j < vv.pv_param.len() {

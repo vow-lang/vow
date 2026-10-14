@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "second"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value v.len 2
+// TEST: counterexample-value v[1] 2.5
+// An element of a float `Vec` parameter is a float, not a raw 64-bit slot: the
+// counterexample lists `v[1]` as the decimal 2.5, never as its bit pattern.
+module FloatVecElementWrongPost
+
+fn second(v: Vec<f64>) -> f64 vow {
+  requires: v.len() > 1 && v[1] == 2.5,
+  ensures: result == 3.5
+} {
+  v[1]
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<f64> = Vec::new();
+  v.push(1.5);
+  v.push(2.5);
+  if second(v) > 3.0 { print_i64(1); } else { print_i64(0); }
+  0
+}
