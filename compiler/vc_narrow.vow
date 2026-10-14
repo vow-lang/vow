@@ -4,30 +4,16 @@ use ir
 use vc_term
 use vc_int
 
-// The narrowing intrinsics `<src>_to_<dst>_{wrap,sat,try}` of the native verifier
-// (docs/spec/grammar.md "Type Cast"; runtime `__vow_<src>_to_<dst>_<kind>`). They are
-// pure integer functions, so each is a closed bit-vector term of its operand, never
-// an unconstrained result:
-//
-//   wrap  `value as dst`: the low bits when narrowing, the extension by the
-//         source's signedness otherwise (`vc_cast`).
-//   sat   the operand clamped into `[DST_MIN, DST_MAX]` (a signed or unsigned
-//         compare by the source's signedness, then a select).
-//   try   `Some(wrapped)` when the operand is in range, else `None`: an `Option`
-//         whose tag slot is the 64-bit `1`/`0` and whose payload slot holds the
-//         destination-width value (the cell `alloc_option_in_arena` fills).
-//
-// The family is not in the operation catalogue (ADR-2026-10-13-1048 keeps it
-// excluded); the symbol is parsed here instead, like the `Vec` operations of
-// `vc_ops`.
+// The narrowing intrinsics `<src>_to_<dst>_{wrap,sat,try}` as closed bit-vector terms
+// of their operand (semantics: ADR-2026-10-08-1422 addendum). They are not in the
+// operation catalogue (ADR-2026-10-13-1048); the symbol is parsed here instead.
 
 fn VC_NAR_NONE() -> i64 { 0 }
 fn VC_NAR_WRAP() -> i64 { 1 }
 fn VC_NAR_SAT() -> i64 { 2 }
 fn VC_NAR_TRY() -> i64 { 3 }
 
-// `kind` is a `VC_NAR_*`; `src` and `dst` are IR integer type codes (-1 when `kind`
-// is `VC_NAR_NONE`).
+// `src` and `dst` are IR integer type codes, -1 when `kind` is `VC_NAR_NONE`.
 struct VcNarrow {
     kind: i64,
     src: i64,
@@ -38,7 +24,6 @@ fn vc_narrow_none() -> VcNarrow {
     VcNarrow { kind: VC_NAR_NONE(), src: -1, dst: -1 }
 }
 
-// The IR type of an integer type name, or -1.
 fn vc_narrow_ity(name: String) -> i64 {
     if name == String::from("i8") { return ITY_I8(); }
     if name == String::from("u8") { return ITY_U8(); }
@@ -60,7 +45,6 @@ fn vc_narrow_kind_of(suffix: String) -> i64 {
     VC_NAR_NONE()
 }
 
-// The index of the first `needle` byte of `s` at or after `from`, or -1.
 fn vc_narrow_find_byte(s: String, from: u64, needle: i64) -> i64 {
     let mut i: u64 = from;
     while i < s.len() {
@@ -133,7 +117,6 @@ fn vc_narrow_dst_max(ar: VcArena, dst: i64) -> i64 {
     let w: i64 = vc_ty_bits(dst);
     if !vc_ty_signed(dst) { return vc_int_minus_one(ar, dst); }
     if w == 128 { return vc_tm_bv(ar, w, -1, 9223372036854775807); }
-    if w == 64 { return vc_tm_bv(ar, w, 9223372036854775807, 0); }
     vc_tm_bv(ar, w, (1 << (w - 1)) - 1, 0)
 }
 
@@ -160,7 +143,6 @@ fn vc_narrow_above(ar: VcArena, nar: VcNarrow, x: i64) -> i64 {
 fn vc_narrow_in_range(ar: VcArena, nar: VcNarrow, x: i64) -> i64 {
     let below: i64 = vc_narrow_below(ar, nar, x);
     let above: i64 = vc_narrow_above(ar, nar, x);
-    if below < 0 && above < 0 { return vc_tm_bool_const(ar, true); }
     if below < 0 { return vc_tm_app1(ar, VC_OP_NOT(), above); }
     if above < 0 { return vc_tm_app1(ar, VC_OP_NOT(), below); }
     vc_tm_app1(ar, VC_OP_NOT(), vc_tm_app2(ar, VC_OP_OR(), below, above))

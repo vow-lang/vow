@@ -376,6 +376,31 @@ fn check_vec_written_in_loop() -> i64 {
     0
 }
 
+// The region analysis opens a region at the head of a block ahead of its Phis; the
+// havoc marker still comes after both.
+fn check_vec_havoc_after_region_marker() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(vec_new_inst(40));
+    let body: Vec<IrInst> = Vec::new();
+    body.push(mk_inst_call_extern(50, ITY_UNIT(), pair(40, 0), String::from("__vow_vec_push_val")));
+    let f: IrFunction = count_up_with(pre, body);
+    let hb: IrBlock = f.blocks[1];
+    let hi: Vec<IrInst> = Vec::new();
+    hi.push(mk_inst(60, IOP_REGION_OPEN(), ITY_UNIT(), Vec::new()));
+    let mut i: u64 = 0;
+    while i < hb.insts.len() {
+        hi.push(hb.insts[i]);
+        i = i + 1;
+    }
+    f.blocks[1] = mk_block(1, hi);
+    let c: VcInduct = vc_induct_cut(f);
+    if c.status != VC_INDUCT_OK() { return 1; }
+    let h: IrBlock = block_by_id(c.f, 1);
+    if h.insts[0].op != IOP_REGION_OPEN() || !vc_is_havoc(h.insts[1]) { return 2; }
+    if !vc_is_havoc_vec(h.insts[2]) || vc_is_havoc_vec(h.insts[1]) { return 3; }
+    0
+}
+
 // A Vec only read in the loop keeps its state: no marker.
 fn check_vec_read_in_loop() -> i64 {
     let pre: Vec<IrInst> = Vec::new();
@@ -482,6 +507,7 @@ fn main() -> i32 {
     if r == 0 { r = check_not_applicable() + 300; if r == 300 { r = 0; } }
     if r == 0 { r = check_ptr_phi() + 400; if r == 400 { r = 0; } }
     if r == 0 { r = check_vec_written_in_loop() + 500; if r == 500 { r = 0; } }
+    if r == 0 { r = check_vec_havoc_after_region_marker() + 540; if r == 540 { r = 0; } }
     if r == 0 { r = check_vec_read_in_loop() + 550; if r == 550 { r = 0; } }
     if r == 0 { r = check_vec_havoc_refused() + 570; if r == 570 { r = 0; } }
     if r == 0 { r = check_vec_set_pop_in_loop() + 590; if r == 590 { r = 0; } }

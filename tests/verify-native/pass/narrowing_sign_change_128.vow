@@ -10,7 +10,7 @@ fn sat_wide_sign_change(x: i128) -> u128 vow {
 }
 
 fn sat_wide_unsigned_to_signed(x: u128) -> i128 vow {
-  ensures: result >= 0
+  ensures: (x as i128 >= 0 && result as u128 == x) || (x as i128 < 0 && result > 0 && (result as u128) + 1 == ((1 as u128) << 127))
 } {
   u128_to_i128_sat(x)
 }

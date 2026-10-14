@@ -563,7 +563,7 @@ fn vc_induct_rebuild_block(st: VcCut, b: u64) -> IrBlock {
     let hl: i64 = st.li.loop_of_header[b];
     let mut at: u64 = 0;
     if hl >= 0 {
-        while at < src.insts.len() && src.insts[at].op == IOP_PHI() {
+        while at < src.insts.len() && (src.insts[at].op == IOP_PHI() || src.insts[at].op == IOP_REGION_OPEN() || src.insts[at].op == IOP_REGION_CLOSE()) {
             at = at + 1;
         }
     }
