@@ -136,6 +136,30 @@ case "$FAKE_BW_MODE" in
         wait
         ;;
     slow_unsat) echo $$ >> "$FAKE_BW_DIR/pids"; sleep 0.3; echo unsat ;;
+    record_unsat) echo "$PPID" >> "$FAKE_BW_DIR/worker_ppids"; echo unsat ;;
+    kill_once_3)
+        # the third query of the run kills its worker, once: a retry succeeds.
+        echo "$PPID" >> "$FAKE_BW_DIR/worker_ppids"
+        if [ "$n" -eq 3 ] && mkdir "$FAKE_BW_DIR/.killed" 2>/dev/null; then kill -9 "$PPID"; sleep 5; fi
+        echo unsat
+        ;;
+    kill_from_3)
+        # every query from the third on kills its worker.
+        echo "$PPID" >> "$FAKE_BW_DIR/worker_ppids"
+        if [ "$n" -ge 3 ]; then kill -9 "$PPID"; sleep 5; fi
+        echo unsat
+        ;;
+    hang_once_3)
+        # the third query of the run hangs, once, with a solver child of its own.
+        echo "$PPID" >> "$FAKE_BW_DIR/worker_pids"
+        if [ "$n" -eq 3 ] && mkdir "$FAKE_BW_DIR/.hung" 2>/dev/null; then
+            echo $$ >> "$FAKE_BW_DIR/pids"
+            sleep 29 &
+            echo $! >> "$FAKE_BW_DIR/grandchild_pids"
+            wait
+        fi
+        echo unsat
+        ;;
     unknown_unwinding)
         # `unsat` for a claim whose goal is a negation (an ensures or invariant),
         # `unknown` for the unwinding claim, whose query ends in the bare path
@@ -440,7 +464,13 @@ expect "call sat function" "$(field "$RUN_OUT" counterexamples.0.function)" "cal
 expect "call sat blame" "$(field "$RUN_OUT" counterexamples.0.blame)" "Caller"
 expect "call sat vow id" "$(field "$RUN_OUT" counterexamples.0.vow_id)" "0"
 expect "call site function" "$(field "$RUN_OUT" counterexamples.0.call_sites.0.caller_function)" "caller"
-expect "call stops at first claim" "$(queries)" "1"
+# `caller` stops at its first claim (one query). The worker session may already
+# have started the next target, `keep`, when the parent reads the failure and
+# stops it, so one more query is allowed; no further claim of `caller` is.
+call_sat_queries=$(queries)
+if [ "$call_sat_queries" != "1" ] && [ "$call_sat_queries" != "2" ]; then
+    fail "call stops at first claim: got '$call_sat_queries' queries, want 1 or 2"
+fi
 no_leftovers "calls sat"
 
 # recursion is skipped, never sent to the solver.
@@ -545,6 +575,79 @@ got_ok=$(combined slow_unsat 8)
 if [ "$ref_ok" != "$got_ok" ]; then fail "all-proven output differs between --verify-jobs 1 and 8"; fi
 no_leftovers "determinism"
 if [ -f "$BW_DIR/pids" ]; then all_dead "$BW_DIR/pids" "solver (determinism)"; fi
+
+# A worker session lowers the program once and decides many functions (#1683):
+# with one job every query of the six targets comes from the same worker, and
+# no more workers than jobs are ever started while all targets are proven.
+distinct_workers() { if [ -f "$1" ]; then sort -u "$1" | wc -l | tr -d ' '; else echo 0; fi; }
+run_native record_unsat "$MANY" --verify-jobs 1
+expect "session status" "$(field "$RUN_OUT" status)" "Verified"
+if [ "$(queries)" -lt 6 ]; then fail "session: expected a query per target, got $(queries)"; fi
+expect "session: one worker for all targets" "$(distinct_workers "$BW_DIR/worker_ppids")" "1"
+no_leftovers "session one job"
+run_native record_unsat "$MANY" --verify-jobs 3
+expect "session jobs=3 status" "$(field "$RUN_OUT" status)" "Verified"
+workers=$(distinct_workers "$BW_DIR/worker_ppids")
+if [ "$workers" -lt 1 ] || [ "$workers" -gt 3 ]; then fail "session jobs=3: $workers workers"; fi
+no_leftovers "session three jobs"
+
+# A worker killed from outside after it has answered earlier targets may only
+# have been squeezed by what they left behind: its target is retried once in a
+# fresh worker, which is what a worker per function would have run.
+run_native kill_once_3 "$MANY" --verify-jobs 1
+expect "session retry status" "$(field "$RUN_OUT" status)" "Verified"
+expect "session retry exit" "$RUN_RC" "0"
+expect "session retry: a second worker" "$(distinct_workers "$BW_DIR/worker_ppids")" "2"
+no_leftovers "session retry"
+# ... but only once: a target that kills the fresh worker too is `unknown`.
+run_native kill_from_3 "$MANY" --verify-jobs 1
+expect "session retry once status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+expect "session retry once verify_status" "$(field "$RUN_OUT" verify_status)" "unknown"
+case "$(field "$RUN_OUT" verify_message)" in
+    *"memory limit exceeded"*) ;;
+    *) fail "session retry once: reason is '$(field "$RUN_OUT" verify_message)'" ;;
+esac
+expect "session retry once: two workers" "$(distinct_workers "$BW_DIR/worker_ppids")" "2"
+no_leftovers "session retry once"
+
+# The deadline is per target: a hang on the third target times out that target
+# alone, the whole process group of its worker is gone, and the earlier targets
+# keep their proofs (nothing above the first non-proven one is reported).
+run_native hang_once_3 "$MANY" --timeout 2 --verify-jobs 1
+expect "session hang verify_status" "$(field "$RUN_OUT" verify_status)" "timeout"
+all_dead "$BW_DIR/worker_pids" "session worker"
+all_dead "$BW_DIR/pids" "session solver"
+all_dead "$BW_DIR/grandchild_pids" "session solver child"
+no_leftovers "session hang"
+
+# Workers that never take a task: one that exits at once (here, as a worker
+# does when the program is not the one the parent planned) fails the run closed
+# after a second try, and one that cannot be started fails it too, never a hang.
+FAKE_VOWC="$TMP_ROOT/fake_vowc"
+cat > "$FAKE_VOWC" <<'SHIM'
+#!/usr/bin/env bash
+if [ "$1" = verify-worker ]; then echo "worker refused" >&2; exit 3; fi
+exec -a "$0" "$REAL_VOWC" "$@"
+SHIM
+chmod +x "$FAKE_VOWC"
+BW_DIR=$(mktemp -d "$TMP_ROOT/bw.XXXXXX")
+RUN_RC=0
+RUN_OUT=$(REAL_VOWC="$VOWC_BIN" PATH="$FAKE_DIR:$PATH" TMPDIR="$SCRATCH" FAKE_BW_MODE=unsat FAKE_BW_DIR="$BW_DIR" \
+    "$FAKE_VOWC" verify --no-cache --backend native --verify-jobs 1 "$MANY" 2>/dev/null) || RUN_RC=$?
+expect "refusing worker verify_status" "$(field "$RUN_OUT" verify_status)" "panicked"
+expect "refusing worker exit" "$RUN_RC" "1"
+case "$(field "$RUN_OUT" verify_message)" in
+    *"exit status 3"*"worker refused"*) ;;
+    *) fail "refusing worker: message is '$(field "$RUN_OUT" verify_message)'" ;;
+esac
+expect "refusing worker: no queries" "$(queries)" "0"
+no_leftovers "refusing worker"
+RUN_RC=0
+RUN_OUT=$(REAL_VOWC="$VOWC_BIN" PATH="$FAKE_DIR:$PATH" TMPDIR="$SCRATCH" FAKE_BW_MODE=unsat FAKE_BW_DIR="$BW_DIR" \
+    bash -c 'exec -a /nonexistent/vowc "$REAL_VOWC" verify --no-cache --backend native "$1"' _ "$MANY" 2>/dev/null) || RUN_RC=$?
+expect "unstartable worker verify_status" "$(field "$RUN_OUT" verify_status)" "panicked"
+expect "unstartable worker message" "$(field "$RUN_OUT" verify_message)" "cannot start the verification worker"
+no_leftovers "unstartable worker"
 
 # real Bitwuzla, real memory pressure: a straight-line function whose query is
 # too large for the worker's address-space cap is `unknown` with a memory reason
