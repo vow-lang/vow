@@ -185,8 +185,43 @@ fn check_bool_literals() -> i64 {
     0
 }
 
+fn args_text(args: Vec<String>) -> String {
+    let s: String = String::from("");
+    let mut i: u64 = 0;
+    while i < args.len() {
+        s.push_str(args[i]);
+        s.push_str(String::from(" "));
+        i = i + 1;
+    }
+    s
+}
+
+fn check_float_queries_use_rewrite_level_one() -> i64 {
+    let fp: String = String::from("(set-logic QF_BVFP)\n(declare-const p0 (_ FloatingPoint 11 53))\n");
+    let afp: String = String::from("(set-logic QF_ABVFP)\n");
+    let bv: String = String::from("(set-logic QF_BV)\n");
+    let abv: String = String::from("(set-logic QF_ABV)\n");
+    let q: String = String::from("(set-logic ABVFP)\n");
+    if !vc_query_is_float(fp) { return 140; }
+    if !vc_query_is_float(afp) { return 141; }
+    if vc_query_is_float(bv) { return 142; }
+    if vc_query_is_float(abv) { return 143; }
+    if vc_query_is_float(q) { return 144; }
+    if vc_query_is_float(String::from("")) { return 145; }
+    if vc_query_is_float(String::from("(declare-const p0 (_ FloatingPoint 11 53))\n(set-logic QF_BVFP)\n")) { return 146; }
+    let plain: String = args_text(vc_solver_args(bv, String::from("q.smt2")));
+    if plain != String::from("--bv-output-format 2 q.smt2 ") { return 147; }
+    let float: String = args_text(vc_solver_args(fp, String::from("q.smt2")));
+    if float != String::from("--bv-output-format 2 --rewrite-level 1 q.smt2 ") { return 148; }
+    let session: String = args_text(vc_solver_stdin_args(afp));
+    if session != String::from("--bv-output-format 2 --rewrite-level 1 ") { return 149; }
+    if args_text(vc_solver_stdin_args(abv)) != String::from("--bv-output-format 2 ") { return 150; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_verdicts();
+    if r == 0 { r = check_float_queries_use_rewrite_level_one(); }
     if r == 0 { r = check_multiline_model(); }
     if r == 0 { r = check_single_line_model(); }
     if r == 0 { r = check_binary_and_hex(); }

@@ -115,6 +115,7 @@ fn check_key() -> i64 {
     if vc_hex_digits(14695981039346656037u64 as i64, 16) != String::from("cbf29ce484222325") { return 7; }
     if vc_hex_digits(-1, 16) != String::from("ffffffffffffffff") { return 8; }
     if !vc_cache_salt(String::from("0.7.0")).contains(String::from("--bv-output-format 2")) { return 9; }
+    if !vc_cache_salt(String::from("0.7.0")).contains(String::from("--rewrite-level 1")) { return 10; }
     0
 }
 

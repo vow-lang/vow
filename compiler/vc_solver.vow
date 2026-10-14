@@ -269,16 +269,37 @@ fn vc_classify_run(exit_code: i64, stdout: String, stderr: String, names: Vec<St
     vc_answer(VC_ANS_SAT(), model.values, model.highs, raw)
 }
 
-// Arguments of an interactive session: commands come from stdin.
-fn vc_solver_stdin_args() -> Vec<String> {
+// True when a query (or a session's header) is quantifier-free floating point:
+// its first command is the logic declaration `vc_logic_name` emits.
+fn vc_query_is_float(query: String) -> bool {
+    string_starts_with(query, String::from("(set-logic QF_BVFP)")) == 1
+        || string_starts_with(query, String::from("(set-logic QF_ABVFP)")) == 1
+}
+
+// Bitwuzla's default rewrite level (2) turns chains of `fp.add` and `fp.mul`
+// into forms the bit-blaster then searches slowly: refuting
+// `(a + b) + c == a + (b + c)` over `f64` takes 0.4 to 1.5 s at level 2 and
+// 0.08 to 0.2 s at level 1, and distributivity behaves alike. Over 32
+// generated `f32` and `f64` queries the two levels cost the same in total;
+// level 1 is slower by a few tenths of a second at most on queries that take
+// under a second either way, and level 0 is far slower on proofs. Only the
+// speed of the search depends on the level, never a verdict.
+//
+// Arguments of an interactive session whose first commands are `header`:
+// commands come from stdin.
+fn vc_solver_stdin_args(header: String) -> Vec<String> {
     let args: Vec<String> = Vec::new();
     args.push(String::from("--bv-output-format"));
     args.push(String::from("2"));
+    if vc_query_is_float(header) {
+        args.push(String::from("--rewrite-level"));
+        args.push(String::from("1"));
+    }
     args
 }
 
-fn vc_solver_args(file: String) -> Vec<String> {
-    let args: Vec<String> = vc_solver_stdin_args();
+fn vc_solver_args(query: String, file: String) -> Vec<String> {
+    let args: Vec<String> = vc_solver_stdin_args(query);
     args.push(file);
     args
 }
@@ -307,7 +328,7 @@ fn vc_solver_check(bin: String, query: String, names: Vec<String>, widths: Vec<i
         if owned { fs_remove_dir(dir); }
         return vc_answer_plain(VC_ANS_ERROR(), String::from("cannot write the solver query"));
     }
-    let handle: i64 = process_start(bin, vc_solver_args(file));
+    let handle: i64 = process_start(bin, vc_solver_args(query, file));
     if handle < 0 {
         fs_remove(file);
         if owned { fs_remove_dir(dir); }
