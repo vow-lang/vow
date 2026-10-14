@@ -1,5 +1,7 @@
 module StringRangesAndLiterals
 
+// TEST: esbmc-model-artifact fn="substring_whole_is_equal" blame=Callee vow_id=0 "ESBMC models string_eq as a cached nondeterministic Bool, so it does not relate equal strings; the native model is exact"
+
 // Substring clamping, prefix and suffix tests and literal matching, exactly as
 // grammar.md specifies them, for strings of any length.
 fn substring_reads_through(s: String) -> bool vow {

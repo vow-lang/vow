@@ -2,6 +2,8 @@
 // state into the join, so the length after the merge is `len` or `len + 1`.
 module VecParamArmPush
 
+// TEST: esbmc-capacity-artifact "ESBMC fails its Vec capacity assertion in arm_only; the postcondition holds for every Vec length"
+
 fn arm_only(v: Vec<i64>, c: i64) -> u64 vow {
   ensures: !(c > 0) || result >= 1
 } {

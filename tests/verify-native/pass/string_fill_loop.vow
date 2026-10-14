@@ -1,5 +1,7 @@
 module StringFillLoop
 
+// TEST: esbmc-model-artifact fn="five_as" blame=Callee vow_id=0 "ESBMC models string_eq as a cached nondeterministic Bool, so it does not relate equal strings; the native model is exact"
+
 // A string written in a loop is unrolled with its length and contents as the
 // executor's own state, never a header Phi, so what the loop wrote is what the
 // postcondition sees.

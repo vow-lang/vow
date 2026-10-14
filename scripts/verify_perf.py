@@ -5,8 +5,12 @@ Times `vowc verify --backend esbmc` against `--backend native` over the gate
 corpus (the non-stretch benchmark references, tests/verify*, and the float
 fixtures inside them): median of five runs per backend, cache off, same
 machine. Wall-clock is the process wall time; peak RSS is the larger of the
-sampled sum over the whole process tree (driver plus solver children) and the
-kernel's `ru_maxrss` for the run when that is above the harness's own peak.
+sampled sum over the whole process tree (driver plus solver children), the
+largest kernel high-water mark (VmHWM) of any sampled process, and the kernel's
+`ru_maxrss` for the run when that is above the harness's own peak (see
+scripts/peak_rss.py). A run no reading saw falls back to `ru_maxrss` as an
+upper bound: allowed for native (it can only raise the native/ESBMC ratio),
+never for ESBMC, whose unmeasured row is a harness failure naming the fixture.
 
 The replacement gate (acceptance gate item 3) passes when, over the rows both
 backends handle identically (class `match` in scripts/verify_diff.py terms):
@@ -36,7 +40,6 @@ import math
 import os
 import platform
 import re
-import resource
 import shutil
 import signal
 import statistics
@@ -49,7 +52,7 @@ import tomllib
 from collections import Counter, namedtuple
 
 import candidate_isolation
-import measure_build_tree_rss
+import peak_rss
 import verify_diff
 import verify_eval
 
@@ -71,18 +74,9 @@ BACKENDS = verify_diff.BACKENDS
 
 # Shipped per-function default: 300s kernel watchdog plus the 30s BV phase.
 DEFAULT_BUDGET_S = 330
-SAMPLE_INTERVAL_S = 0.02
-
 RATIO_TOLERANCE = 1e-9
 
 Fixture = namedtuple("Fixture", "group name path truth")
-
-NATIVE_DIR_TRUTH = {
-    "pass": "Verified",
-    "fail": "VerifyFailed",
-    "skip": "Skipped",
-    "unknown": None,
-}
 
 VERSION_RE = re.compile(r"\d+\.\d+(?:\.\d+)?")
 
@@ -195,10 +189,11 @@ def verify_eval_fixtures():
 
 
 def native_fixtures():
-    out = []
-    for sub, truth in NATIVE_DIR_TRUTH.items():
-        out += dir_fixtures(f"verify-native/{sub}", truth)
-    return out
+    return [
+        Fixture(group, exp.name, exp.path, exp.expected_status)
+        for group, exp in verify_diff.collect_native(None)
+        if not exp.skip_reason
+    ]
 
 
 def dir_fixtures(group, truth):
@@ -254,13 +249,6 @@ def fixture_function_count(fx):
         for name in sorted(os.listdir(directory))
         if name.endswith(".vow")
     )
-
-
-def sample_tree_rss(pid, stop, peaks):
-    while not stop.is_set():
-        tree, _ = measure_build_tree_rss.snapshot(pid)
-        peaks["tree"] = max(peaks["tree"], tree)
-        stop.wait(SAMPLE_INTERVAL_S)
 
 
 def parse_result(text, killed, status):
@@ -325,28 +313,22 @@ def run_once(vowc, backend, path, jobs, timeout, watchdog_s):
     timed_out = measured["killed"] or (
         result is not None and result.get("verify_status") == "timeout"
     )
-    maxrss = measured["rusage"].ru_maxrss
+    peak_kb, source = peak_rss.resolve_peak(
+        measured["tree"],
+        measured["single"],
+        measured["rusage"].ru_maxrss,
+        peak_rss.own_peak_kb(),
+    )
     return {
         "wall_s": measured["wall_s"],
-        "peak_rss_kb": max(measured["tree"], trusted_maxrss(maxrss)),
+        "peak_rss_kb": peak_kb,
+        "rss_source": source,
         "result": result,
         "timed_out": timed_out,
     }
 
 
-def trusted_maxrss(maxrss_kb):
-    """`ru_maxrss` of a reaped child, or 0 when it cannot be told from the floor.
-
-    Linux seeds a child's high-water mark with its parent's at exec time, so a
-    value at or below the harness's own peak says nothing about the child.
-    """
-    floor = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    return maxrss_kb if maxrss_kb > floor else 0
-
-
 def wait_measured(pid, watchdog_s, start):
-    peaks = {"tree": 0}
-    stop = threading.Event()
     killed = threading.Event()
 
     def kill_group():
@@ -356,9 +338,8 @@ def wait_measured(pid, watchdog_s, start):
         except ProcessLookupError:
             pass
 
-    sampler = threading.Thread(target=sample_tree_rss, args=(pid, stop, peaks))
+    sampler = peak_rss.TreeSampler(pid, time.monotonic)
     watchdog = threading.Timer(watchdog_s, kill_group)
-    sampler.start()
     watchdog.start()
     try:
         os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
@@ -372,16 +353,20 @@ def wait_measured(pid, watchdog_s, start):
         raise
     finally:
         watchdog.cancel()
-        stop.set()
-        sampler.join()
+        tree_kb, single_kb = sampler.stop()
     _, status, rusage = os.wait4(pid, 0)
     return {
         "wall_s": wall_s,
         "status": status,
         "rusage": rusage,
         "killed": killed.is_set(),
-        "tree": peaks["tree"],
+        "tree": tree_kb,
+        "single": single_kb,
     }
+
+
+def rss_source(sample):
+    return sample.get("rss_source", peak_rss.SAMPLED)
 
 
 def summarise_backend(samples):
@@ -393,9 +378,11 @@ def summarise_backend(samples):
         "verdict": common,
         "verify_status": result.get("verify_status"),
         "status": result.get("status"),
+        "outcome": verify_diff.summarise(result),
         "counterexamples": verify_eval.actual_cex(result),
         "wall_s": statistics.median([s["wall_s"] for s in samples]),
         "peak_rss_kb": statistics.median([s["peak_rss_kb"] for s in samples]),
+        "rss_sources": dict(Counter(rss_source(s) for s in samples)),
         "wall_samples": [s["wall_s"] for s in samples],
         "rss_samples": [s["peak_rss_kb"] for s in samples],
         "timeout_runs": timeout_runs,
@@ -416,16 +403,20 @@ def excluded_reason(gating, cls, esbmc, native):
     return None
 
 
+def require_measured_denominator(row):
+    if peak_rss.UPPER_BOUND in row["esbmc"]["rss_sources"]:
+        raise ValueError(
+            f"{row['fixture']}: no peak RSS was measured for some esbmc runs "
+            f"({row['esbmc']['rss_sources']}); an upper bound cannot be the "
+            "denominator of an RSS ratio"
+        )
+
+
 def build_row(fx, samples):
     esbmc = summarise_backend(samples["esbmc"])
     native = summarise_backend(samples["native"])
-    cls, detail = verify_diff.classify(
-        fx.truth,
-        esbmc["verdict"],
-        native["verdict"],
-        verify_diff.cex_keys(esbmc["counterexamples"]),
-        verify_diff.cex_keys(native["counterexamples"]),
-        native["verify_status"],
+    cls, detail = verify_diff.classify_outcomes(
+        fx.truth, fx.path, esbmc.pop("outcome"), native.pop("outcome")
     )
     gating = fx.group not in NON_GATING_GROUPS
     excluded = excluded_reason(gating, cls, esbmc, native)
@@ -444,8 +435,12 @@ def build_row(fx, samples):
         "native": native,
     }
     if excluded is None:
-        row["ratio_wall"] = ratio(native["wall_s"], esbmc["wall_s"])
-        row["ratio_rss"] = ratio(native["peak_rss_kb"], esbmc["peak_rss_kb"])
+        require_measured_denominator(row)
+        try:
+            row["ratio_wall"] = ratio(native["wall_s"], esbmc["wall_s"])
+            row["ratio_rss"] = ratio(native["peak_rss_kb"], esbmc["peak_rss_kb"])
+        except ValueError as err:
+            raise ValueError(f"{row['fixture']}: {err}") from err
     return row
 
 

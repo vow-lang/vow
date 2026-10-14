@@ -1,5 +1,7 @@
 module StringEqExact
 
+// TEST: esbmc-model-artifact fn="eq_transitive" blame=Callee vow_id=2 "ESBMC models string_eq as a cached nondeterministic Bool, so it does not relate equal strings; the native model is exact"
+
 // `string_eq` is exact: equal lengths and every byte equal. Each property below
 // holds for strings of any length, with no capacity assumed.
 fn eq_symmetric(a: String, b: String) -> bool vow {
