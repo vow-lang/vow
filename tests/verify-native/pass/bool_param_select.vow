@@ -1,0 +1,28 @@
+module BoolParamSelect
+
+fn pick(flag: bool, a: i64, b: i64) -> i64 vow {
+  ensures: flag && result == a || !flag && result == b
+} {
+  if flag { a } else { b }
+}
+
+fn exactly_one(p: bool, q: bool) -> bool vow {
+  ensures: result == (p != q),
+  ensures: !(p && q) || !result
+} {
+  p != q
+}
+
+fn gated_sum(on: bool, x: u64, y: u64) -> u64 vow {
+  requires: x <= 1000 && y <= 1000,
+  ensures: !on || result == x + y,
+  ensures: on || result == x
+} {
+  if on { x + y } else { x }
+}
+
+fn main() -> i32 [io] {
+  print_i64(pick(true, 3, 4));
+  if exactly_one(true, false) { print_u64(gated_sum(true, 1, 2)); }
+  0
+}

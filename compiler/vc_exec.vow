@@ -701,7 +701,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
     vc_script_set_option(hdr, String::from(":produce-models"), String::from("true"));
     let mut pi: u64 = 0;
     while pi < f.params.len() {
-        if vc_ty_is_int(f.params[pi]) || vc_ty_is_float(f.params[pi]) {
+        if f.params[pi] == ITY_BOOL() || vc_ty_is_int(f.params[pi]) || vc_ty_is_float(f.params[pi]) {
             cs.model_hdr.push(hdr.kinds.len() as i64);
             cs.model_slots.push(-1);
             vc_script_declare_const(hdr, vc_param_name(pi as i64), vc_ty_sort(f.params[pi]));

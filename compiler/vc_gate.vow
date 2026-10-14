@@ -306,7 +306,7 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
     if op == IOP_UPSILON() { return n == 1 && inst.dk == IDATA_PHI_TARGET() && vc_is_merge_ty(t0); }
     if vc_fp_is_op(op) { return vc_fp_inst_ok(inst, t0, t1); }
     if op == IOP_GET_ARG() {
-        return (vc_ty_is_int(inst.ty) || vc_ty_is_float(inst.ty) || inst.ty == ITY_PTR()) && n == 0 && inst.dv >= 0
+        return (inst.ty == ITY_BOOL() || vc_ty_is_int(inst.ty) || vc_ty_is_float(inst.ty) || inst.ty == ITY_PTR()) && n == 0 && inst.dv >= 0
             && inst.dv < f.params.len() as i64 && f.params[inst.dv as u64] == inst.ty;
     }
     if op == IOP_REGION_ALLOC() {

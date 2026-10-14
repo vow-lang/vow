@@ -231,6 +231,25 @@ fn check_bool_operators() -> i64 {
     0
 }
 
+// A Bool parameter is a Bool constant of the query and a model entry typed Bool.
+fn check_bool_param_is_a_bool_symbol() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_BOOL(), 0));
+    i.push(mk_inst(1, IOP_NOT(), ITY_BOOL(), args1(0)));
+    i.push(mk_vow(2, IOP_VOW_ENS(), 1, 0));
+    i.push(mk_inst_return(3, 0));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_BOOL());
+    let f: IrFunction = one_block(String::from("flag"), p, ITY_BOOL(), i);
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 74; }
+    if cs.model_names.len() != 1 || cs.model_tys[0] != ITY_BOOL() || cs.model_widths[0] != VC_SORT_BOOL() { return 75; }
+    let q: String = query(cs, 0);
+    if !q.contains(String::from("(declare-const p0 Bool)\n")) { return 76; }
+    if !q.contains(String::from("(define-fun v1 () Bool (not p0))\n")) { return 77; }
+    0
+}
+
 // Constants and Bool laws fold: no definition and no claim is left.
 fn check_constant_bool_logic_folds_away() -> i64 {
     let i: Vec<IrInst> = Vec::new();
@@ -973,6 +992,7 @@ fn main() -> i32 {
     if r == 0 { r = check_division_in_requires_is_positional(); }
     if r == 0 { r = check_names_are_internal(); }
     if r == 0 { r = check_bool_operators(); }
+    if r == 0 { r = check_bool_param_is_a_bool_symbol(); }
     if r == 0 { r = check_constant_bool_logic_folds_away(); }
     if r == 0 { r = check_diamond_phi_is_ite(); }
     if r == 0 { r = check_early_return_claims_carry_path_condition(); }
