@@ -114,8 +114,7 @@ fn reader_need(r: ModuleReader, n: u64) -> bool {
 }
 
 fn reject_encode_u8() -> i64 {
-    let bad: Vec<i64> = Vec::new();
-    bad[0]
+    255
 }
 
 fn decode_error_name(kind: i64) -> String {
@@ -176,6 +175,10 @@ fn write_u32_le(out: Vec<i64>, v: i64) vow {
     out.push((v / 256) % 256);
     out.push((v / 65536) % 256);
     out.push((v / 16777216) % 256);
+}
+
+fn write_u32_wire(out: Vec<i64>, v: i64) {
+    write_u32_le(out, v & 4294967295);
 }
 
 fn low_byte(v: i64) -> i64 {
@@ -405,8 +408,11 @@ fn reader_read_effects(r: ModuleReader) -> i64 {
     effects
 }
 
-fn ty_disc(ty: i64) -> i64 {
-    ty
+fn ty_disc(ty: i64) -> i64 vow {
+    ensures: result >= 0,
+    ensures: result <= 255
+} {
+    ty & 255
 }
 
 fn disc_ty(d: i64) -> i64 {
@@ -425,12 +431,27 @@ fn disc_blame(d: i64) -> i64 {
     BLAME_NONE()
 }
 
-fn opcode_disc(op: i64) -> i64 {
-    op
+fn opcode_disc(op: i64) -> i64 vow {
+    ensures: result >= 0,
+    ensures: result <= 65535
+} {
+    op & 65535
 }
 
 fn disc_opcode(d: i64) -> i64 {
     d
+}
+
+fn region_wire(rgn: i64) -> i64 vow {
+    ensures: result >= 0,
+    ensures: region_val(result) <= 4294967295,
+    ensures: region_kind(result) <= 1 || region_val(result) == 0
+} {
+    let kind: i64 = rgn & 3;
+    if kind > REGION_KIND_CALLER() {
+        return region_pack(kind, 0);
+    }
+    region_pack(kind, (rgn / 4) & 4294967295)
 }
 
 fn region_encode(out: Vec<i64>, rgn: i64) vow {
@@ -482,7 +503,8 @@ fn region_constraint_encode(out: Vec<i64>, kind: i64, aux: i64, aliases: Vec<i64
     write_leb(out, n);
     let mut i: u64 = 0;
     while i < n vow {
-        invariant: i <= n
+        invariant: i <= n,
+        invariant: n <= aliases.len()
     } {
         write_u32_le(out, aliases[i] & 4294967295);
         i = i + 1;
@@ -521,22 +543,48 @@ fn region_constraint_decode(r: ModuleReader) -> WireRegionConstraint {
     WireRegionConstraint { kind: kind, aux: 0, aliases: aliases }
 }
 
+// The flat store-effect list is a sequence of records `[target, kind, (aux | n,
+// alias...)]`. Every reader of a record goes through these helpers, which read a
+// slot past the end as 0 and never let a record run past it, so the count prefix
+// and the records written agree on a truncated or overlong list as they do on a
+// whole one.
+fn store_effect_slot(flat: Vec<i64>, idx: u64) -> i64 {
+    if idx < flat.len() { return flat[idx]; }
+    0
+}
+
+fn store_effect_kind(flat: Vec<i64>, start: u64) -> i64 {
+    store_effect_slot(flat, start + 1) & 3
+}
+
+fn store_effect_alias_count(flat: Vec<i64>, start: u64) -> u64 {
+    let head: u64 = start + 3;
+    let mut have: u64 = 0;
+    if head < flat.len() { have = flat.len() - head; }
+    let want: u64 = store_effect_slot(flat, start + 2) as u64;
+    if want < have { return want; }
+    have
+}
+
 fn store_effect_flat_advance(flat: Vec<i64>, start: u64) -> u64 {
-    let kind: i64 = flat[start + 1];
+    let kind: i64 = store_effect_kind(flat, start);
+    let mut next: u64 = start + 3 + store_effect_alias_count(flat, start);
     if kind == RSUM_KIND_FRESH_IN_CALLER() || kind == RSUM_KIND_CONSTANT_GLOBAL() {
-        start + 2
+        next = start + 2;
     } else if kind == RSUM_KIND_ALIAS_OF() {
-        start + 3
-    } else {
-        start + 3 + (flat[start + 2] as u64)
+        next = start + 3;
     }
+    if next < flat.len() { return next; }
+    flat.len()
 }
 
 fn store_effect_count(flat: Vec<i64>) -> u64 {
     let mut count: u64 = 0;
     let mut i: u64 = 0;
     let n: u64 = flat.len();
-    while i < n {
+    while i < n vow {
+        invariant: i <= n
+    } {
         i = store_effect_flat_advance(flat, i);
         count = count + 1;
     }
@@ -550,7 +598,7 @@ fn write_region_summary(out: Vec<i64>, f: IrFunction) {
     while i < param_regions.len() vow {
         invariant: i <= param_regions.len()
     } {
-        write_u32_le(out, param_regions[i] & 4294967295);
+        write_u32_wire(out, param_regions[i]);
         i = i + 1;
     }
 
@@ -564,17 +612,14 @@ fn write_region_summary(out: Vec<i64>, f: IrFunction) {
     while i < flat.len() vow {
         invariant: i <= flat.len()
     } {
-        let target: i64 = flat[i];
-        let kind: i64 = flat[i + 1] & 3;
-        write_u32_le(out, target & 4294967295);
+        let kind: i64 = store_effect_kind(flat, i);
+        write_u32_wire(out, flat[i]);
         if kind == RSUM_KIND_FRESH_IN_CALLER() || kind == RSUM_KIND_CONSTANT_GLOBAL() {
             region_constraint_encode(out, kind, 0, Vec::new());
-            i = i + 2;
         } else if kind == RSUM_KIND_ALIAS_OF() {
-            region_constraint_encode(out, kind, flat[i + 2] & 4294967295, Vec::new());
-            i = i + 3;
+            region_constraint_encode(out, kind, store_effect_slot(flat, i + 2) & 4294967295, Vec::new());
         } else {
-            let n_aliases: u64 = flat[i + 2] as u64;
+            let n_aliases: u64 = store_effect_alias_count(flat, i);
             let aliases: Vec<i64> = Vec::new();
             let mut j: u64 = 0;
             while j < n_aliases vow {
@@ -584,8 +629,8 @@ fn write_region_summary(out: Vec<i64>, f: IrFunction) {
                 j = j + 1;
             }
             region_constraint_encode(out, kind, 0, aliases);
-            i = i + 3 + n_aliases;
         }
+        i = store_effect_flat_advance(flat, i);
     }
 }
 
@@ -690,28 +735,28 @@ fn write_inst_data(out: Vec<i64>, inst: IrInst) {
         if inst.dv == 0 { write_u8(out, 0); } else { write_u8(out, 1); }
         return;
     }
-    if dk == IDATA_ARG_INDEX() { write_u8(out, 6); write_u32_le(out, inst.dv); return; }
-    if dk == IDATA_PHI_TARGET() { write_u8(out, 7); write_u32_le(out, inst.dv); return; }
+    if dk == IDATA_ARG_INDEX() { write_u8(out, 6); write_u32_wire(out, inst.dv); return; }
+    if dk == IDATA_PHI_TARGET() { write_u8(out, 7); write_u32_wire(out, inst.dv); return; }
     if dk == IDATA_CONST_U64() { write_u8(out, 8); write_i64_bits(out, inst.dv); return; }
-    if dk == IDATA_CONST_STR() { write_u8(out, 9); write_u32_le(out, inst.dv); return; }
-    if dk == IDATA_CALL_TARGET() { write_u8(out, 10); write_u32_le(out, inst.dv); return; }
+    if dk == IDATA_CONST_STR() { write_u8(out, 9); write_u32_wire(out, inst.dv); return; }
+    if dk == IDATA_CALL_TARGET() { write_u8(out, 10); write_u32_wire(out, inst.dv); return; }
     if dk == IDATA_CALL_EXTERN() { write_u8(out, 11); write_string(out, inst.ds); return; }
     if dk == IDATA_BRANCH_TARGETS() {
         write_u8(out, 12);
-        write_u32_le(out, inst.dv);
-        write_u32_le(out, inst.dv2);
+        write_u32_wire(out, inst.dv);
+        write_u32_wire(out, inst.dv2);
         return;
     }
-    if dk == IDATA_JUMP_TARGET() { write_u8(out, 13); write_u32_le(out, inst.dv); return; }
-    if dk == IDATA_VOW_ID() { write_u8(out, 14); write_u32_le(out, inst.dv); return; }
+    if dk == IDATA_JUMP_TARGET() { write_u8(out, 13); write_u32_wire(out, inst.dv); return; }
+    if dk == IDATA_VOW_ID() { write_u8(out, 14); write_u32_wire(out, inst.dv); return; }
     if dk == IDATA_ALLOC_SIZE() {
         write_u8(out, 15);
-        write_u32_le(out, inst.dv);
-        write_u32_le(out, inst.dv2);
+        write_u32_wire(out, inst.dv);
+        write_u32_wire(out, inst.dv2);
         return;
     }
-    if dk == IDATA_FIELD() { write_u8(out, 16); write_u32_le(out, inst.dv); return; }
-    if dk == IDATA_WIDE_SLOT() { write_u8(out, 22); write_u32_le(out, inst.dv); return; }
+    if dk == IDATA_FIELD() { write_u8(out, 16); write_u32_wire(out, inst.dv); return; }
+    if dk == IDATA_WIDE_SLOT() { write_u8(out, 22); write_u32_wire(out, inst.dv); return; }
     if dk == IDATA_INTEGER() {
         write_u8(out, 17);
         if inst.dv == ITY_I8() { write_u8(out, 0); write_u8(out, 0); return; }
@@ -725,7 +770,7 @@ fn write_inst_data(out: Vec<i64>, inst: IrInst) {
         if inst.dv == ITY_I128() { write_u8(out, 4); write_u8(out, 0); return; }
         if inst.dv == ITY_U128() { write_u8(out, 4); write_u8(out, 1); return; }
     }
-    if dk == IDATA_CONST_U8() { write_u8(out, 18); write_u8(out, inst.dv); return; }
+    if dk == IDATA_CONST_U8() { write_u8(out, 18); write_u8(out, inst.dv & 255); return; }
     if dk == IDATA_INTEGER_CAST() {
         write_u8(out, 19);
         write_integer_ty(out, inst.dv);
@@ -825,7 +870,7 @@ fn read_inst_data(r: ModuleReader) -> WireInstData {
 }
 
 fn write_inst(out: Vec<i64>, inst: IrInst) {
-    write_u32_le(out, inst.id);
+    write_u32_wire(out, inst.id);
     write_u16_le(out, opcode_disc(inst.op));
     write_u8(out, ty_disc(inst.ty));
     write_leb(out, inst.args.len());
@@ -833,13 +878,13 @@ fn write_inst(out: Vec<i64>, inst: IrInst) {
     while i < inst.args.len() vow {
         invariant: i <= inst.args.len()
     } {
-        write_u32_le(out, inst.args[i]);
+        write_u32_wire(out, inst.args[i]);
         i = i + 1;
     }
     write_inst_data(out, inst);
-    write_u32_le(out, inst.ostart);
-    write_u32_le(out, inst.olen);
-    region_encode(out, inst.rgn);
+    write_u32_wire(out, inst.ostart);
+    write_u32_wire(out, inst.olen);
+    region_encode(out, region_wire(inst.rgn));
 }
 
 fn read_inst(r: ModuleReader) -> IrInst {
@@ -864,7 +909,7 @@ fn read_inst(r: ModuleReader) -> IrInst {
 }
 
 fn write_block(out: Vec<i64>, block: IrBlock) {
-    write_u32_le(out, block.id);
+    write_u32_wire(out, block.id);
     write_leb(out, block.insts.len());
     let mut i: u64 = 0;
     while i < block.insts.len() vow {
@@ -889,20 +934,26 @@ fn read_block(r: ModuleReader) -> IrBlock {
 }
 
 fn write_vow_entry(out: Vec<i64>, entry: IrVowEntry) {
-    write_u32_le(out, entry.id);
+    write_u32_wire(out, entry.id);
     write_string(out, entry.description);
     write_u8(out, blame_disc(entry.blame));
-    write_leb(out, entry.binding_ids.len());
+    let ids: Vec<i64> = entry.binding_ids;
+    let names: Vec<String> = entry.binding_names;
+    let mut n: u64 = ids.len();
+    if names.len() < n { n = names.len(); }
+    write_leb(out, n);
     let mut i: u64 = 0;
-    while i < entry.binding_ids.len() vow {
-        invariant: i <= entry.binding_ids.len()
+    while i < n vow {
+        invariant: i <= n,
+        invariant: n <= ids.len(),
+        invariant: n <= names.len()
     } {
-        write_string(out, entry.binding_names[i]);
-        write_u32_le(out, entry.binding_ids[i]);
+        write_string(out, names[i]);
+        write_u32_wire(out, ids[i]);
         i = i + 1;
     }
     write_string(out, entry.file);
-    write_u32_le(out, entry.offset);
+    write_u32_wire(out, entry.offset);
 }
 
 fn read_vow_entry(r: ModuleReader) -> IrVowEntry {

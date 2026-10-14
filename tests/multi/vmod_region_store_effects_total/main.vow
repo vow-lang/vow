@@ -1,0 +1,150 @@
+// TEST: stdout "0"
+// The flat store-effect list of a region summary is read through one total reading of a record:
+// a slot past the end reads as 0, an alias list never runs past the end, and a kind is its low two
+// bits. The count prefix and the records written therefore agree on a truncated, overlong or
+// out-of-range list, where they used to disagree or index out of bounds. Whole lists keep their
+// bytes (`vmod_region_roundtrip`).
+module Main
+
+use ir
+use module_io
+
+fn expect_bytes(out: Vec<i64>, want: Vec<i64>) -> i64 {
+    if out.len() != want.len() { return 1; }
+    let mut i: u64 = 0;
+    let n: u64 = want.len();
+    while i < n vow {
+        invariant: i <= n
+    } {
+        if out[i] != want[i] { return 1; }
+        i = i + 1;
+    }
+    0
+}
+
+fn push_u32(v: Vec<i64>, a: i64) {
+    v.push(a);
+    v.push(0);
+    v.push(0);
+    v.push(0);
+}
+
+fn summary_of(flat: Vec<i64>) -> Vec<i64> {
+    let f: IrFunction = ir_function_new(1, String::from("f"), ITY_UNIT(), 0, String::from("t.vow"));
+    f.rsum_return_kind = RSUM_KIND_FRESH_IN_CALLER();
+    let mut i: u64 = 0;
+    while i < flat.len() vow {
+        invariant: i <= flat.len()
+    } {
+        f.rsum_store_effects.push(flat[i]);
+        i = i + 1;
+    }
+    let out: Vec<i64> = Vec::new();
+    write_region_summary(out, f);
+    out
+}
+
+// Param count 0, return constraint FRESH_IN_CALLER, then the store-effect count.
+fn head(count: i64) -> Vec<i64> {
+    let want: Vec<i64> = Vec::new();
+    want.push(0);
+    want.push(0);
+    want.push(count);
+    want
+}
+
+fn flat1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn flat2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = flat1(a);
+    v.push(b);
+    v
+}
+
+fn push_all(v: Vec<i64>, more: Vec<i64>) {
+    let mut i: u64 = 0;
+    while i < more.len() vow {
+        invariant: i <= more.len()
+    } {
+        v.push(more[i]);
+        i = i + 1;
+    }
+}
+
+// [7]: a lone target is one FRESH_IN_CALLER record.
+fn lone_target() -> i64 {
+    let want: Vec<i64> = head(1);
+    push_u32(want, 7);
+    want.push(RSUM_KIND_FRESH_IN_CALLER());
+    expect_bytes(summary_of(flat1(7)), want)
+}
+
+// [7, ALIAS_OF]: the aux slot is missing and reads as 0.
+fn missing_aux() -> i64 {
+    let want: Vec<i64> = head(1);
+    push_u32(want, 7);
+    want.push(RSUM_KIND_ALIAS_OF());
+    push_u32(want, 0);
+    expect_bytes(summary_of(flat2(7, RSUM_KIND_ALIAS_OF())), want)
+}
+
+// [7, ALIAS_OF_ANY, 5, 9, 8]: five aliases are stated and two remain.
+fn overlong_alias_count() -> i64 {
+    let flat: Vec<i64> = flat2(7, RSUM_KIND_ALIAS_OF_ANY());
+    push_all(flat, flat2(5, 9));
+    flat.push(8);
+    let want: Vec<i64> = head(1);
+    push_u32(want, 7);
+    want.push(RSUM_KIND_ALIAS_OF_ANY());
+    want.push(2);
+    push_u32(want, 9);
+    push_u32(want, 8);
+    expect_bytes(summary_of(flat), want)
+}
+
+// [7, ALIAS_OF_ANY, -1, 3]: a negative count is as long as the list allows.
+fn negative_alias_count() -> i64 {
+    let flat: Vec<i64> = flat2(7, RSUM_KIND_ALIAS_OF_ANY());
+    push_all(flat, flat2(0 - 1, 3));
+    let want: Vec<i64> = head(1);
+    push_u32(want, 7);
+    want.push(RSUM_KIND_ALIAS_OF_ANY());
+    want.push(1);
+    push_u32(want, 3);
+    expect_bytes(summary_of(flat), want)
+}
+
+// [7, ALIAS_OF_ANY]: the count slot is missing.
+fn missing_alias_count() -> i64 {
+    let want: Vec<i64> = head(1);
+    push_u32(want, 7);
+    want.push(RSUM_KIND_ALIAS_OF_ANY());
+    want.push(0);
+    expect_bytes(summary_of(flat2(7, RSUM_KIND_ALIAS_OF_ANY())), want)
+}
+
+// [7, 4, 8, ALIAS_OF, 5]: kind 4 is FRESH_IN_CALLER (its low two bits), so the record is two
+// slots wide for the count prefix as well as for the writer, and the second record starts at 8.
+fn kind_out_of_range() -> i64 {
+    let flat: Vec<i64> = flat2(7, 4);
+    push_all(flat, flat2(8, RSUM_KIND_ALIAS_OF()));
+    flat.push(5);
+    let want: Vec<i64> = head(2);
+    push_u32(want, 7);
+    want.push(RSUM_KIND_FRESH_IN_CALLER());
+    push_u32(want, 8);
+    want.push(RSUM_KIND_ALIAS_OF());
+    push_u32(want, 5);
+    expect_bytes(summary_of(flat), want)
+}
+
+fn main() -> i32 [io] {
+    let fail: i64 = lone_target() + missing_aux() + overlong_alias_count() + negative_alias_count()
+        + missing_alias_count() + kind_out_of_range();
+    print_i64(fail);
+    0
+}

@@ -1,0 +1,132 @@
+// TEST: stdout "0"
+// The writers are total. A value that has no encoding (a type, an InstData kind) is written as the
+// byte 255, which no decoder tag accepts, so decoding the bytes is an InvalidKind error rather than
+// a trap in the encoder; a value wider than its wire field is reduced to the field's width; a vow
+// entry with fewer names than ids writes the pairs there are. In-range values keep their bytes.
+module Main
+
+use ir
+use module_io
+
+fn expect_bytes(out: Vec<i64>, want: Vec<i64>) -> i64 {
+    if out.len() != want.len() { return 1; }
+    let mut i: u64 = 0;
+    let n: u64 = want.len();
+    while i < n vow {
+        invariant: i <= n
+    } {
+        if out[i] != want[i] { return 1; }
+        i = i + 1;
+    }
+    0
+}
+
+fn push_u32(v: Vec<i64>, a: i64, b: i64, c: i64, d: i64) {
+    v.push(a);
+    v.push(b);
+    v.push(c);
+    v.push(d);
+}
+
+fn unencodable_integer_ty() -> i64 {
+    let out: Vec<i64> = Vec::new();
+    write_integer_ty(out, 99);
+    let want: Vec<i64> = Vec::new();
+    want.push(255);
+    if expect_bytes(out, want) != 0 { return 1; }
+    let r: ModuleReader = reader_new(out);
+    let _ty: i64 = read_integer_ty(r);
+    if r.err_kind != DEC_INVALID_KIND() || r.err_label != String::from("IntegerWidth") || r.err_value != 255 { return 1; }
+    0
+}
+
+fn unencodable_inst_data() -> i64 {
+    let out: Vec<i64> = Vec::new();
+    let inst: IrInst = ir_inst_new(0, IOP_CONST_I64(), ITY_I64(), Vec::new(), 99, 0, 0, String::from(""));
+    write_inst_data(out, inst);
+    let want: Vec<i64> = Vec::new();
+    want.push(255);
+    if expect_bytes(out, want) != 0 { return 1; }
+    let r: ModuleReader = reader_new(out);
+    let _d: WireInstData = read_inst_data(r);
+    if r.err_kind != DEC_INVALID_KIND() || r.err_label != String::from("InstData") || r.err_value != 255 { return 1; }
+    0
+}
+
+fn wide_inst_fields() -> i64 {
+    let inst: IrInst = ir_inst_new(0 - 1, 65543, 259, Vec::new(), IDATA_NONE(), 0, 0, String::from(""));
+    inst.ostart = 4294967296;
+    inst.olen = 0 - 1;
+    inst.rgn = 1099511627777;
+    let out: Vec<i64> = Vec::new();
+    write_inst(out, inst);
+    let want: Vec<i64> = Vec::new();
+    push_u32(want, 255, 255, 255, 255);
+    want.push(7);
+    want.push(0);
+    want.push(3);
+    want.push(0);
+    want.push(0);
+    push_u32(want, 0, 0, 0, 0);
+    push_u32(want, 255, 255, 255, 255);
+    want.push(1);
+    push_u32(want, 0, 0, 0, 0);
+    expect_bytes(out, want)
+}
+
+fn wide_region() -> i64 {
+    let inst: IrInst = ir_inst_new(1, IOP_CONST_I64(), ITY_I64(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""));
+    inst.rgn = 0 - 5;
+    let out: Vec<i64> = Vec::new();
+    write_inst(out, inst);
+    let want: Vec<i64> = Vec::new();
+    push_u32(want, 1, 0, 0, 0);
+    want.push(IOP_CONST_I64());
+    want.push(0);
+    want.push(ITY_I64());
+    want.push(0);
+    want.push(0);
+    push_u32(want, 0, 0, 0, 0);
+    push_u32(want, 0, 0, 0, 0);
+    want.push(3);
+    push_u32(want, 0, 0, 0, 0);
+    expect_bytes(out, want)
+}
+
+fn short_names() -> i64 {
+    let ids: Vec<i64> = Vec::new();
+    ids.push(7);
+    ids.push(8);
+    let names: Vec<String> = Vec::new();
+    names.push(String::from("n"));
+    let entry: IrVowEntry = IrVowEntry {
+        id: 5,
+        description: String::from("d"),
+        blame: BLAME_CALLER(),
+        binding_ids: ids,
+        binding_names: names,
+        file: String::from("f"),
+        offset: 4294967305,
+    };
+    let out: Vec<i64> = Vec::new();
+    write_vow_entry(out, entry);
+    let want: Vec<i64> = Vec::new();
+    push_u32(want, 5, 0, 0, 0);
+    want.push(1);
+    want.push(100);
+    want.push(0);
+    want.push(1);
+    want.push(1);
+    want.push(110);
+    push_u32(want, 7, 0, 0, 0);
+    want.push(1);
+    want.push(102);
+    push_u32(want, 9, 0, 0, 0);
+    expect_bytes(out, want)
+}
+
+fn main() -> i32 [io] {
+    let fail: i64 = unencodable_integer_ty() + unencodable_inst_data() + wide_inst_fields() + wide_region() + short_names();
+    print_i64(fail);
+    0
+}
