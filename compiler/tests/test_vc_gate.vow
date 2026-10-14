@@ -116,6 +116,13 @@ fn check_phi_after_region_markers() -> i64 {
     let marked: Vec<IrInst> = Vec::new();
     marked.push(region_marker(30, IOP_REGION_OPEN()));
     if vc_skip_reason(diamond_lead(true, marked)).len() != 0 { return 23; }
+    let closed: Vec<IrInst> = Vec::new();
+    closed.push(region_marker(32, IOP_REGION_CLOSE()));
+    let missing: String = vc_skip_reason(diamond_lead(false, closed));
+    if missing != String::from("unsupported-opcode: Phi input missing from a predecessor") { return 25; }
+    let opened: Vec<IrInst> = Vec::new();
+    opened.push(region_marker(33, IOP_REGION_OPEN()));
+    if vc_skip_reason(diamond_lead(false, opened)) != missing { return 26; }
     let real: Vec<IrInst> = Vec::new();
     real.push(mk_inst_const_i64(31, 5));
     if vc_skip_reason(diamond_lead(true, real)) != String::from("unsupported-opcode: Phi after the head of its block") { return 24; }
@@ -130,33 +137,6 @@ fn check_branches_accepted() -> i64 {
 fn check_phi_input_missing() -> i64 {
     let r: String = vc_skip_reason(diamond(false));
     if r != String::from("unsupported-opcode: Phi input missing from a predecessor") { return 21; }
-    0
-}
-
-// `diamond`'s join block with `lead` inserted before its Phi.
-fn diamond_with_lead(lead: IrInst, feed_else: bool) -> IrFunction {
-    let f: IrFunction = diamond(feed_else);
-    let m: IrBlock = f.blocks[3];
-    let moved: Vec<IrInst> = Vec::new();
-    moved.push(lead);
-    let mut k: u64 = 0;
-    while k < m.insts.len() {
-        moved.push(m.insts[k]);
-        k = k + 1;
-    }
-    m.insts = moved;
-    f
-}
-
-// A region marker defines no value, so a Phi may follow it; any other instruction
-// ends the head of the block.
-fn check_phi_head_after_region_open() -> i64 {
-    let open: IrInst = mk_inst(9, IOP_REGION_OPEN(), ITY_UNIT(), Vec::new());
-    if vc_skip_reason(diamond_with_lead(open, true)).len() != 0 { return 22; }
-    let missing: String = vc_skip_reason(diamond_with_lead(open, false));
-    if missing != String::from("unsupported-opcode: Phi input missing from a predecessor") { return 24; }
-    let r: String = vc_skip_reason(diamond_with_lead(mk_inst_const_i64(9, 1), true));
-    if r != String::from("unsupported-opcode: Phi after the head of its block") { return 23; }
     0
 }
 
@@ -726,7 +706,6 @@ fn main() -> i32 {
     if r == 0 { r = check_branches_accepted(); }
     if r == 0 { r = check_phi_input_missing(); }
     if r == 0 { r = check_phi_after_region_markers(); }
-    if r == 0 { r = check_phi_head_after_region_open(); }
     if r == 0 { r = check_entry_loop_rejected(); }
     if r == 0 { r = check_loop_accepted(); }
     if r == 0 { r = check_loop_value_escape_closed(); }
