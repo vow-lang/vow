@@ -112,20 +112,25 @@ fn replay_cex_value(names: Vec<String>, vals: Vec<String>, key: String) -> Strin
     String::from("")
 }
 
-// Ids of the items of `kind`, in declaration order. Kept apart from the name
-// lookups below on purpose: this is the only code here that calls the contracted
-// `item_kind`/`item_id`, so it is the only code the C verifier model sees, and
-// that model cannot type the `String` `arena_str` reads out of a `Vec`.
+// Id of item `it` when it is of `kind`, -1 otherwise (an id is never negative).
+// The only code here that calls the contracted `item_kind`/`item_id`, so it is
+// the only code the C verifier model sees, and that model cannot type the
+// `String` `arena_str` reads out of a `Vec`. Loop-free, so both verifiers
+// decide its callee `requires` outright.
+fn replay_item_id_of_kind(it: i64, kind: i64) -> i64 {
+    if it >= 0 && item_kind(it) == kind { item_id(it) } else { -1 }
+}
+
+// Ids of the items of `kind`, in declaration order. Calls no contracted
+// function, so the verifiers have no obligation in this loop.
 fn replay_item_ids(m: Module, kind: i64) -> Vec<i64> {
     let out: Vec<i64> = Vec::new();
     let items: Vec<i64> = m.items;
     let mut i: u64 = 0u64;
-    while i < items.len() vow {
-        invariant: i <= items.len()
-    } {
-        let it: i64 = items[i];
-        if it >= 0 && item_kind(it) == kind {
-            out.push(item_id(it));
+    while i < items.len() {
+        let id: i64 = replay_item_id_of_kind(items[i], kind);
+        if id >= 0 {
+            out.push(id);
         }
         i = i + 1u64;
     }
