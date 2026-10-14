@@ -1,0 +1,18 @@
+// `b.n` is written from the length of the `Vec` in `b.items`: a function that reads memory
+// through a field and writes a parameter is verified, and the length is never negative.
+module HeapParamFieldWriteReadsFieldLen
+
+struct Bag { items: Vec<i64>, n: i64 }
+
+fn refresh(b: Bag) -> i64 vow {
+  ensures: result >= 0
+} {
+  b.n = b.items.len() as i64;
+  b.n
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), n: 0 };
+  print_i64(refresh(b));
+  0
+}

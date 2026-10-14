@@ -1,0 +1,23 @@
+// A push on one branch to a `Vec` parameter, with the length of a `Vec` held in a field read on
+// the other branch and after the join: `out` may be that `Vec`, and its length only grows.
+module HeapParamBranchPushGrows
+
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn grow(out: Vec<i64>, b: Bag, c: bool) -> bool vow {
+  ensures: result
+} {
+  let mut n: u64 = 0;
+  if c { n = b.items.len(); }
+  if c { out.push(1); }
+  let m: u64 = b.items.len();
+  m >= n
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), tag: 1 };
+  b.items.push(5);
+  let out: Vec<i64> = Vec::new();
+  if grow(out, b, true) { print_i64(1); }
+  0
+}

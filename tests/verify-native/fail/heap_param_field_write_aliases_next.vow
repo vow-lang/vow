@@ -1,0 +1,21 @@
+// TEST: replay-skipped field 1 is a struct, which the replay harness cannot build
+// TEST: counterexample-fn "bump"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// `p` may be the struct that `p.next` holds, and then writing `p.val` changes what is read
+// through `next`: the claim that it does not is refuted.
+module HeapParamFieldWriteAliasesNext
+
+struct Node { val: i64, next: Node }
+
+fn bump(p: Node) -> bool vow {
+  ensures: result
+} {
+  let before: i64 = p.next.val;
+  p.val = before + 1;
+  p.next.val == before
+}
+
+fn main() -> i32 [io] {
+  0
+}

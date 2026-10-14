@@ -1,0 +1,24 @@
+// TEST: replay-skipped field 0 is a String, which the replay harness cannot build
+// TEST: counterexample-fn "wipe"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// `out` may be the `String` that `l.text` holds, and then clearing it changes the length read
+// through the field: the claim that it does not is refuted.
+module HeapParamStringClearAliasesFieldText
+
+struct Label { text: String, n: i64 }
+
+fn wipe(out: String, l: Label) -> bool vow {
+  ensures: result
+} {
+  let before: u64 = l.text.len();
+  out.clear();
+  l.text.len() == before
+}
+
+fn main() -> i32 [io] {
+  let l: Label = Label { text: String::from("a"), n: 1 };
+  let out: String = String::from("b");
+  if wipe(out, l) { print_i64(1); }
+  0
+}

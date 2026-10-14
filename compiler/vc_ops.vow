@@ -207,7 +207,9 @@ fn vc_is_havoc(inst: IrInst) -> bool {
 
 // A loop cut (`vc_induct`) puts one at the top of a loop header proper for each
 // `Vec` the loop writes: its operand's `(array, length)` becomes an arbitrary
-// pair for the rest of the header, the way a header Phi's value does.
+// pair for the rest of the header, the way a header Phi's value does. The marker's
+// data value is 1 when the loop only pushes, so the new length is no shorter than
+// the length the loop was entered with.
 fn VC_INTERNAL_HAVOC_VEC() -> String { String::from("__vc_havoc_vec") }
 
 fn vc_is_havoc_vec(inst: IrInst) -> bool {

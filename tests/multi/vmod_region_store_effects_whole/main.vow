@@ -1,0 +1,137 @@
+// TEST: stdout "0"
+// Whole store-effect lists keep their bytes, and a kind is read as its low two bits by the count
+// prefix and the writer alike: kind 4 is a two-slot FRESH_IN_CALLER record in both, where the
+// count used to take it for an alias list and advance `3 + n`. A list that is not a sequence of
+// whole records aborts (`vmod_rejects_store_effect_truncated`, `vmod_rejects_store_effect_alias_count`).
+module Main
+
+use ir
+use module_io
+
+fn expect_bytes(out: Vec<i64>, want: Vec<i64>) -> i64 {
+    if out.len() != want.len() { return 1; }
+    let mut i: u64 = 0;
+    let n: u64 = want.len();
+    while i < n vow {
+        invariant: i <= n
+    } {
+        if out[i] != want[i] { return 1; }
+        i = i + 1;
+    }
+    0
+}
+
+fn push_u32(v: Vec<i64>, a: i64) {
+    v.push(a);
+    v.push(0);
+    v.push(0);
+    v.push(0);
+}
+
+fn summary_of(flat: Vec<i64>) -> Vec<i64> {
+    let f: IrFunction = ir_function_new(1, String::from("f"), ITY_UNIT(), 0, String::from("t.vow"));
+    f.rsum_return_kind = RSUM_KIND_FRESH_IN_CALLER();
+    let mut i: u64 = 0;
+    while i < flat.len() vow {
+        invariant: i <= flat.len()
+    } {
+        f.rsum_store_effects.push(flat[i]);
+        i = i + 1;
+    }
+    let out: Vec<i64> = Vec::new();
+    write_region_summary(out, f);
+    out
+}
+
+// Param count 0, return constraint FRESH_IN_CALLER, then the store-effect count.
+fn head(count: i64) -> Vec<i64> {
+    let want: Vec<i64> = Vec::new();
+    want.push(0);
+    want.push(0);
+    want.push(count);
+    want
+}
+
+fn flat1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn flat2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = flat1(a);
+    v.push(b);
+    v
+}
+
+fn push_all(v: Vec<i64>, more: Vec<i64>) {
+    let mut i: u64 = 0;
+    while i < more.len() vow {
+        invariant: i <= more.len()
+    } {
+        v.push(more[i]);
+        i = i + 1;
+    }
+}
+
+// A whole list of every record shape, in one list.
+fn all_shapes() -> i64 {
+    let flat: Vec<i64> = flat2(7, RSUM_KIND_FRESH_IN_CALLER());
+    push_all(flat, flat2(8, RSUM_KIND_ALIAS_OF()));
+    flat.push(5);
+    push_all(flat, flat2(9, RSUM_KIND_ALIAS_OF_ANY()));
+    push_all(flat, flat2(2, 11));
+    flat.push(12);
+    push_all(flat, flat2(10, RSUM_KIND_CONSTANT_GLOBAL()));
+    let want: Vec<i64> = head(4);
+    push_u32(want, 7);
+    want.push(RSUM_KIND_FRESH_IN_CALLER());
+    push_u32(want, 8);
+    want.push(RSUM_KIND_ALIAS_OF());
+    push_u32(want, 5);
+    push_u32(want, 9);
+    want.push(RSUM_KIND_ALIAS_OF_ANY());
+    want.push(2);
+    push_u32(want, 11);
+    push_u32(want, 12);
+    push_u32(want, 10);
+    want.push(RSUM_KIND_CONSTANT_GLOBAL());
+    expect_bytes(summary_of(flat), want)
+}
+
+// An empty list is a count of 0.
+fn empty_list() -> i64 {
+    expect_bytes(summary_of(Vec::new()), head(0))
+}
+
+// An alias list with no aliases is a record of its own.
+fn empty_alias_list() -> i64 {
+    let flat: Vec<i64> = flat2(7, RSUM_KIND_ALIAS_OF_ANY());
+    flat.push(0);
+    let want: Vec<i64> = head(1);
+    push_u32(want, 7);
+    want.push(RSUM_KIND_ALIAS_OF_ANY());
+    want.push(0);
+    expect_bytes(summary_of(flat), want)
+}
+
+// [7, 4, 8, ALIAS_OF, 5]: kind 4 is FRESH_IN_CALLER (its low two bits), so the record is two
+// slots wide for the count prefix as well as for the writer, and the second record starts at 8.
+fn kind_out_of_range() -> i64 {
+    let flat: Vec<i64> = flat2(7, 4);
+    push_all(flat, flat2(8, RSUM_KIND_ALIAS_OF()));
+    flat.push(5);
+    let want: Vec<i64> = head(2);
+    push_u32(want, 7);
+    want.push(RSUM_KIND_FRESH_IN_CALLER());
+    push_u32(want, 8);
+    want.push(RSUM_KIND_ALIAS_OF());
+    push_u32(want, 5);
+    expect_bytes(summary_of(flat), want)
+}
+
+fn main() -> i32 [io] {
+    let fail: i64 = empty_list() + all_shapes() + empty_alias_list() + kind_out_of_range();
+    print_i64(fail);
+    0
+}

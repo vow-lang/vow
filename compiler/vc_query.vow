@@ -52,6 +52,10 @@ struct VcClaims {
 // field of an aggregate one its slot, 0 or more.
 fn VC_SLOT_VEC_LEN() -> i64 { -3 }
 
+// `model_slots` of the address a parameter that may be the memory a handle names carries
+// (`vc_overlay`): `<param>.addr` in a counterexample.
+fn VC_SLOT_ADDR() -> i64 { -4 }
+
 // Number of model symbols claim `k`'s query declares: the header is only
 // declared up to `header_lens[k]`, and `get-value` of a symbol declared later
 // is a solver error. Symbols are listed in declaration order, so these are the

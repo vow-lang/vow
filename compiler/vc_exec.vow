@@ -16,6 +16,7 @@ use vc_wide
 use vc_heap
 use vc_map
 use vc_mapops
+use vc_overlay
 use vc_strops
 use vc_strdeep
 use vc_str
@@ -162,25 +163,38 @@ fn vc_guard(cs: VcClaims, kind: i64, label: String, pc: i64, goal: i64, inst: Ir
 // slot each came from (a symbol's width is its sort: 0 for Bool). A slot read
 // at two sorts is `ambig` in every entry so reporting and replay can tell the
 // symbols apart.
-fn vc_claims_harvest_fields(cs: VcClaims, ag: VcAgg, vv: VcVec) {
+fn vc_claims_harvest_fields(cs: VcClaims, ag: VcAgg, vv: VcVec, ov: VcOverlay) {
+    let none: i64 = 9223372036854775807;
     let mut i: u64 = 0;
     let mut v: u64 = 0;
-    while i < ag.ps_param.len() || v < vv.pv_param.len() {
-        if v < vv.pv_param.len() && (i >= ag.ps_param.len() || vv.pv_hdr[v] < ag.ps_hdr[i]) {
+    let mut a: u64 = 0;
+    while i < ag.ps_param.len() || v < vv.pv_param.len() || a < ov.param.len() {
+        let hi: i64 = { if i < ag.ps_param.len() { ag.ps_hdr[i] } else { none } };
+        let hv: i64 = { if v < vv.pv_param.len() { vv.pv_hdr[v] } else { none } };
+        let ha: i64 = { if a < ov.param.len() { ov.hdr[a] } else { none } };
+        if hv < hi && hv < ha {
             cs.model_names.push(vv.pv_len[v]);
             cs.model_params.push(vv.pv_param[v]);
             cs.model_tys.push(ITY_U64());
             cs.model_widths.push(64);
             cs.model_slots.push(VC_SLOT_VEC_LEN());
-            cs.model_hdr.push(vv.pv_hdr[v]);
+            cs.model_hdr.push(hv);
             v = v + 1;
+        } else if ha < hi {
+            cs.model_names.push(ov.names[a]);
+            cs.model_params.push(ov.param[a]);
+            cs.model_tys.push(ITY_I64());
+            cs.model_widths.push(64);
+            cs.model_slots.push(VC_SLOT_ADDR());
+            cs.model_hdr.push(ha);
+            a = a + 1;
         } else {
             cs.model_names.push(vc_agg_symbol_name(ag.ps_param[i], ag.ps_slot[i], ag.ps_sort[i]));
             cs.model_params.push(ag.ps_param[i]);
             cs.model_tys.push(ag.ps_ty[i]);
             cs.model_widths.push(ag.ps_sort[i]);
             cs.model_slots.push(ag.ps_slot[i]);
-            cs.model_hdr.push(ag.ps_hdr[i]);
+            cs.model_hdr.push(hi);
             i = i + 1;
         }
     }
@@ -214,6 +228,7 @@ struct VcWalk {
     vv: VcVec,
     hp: VcHeap,
     mp: VcMap,
+    ov: VcOverlay,
     var_of: Vec<i64>,
     obj_of: Vec<i64>,
     // The element address a wide `Vec` call defined (`vc_wide`): the `Vec`'s slot,
@@ -417,7 +432,9 @@ fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
         return true;
     }
     if op == IOP_FIELD_GET() && w.tys[inst.args[0] as u64] == ITY_I64() {
-        vc_define(w, inst, vc_heap_field(w.hp, cs.arena, cs.header, w.var_of[inst.args[0] as u64], inst.dv, inst.ty));
+        let h: i64 = w.var_of[inst.args[0] as u64];
+        let base: i64 = vc_heap_field(w.hp, cs.arena, cs.header, h, inst.dv, inst.ty);
+        vc_define(w, inst, vc_overlay_field(w.ov, ag, cs.arena, cs.header, h, inst.dv, inst.ty, base));
         return true;
     }
     if op == IOP_FIELD_GET() {
@@ -542,11 +559,15 @@ fn vc_walk_str(w: VcWalk, bi: u64, inst: IrInst, pc: i64, kind: i64, s: i64) {
 
 // `len` or `v[i]` of a collection at a handle (`vc_heap`): a read of the memory the
 // function loaded, with the same bounds claim as an object's `get`.
-fn vc_walk_handle_vec(w: VcWalk, inst: IrInst, pc: i64, kind: i64) {
+fn vc_walk_handle_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64, kind: i64) {
     let cs: VcClaims = w.cs;
     let ar: VcArena = cs.arena;
+    let hdr: SmtScript = cs.header;
+    let b: i64 = bi as i64;
     let h: i64 = w.var_of[inst.args[0] as u64];
-    let len: i64 = vc_heap_len(w.hp, ar, cs.header, cs.assumed, h);
+    let base_len: i64 = vc_heap_len(w.hp, ar, hdr, cs.assumed, h);
+    let rcls: i64 = vc_overlay_op_class(inst, kind);
+    let len: i64 = vc_overlay_len(w.ov, w.ag, w.vv, ar, hdr, cs.assumed, b, h, rcls, base_len);
     if kind == VC_VEC_LEN() {
         vc_define(w, inst, len);
         return;
@@ -554,11 +575,13 @@ fn vc_walk_handle_vec(w: VcWalk, inst: IrInst, pc: i64, kind: i64) {
     let idx: i64 = w.var_of[inst.args[1] as u64];
     if kind == VC_STR_BYTE_AT() {
         vc_guard(cs, VC_CLAIM_VEC_BOUNDS(), VC_LABEL_STRING_BOUNDS(), pc, vc_vec_in_bounds(ar, idx, len), inst);
-        vc_define(w, inst, vc_heap_byte(w.hp, ar, cs.header, h, idx));
+        let base: i64 = vc_heap_byte(w.hp, ar, hdr, h, idx);
+        vc_define(w, inst, vc_overlay_elem(w.ov, w.ag, w.vv, ar, hdr, cs.assumed, b, h, idx, rcls, true, base));
         return;
     }
     vc_guard(cs, VC_CLAIM_VEC_BOUNDS(), VC_LABEL_VEC_BOUNDS(), pc, vc_vec_in_bounds(ar, idx, len), inst);
-    vc_define(w, inst, vc_heap_elem(w.hp, ar, cs.header, h, idx));
+    let base: i64 = vc_heap_elem(w.hp, ar, hdr, h, idx);
+    vc_define(w, inst, vc_overlay_elem(w.ov, w.ag, w.vv, ar, hdr, cs.assumed, b, h, idx, rcls, false, base));
 }
 
 // `vec_sort(v)`: a new `Vec` of `v`'s length whose slots are the sorted permutation of
@@ -637,7 +660,7 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
         return true;
     }
     if w.tys[inst.args[0] as u64] == ITY_I64() {
-        vc_walk_handle_vec(w, inst, pc, kind);
+        vc_walk_handle_vec(w, bi, inst, pc, kind);
         return true;
     }
     if kind == VC_VEC_SORT() {
@@ -815,7 +838,14 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
         name.push_str(i64_to_string(inst.id));
         vc_define(w, inst, vc_agg_declare(cs.arena, cs.header, name, vc_ty_sort(inst.ty)));
     } else if vc_is_havoc_vec(inst) {
-        vc_vec_havoc(w.vv, w.ag, cs.arena, cs.header, cs.assumed, w.obj_of[inst.args[0] as u64], bi as i64);
+        let obj: i64 = w.obj_of[inst.args[0] as u64];
+        let slot: i64 = vc_vec_slot(w.vv, w.ag, cs.arena, cs.header, cs.assumed, obj);
+        let entry_len: i64 = vc_vec_cur_len(w.vv, slot, bi as i64);
+        vc_vec_havoc(w.vv, w.ag, cs.arena, cs.header, cs.assumed, obj, bi as i64);
+        if inst.dv == 1 {
+            let grown: i64 = vc_vec_cur_len(w.vv, slot, bi as i64);
+            vc_assume(cs, pc, vc_tm_app2(cs.arena, VC_OP_BVULE(), entry_len, grown));
+        }
     } else if vc_is_havoc_map(inst) {
         vc_map_havoc(w.mp, w.ag, cs.arena, cs.header, cs.assumed, w.obj_of[inst.args[0] as u64], bi as i64);
     } else if vc_is_unwrap_abort(inst) {
@@ -932,6 +962,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         vv: vc_vec_new_state(fl, nb),
         hp: vc_heap_new(),
         mp: vc_map_new_state(fl, nb),
+        ov: vc_overlay_new(),
         var_of: dom_fill(tys.len(), -1),
         obj_of: dom_fill(tys.len(), -1),
         wslot: dom_fill(tys.len(), -1),
@@ -945,6 +976,9 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
     };
     w.vv.content = vc_str_reads_bytes(f);
     vc_agg_enable_alias(w.ag, ar, hdr, vc_agg_alias_params(f, tys.len()));
+    if vc_heap_overlay_needed(f, tys) {
+        vc_overlay_enable(w.ov, w.ag, ar, hdr, cs.assumed, vc_overlay_params(f, tys, VC_OV_VEC()), vc_overlay_params(f, tys, VC_OV_STRING()), vc_overlay_params(f, tys, VC_OV_STRUCT()));
+    }
     let id_to_idx: Vec<i64> = dom_block_id_table(f);
     let succ: Vec<i64> = dom_successors(f, id_to_idx);
     let order: Vec<i64> = dom_rpo_order(dom_rpo_numbers(nb, succ));
@@ -974,7 +1008,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         }
         oi = oi + 1;
     }
-    vc_claims_harvest_fields(cs, w.ag, w.vv);
+    vc_claims_harvest_fields(cs, w.ag, w.vv, w.ov);
     cs.hook_vars = w.vv.hk_vars;
     cs.map_vars = vc_map_inexact_vars(w.mp);
     vc_script_replace_logic(hdr, vc_logic_name(vc_vec_count(w.vv) > 0 || vc_heap_used(w.hp) || vc_map_count(w.mp) > 0, vc_function_has_float(f, tys), w.vv.quantified));

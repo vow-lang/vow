@@ -1,0 +1,34 @@
+// TEST: warning ArithOverflowReachable
+// Nested loops with invariants prove inductively, and the checked add the cut can reach is still
+// reported: the search for warnings stops at the first round that finds it, since a round of nested
+// loops costs ten times the one before it.
+module LoopNestedCheckedAddWarning
+
+fn count_cells(rows: u64, cols: u64, bump: i64) -> u64 vow {
+  ensures: result <= rows
+} {
+  let mut r: u64 = 0;
+  let mut hits: u64 = 0;
+  while r < rows vow {
+    invariant: r <= rows,
+    invariant: hits <= r
+  } {
+    let mut c: u64 = 0;
+    while c < cols vow {
+      invariant: c <= cols
+    } {
+      let _t: i64 = bump +! 9223372036854775807;
+      c = c + 1;
+    }
+    if cols > 0 {
+      hits = hits + 1;
+    }
+    r = r + 1;
+  }
+  hits
+}
+
+fn main() -> i32 [io] {
+  print_u64(count_cells(2, 2, 0));
+  0
+}

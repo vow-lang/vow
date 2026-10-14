@@ -1,0 +1,24 @@
+// TEST: replay-skipped field 0 is a Vec, which the replay harness cannot build
+// TEST: counterexample-fn "same"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The push happens on one branch only, and `out` may be the `Vec` that `b.items` holds: the
+// length read after the join is the earlier one only when the branch is not taken or they differ.
+module HeapParamBranchPushKeepsLen
+
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn same(out: Vec<i64>, b: Bag, c: bool) -> bool vow {
+  ensures: result
+} {
+  let a: u64 = b.items.len();
+  if c { out.push(1); }
+  b.items.len() == a
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), tag: 1 };
+  let out: Vec<i64> = Vec::new();
+  if same(out, b, false) { print_i64(1); }
+  0
+}

@@ -464,28 +464,40 @@ of this change and stay `Skipped`.
   keyed by a 128-bit concatenation, so no array holds an array) and are never
   written (`compiler/vc_heap.vow`). This is exact, not a bound: two reads of
   one handle agree, handles merge through Phis, fields and elements like any
-  term, and no length or field is capped. It is sound only while nothing in
-  the function can change that memory, which the gate enforces instead of the
-  model: a handle cannot be written (a `FieldSet` or a mutating `Vec`/`String`
-  operation needs an object), and a function that reads through a handle is
-  `Skipped` if it writes a parameter or a collection parameter, because a
-  parameter may be the very object a handle names. A fresh value the function
-  builds cannot be at an address it loaded, so building one is unaffected. The
-  weaker alternative (assume a field `Vec` is distinct from every `Vec`
-  parameter, as two `Vec` parameters are) was rejected: it would prove a
-  property that fails when they are one `Vec`. The exact model that lets a
-  function mutate its parameters (the parameters' own state becomes entries of
-  the same arrays) is not built, nor is the model of a pointer written into a
-  `Vec` or into a parameter's field. A pointer written into a field of a fresh
-  struct is admitted as a write with no effect when nothing reads that field
-  back.
+  term, and no length or field is capped. The arrays are never written, so
+  they are exact for everything the function cannot change: a handle cannot
+  be written (a `FieldSet` or a mutating `Vec`/`String` operation needs an
+  object), and a fresh value the function builds cannot be at an address it
+  loaded. A parameter may be the very object a handle names, so a function
+  that reads through a handle and writes a parameter (#1703) lays its
+  parameters over the arrays (`compiler/vc_overlay.vow`): each `Vec`/`String`
+  parameter and each struct parameter it uses carries a free 64-bit address,
+  and a read through `h` is `ite(h == address(p), state of p, ..., array[h])`
+  over the parameters of the class the read can name, where the state of a
+  parameter is the object model the function already keeps for it
+  (`vc_vec`, `vc_agg`) at the current point of the walk. That is exact and
+  has no quantifier. The alternative the issue sketched, storing the
+  parameters' writes into the shared arrays, makes a loop cut havoc a whole
+  array and needs a quantified frame for every address the loop does not
+  touch; the overlay reuses the per-object havoc the cut already has. A
+  `Vec` is never a struct, so only `Vec`/`String` parameters meet a length,
+  element or byte read and only struct parameters a field read; two
+  `Vec`/`String` parameters are distinct objects, two struct parameters are
+  one object exactly when their identities say so (`vc_agg`). The IR erases
+  the type of a parameter, so a handle may stand for any parameter of its
+  class even where the source types differ. The weaker alternative (assume a
+  field `Vec` is distinct from every `Vec` parameter, as two `Vec` parameters
+  are) was rejected: it would prove a property that fails when they are one
+  `Vec`. The model of a pointer written into a `Vec` or into a parameter's
+  field is not built. A pointer written into a field of a fresh struct is
+  admitted as a write with no effect when nothing reads that field back.
 - **Induction.** A loop body that writes a Vec (`push`, `set`, `pop`) is cut for
   invariant-based induction (#1645): the cut puts a `__vc_havoc_vec` marker for
   each Vec the loop writes at the top of the header proper, which gives it an
   arbitrary array and an arbitrary length below the capacity mask, as a header Phi
   gets an arbitrary value (see the addendum below). A function is still not cut
-  when a mutated receiver is a String or is defined inside a loop that mutates it;
-  bounded unwinding decides such a function alone, and `vc_step_applicable`
+  when a mutated receiver is a String; bounded unwinding decides such a function
+  alone (a receiver born inside a loop is cut, see the #1726 addendum), and `vc_step_applicable`
   (k-induction) still refuses a Vec-written loop. A loop that only reads a Vec is
   cut with no marker.
 - **Aliasing.** Two `Vec` parameters are distinct objects, as they are for
@@ -737,10 +749,9 @@ bounded verdict stands, so a false contract never becomes `Verified`. The array 
 havocked too, so a fact about contents holds only if the invariant states it
 (`tests/verify-native/unknown/vec_loop_contents_not_in_invariant.vow`).
 
-Refused, so the whole function stays with bounded unwinding: a String receiver and
-a receiver defined in a loop that mutates it (an object born in the loop it is
-havocked by has no state the model could name). The k-induction step case
-(`vc_step_applicable`) is unchanged and still refuses a Vec-written loop.
+Refused, so the whole function stays with bounded unwinding: a String receiver
+(a receiver born in a loop is cut, see the #1726 addendum). The k-induction step
+case (`vc_step_applicable`) is unchanged and still refuses a Vec-written loop.
 
 ## Addendum (#1646): `parse_f64_bits` and `format_f64_bits`
 
@@ -1086,3 +1097,43 @@ addendum is that model (`compiler/vc_map.vow`, op table `compiler/vc_mapops.vow`
 `M08`/`M09`). A property over a `HashMap<u8, _>` parameter's length or keys can degrade from
 ESBMC's `Verified` (an artifact of its capacity) to `unknown`. Maps stored in a struct field, passed
 to a function, or with a `String`/`Vec`/struct value stay `Skipped`.
+
+## Addendum (#1726): loops and handle reads of the `.vmod` writers
+
+The `.vmod` writers of `compiler/module_io.vow` copy collections held in struct fields into a `Vec`
+parameter inside nested loops. Four rules of the model were too weak or too strict for that shape,
+and each is a property of the language, not of the function.
+
+- **A read consults its own class.** A handle read by a `String` operation names a `String`, one
+  read by a `Vec` operation names a `Vec` (the type checker never lets a `String` field hold a
+  `Vec`). `VcOverlay.cls` tags every overlay parameter `Vec` (1) or `String` (2) (3 for a parameter
+  used as both, which the type checker rules out), and `vc_overlay_len`/`vc_overlay_elem` take the
+  class of the operation (`vc_overlay_op_class`: the runtime symbol's `__vow_string_` prefix, or one
+  of the three text helpers without it, `hash_str`, `parse_f64_bits`, `hex_decode`). Without
+  it, `s.len()` of a `String` field `s` could be the length of the `Vec` parameter the loop pushes
+  to, and the havoc of that parameter at the loop header broke every bound cached before the loop.
+  Two `Vec` parameters and a field `Vec` stay possibly one object, as before.
+- **A loop that only pushes never shortens a `Vec`.** The `__vc_havoc_vec` marker carries 1 in its
+  data value when every mutation in the loop (nested loops included) is a `push` (`VcVecHavocs.grow`).
+  The executor then assumes, on the paths that reach the marker, that the havoced length is not below
+  the length the loop was entered with (`vc_assume` of `entry <= havoced`). That is a fact about
+  the loop, not about the invariant: a pop, set or String operation leaves the marker at 0 and the
+  length arbitrary (`tests/verify-native/fail/loop_pop_shrinks_vec.vow`). The element prefix is not
+  preserved, since that needs a quantifier. Its effect is on a length cached before the loop: after a
+  `push`-only loop an aliased field `Vec` is still at least as long as the cached bound
+  (`tests/verify-native/pass/heap_param_push_loops_keep_aliased_len.vow`).
+- **A `Vec` born in a loop is cut.** A receiver defined inside loop `j` gets no marker at `j`'s
+  header (each iteration creates it afresh and no pointer Phi carries it across the back edge,
+  `vc_induct_ptr_phi`); it still gets one at the header of every inner loop it was born outside of.
+  The function used to be left to bounded unwinding, which cannot decide a loop over an unbounded
+  length (`tests/verify-native/pass/loop_vec_born_in_outer_loop.vow`).
+
+A reachable abort is a soft claim, and a function with one used to run its unrolled rounds after the
+inductive proof to find the warnings, each round of nested loops ten times the cost of the one before it
+(`tests/verify-native/pass/loop_nested_checked_add_warning.vow` timed out). The inductive cut already
+knows which aborts any run can reach, because it over-approximates every run: the sites of its `sat`
+answers on soft claims (`VcInduction.sites`). A soft claim the cut proves `unsat` is never a warning, so a
+proof whose cut reaches no abort ends the check, and otherwise the rounds end at the first one whose sites
+cover the cut's (`vc_sites_cover`). The warnings are the same set; only rounds that could add none are
+skipped. This is what lets a writer reach the encoder's abort on a value that has no encoding
+(`reject_encode_u8`, a checked add) and still be proven for every value that has one.

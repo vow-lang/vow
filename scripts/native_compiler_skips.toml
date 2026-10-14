@@ -92,52 +92,10 @@ issue = 1704
 reason = "calls reader_fail, which stores a String into a parameter's field (module_io.vow)"
 
 [[skip]]
-function = "write_block"
-code = "unsupported-opcode"
-issue = 1703
-reason = "mutates a Vec parameter while reading a collection through a field (module_io.vow)"
-
-[[skip]]
-function = "write_enum_layout"
-code = "unsupported-opcode"
-issue = 1703
-reason = "mutates a Vec parameter while reading a collection through a field (module_io.vow)"
-
-[[skip]]
 function = "write_function"
 code = "unsupported-opcode"
-issue = 1703
-reason = "mutates a Vec parameter while reading a collection through a field (module_io.vow)"
-
-[[skip]]
-function = "write_inst"
-code = "unsupported-opcode"
-issue = 1703
-reason = "mutates a Vec parameter while reading a collection through a field (module_io.vow)"
-
-[[skip]]
-function = "write_region_summary"
-code = "unsupported-opcode"
-issue = 1703
-reason = "mutates a Vec parameter while reading a collection through a field (module_io.vow)"
-
-[[skip]]
-function = "write_struct_layout"
-code = "unsupported-opcode"
-issue = 1703
-reason = "mutates a Vec parameter while reading a collection through a field (module_io.vow)"
-
-[[skip]]
-function = "write_variant"
-code = "unsupported-opcode"
-issue = 1703
-reason = "mutates a Vec parameter while reading a collection through a field (module_io.vow)"
-
-[[skip]]
-function = "write_vow_entry"
-code = "unsupported-opcode"
-issue = 1703
-reason = "mutates a Vec parameter while reading a collection through a field (module_io.vow)"
+issue = 1704
+reason = "reads back a struct field that holds a collection (the sort_local_names result)"
 
 [[skip]]
 function = "reader_read_string"

@@ -20,12 +20,13 @@ use vc_agg
 //   element `i` of the collection at `h`    helem[h ++ i]       (128-bit key)
 //
 // `hf<k>`, `hlen` and `helem` are unconstrained arrays declared on first use and
-// never stored to. They are exact, not an over-approximation, because the gate
-// (`vc_heap_shape_detail`) only lets a function read memory through a handle when
-// nothing in it can change that memory: it must write no parameter, no `Vec`
-// parameter and nothing reached through a handle (every `FieldSet` and every
-// mutating `Vec` operation needs a pointer-typed object, never a handle). A
-// fresh object the function builds cannot be at a handle it did not allocate.
+// never stored to. They are exact for every object the function cannot change: the
+// instruction gates let a function write only an object it allocated or a parameter
+// (every `FieldSet` and every mutating `Vec` operation needs a pointer-typed
+// object, never a handle), and a fresh object cannot be at a handle it did not
+// allocate. A parameter may be the object a handle names, so a function that reads
+// through a handle and also writes a parameter lays the parameters' own state over
+// the arrays (`vc_overlay`).
 // Two reads of one handle are one array read, so `b.insts.len()` and
 // `b.insts[n - 1]` agree on which `Vec` `b.insts` is, and handles that merge
 // through a Phi, a `Vec` element or a field are plain 64-bit terms. A length is
@@ -82,6 +83,14 @@ fn vc_heap_field(hp: VcHeap, ar: VcArena, hdr: SmtScript, h: i64, slot: i64, ty:
     vc_cast(ar, ITY_I64(), ty, raw)
 }
 
+// Adds `fact` to `assumed` once.
+fn vc_heap_assume(ar: VcArena, assumed: Vec<i64>, fact: i64) {
+    if ar.assumed[fact as u64] != 1 {
+        ar.assumed[fact as u64] = 1;
+        assumed.push(fact);
+    }
+}
+
 // The length of the collection at `h`. Its first read adds the runtime's own
 // fact that a length is below the capacity mask to `assumed`.
 fn vc_heap_len(hp: VcHeap, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, h: i64) -> i64 {
@@ -89,11 +98,7 @@ fn vc_heap_len(hp: VcHeap, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, h: i6
         hp.len_arr = vc_agg_declare(ar, hdr, String::from("hlen"), VC_SORT_ARRAY64());
     }
     let len: i64 = vc_tm_app2(ar, VC_OP_SELECT(), hp.len_arr, h);
-    let fact: i64 = vc_tm_app2(ar, VC_OP_BVULT(), len, vc_tm_bv(ar, 64, 9223372036854775807, 0));
-    if ar.assumed[fact as u64] != 1 {
-        ar.assumed[fact as u64] = 1;
-        assumed.push(fact);
-    }
+    vc_heap_assume(ar, assumed, vc_tm_app2(ar, VC_OP_BVULT(), len, vc_tm_bv(ar, 64, 9223372036854775807, 0)));
     len
 }
 
@@ -184,14 +189,15 @@ fn vc_heap_param_table(f: IrFunction, n_ids: u64) -> Vec<i64> {
     param
 }
 
-// Gate rule for the memory model: "" when a function that reads memory through a
-// handle writes none of the objects a handle may name. A parameter may be the
-// very object a handle names (`q.child` is `p`), so a `FieldSet` on a parameter,
-// or a mutating `Vec` or `String` operation on a parameter, is `Skipped` when the
-// function also reads through a handle. A fresh object cannot be at a handle the
-// function loaded, so building and mutating one is unaffected. `tys` is the type
-// of every value (`vc_ty_table`).
-fn vc_heap_shape_detail(f: IrFunction, tys: Vec<i64>) -> String {
+// True when the function reads memory through a handle and also writes a
+// parameter (`FieldSet` on a struct parameter, or a mutating `Vec` or `String`
+// operation on a `Vec` or `String` parameter). A parameter may be the very object a
+// handle names (`q.child` is `p`), so such a function is modelled with the
+// parameters' own state laid over the arrays (`vc_overlay`); any other function reads
+// the arrays alone. A fresh object cannot be at a handle the function loaded, so
+// building and mutating one never needs it. `tys` is the type of every value
+// (`vc_ty_table`).
+fn vc_heap_overlay_needed(f: IrFunction, tys: Vec<i64>) -> bool {
     let mut reads: bool = false;
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
@@ -203,7 +209,7 @@ fn vc_heap_shape_detail(f: IrFunction, tys: Vec<i64>) -> String {
         }
         bi = bi + 1;
     }
-    if !reads { return String::from(""); }
+    if !reads { return false; }
     let param: Vec<i64> = vc_heap_param_table(f, tys.len());
     bi = 0;
     while bi < f.blocks.len() {
@@ -211,17 +217,15 @@ fn vc_heap_shape_detail(f: IrFunction, tys: Vec<i64>) -> String {
         let mut ii: u64 = 0;
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
-            if inst.op == IOP_FIELD_SET() && param[inst.args[0] as u64] == 1 {
-                return String::from("FieldSet on a parameter of a function that reads a collection or struct through a field");
-            }
+            if inst.op == IOP_FIELD_SET() && param[inst.args[0] as u64] == 1 { return true; }
             if inst.op == IOP_CALL() && inst.args.len() > 0 && vc_vec_kind_mutates(vc_inst_vec_kind(inst)) && param[inst.args[0] as u64] == 1 {
-                return String::from("Vec or String parameter mutated by a function that reads a collection or struct through a field");
+                return true;
             }
             ii = ii + 1;
         }
         bi = bi + 1;
     }
-    String::from("")
+    false
 }
 
 // Gate rule for a pointer written into a field (`SortedLocalNames { ids: a, names: b }`).
