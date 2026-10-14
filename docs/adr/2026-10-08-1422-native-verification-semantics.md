@@ -833,7 +833,9 @@ their parity are unchanged.
   (h[i] xor low8(s[i])) * prime`). The binder obeys the rule of #1426: built only in an assumption, in
   a positive position, never in a goal; the assumptions define `h` from the operand and cannot make a
   query unsatisfiable, and they determine `h[len]` exactly, so a counterexample is a real run (replay
-  confirms it). Calls on the same operand terms share one result. No Ackermann axiom relates the
+  confirms it). Calls on the same operand terms share one result. A claim that unrolls the fold over two or more
+  bytes of a symbolic string is a nonlinear query (a chain of 64-bit constant multiplications compared with
+  another) and can take the solver tens of seconds; a literal never does. No Ackermann axiom relates the
   hashes of two equal strings that are built differently: the solver cannot do the induction over a
   fold, so such a claim is `unknown` or `timeout`, never a proof of the wrong thing (the claim is
   true, the model only cannot show it).

@@ -4,8 +4,9 @@ module HashStrExact
 // basis `0xCBF29CE484222325` with the prime `0x100000001B3`, encoded exactly for a string of
 // any length: a closed term for a short known length (a literal, a string built by pushes),
 // else the entry `len` of a prefix array defined by a step binder in an assumption. The
-// published FNV-1a values of "", "a" and "foobar" are proven here, and so is the one-step and
-// the two-step unrolling of a symbolic string.
+// published FNV-1a values of "", "a" and "foobar" are proven here, and so is the one-step
+// unrolling of a symbolic string. (A symbolic string of two or more bytes is a nonlinear query,
+// a miter of 64-bit multipliers, that takes the solver seconds, so it is not a fixture.)
 fn empty_literal() -> bool vow {
   ensures: result == true
 } {
@@ -44,14 +45,6 @@ fn one_byte_param(s: String) -> bool vow {
   ensures: result == true
 } {
   hash_str(s) == (14695981039346656037u64 ^ (s.byte_at(0) as u64)) * 1099511628211u64
-}
-
-fn two_bytes_param(s: String) -> bool vow {
-  requires: s.len() == 2
-  ensures: result == true
-} {
-  let h1: u64 = (14695981039346656037u64 ^ (s.byte_at(0) as u64)) * 1099511628211u64;
-  hash_str(s) == (h1 ^ (s.byte_at(1) as u64)) * 1099511628211u64
 }
 
 fn copy_hashes_alike(s: String) -> bool vow {

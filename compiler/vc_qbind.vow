@@ -2,11 +2,13 @@ module VcQbind
 
 // SMT-LIB text of the string-function binders and macros of the native verifier (ADR-2026-10-08-1422,
 // #1654 addendum): the FNV-1a prefix fold of `hash_str`, the hex digits of `hex_encode`, and the
-// pair grammar of `hex_decode`. `vc_smt` renders the operand terms and hands the text over, so this
-// module knows no term, only SMT-LIB. Every bound variable is `vq_i` (the name `vc_smt` reserves for
-// its binders, which no executor symbol uses), and a `let` name is `vq_a`, `vq_b` or `vq_x`; an
-// operand is a closed term, so none is captured.
+// pair grammar of `hex_decode`, and the text helpers `vc_smt` prints its own `VC_T_QEQ`, `VC_T_QLT`
+// and `VC_T_QDIFF` binders with. `vc_smt` renders the operand terms and hands the text over, so this
+// module knows no term, only SMT-LIB. Every bound variable is `vq_i` (a name no executor symbol
+// uses), and a `let` name is `vq_a`, `vq_b` or `vq_x`; an operand is a closed term, so none is
+// captured.
 
+// The name every binder binds.
 fn vc_qb_i() -> String { String::from("vq_i") }
 
 fn vc_qb_c(v: u64) -> String {
@@ -46,7 +48,7 @@ fn vc_qb_select(arr: String, idx: String) -> String {
 
 // `low8(arr[idx])`.
 fn vc_qb_byte(arr: String, idx: String) -> String {
-    vc_qb_app2(String::from("bvand"), vc_qb_select(arr, idx), vc_qb_c(255))
+    vc_qb_app2(String::from("bvand"), vc_qb_select(arr, idx), String::from("#x00000000000000ff"))
 }
 
 fn vc_qb_ult(a: String, b: String) -> String {

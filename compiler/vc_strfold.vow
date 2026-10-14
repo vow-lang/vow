@@ -141,6 +141,29 @@ fn vc_fold_pair_at(ar: VcArena, assumed: Vec<i64>, guard: i64, arr: i64, sarr: i
     vc_str_axiom(ar, assumed, vc_tm_implies(ar, guard, vc_tm_app2(ar, VC_OP_EQ(), vc_tm_app2(ar, VC_OP_SELECT(), arr, i), vc_tm_hexval(ar, sarr, i))));
 }
 
+// `hex_decode` of a string whose length `cnt` is a small constant, with no binder: it decodes
+// exactly when `cnt` is even and each of the `cnt / 2` pairs is accepted (the ground macro), and
+// then pair `j` is byte `j`. The length is `ite(decodes, cnt / 2, 0)`, a closed term.
+fn vc_fold_decode_known(vv: VcVec, ar: VcArena, assumed: Vec<i64>, sarr: i64, slen: i64, cnt: i64, arr: i64, out: Vec<i64>) {
+    let pairs: i64 = cnt / 2;
+    let mut ok: i64 = vc_tm_bool_const(ar, cnt % 2 == 0);
+    let mut j: i64 = 0;
+    while j < pairs {
+        ok = vc_tm_and(ar, ok, vc_tm_hexpair(ar, sarr, vc_fold_c(ar, j)));
+        j = j + 1;
+    }
+    j = 0;
+    while j < pairs {
+        let at: i64 = vc_fold_c(ar, j);
+        vc_str_axiom(ar, assumed, vc_tm_implies(ar, ok, vc_tm_app2(ar, VC_OP_EQ(), vc_tm_app2(ar, VC_OP_SELECT(), arr, at), vc_tm_hexval(ar, sarr, at))));
+        j = j + 1;
+    }
+    let len: i64 = vc_tm_app3(ar, VC_OP_ITE(), ok, vc_fold_c(ar, pairs), vc_fold_c(ar, 0));
+    vc_fold_memo(vv, VC_FOLD_HEX_DECODE(), sarr, slen, arr, len);
+    out.push(arr);
+    out.push(len);
+}
+
 // `hex_decode` of the string `(sarr, slen)` as the `(array, length)` of a `Vec<u8>` pushed on
 // `out`. Elements are the decoded bytes, zero-extended slots.
 fn vc_str_hex_decode(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, sarr: i64, slen: i64, out: Vec<i64>) {
@@ -152,6 +175,11 @@ fn vc_str_hex_decode(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, 
     }
     let zero: i64 = vc_fold_c(ar, 0);
     let arr: i64 = vc_str_fresh_array(vv, ar, hdr, String::from("hd"));
+    let cnt: i64 = vc_str_const(ar, slen);
+    if cnt >= 0 && cnt <= VC_FOLD_UNFOLD() {
+        vc_fold_decode_known(vv, ar, assumed, sarr, slen, cnt, arr, out);
+        return;
+    }
     let e: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("hde")), VC_SORT_BOOL());
     let w: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("hdw")), 64);
     let pairs: i64 = vc_tm_app2(ar, VC_OP_BVLSHR(), slen, vc_fold_c(ar, 1));

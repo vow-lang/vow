@@ -4,8 +4,9 @@ module HexCodecExact
 // digits `0123456789abcdef` of the high and the low nibble of each element's low 8 bits.
 // `hex_decode(s)` is empty unless `|s|` is even and every pair is a hex digit, optionally
 // after a `+` (the runtime parses a pair with `u8::from_str_radix(pair, 16)`, which accepts a
-// leading plus sign), and then holds `|s| / 2` bytes. A literal operand is unrolled; a symbolic
-// one goes through a binder that stands only in an assumption.
+// leading plus sign), and then holds `|s| / 2` bytes. A short literal operand is unrolled (no
+// quantifier); a symbolic one goes through a binder that stands only in an assumption, and a
+// decode of an encode is proven to keep the length and the bytes.
 fn encode_literal() -> bool vow {
   ensures: result == true
 } {
@@ -77,6 +78,23 @@ fn decode_length_is_empty_or_half(s: String) -> bool vow {
 } {
   let n: u64 = hex_decode(s).len();
   n == 0 || n * 2 == s.len()
+}
+
+fn roundtrip_keeps_the_length(v: Vec<u8>) -> bool vow {
+  ensures: result == true
+} {
+  let d: Vec<u8> = hex_decode(hex_encode(v));
+  d.len() == v.len()
+}
+
+fn roundtrip_of_literal_bytes() -> bool vow {
+  ensures: result == true
+} {
+  let v: Vec<u8> = Vec::new();
+  v.push(1u8);
+  v.push(255u8);
+  let d: Vec<u8> = hex_decode(hex_encode(v));
+  d.len() == 2 && d[0] == 1u8 && d[1] == 255u8
 }
 
 fn main() -> i32 [io] {

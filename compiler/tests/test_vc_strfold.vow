@@ -167,6 +167,8 @@ fn check_op_table() -> i64 {
     if vc_vec_op_kind(String::from("__vow_string_to_lower")) != VC_STR_TO_LOWER() { return 6; }
     if vc_vec_op_kind(String::from("__vow_string_parse_i64_opt")) != VC_STR_PARSE_INT() { return 7; }
     if vc_vec_op_kind(String::from("__vow_string_parse_u64_opt")) != VC_STR_PARSE_INT() { return 8; }
+    if vc_str_unmodeled_reason(String::from("__vow_string_parse_u64_opt")).len() != 0 { return 27; }
+    if vc_str_unmodeled_reason(String::from("__vow_string_parse_i8_opt_in_arena")).len() == 0 { return 28; }
     if vc_vec_op_kind(String::from("__vow_string_parse_u128_opt")) != VC_STR_PARSE_INT() { return 9; }
     if vc_vec_op_kind(String::from("__vow_string_replace")) != VC_STR_NONE() { return 10; }
     if vc_vec_op_kind(String::from("__vow_string_split")) != VC_STR_NONE() { return 11; }
@@ -291,13 +293,43 @@ fn check_decode_definition_is_rendered() -> i64 {
     0
 }
 
+// fn f() -> bool { hex_decode("0a1b").len() == 2 } with `ensures: result`: a literal of known length
+// decodes with no binder.
+fn decode_literal() -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(ir_inst_new(0, IOP_CONST_STR(), ITY_PTR(), Vec::new(), IDATA_CONST_STR(), 0, VC_STR_RESOLVED(), String::from("0a1b")));
+    insts.push(call1(1, ITY_PTR(), 0, String::from("__vow_string_literal")));
+    insts.push(call1(2, ITY_PTR(), 1, String::from("__vow_hex_decode")));
+    insts.push(call1(3, ITY_U64(), 2, String::from("__vow_vec_len")));
+    insts.push(ir_inst_new(4, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_I64(), 2, 0, String::from("")));
+    insts.push(mk_eq(5, 3, 4));
+    insts.push(mk_ens(6, 5, 0));
+    insts.push(mk_inst_return(7, 5));
+    one_block(Vec::new(), ITY_BOOL(), insts)
+}
+
+// A decode of a short known length is quantifier-free: the pairs are ground macros, the length is
+// `ite(decodes, 2, 0)` and each byte is tied to its pair under `decodes`.
+fn check_decode_of_known_length_is_ground() -> i64 {
+    let f: IrFunction = decode_literal();
+    if vc_skip_reason(f).len() != 0 { return 140; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 141; }
+    let q: String = query(cs, 0);
+    if contains(q, String::from("forall")) { return 142; }
+    if contains(q, String::from("(declare-const hde")) { return 143; }
+    if !contains(q, String::from("(set-logic QF_ABV)")) { return 144; }
+    if count_of(q, String::from("(let ((vq_a")) < 4 { return 145; }
+    0
+}
+
 // The binder templates, pinned to the byte: a digit, an FNV step, a pair.
 fn check_templates() -> i64 {
     let step: String = vc_qb_fold(String::from("h"), String::from("s"), String::from("n"));
-    let want: String = String::from("(forall ((vq_i (_ BitVec 64))) (=> (bvult vq_i n) (= (select h (bvadd vq_i (_ bv1 64))) (bvmul (bvxor (select h vq_i) (bvand (select s vq_i) (_ bv255 64))) (_ bv1099511628211 64)))))");
+    let want: String = String::from("(forall ((vq_i (_ BitVec 64))) (=> (bvult vq_i n) (= (select h (bvadd vq_i (_ bv1 64))) (bvmul (bvxor (select h vq_i) (bvand (select s vq_i) #x00000000000000ff)) (_ bv1099511628211 64)))))");
     if step != want { return 100; }
     let pair: String = vc_qb_hexpair(String::from("s"), String::from("i"));
-    if !string_starts_with_text(pair, String::from("(let ((vq_a (bvand (select s (bvmul i (_ bv2 64))) (_ bv255 64)))) (let ((vq_b (bvand (select s (bvadd (bvmul i (_ bv2 64)) (_ bv1 64))) (_ bv255 64)))) ")) { return 101; }
+    if !string_starts_with_text(pair, String::from("(let ((vq_a (bvand (select s (bvmul i (_ bv2 64))) #x00000000000000ff))) (let ((vq_b (bvand (select s (bvadd (bvmul i (_ bv2 64)) (_ bv1 64))) #x00000000000000ff))) ")) { return 101; }
     if !contains(pair, String::from("(= vq_a (_ bv43 64))")) { return 102; }
     let val: String = vc_qb_hexval(String::from("s"), String::from("i"));
     if !contains(val, String::from("(ite (= vq_a (_ bv43 64)) ")) { return 103; }
@@ -355,6 +387,7 @@ fn main() -> i32 {
     if r == 0 { r = check_hash_same_operand_shares(); }
     if r == 0 { r = check_encode_definition_is_rendered(); }
     if r == 0 { r = check_decode_definition_is_rendered(); }
+    if r == 0 { r = check_decode_of_known_length_is_ground(); }
     if r == 0 { r = check_templates(); }
     if r == 0 { r = check_parse_hook(); }
     if r == 0 { r = check_text_hook_facts(); }

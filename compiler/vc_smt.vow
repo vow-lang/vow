@@ -228,21 +228,10 @@ fn vc_ext_prefix(kind: i64, amount: i64) -> String {
     out
 }
 
-// The name a `VC_T_QEQ` binds. No executor symbol uses it and the operands of a
-// `VC_T_QEQ` are closed terms, so it is never captured.
-fn vc_qeq_var() -> String { String::from("vq_i") }
-
-fn vc_qeq_byte(arr: String, idx: String) -> String {
-    let out: String = String::from("(bvand ");
-    out.push_str(vc_select_text(arr, idx));
-    out.push_str(String::from(" #x00000000000000ff)"));
-    out
-}
-
 // `(bvadd vq_i off)`.
 fn vc_qeq_shifted(off: String) -> String {
     let out: String = String::from("(bvadd ");
-    out.push_str(vc_qeq_var());
+    out.push_str(vc_qb_i());
     out.push_str(String::from(" "));
     out.push_str(off);
     out.push_str(String::from(")"));
@@ -251,7 +240,7 @@ fn vc_qeq_shifted(off: String) -> String {
 
 // `(forall ((vq_i (_ BitVec 64))) (=> (bvult vq_i n) (= low8(a[vq_i]) low8(b[vq_i + k]))))`.
 fn vc_qeq_text(ar: VcArena, t: i64) -> String {
-    let i: String = vc_qeq_var();
+    let i: String = vc_qb_i();
     let shifted: String = vc_qeq_shifted(vc_term_text(ar, ar.c[t as u64]));
     let out: String = String::from("(forall ((");
     out.push_str(i);
@@ -260,9 +249,9 @@ fn vc_qeq_text(ar: VcArena, t: i64) -> String {
     out.push_str(String::from(" "));
     out.push_str(vc_term_text(ar, ar.aux[t as u64]));
     out.push_str(String::from(") (= "));
-    out.push_str(vc_qeq_byte(vc_term_text(ar, ar.a[t as u64]), i));
+    out.push_str(vc_qb_byte(vc_term_text(ar, ar.a[t as u64]), i));
     out.push_str(String::from(" "));
-    out.push_str(vc_qeq_byte(vc_term_text(ar, ar.b[t as u64]), shifted));
+    out.push_str(vc_qb_byte(vc_term_text(ar, ar.b[t as u64]), shifted));
     out.push_str(String::from(")))"));
     out
 }
@@ -270,9 +259,9 @@ fn vc_qeq_text(ar: VcArena, t: i64) -> String {
 // `(forall ((vq_i (_ BitVec 64))) (=> (bvule vq_i l) <body>))`.
 fn vc_bound_text(ar: VcArena, t: i64, body: String) -> String {
     let out: String = String::from("(forall ((");
-    out.push_str(vc_qeq_var());
+    out.push_str(vc_qb_i());
     out.push_str(String::from(" (_ BitVec 64))) (=> (bvule "));
-    out.push_str(vc_qeq_var());
+    out.push_str(vc_qb_i());
     out.push_str(String::from(" "));
     out.push_str(vc_term_text(ar, ar.aux[t as u64]));
     out.push_str(String::from(") "));
@@ -281,19 +270,10 @@ fn vc_bound_text(ar: VcArena, t: i64, body: String) -> String {
     out
 }
 
-fn vc_select_text(arr: String, idx: String) -> String {
-    let out: String = String::from("(select ");
-    out.push_str(arr);
-    out.push_str(String::from(" "));
-    out.push_str(idx);
-    out.push_str(String::from(")"));
-    out
-}
-
 // `forall i <= l. a[i] < b`.
 fn vc_qlt_text(ar: VcArena, t: i64) -> String {
     let body: String = String::from("(bvult ");
-    body.push_str(vc_select_text(vc_term_text(ar, ar.a[t as u64]), vc_qeq_var()));
+    body.push_str(vc_qb_select(vc_term_text(ar, ar.a[t as u64]), vc_qb_i()));
     body.push_str(String::from(" "));
     body.push_str(vc_term_text(ar, ar.b[t as u64]));
     body.push_str(String::from(")"));
@@ -302,12 +282,12 @@ fn vc_qlt_text(ar: VcArena, t: i64) -> String {
 
 // `forall i <= l. low8(a[c[i]]) != low8(b[i + c[i]])`.
 fn vc_qdiff_text(ar: VcArena, t: i64) -> String {
-    let pick: String = vc_select_text(vc_term_text(ar, ar.c[t as u64]), vc_qeq_var());
+    let pick: String = vc_qb_select(vc_term_text(ar, ar.c[t as u64]), vc_qb_i());
     let shifted: String = vc_qeq_shifted(pick);
     let body: String = String::from("(distinct ");
-    body.push_str(vc_qeq_byte(vc_term_text(ar, ar.a[t as u64]), pick));
+    body.push_str(vc_qb_byte(vc_term_text(ar, ar.a[t as u64]), pick));
     body.push_str(String::from(" "));
-    body.push_str(vc_qeq_byte(vc_term_text(ar, ar.b[t as u64]), shifted));
+    body.push_str(vc_qb_byte(vc_term_text(ar, ar.b[t as u64]), shifted));
     body.push_str(String::from(")"));
     vc_bound_text(ar, t, body)
 }
