@@ -2,6 +2,8 @@
 // up to its model capacity (128); the native model has no capacity.
 module VecParamLenUnbounded
 
+// TEST: esbmc-capacity-artifact "ESBMC fails its Vec capacity assertion in grow; the postcondition holds for every Vec length"
+
 fn grow(v: Vec<i64>) vow {
   ensures: v.len() > 0
 } {

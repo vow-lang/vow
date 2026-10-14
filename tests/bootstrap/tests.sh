@@ -52,6 +52,18 @@ make_fake_repo() {
 
     cp tests/bootstrap/fake_compiler.sh "$repo/target/release/vow"
     chmod +x "$repo/target/release/vow"
+
+    cat >"$repo/scripts/verify_compiler.py" <<'PY'
+import os
+import sys
+
+with open(os.environ["VOW_BOOTSTRAP_TEST_LOG"], "a", encoding="utf-8") as log:
+    log.write(f"{sys.argv[0]} {' '.join(sys.argv[1:])}\n")
+
+if os.environ.get("VOW_BOOTSTRAP_TEST_NATIVE_FAIL") == "1":
+    print("fake verify_compiler: native verification failed", file=sys.stderr)
+    sys.exit(1)
+PY
 }
 
 run_bootstrap() {
@@ -266,6 +278,72 @@ test_fixed_point_mismatch_skips_verify_pass() {
     assert_not_contains "$(cat "$invocations")" " verify " "diverges invocations"
 }
 
+test_native_verify_checks_both_stages_before_promotion() {
+    local paths invocations native
+    paths=$(run_bootstrap native_verify --no-verify --native-verify)
+    invocations=$(sed -n '3p' <<<"$paths")
+
+    [ "$(invocation_count "$invocations")" -eq 4 ] || fail "native_verify: expected three builds and one native pass"
+    native=$(sed -n '4p' "$invocations")
+    assert_contains "$native" "verify_compiler.py --native-only" "native_verify pass"
+    assert_contains "$native" "--vowc build/vowc --vowc build/vowc2" "native_verify pass"
+    assert_contains "$native" "--verify-jobs 2" "native_verify pass"
+    assert_not_contains "$native" "--no-verify" "native_verify pass"
+}
+
+test_native_verify_jobs_come_from_the_environment() {
+    local paths invocations
+    paths=$(VOW_BOOTSTRAP_NATIVE_JOBS=5 run_bootstrap native_jobs --no-verify --native-verify)
+    invocations=$(sed -n '3p' <<<"$paths")
+
+    assert_contains "$(sed -n '4p' "$invocations")" "--verify-jobs 5" "native_jobs pass"
+}
+
+test_native_verify_is_off_by_default() {
+    local paths invocations
+    paths=$(run_bootstrap native_off)
+    invocations=$(sed -n '3p' <<<"$paths")
+
+    assert_not_contains "$(cat "$invocations")" "verify_compiler.py" "native_off invocations"
+}
+
+test_native_verify_runs_alongside_the_esbmc_pass() {
+    local paths invocations
+    paths=$(run_bootstrap native_and_esbmc --native-verify)
+    invocations=$(sed -n '3p' <<<"$paths")
+
+    [ "$(invocation_count "$invocations")" -eq 5 ] || fail "native_and_esbmc: expected five invocations"
+    assert_contains "$(sed -n '4p' "$invocations")" "build/vowc2 verify" "native_and_esbmc ESBMC pass"
+    assert_contains "$(sed -n '5p' "$invocations")" "verify_compiler.py" "native_and_esbmc native pass"
+}
+
+test_native_verify_failure_fails_bootstrap_without_promotion() {
+    local paths stdout repo
+    paths=$(VOW_BOOTSTRAP_TEST_NATIVE_FAIL=1 run_bootstrap_expect_failure native_fails --no-verify --native-verify)
+    stdout=$(sed -n '1p' <<<"$paths")
+    repo=$(sed -n '4p' <<<"$paths")
+
+    assert_not_contains "$(cat "$stdout")" "Bootstrap successful" "native_fails stdout"
+    assert_contains "$(cat "$stdout")" "native-verify.json" "native_fails stdout"
+    [ -e "$repo/build/vowc2" ] || fail "native_fails: build/vowc2 must not be promoted"
+}
+
+test_native_verify_is_skipped_when_the_fixed_point_diverges() {
+    local paths invocations
+    paths=$(VOW_BOOTSTRAP_TEST_DIVERGE=1 run_bootstrap_expect_failure native_diverges --no-verify --native-verify)
+    invocations=$(sed -n '3p' <<<"$paths")
+
+    assert_not_contains "$(cat "$invocations")" "verify_compiler.py" "native_diverges invocations"
+}
+
+test_native_verify_jobs_must_be_a_positive_integer() {
+    local paths stdout
+    paths=$(VOW_BOOTSTRAP_NATIVE_JOBS='2; true' run_bootstrap_expect_failure native_jobs_bad --no-verify --native-verify)
+    stdout=$(sed -n '1p' <<<"$paths")
+
+    assert_not_contains "$(cat "$stdout")" "Stage 1" "native_jobs_bad stdout"
+}
+
 test_combined_flags_warn_and_preserve_no_verify_precedence
 test_single_flags_do_not_warn
 test_default_sequence
@@ -276,5 +354,12 @@ test_verify_failure_fails_bootstrap_without_promotion
 test_fixed_point_mismatch_skips_verify_pass
 test_no_cache_flag_is_forwarded_to_all_stages
 test_no_cache_combined_with_no_verify
+test_native_verify_checks_both_stages_before_promotion
+test_native_verify_jobs_come_from_the_environment
+test_native_verify_is_off_by_default
+test_native_verify_runs_alongside_the_esbmc_pass
+test_native_verify_failure_fails_bootstrap_without_promotion
+test_native_verify_is_skipped_when_the_fixed_point_diverges
+test_native_verify_jobs_must_be_a_positive_integer
 
 echo "bootstrap tests passed"

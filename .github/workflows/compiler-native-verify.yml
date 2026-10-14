@@ -1,0 +1,109 @@
+name: Compiler native verify
+
+# The native verifier over the whole compiler (epic #1398, issue #1432). Two
+# checks from `scripts/verify_compiler.py`, both repeatable by hand with the
+# same commands:
+#
+#   * the bootstrap's native pass (`bootstrap.sh --native-verify`): the Stage 1
+#     and Stage 2 `vowc` each verify every `compiler/*.vow` source with
+#     `--backend native` and must reach identical outcomes, with every skipped
+#     function tracked in `scripts/native_compiler_skips.toml`;
+#   * the ESBMC comparison: per-function verdicts of both backends over the same
+#     roots, so a function native is weaker on, or a skip-list entry whose gap
+#     has closed, fails the run. The cost gate of `scripts/verify_perf.py`
+#     (wall-clock and peak RSS) is reported here but only enforced by a local
+#     run on an idle host: shared runners are too noisy to gate a ratio on.
+#
+# Off the pull-request path, like bootstrap.yml and native-oracle.yml: the job
+# is bootstrap-class in runtime. Every push to `main` runs it, so a regression is
+# attributed to one merge; the nightly run is the backstop.
+on:
+  push:
+    branches: [main]
+  schedule:
+    # 08:07 UTC -- clear of cargo-mutants (02:17), bootstrap (03:53),
+    # equivalence (04:41), native-oracle (05:37), arena-verify (06:29) and
+    # full-test (07:20).
+    - cron: "7 8 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Classify changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: classify
+        env:
+          BASE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: python3 scripts/ci_docs_only.py --base "$BASE_SHA" --head "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+  compiler:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    name: Native verify of compiler/*.vow
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install ESBMC
+        uses: ./.github/actions/install-esbmc
+      - name: Install Bitwuzla
+        uses: ./.github/actions/install-bitwuzla
+      - name: Bootstrap with the native verification pass
+        # Codegen does not depend on verification, so the fixed point is as
+        # meaningful as in bootstrap.yml; the ESBMC pass belongs to that workflow.
+        run: scripts/bootstrap.sh --no-verify --native-verify
+      - name: Native versus ESBMC over the whole compiler
+        # Runs even when the stage check failed, so one run reports both.
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/verify_compiler.py --runs 1 --no-perf-gate \
+            --output "$RUNNER_TEMP/compiler-compare.json"
+      - name: Summarize the comparison
+        if: ${{ !cancelled() }}
+        env:
+          REPORT: ${{ runner.temp }}/compiler-compare.json
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["REPORT"])
+          if not path.exists():
+              print("### Compiler native verify: no comparison report")
+          else:
+              gate = json.loads(path.read_text())["gate"]
+              print("### Compiler native verify")
+              print()
+              print("| criterion | result |")
+              print("|---|---|")
+              for name, ok in gate["criteria"].items():
+                  print(f"| {name} | {'ok' if ok else 'FAIL'} |")
+              for line in gate["verdict_failures"] + gate["native_problems"]:
+                  print(f"- {line}")
+          PY
+      - name: Upload the reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: compiler-native-verify
+          path: |
+            ${{ runner.temp }}/compiler-compare.json
+            build/native-verify.json
+          if-no-files-found: warn
