@@ -985,3 +985,30 @@ directive. Each one's postcondition (`result == 1`) holds on every returning run
 failing programs, only programs ESBMC's model capacity could not represent. The directive is
 read from the file, so a fixture whose ESBMC counterexample is anything but a capacity assertion
 stays a `soundness` finding.
+
+## Addendum (#1663): `Vec<i128>` and `Vec<u128>` elements
+
+A 128-bit element takes two 8-byte slots, and the lowerer reaches it through the address of the
+element: `__vow_vec_push_wide_ptr`, `__vow_vec_get_wide_ptr` and `__vow_vec_set_wide_ptr` return a
+`ptr`, and a two-slot `WideSlot` `FieldGet`/`FieldSet` follows (`compiler/vc_wide.vow`). The model
+keeps the one-slot `Vec` array and gives element `i` the keys `2i` (low limb) and `2i + 1` (high
+limb), so the length, the bounds obligation (`vec bounds`, vow id `4294967293`), `pop`, the loop cut
+and the havoc are the one-slot model's own. A length is below `2^63`, so an in-bounds index cannot
+wrap when doubled; an out-of-bounds one is already a refuted obligation and assumed away after it.
+
+- **Address.** Not a term: the executor remembers, per address a wide call defines, the `Vec` slot,
+  its object and the element index (`VcWalk.wslot/wobj/widx`). A `push` extends the length and
+  leaves the new element unconstrained until the write that follows it; `get` and `set` are bounds
+  obligations. The write is a pair of `store`s, the read a `concat` of two `select`s.
+- **Gate.** The call shapes (`push` one operand; `get`/`set` a `Vec` and a 64-bit index; result
+  `ptr`) and one shape rule: an address is the target of a `WideSlot` access with slot 0 and nothing
+  else (never a `Phi` or call operand, never a stored value). A wide call on a handle (a `Vec<i128>`
+  held in a struct field) is not modelled by `vc_heap` and stays `Skipped`.
+- **Counterexamples.** A parameter whose elements the function accesses as 128-bit values
+  (`VcVec.pv_wide`, `VcClaims.vec_wide`) lists each element as one 128-bit entry in its own type
+  (`i128` signed, `u128` unsigned), asked as the `concat` of its two limbs. Replay rebuilds the
+  `Vec<i128>`/`Vec<u128>` from those decimals with the literal suffix of the type.
+- **Left out.** Pointer elements (`Vec<Vec<_>>`, `Vec<String>`, `Vec<struct>`) are still `Skipped`
+  (#1663); they need an object-identity model.
+- **Verdict impact.** Native only. ESBMC keeps skipping these functions, so any corpus fixture that
+  reads or pushes a 128-bit element is a native proof or refutation with no ESBMC verdict to compare.
