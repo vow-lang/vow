@@ -1,0 +1,26 @@
+module FieldSetMergedParams
+
+struct Cell { v: i64 }
+
+fn pick(a: Cell, b: Cell, x: i64) -> i64 vow {
+  ensures: result == 5
+} {
+  let p: Cell = if x > 0 { a } else { b };
+  p.v = 5;
+  if x > 0 { a.v } else { b.v }
+}
+
+fn nested(a: Cell, b: Cell, c: Cell, x: i64, y: i64) -> i64 vow {
+  ensures: result == 9
+} {
+  let p: Cell = if x > 0 { a } else { b };
+  let q: Cell = if y > 0 { p } else { c };
+  q.v = 9;
+  if y > 0 { if x > 0 { a.v } else { b.v } } else { c.v }
+}
+
+fn main() -> i32 [io] {
+  print_i64(pick(Cell { v: 0 }, Cell { v: 0 }, 1));
+  print_i64(nested(Cell { v: 0 }, Cell { v: 0 }, Cell { v: 0 }, 1, 0));
+  0
+}

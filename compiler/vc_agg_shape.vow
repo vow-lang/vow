@@ -1,0 +1,109 @@
+module VcAggShape
+
+use ir
+use ir_dominance
+
+// Gate and set-up for the aggregate model (`vc_agg`): which writes it accepts and
+// which parameters it must treat as possibly one object. Both read the IR only.
+
+// Op of the instruction that defines each id, or -1.
+fn vc_agg_def_ops(f: IrFunction, n_ids: u64) -> Vec<i64> {
+    let def_op: Vec<i64> = dom_fill(n_ids, -1);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.id >= 0 {
+                def_op[inst.id as u64] = inst.op;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    def_op
+}
+
+// Gate rule for writes: a `FieldSet` must target a `RegionAlloc`, a pointer
+// parameter or a pointer Phi merging such objects. "" when every write is, else
+// the detail of an `unsupported-opcode` skip. `n_ids` is the size of the
+// instruction-id space.
+fn vc_agg_shape_detail(f: IrFunction, n_ids: u64) -> String {
+    let def_op: Vec<i64> = vc_agg_def_ops(f, n_ids);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_FIELD_SET() {
+                let op: i64 = def_op[inst.args[0] as u64];
+                if op != IOP_REGION_ALLOC() && op != IOP_GET_ARG() && op != IOP_PHI() {
+                    return String::from("FieldSet on a value that is neither an allocation, a parameter nor a merge of them");
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    String::from("")
+}
+
+// The parameter index of each `GetArg` of a pointer parameter, by instruction id.
+fn vc_agg_arg_params(f: IrFunction, n_ids: u64) -> Vec<i64> {
+    let arg_param: Vec<i64> = dom_fill(n_ids, -1);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_GET_ARG() && inst.ty == ITY_PTR() && inst.id >= 0 && inst.dv >= 0 {
+                arg_param[inst.id as u64] = inst.dv;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    arg_param
+}
+
+// The ascending indices of the pointer parameters the function reads or writes a
+// field of, or merges in a Phi, when it also writes a field through a parameter
+// or a Phi and there are at least two of them; else none. Parameters of any
+// aggregate type may be the very same object (the caller can pass one value
+// twice), so a write through one is a write through the others whenever they are.
+// A function that writes only objects it allocated needs no identity.
+fn vc_agg_alias_params(f: IrFunction, n_ids: u64) -> Vec<i64> {
+    let def_op: Vec<i64> = vc_agg_def_ops(f, n_ids);
+    let arg_param: Vec<i64> = vc_agg_arg_params(f, n_ids);
+    let marked: Vec<i64> = dom_fill(f.params.len(), 0);
+    let mut writes_param: bool = false;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            let touches: bool = inst.op == IOP_FIELD_SET() || inst.op == IOP_FIELD_GET() || inst.op == IOP_UPSILON();
+            if touches && inst.args.len() > 0 && inst.args[0] >= 0 && (inst.args[0] as u64) < n_ids && arg_param[inst.args[0] as u64] >= 0 {
+                marked[arg_param[inst.args[0] as u64] as u64] = 1;
+            }
+            if inst.op == IOP_FIELD_SET() {
+                let op: i64 = def_op[inst.args[0] as u64];
+                if op == IOP_GET_ARG() || op == IOP_PHI() { writes_param = true; }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    let out: Vec<i64> = Vec::new();
+    let mut k: u64 = 0;
+    while k < marked.len() {
+        if marked[k] == 1 && writes_param { out.push(k as i64); }
+        k = k + 1;
+    }
+    if out.len() < 2 { return Vec::new(); }
+    out
+}

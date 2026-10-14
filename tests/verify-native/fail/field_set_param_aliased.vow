@@ -1,0 +1,22 @@
+// TEST: counterexample-fn "both"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The two parameters may be one object: then the write to `b` is the one `a.v`
+// reads back, so the clause fails. The counterexample says so as equal
+// identities.
+module FieldSetParamAliased
+
+struct Cell { v: i64 }
+
+fn both(a: Cell, b: Cell) -> i64 vow {
+  ensures: result == 1
+} {
+  a.v = 1;
+  b.v = 2;
+  a.v
+}
+
+fn main() -> i32 [io] {
+  print_i64(both(Cell { v: 0 }, Cell { v: 0 }));
+  0
+}

@@ -1,5 +1,3 @@
-// TEST: category unverifiable
-// TEST: skip-reason unsupported-opcode
 module FieldSetThroughMerged
 
 struct Cell { v: i64 }

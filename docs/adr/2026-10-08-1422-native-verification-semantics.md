@@ -205,7 +205,10 @@ known limits.
   a field write is path-conditional (`ite(pc, new, old)`), so a write in a
   branch, to a value built before one, or to the only pointer parameter is
   modelled; a write through a merged value, or to a parameter of a function with
-  another pointer parameter, stays `Skipped`.
+  another pointer parameter, stays `Skipped`. *Addendum (#1691):* a write through a
+  pointer Phi is a write to each merged object under its edge condition, and
+  aggregate parameters carry a free identity (equal identities are one object, so
+  transitivity is free) through which a write to one reaches the others.
 - **Callee inlining** (epic D4) makes verification cost grow with the call tree;
   modular assume-guarantee verification is a separate future ADR.
 - **128-bit aggregates** (struct fields) stay gated. *Addendum (#1421):* struct

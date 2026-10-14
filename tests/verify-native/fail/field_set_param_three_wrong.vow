@@ -1,0 +1,21 @@
+// TEST: counterexample-fn "outer"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// `a` and `c` may be one object while `b` is another, so `a.v` can read `3`.
+module FieldSetParamThreeWrong
+
+struct Cell { v: i64 }
+
+fn outer(a: Cell, b: Cell, c: Cell) -> i64 vow {
+  ensures: result == 1 || result == 2
+} {
+  a.v = 1;
+  b.v = 2;
+  c.v = 3;
+  a.v
+}
+
+fn main() -> i32 [io] {
+  print_i64(outer(Cell { v: 0 }, Cell { v: 0 }, Cell { v: 0 }));
+  0
+}

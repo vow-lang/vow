@@ -221,6 +221,24 @@ fn replay_int_literal(name: String, raw: String) -> String {
     raw
 }
 
+// The identity the model gave aggregate parameter `pname` (`<param>.alias`), or
+// "" when the function has no aliasable parameters. Two parameters with the same
+// identity are one object, so the harness passes one value for both.
+fn replay_alias_id(names: Vec<String>, vals: Vec<String>, pname: String) -> String {
+    replay_cex_value(names, vals, str3r(pname, String::from(".alias"), String::from("")))
+}
+
+// Position of `id` in `seen`, or -1; an empty id is never found.
+fn replay_alias_find(seen: Vec<String>, id: String) -> i64 {
+    if id.len() == 0 { return -1; }
+    let mut i: u64 = 0u64;
+    while i < seen.len() {
+        if seen[i] == id { return i as i64; }
+        i = i + 1u64;
+    }
+    -1
+}
+
 fn replay_slot_key(pname: String, slot: i64) -> String {
     let out: String = String::from(pname);
     out.push_str(String::from("."));
