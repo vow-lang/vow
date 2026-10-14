@@ -1,3 +1,4 @@
+// TEST: replay-skipped parameter v: element type `f64` is not rebuilt by replay (a listed float and a raw slot are both digits, #1748)
 // TEST: counterexample-fn "second"
 // TEST: counterexample-vow-id 1
 // TEST: counterexample-blame Callee
