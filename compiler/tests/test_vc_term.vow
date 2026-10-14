@@ -712,27 +712,60 @@ fn quotient_on_right(form: i64) -> bool {
     form == 0 || form == 2 || form == 4 || form == 5
 }
 
+// The operand values a width-`w` check runs over: every value at width 8, the
+// edges and a spread of mid-range values at width 16.
+fn quotient_samples(w: i64) -> Vec<i64> {
+    let vals: Vec<i64> = Vec::new();
+    if w == 8 {
+        let mut k: i64 = 0;
+        while k < 256 {
+            vals.push(k);
+            k = k + 1;
+        }
+        return vals;
+    }
+    vals.push(0);
+    vals.push(1);
+    vals.push(2);
+    vals.push(3);
+    vals.push(5);
+    vals.push(7);
+    vals.push(100);
+    vals.push(255);
+    vals.push(256);
+    vals.push(300);
+    vals.push(1000);
+    vals.push(32766);
+    vals.push(32767);
+    vals.push(32768);
+    vals.push(32769);
+    vals.push(40000);
+    vals.push(65534);
+    vals.push(65535);
+    vals
+}
+
 // `v <op> (c / d)` as a raw node and through the constructors, over every pair
-// of 8-bit values: the constructors rewrite exactly the forms the rule covers
-// (an `ite` on the divisor's sign), and the rewrite agrees with the raw node
-// everywhere; the rest stay the plain comparison.
-fn check_quotient_cmp(signed: bool, form: i64, c: i64) -> i64 {
+// of 8-bit values (and a sample at width 16): the constructors rewrite exactly
+// the forms the rule covers (an `ite` on the divisor's sign), and the rewrite
+// agrees with the raw node everywhere; the rest stay the plain comparison.
+fn check_quotient_cmp(signed: bool, form: i64, c: i64, w: i64) -> i64 {
     let tag: i64 = 400 + flag(signed) * 100 + form;
     let op: i64 = quotient_form_op(signed, form);
     let dop: i64 = { if signed { VC_OP_BVSDIV() } else { VC_OP_BVUDIV() } };
     let raw: VcArena = vc_arena_new();
     let rv: i64 = vc_tm_var(raw, String::from("v"));
     let rd: i64 = vc_tm_var(raw, String::from("d"));
-    let rq: i64 = vc_arena_push(raw, VC_T_APP(), vc_tm_bv(raw, 8, c, 0), rd, -1, dop);
+    let rq: i64 = vc_arena_push(raw, VC_T_APP(), vc_tm_bv(raw, w, c, 0), rd, -1, dop);
     let mut rc: i64 = vc_arena_push(raw, VC_T_APP(), rq, rv, -1, op);
     if quotient_on_right(form) { rc = vc_arena_push(raw, VC_T_APP(), rv, rq, -1, op); }
     let smart: VcArena = vc_arena_new();
     let sv: i64 = vc_tm_var(smart, String::from("v"));
     let sd: i64 = vc_tm_var(smart, String::from("d"));
-    let sq: i64 = vc_tm_app2(smart, dop, vc_tm_bv(smart, 8, c, 0), sd);
+    let sq: i64 = vc_tm_app2(smart, dop, vc_tm_bv(smart, w, c, 0), sd);
     let mut sc: i64 = vc_tm_app2(smart, op, sq, sv);
     if quotient_on_right(form) { sc = vc_tm_app2(smart, op, sv, sq); }
-    let covered: bool = form < 4 && (!signed || c < 128);
+    let covered: bool = form < 4 && (!signed || c < (1 << (w - 1)));
     let is_ite: bool = smart.kinds[sc as u64] == VC_T_APP() && smart.aux[sc as u64] == VC_OP_ITE();
     if covered != is_ite { return tag; }
     if !covered {
@@ -743,21 +776,22 @@ fn check_quotient_cmp(signed: bool, form: i64, c: i64) -> i64 {
         return 0;
     }
     let vs: Vec<i64> = Vec::new();
-    vs.push(8);
-    vs.push(8);
-    let mut a: i64 = 0;
-    while a < 256 {
-        let mut b: i64 = 0;
-        while b < 256 {
+    vs.push(w);
+    vs.push(w);
+    let vals: Vec<i64> = quotient_samples(w);
+    let mut i: u64 = 0;
+    while i < vals.len() {
+        let mut j: u64 = 0;
+        while j < vals.len() {
             let env: Vec<i64> = Vec::new();
-            env.push(a);
-            env.push(b);
+            env.push(vals[i]);
+            env.push(vals[j]);
             let x: i64 = ev(raw, rc, env, vs, fresh_memo(raw.kinds.len()));
             let y: i64 = ev(smart, sc, env, vs, fresh_memo(smart.kinds.len()));
             if x != y { return tag + 2000; }
-            b = b + 1;
+            j = j + 1;
         }
-        a = a + 1;
+        i = i + 1;
     }
     0
 }
@@ -777,7 +811,28 @@ fn check_quotient_cmp_exhaustive() -> i64 {
         while f < 8 && r == 0 {
             let mut k: u64 = 0;
             while k < cs.len() && r == 0 {
-                r = check_quotient_cmp(s == 1, f, cs[k]);
+                r = check_quotient_cmp(s == 1, f, cs[k], 8);
+                k = k + 1;
+            }
+            f = f + 1;
+        }
+        s = s + 1;
+    }
+    let ws: Vec<i64> = Vec::new();
+    ws.push(0);
+    ws.push(1);
+    ws.push(5);
+    ws.push(300);
+    ws.push(32767);
+    ws.push(32768);
+    ws.push(65535);
+    s = 0;
+    while s < 2 && r == 0 {
+        let mut f: i64 = 0;
+        while f < 8 && r == 0 {
+            let mut k: u64 = 0;
+            while k < ws.len() && r == 0 {
+                r = check_quotient_cmp(s == 1, f, ws[k], 16);
                 k = k + 1;
             }
             f = f + 1;

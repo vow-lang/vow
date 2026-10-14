@@ -561,17 +561,16 @@ fn vc_simp_cmp_quotient(ar: VcArena, op: i64, x: i64, y: i64) -> i64 {
     if w > 64 || (signed && vc_bvfold_sext(w, ar.aux[c as u64]) < 0) { return -1; }
     let zero: i64 = vc_tm_bv(ar, w, 0, 0);
     let prod: i64 = vc_tm_app2(ar, VC_OP_BVMUL(), v, d);
+    let gt: i64 = { if signed { VC_OP_BVSGT() } else { VC_OP_BVUGT() } };
+    let le: i64 = { if signed { VC_OP_BVSLE() } else { VC_OP_BVULE() } };
+    let pos: i64 = vc_tm_app2(ar, gt, d, zero);
+    let fits: i64 = vc_tm_app2(ar, le, prod, c);
+    let mulo: i64 = vc_tm_app2(ar, { if signed { VC_OP_BVSMULO() } else { VC_OP_BVUMULO() } }, v, d);
     let mut inner: i64 = 0;
-    let mut pos: i64 = 0;
     if signed {
-        pos = vc_tm_app2(ar, VC_OP_BVSGT(), d, zero);
-        let fits: i64 = vc_tm_app2(ar, VC_OP_BVSLE(), prod, c);
-        let wraps: i64 = vc_tm_app2(ar, VC_OP_BVSMULO(), v, d);
-        inner = vc_tm_app3(ar, VC_OP_ITE(), wraps, vc_tm_app2(ar, VC_OP_BVSLT(), v, zero), fits);
+        inner = vc_tm_app3(ar, VC_OP_ITE(), mulo, vc_tm_app2(ar, VC_OP_BVSLT(), v, zero), fits);
     } else {
-        pos = vc_tm_app2(ar, VC_OP_BVUGT(), d, zero);
-        let fits: i64 = vc_tm_app2(ar, VC_OP_BVULE(), prod, c);
-        inner = vc_tm_and(ar, vc_tm_app1(ar, VC_OP_NOT(), vc_tm_app2(ar, VC_OP_BVUMULO(), v, d)), fits);
+        inner = vc_tm_and(ar, vc_tm_app1(ar, VC_OP_NOT(), mulo), fits);
     }
     if shape.negated { inner = vc_tm_app1(ar, VC_OP_NOT(), inner); }
     let original: i64 = vc_arena_intern(ar, VC_T_APP(), x, y, -1, op);

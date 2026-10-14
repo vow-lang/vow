@@ -118,7 +118,10 @@ The guard is `check_quotient_cmp_exhaustive` in
 forms and constants at the edges (0, 1, 5, 127, 128, 255) it compares the raw
 and simplified terms over all 65 536 width-8 operand pairs and checks that
 exactly the four covered forms (and non-negative signed constants) are
-rewritten; `check_quotient_rules` pins the shapes that must not match (a
+rewritten. The same check runs at width 16 over constants at the edges (0, 1,
+5, 300, 32767, 32768, 65535) and an 18-value operand sample (the edges, the
+sign boundary and mid-range values), so a width-dependent slip is not hidden
+by the 8-bit domain; that part is sampled, not exhaustive. `check_quotient_rules` pins the shapes that must not match (a
 constant `v`, a variable or wide or negative dividend, the other signedness).
 
 Not folded: the strict `v < c / d` and `v >= c / d`, which are not overflow
