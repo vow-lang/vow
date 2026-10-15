@@ -1,0 +1,40 @@
+// Collections of pointers built in a loop: a `Vec<String>` and a `Vec` of structs, one
+// element per trip. The invariant ties the length to the counter, and the length is the
+// result.
+module VecPointerPushLoop
+
+struct Item { id: i64, tag: i64 }
+
+fn names(n: u64) -> Vec<String> vow {
+  ensures: result.len() == n
+} {
+  let out: Vec<String> = Vec::new();
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: out.len() == i && i <= n
+  } {
+    out.push(String::from("x"));
+    i = i + 1;
+  }
+  out
+}
+
+fn items(n: u64) -> u64 vow {
+  ensures: result == n + 1
+} {
+  let v: Vec<Item> = Vec::new();
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: v.len() == i && i <= n
+  } {
+    v.push(Item { id: 1, tag: 2 });
+    i = i + 1;
+  }
+  v.push(Item { id: 0, tag: 0 });
+  v.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(items(2));
+  0
+}

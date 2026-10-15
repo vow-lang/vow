@@ -1,0 +1,17 @@
+// TEST: counterexample-fn "nest"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+module VecOfVecPushWrong
+
+fn nest() -> u64 vow {
+  ensures: result == 2
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  outer.push(Vec::new());
+  outer.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(nest());
+  0
+}

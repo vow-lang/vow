@@ -1,0 +1,25 @@
+// A pointer pushed onto, and stored into, a parameter `Vec`: the length moves by one for a
+// push and not at all for a store.
+module VecPointerPushParam
+
+fn append(v: Vec<String>, s: String) -> u64 vow {
+  ensures: result == v.len()
+} {
+  v.push(s);
+  v.len()
+}
+
+fn replace_first(v: Vec<Vec<i64>>) -> u64 vow {
+  requires: v.len() >= 1
+  ensures: result == v.len()
+} {
+  let w: Vec<i64> = Vec::new();
+  v[0] = w;
+  v.len()
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<String> = Vec::new();
+  print_u64(append(v, String::from("a")));
+  0
+}

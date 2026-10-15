@@ -620,6 +620,17 @@ fn vc_mark_stored_float(w: VcWalk, obj: i64, val: i64) {
     if ft >= 0 { vc_vec_mark_elem(w.vv, w.ag, obj, ft); }
 }
 
+// The 64-bit slot a `push` or `set` stores for value `val`. An object has no address
+// in the model, so its slot is a fresh constant; `vc_ptr_store_detail` keeps every
+// function that could read it back out of the subset.
+fn vc_walk_slot_word(w: VcWalk, val: i64) -> i64 {
+    let ty: i64 = w.tys[val as u64];
+    if ty == ITY_PTR() {
+        return vc_agg_declare(w.cs.arena, w.cs.header, vc_vec_fresh_name(w.vv, String::from("pe")), 64);
+    }
+    vc_vec_elem64(w.cs.arena, ty, w.var_of[val as u64])
+}
+
 // A `Vec` call (`vc_vec`). `get` and `len` define a value, the rest change the
 // object's state in this block; an index out of bounds is a hard claim, assumed
 // afterwards like the other aborts.
@@ -686,7 +697,7 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
         vc_walk_wide_call(w, bi, inst, pc, kind, s);
     } else if kind == VC_VEC_PUSH() {
         vc_mark_stored_float(w, w.obj_of[inst.args[0] as u64], inst.args[1]);
-        let elem: i64 = vc_vec_elem64(ar, w.tys[inst.args[1] as u64], w.var_of[inst.args[1] as u64]);
+        let elem: i64 = vc_walk_slot_word(w, inst.args[1]);
         vc_assume(cs, pc, vc_vec_push_guard(ar, vc_vec_cur_len(vv, s, b)));
         vc_vec_push(vv, ar, hdr, s, b, elem);
     } else {
@@ -697,7 +708,7 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
             w.elem_obj[inst.id as u64] = w.obj_of[inst.args[0] as u64];
         } else {
             vc_mark_stored_float(w, w.obj_of[inst.args[0] as u64], inst.args[2]);
-            let elem: i64 = vc_vec_elem64(ar, w.tys[inst.args[2] as u64], w.var_of[inst.args[2] as u64]);
+            let elem: i64 = vc_walk_slot_word(w, inst.args[2]);
             vc_vec_set(vv, ar, hdr, s, b, idx, elem);
         }
     }

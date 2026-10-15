@@ -1138,10 +1138,25 @@ cover the cut's (`vc_sites_cover`). The warnings are the same set; only rounds t
 skipped. This is what lets a writer reach the encoder's abort on a value that has no encoding
 (`reject_encode_u8`, a checked add) and still be proven for every value that has one.
 
-## Addendum (#1663): a loop without an invariant
+## Addendum (#1663): pointer elements, a loop without an invariant
 
-One small rule, each sound for proofs and none a cap or a havoc.
+Two small rules, each sound for proofs and none a cap or a havoc.
 
+- **A pointer stored into a `Vec` is a slot the model does not read.** `push` and `set` of a
+  `String`, `Vec` or struct store the object's address in the 8-byte slot. The verifier keeps no
+  address for an object the function built (an address per object, read back through the overlay of
+  `vc_overlay`, is the remainder of #1663), so the slot is a fresh 64-bit constant. That is exact for
+  everything that never looks at the slot: the length, the bounds of every index and the other
+  elements. The gate (`vc_ptr_store_detail`, `compiler/vc_ptrstore.vow`) keeps out of the subset
+  every function that could: one that reads such an element back with `get`, copies or sorts a
+  `Vec` that holds one, or reads memory through a handle at all (a stored object may be what a
+  loaded handle names). Each is `unsupported-opcode` with its own detail, never a free answer. The
+  alternative that was rejected is to register the fresh constants as hook variables and let the
+  recheck turn a counterexample that reads them into `unknown`: a function the ESBMC path still
+  decides would become `unknown` instead of `Skipped`. Pinned by `pass/vec_of_vec_push.vow`,
+  `pass/vec_pointer_push_loop.vow`, `pass/vec_pointer_push_param.vow`,
+  `skip/vec_pointer_element_read_back_skipped.vow` and
+  `skip/vec_pointer_store_handle_read_skipped.vow`.
 - **A loop with no `invariant` is also cut, with the clause `true`.** After the bounded rounds end
   open at the largest bound, when the inductive attempt did not prove and some loop has no clause,
   the cut is made again with `ConstBool true; VowInvariant` after each such header's Phis

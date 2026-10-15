@@ -300,8 +300,43 @@ fn check_float_elements_of_a_parameter() -> i64 {
     0
 }
 
+// let v = Vec::new(); let w = Vec::new(); v.push(w); v[0] = w; v.push(w); return v.len()
+fn local_pointer_pushes() -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_const_i64(0, 8));
+    insts.push(mk_inst_const_i64(1, 8));
+    insts.push(mk_inst_call_extern(2, ITY_PTR(), args2(0, 1), String::from("__vow_vec_new")));
+    insts.push(mk_inst_call_extern(3, ITY_PTR(), args2(0, 1), String::from("__vow_vec_new")));
+    insts.push(mk_inst_call_extern(4, ITY_UNIT(), args2(2, 3), String::from("__vow_vec_push_val")));
+    insts.push(mk_inst_const_i64(5, 0));
+    insts.push(mk_inst_call_extern(6, ITY_UNIT(), args3(2, 5, 3), String::from("__vow_vec_set_val")));
+    insts.push(mk_inst_call_extern(7, ITY_UNIT(), args2(2, 3), String::from("__vow_vec_push_val")));
+    insts.push(mk_inst_call_extern(8, ITY_U64(), args1(2), String::from("__vow_vec_len")));
+    insts.push(mk_inst_return(9, 8));
+    one_block(Vec::new(), ITY_U64(), insts)
+}
+
+// A pointer pushed or stored is a fresh 64-bit slot constant: the length is exact (two pushes
+// fold away like scalar ones), and each stored address is its own declared constant.
+fn check_pointer_elements_are_fresh_slots() -> i64 {
+    let f: IrFunction = local_pointer_pushes();
+    if vc_skip_reason(f).len() != 0 { return 40; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 0 || cs.assumed.len() != 0 { return 41; }
+    let mut slots: i64 = 0;
+    let hdr: SmtScript = cs.header;
+    let mut i: u64 = 0;
+    while i < hdr.names.len() {
+        if contains(hdr.names[i], String::from("pe")) { slots = slots + 1; }
+        i = i + 1;
+    }
+    if slots != 3 { return 42; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_param_length_is_unconstrained();
+    if r == 0 { r = check_pointer_elements_are_fresh_slots(); }
     if r == 0 { r = check_push_assumes_only_the_invariant(); }
     if r == 0 { r = check_local_vec_length(); }
     if r == 0 { r = check_havoc_forgets_length(); }
