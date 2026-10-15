@@ -318,13 +318,28 @@ fn catalogue_verifier_known(sym: String) -> bool {
         }
     }
     if n == 17 {
-        return sym == String::from("__vow_string_trim");
+        let c0: i64 = sym.byte_at(13);
+        if c0 == 106 {
+            return sym == String::from("__vow_string_join");
+        }
+        if c0 == 116 {
+            return sym == String::from("__vow_string_trim");
+        }
+    }
+    if n == 18 {
+        return sym == String::from("__vow_string_split");
     }
     if n == 19 {
         return sym == String::from("__vow_string_substr");
     }
     if n == 20 {
-        return sym == String::from("__vow_parse_f64_bits");
+        let c0: i64 = sym.byte_at(6);
+        if c0 == 112 {
+            return sym == String::from("__vow_parse_f64_bits");
+        }
+        if c0 == 115 {
+            return sym == String::from("__vow_string_replace");
+        }
     }
     if n == 21 {
         let c0: i64 = sym.byte_at(16);

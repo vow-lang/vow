@@ -550,6 +550,28 @@ fn vc_walk_str(w: VcWalk, bi: u64, inst: IrInst, pc: i64, kind: i64, s: i64) {
             narr = out[0];
             nlen = out[1];
         }
+        if kind == VC_STR_REPLACE() || kind == VC_STR_SPLIT() {
+            let ops: Vec<i64> = Vec::new();
+            ops.push(arr);
+            ops.push(len);
+            let mut j: u64 = 1;
+            while j < vc_str_kind_object_operands(kind) {
+                let t: i64 = vc_vec_slot(vv, w.ag, ar, hdr, cs.assumed, w.obj_of[inst.args[j] as u64]);
+                ops.push(vc_vec_cur_arr(vv, t, b));
+                ops.push(vc_vec_cur_len(vv, t, b));
+                j = j + 1;
+            }
+            let out: Vec<i64> = Vec::new();
+            vc_hook_multi_text_fn(vv, ar, hdr, cs.assumed, kind, ops, out);
+            narr = out[0];
+            nlen = out[1];
+        }
+        if kind == VC_STR_JOIN() {
+            let out: Vec<i64> = Vec::new();
+            vc_hook_join(vv, ar, hdr, cs.assumed, len, out);
+            narr = out[0];
+            nlen = out[1];
+        }
         if kind == VC_STR_HEX_ENCODE() || kind == VC_STR_HEX_DECODE() {
             let out: Vec<i64> = Vec::new();
             if kind == VC_STR_HEX_DECODE() {

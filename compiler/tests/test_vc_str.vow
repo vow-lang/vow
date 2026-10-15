@@ -646,14 +646,21 @@ fn check_gate_types() -> i64 {
     let f3: IrFunction = one_block(ptr_params(2), ITY_I64(), notbool);
     if vc_skip_reason(f3).len() == 0 { return 172; }
 
-    // `split` stays an unmodelled builtin, with the symbol as its detail.
+    // An arena variant stays an unmodelled builtin, with the symbol as its detail.
     let sub: Vec<IrInst> = Vec::new();
     sub.push(mk_inst_arg(0, ITY_PTR(), 0));
     sub.push(mk_inst_arg(1, ITY_PTR(), 1));
-    sub.push(call(2, ITY_BOOL(), args2(0, 1), String::from("__vow_string_split")));
+    sub.push(call(2, ITY_BOOL(), args2(0, 1), String::from("__vow_string_split_in_arena")));
     sub.push(mk_inst_return(3, 2));
     let f4: IrFunction = one_block(ptr_params(2), ITY_BOOL(), sub);
-    if vc_skip_reason(f4) != String::from("unmodeled-builtin: __vow_string_split") { return 173; }
+    if vc_skip_reason(f4) != String::from("unmodeled-builtin: __vow_string_split_in_arena") { return 173; }
+    // `split` returns a `Vec`: a boolean result is a malformed call.
+    let bad_split: Vec<IrInst> = Vec::new();
+    bad_split.push(mk_inst_arg(0, ITY_PTR(), 0));
+    bad_split.push(mk_inst_arg(1, ITY_PTR(), 1));
+    bad_split.push(call(2, ITY_BOOL(), args2(0, 1), String::from("__vow_string_split")));
+    bad_split.push(mk_inst_return(3, 2));
+    if vc_reason_code(vc_skip_reason(one_block(ptr_params(2), ITY_BOOL(), bad_split))) != VC_SKIP_UNSUPPORTED_OPCODE() { return 174; }
     0
 }
 

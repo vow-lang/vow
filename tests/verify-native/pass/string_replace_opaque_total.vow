@@ -1,0 +1,23 @@
+// `string_replace` is an opaque total function of its three strings (a Unicode-aware
+// `str::replace` the model does not encode): the same operands give the same result, and
+// operands that are equal strings give equal results.
+module StringReplaceOpaqueTotal
+
+fn replace_twice(s: String, a: String, b: String) -> bool vow {
+  ensures: result == true
+} {
+  let x: String = string_replace(s, a, b);
+  let y: String = string_replace(s, a, b);
+  x == y
+}
+
+fn replace_equal_operands(s: String, t: String, a: String, b: String) -> bool vow {
+  requires: s == t
+  ensures: result == true
+} {
+  string_replace(s, a, b) == string_replace(t, a, b)
+}
+
+fn main() -> i32 [io] {
+  if replace_twice(String::from("aba"), String::from("a"), String::from("c")) { 0 } else { 1 }
+}

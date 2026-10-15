@@ -170,9 +170,10 @@ fn check_op_table() -> i64 {
     if vc_str_unmodeled_reason(String::from("__vow_string_parse_u64_opt")).len() != 0 { return 27; }
     if vc_str_unmodeled_reason(String::from("__vow_string_parse_i8_opt_in_arena")).len() == 0 { return 28; }
     if vc_vec_op_kind(String::from("__vow_string_parse_u128_opt")) != VC_STR_PARSE_INT() { return 9; }
-    if vc_vec_op_kind(String::from("__vow_string_replace")) != VC_STR_NONE() { return 10; }
-    if vc_vec_op_kind(String::from("__vow_string_split")) != VC_STR_NONE() { return 11; }
-    if vc_vec_op_kind(String::from("__vow_string_join")) != VC_STR_NONE() { return 12; }
+    if vc_vec_op_kind(String::from("__vow_string_replace")) != VC_STR_REPLACE() { return 10; }
+    if vc_vec_op_kind(String::from("__vow_string_split")) != VC_STR_SPLIT() { return 11; }
+    if vc_vec_op_kind(String::from("__vow_string_join")) != VC_STR_JOIN() { return 12; }
+    if vc_vec_op_kind(String::from("__vow_string_replace_in_arena")) != VC_STR_NONE() { return 18; }
     if vc_vec_op_kind(String::from("__vow_hex_encode_in_arena")) != VC_STR_NONE() { return 13; }
     if vc_vec_op_kind(String::from("__vow_hash_str_in_arena")) != VC_STR_NONE() { return 14; }
     if vc_vec_op_kind(String::from("__vow_string_parse_i64_opt_in_arena")) != VC_STR_NONE() { return 15; }
@@ -227,12 +228,18 @@ fn check_gate() -> i64 {
     two.push(mk_inst_call_extern(2, ITY_PTR(), args2(0, 1), String::from("__vow_hex_decode")));
     two.push(mk_inst_return(3, 2));
     if vc_skip_reason(one_block(ptrs(2), ITY_PTR(), two)).len() == 0 { return 57; }
-    // `replace`, `split` and `join` keep their skip.
+    // `replace` takes three strings: a call with one operand is malformed, never a model of one.
     let rep: Vec<IrInst> = Vec::new();
     rep.push(mk_inst_arg(0, ITY_PTR(), 0));
     rep.push(call1(1, ITY_PTR(), 0, String::from("__vow_string_replace")));
     rep.push(mk_inst_return(2, 1));
-    if vc_reason_code(vc_skip_reason(one_block(ptrs(1), ITY_PTR(), rep))) != VC_SKIP_UNMODELED_BUILTIN() { return 58; }
+    if vc_reason_code(vc_skip_reason(one_block(ptrs(1), ITY_PTR(), rep))) != VC_SKIP_UNSUPPORTED_OPCODE() { return 58; }
+    // The arena variant is not modelled: the verifier sees the base symbol.
+    let arena: Vec<IrInst> = Vec::new();
+    arena.push(mk_inst_arg(0, ITY_PTR(), 0));
+    arena.push(call1(1, ITY_PTR(), 0, String::from("__vow_string_replace_in_arena")));
+    arena.push(mk_inst_return(2, 1));
+    if vc_reason_code(vc_skip_reason(one_block(ptrs(1), ITY_PTR(), arena))) != VC_SKIP_UNMODELED_BUILTIN() { return 59; }
     0
 }
 

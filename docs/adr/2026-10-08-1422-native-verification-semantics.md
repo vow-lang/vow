@@ -1179,3 +1179,27 @@ Three small rules, each sound for proofs and none a cap or a havoc.
   fact about the state after the loop stays `unknown` (`unknown/loop_without_invariant_exit_fact.vow`)
   and a wrong postcondition is still refuted by the bounded rounds
   (`fail/loop_without_invariant_cut_wrong.vow`).
+
+## Addendum (#1654): `replace`, `split` and `join`
+
+Three builtins that were `unmodeled-builtin` are opaque total functions of their operands, sound for proofs and neither a cap nor a havoc.
+
+- **`replace`, `split` and `join` are opaque total functions.** The route is that of `string_trim`
+  (the #1731 addendum): fresh results, the Ackermann axioms on the exact `vc_str_eq`, the facts every
+  run has, and the recheck that makes a counterexample which needs a value `unknown`. `replace(s,
+  from, to)` is a fresh text of length below `VOW_CAP_VALUE_MASK`, one entry of the `ox_*` tables with
+  three operand strings, so equal operand strings (all three) give equal texts. `split(s, sep)` is a
+  `Vec` object of a fresh array and length with the facts of `__vow_string_split`: at least one
+  piece (the loop pushes before it can break), at most `s.len() + 1` (each match consumes at least
+  one byte for a non-empty `sep`), exactly one for an empty `sep`, below the capacity mask, and the
+  same count for equal operand strings; the pieces are distinct objects, so no congruence is stated for
+  the array. `join(parts, sep)` is a fresh text below the mask, empty for no parts, with no
+  congruence at all: the runtime reads the contents of every part, and the contents of an object the
+  function stored are not held by the model, so two joins of one term need not agree. The elements of
+  a split result are free addresses and the heap arrays behind them free too, which only widens
+  what a proof must hold for; a counterexample that reads one reaches the hook variables and is
+  `unknown`. Pinned by `pass/string_replace_opaque_total.vow`, `pass/string_split_piece_count.vow`,
+  `pass/string_join_no_parts.vow`, `unknown/string_replace_value_opaque.vow`,
+  `unknown/string_split_count_opaque.vow` and `fail/string_join_no_parts_wrong.vow`.
+
+`String::from_cstr` and the arena variants remain `unmodeled-builtin` (`vc_str_unmodeled_reason`).
