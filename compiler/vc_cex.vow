@@ -50,6 +50,7 @@ fn vc_model_symbol_name(f: IrFunction, cs: VcClaims, j: u64) -> String {
         return base;
     }
     let out: String = String::from(base);
+    out.push_str(cs.model_paths[j]);
     out.push_str(String::from("."));
     out.push_str(i64_to_string(cs.model_slots[j]));
     if cs.model_ambig[j] != 0 {
@@ -90,14 +91,14 @@ fn vc_answer_vec_len(cs: VcClaims, ans: VcSolverAnswer, n: u64, v: i64) -> i64 {
 // entry for the same slot and width, else `j`. Only the first `n` entries of
 // `vals` are model entries; an enriched answer carries `Vec` elements behind them.
 fn vc_alias_value_source(cs: VcClaims, vals: Vec<i64>, n: u64, j: u64) -> u64 {
-    if cs.model_slots[j] < 0 { return j; }
+    if cs.model_slots[j] < 0 || cs.model_paths[j].len() > 0 { return j; }
     let me: i64 = vc_alias_entry(cs, n, cs.model_params[j]);
     if me < 0 { return j; }
     let mut best: u64 = j;
     let mut i: u64 = 0;
     while i < n {
         let q: i64 = cs.model_params[i];
-        if cs.model_slots[i] == cs.model_slots[j] && cs.model_widths[i] == cs.model_widths[j] && q < cs.model_params[best] {
+        if cs.model_slots[i] == cs.model_slots[j] && cs.model_paths[i].len() == 0 && cs.model_widths[i] == cs.model_widths[j] && q < cs.model_params[best] {
             let qe: i64 = vc_alias_entry(cs, n, q);
             if qe >= 0 && vals[qe as u64] == vals[me as u64] { best = i; }
         }

@@ -1,0 +1,26 @@
+// TEST: counterexample-fn "or_default"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: replay-skipped the payload of an Option parameter is a struct, which the replay harness does not rebuild (#1742)
+// The payload merges with an object the function builds: the read of the merge
+// reaches the parameter's payload on the `Some` path, so `fd <= 0` there is refuted.
+module PayloadMergedWithDefaultWrong
+
+struct Handle {
+  fd: i64,
+}
+
+fn or_default(o: Option<Handle>) -> i64 vow {
+  ensures: result > 0
+} {
+  let h: Handle = match o {
+    Option::Some(x) => x,
+    Option::None => Handle { fd: 1 },
+  };
+  h.fd
+}
+
+fn main() -> i32 [io] {
+  print_i64(or_default(Option::None));
+  0
+}

@@ -3,6 +3,7 @@ module VcAggShape
 use ir
 use ir_dominance
 use vc_wide
+use vc_heap
 
 // Gate and set-up for the aggregate model (`vc_agg`): which writes it accepts and
 // which parameters it must treat as possibly one object. Both read the IR only.
@@ -131,4 +132,121 @@ fn vc_agg_alias_params(f: IrFunction, n_ids: u64) -> Vec<i64> {
     }
     if out.len() < 2 { out.clear(); }
     out
+}
+
+// True when the instruction reads a pointer out of a field (`FieldGet[ptr]`: the
+// payload of an enum, `Option` or `Result`).
+fn vc_agg_is_ptr_read(inst: IrInst) -> bool {
+    inst.op == IOP_FIELD_GET() && inst.ty == ITY_PTR() && inst.id >= 0
+}
+
+// Marks, in `rooted` (1 for a pointer parameter), every pointer read whose base is
+// marked, until nothing changes (blocks are not in dominance order).
+fn vc_agg_root_reads(f: IrFunction, rooted: Vec<i64>) {
+    let mut changed: bool = true;
+    while changed {
+        changed = false;
+        let mut bi: u64 = 0;
+        while bi < f.blocks.len() {
+            let blk: IrBlock = f.blocks[bi];
+            let mut ii: u64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                if vc_agg_is_ptr_read(inst) && rooted[inst.id as u64] == 0 && rooted[inst.args[0] as u64] == 1 {
+                    rooted[inst.id as u64] = 1;
+                    changed = true;
+                }
+                ii = ii + 1;
+            }
+            bi = bi + 1;
+        }
+    }
+}
+
+// Whether `inst` may take the pointer `id` that was read out of a field. Only
+// what the aggregate model understands: a field read or write, a merge, a return,
+// a consume, and a call of a user function (inlined before execution; the
+// flattened function is vetted again).
+fn vc_agg_read_use_ok(inst: IrInst, a: u64) -> bool {
+    let op: i64 = inst.op;
+    if op == IOP_FIELD_GET() { return a == 0; }
+    if op == IOP_CALL() { return inst.dk == IDATA_CALL_TARGET(); }
+    op == IOP_FIELD_SET() || op == IOP_UPSILON() || op == IOP_RETURN() || op == IOP_LINEAR_CONSUME()
+}
+
+// Gate rule for a pointer read out of a field of a parameter (`FieldGet[ptr]`,
+// the payload of an enum, `Option` or `Result` parameter): the read is a child
+// object of the parameter, one per slot (`vc_agg_child`), whose fields are
+// symbols of their own. The model is exact when
+//   - the base is a pointer parameter or another such read: a base that is an
+//     allocation or a merge has no object to take a child of;
+//   - the pointer is only used as the base of a field access, a merge, a return,
+//     a consume or an argument of a user call, never as a `Vec` or `String`
+//     (those are modelled per parameter, `vc_vec`);
+//   - no parameter may be the very object a child names, which `vc_heap` rules
+//     out by forbidding writes to parameters in a function that reads a pointer
+//     out of a field, and the aliasable-parameter identities (`alias_params`)
+//     are not needed.
+// "" when it holds, else the detail of an `unsupported-opcode` skip.
+fn vc_agg_child_detail(f: IrFunction, n_ids: u64) -> String {
+    let rooted: Vec<i64> = vc_agg_arg_params(f, n_ids);
+    let mut k: u64 = 0;
+    while k < rooted.len() {
+        if rooted[k] >= 0 { rooted[k] = 1; } else { rooted[k] = 0; }
+        k = k + 1;
+    }
+    vc_agg_root_reads(f, rooted);
+    let mut any: bool = false;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if vc_agg_is_ptr_read(inst) {
+                any = true;
+                if inst.args.len() != 1 || rooted[inst.args[0] as u64] == 0 {
+                    return String::from("a pointer field is read from a value that is not a parameter or a field of one");
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    if !any { return String::from(""); }
+    let held: Vec<i64> = dom_fill(n_ids, 0);
+    bi = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if vc_agg_is_ptr_read(inst) { held[inst.id as u64] = 1; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    vc_heap_close_over_phis(f, held);
+    bi = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            let mut a: u64 = 0;
+            while a < inst.args.len() {
+                let id: i64 = inst.args[a];
+                if id >= 0 && (id as u64) < n_ids && held[id as u64] == 1 && !vc_agg_read_use_ok(inst, a) {
+                    return String::from("a pointer read out of a field is used as a collection, a string or a value");
+                }
+                a = a + 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    if vc_agg_alias_params(f, n_ids).len() > 0 {
+        return String::from("a pointer read out of a field in a function whose parameters may be one object");
+    }
+    String::from("")
 }

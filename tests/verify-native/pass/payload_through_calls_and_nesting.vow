@@ -1,0 +1,69 @@
+module PayloadThroughCallsAndNesting
+
+struct Handle {
+  fd: i64,
+}
+
+struct Rec {
+  ids: Vec<i64>,
+  tag: i64,
+}
+
+fn peek(o: Option<Handle>) -> i64 {
+  match o {
+    Option::Some(h) => {
+      if h.fd < 0 { 0 } else { h.fd }
+    },
+    Option::None => 0,
+  }
+}
+
+// The callee reads the caller's parameter, so its payload object is the caller's.
+fn outer(o: Option<Handle>) -> i64 vow {
+  ensures: result >= 0
+} {
+  peek(o)
+}
+
+fn nested(o: Option<Option<Handle>>) -> i64 vow {
+  ensures: result >= 0
+} {
+  match o {
+    Option::Some(inner) => {
+      match inner {
+        Option::Some(h) => {
+          if h.fd < 0 { 0 } else { h.fd }
+        },
+        Option::None => 0,
+      }
+    },
+    Option::None => 0,
+  }
+}
+
+// A `Vec` field of the payload is read through memory like a `Vec` field of a
+// struct parameter.
+fn ids_len(o: Option<Rec>) -> i64 vow {
+  ensures: result >= 0
+} {
+  match o {
+    Option::Some(r) => r.ids.len() as i64,
+    Option::None => 0,
+  }
+}
+
+// A payload merged with an object the function builds.
+fn or_default(o: Option<Handle>) -> i64 vow {
+  ensures: result >= 0
+} {
+  let h: Handle = match o {
+    Option::Some(x) => x,
+    Option::None => Handle { fd: 0 },
+  };
+  if h.fd < 0 { 0 } else { h.fd }
+}
+
+fn main() -> i32 [io] {
+  print_i64(outer(Option::Some(Handle { fd: 3 })));
+  0
+}

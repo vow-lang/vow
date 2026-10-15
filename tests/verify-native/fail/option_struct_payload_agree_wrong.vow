@@ -1,0 +1,30 @@
+// TEST: counterexample-fn "different"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: replay-skipped the payload of an Option parameter is a struct, which the replay harness does not rebuild (#1742)
+// The payloads of two parameters are two objects, so their fields may differ, while
+// the payload of one parameter is a single object.
+module OptionStructPayloadAgreeWrong
+
+struct Handle {
+  fd: i64,
+}
+
+fn different(a: Option<Handle>, b: Option<Handle>) -> i64 vow {
+  ensures: result == 0
+} {
+  let x: i64 = match a {
+    Option::Some(h) => h.fd,
+    Option::None => 0,
+  };
+  let y: i64 = match b {
+    Option::Some(h) => h.fd,
+    Option::None => 0,
+  };
+  x - y
+}
+
+fn main() -> i32 [io] {
+  print_i64(different(Option::None, Option::None));
+  0
+}

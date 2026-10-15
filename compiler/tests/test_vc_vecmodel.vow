@@ -31,6 +31,7 @@ fn two_vec_claims() -> VcClaims {
         assumed_lens: Vec::new(),
         model_names: Vec::new(),
         model_params: Vec::new(),
+        model_paths: Vec::new(),
         model_tys: Vec::new(),
         model_widths: Vec::new(),
         model_slots: Vec::new(),
@@ -47,12 +48,14 @@ fn two_vec_claims() -> VcClaims {
     cs.header_lens.push(10);
     cs.model_names.push(String::from("p0_vlen"));
     cs.model_params.push(0);
+    cs.model_paths.push(String::from(""));
     cs.model_tys.push(ITY_U64());
     cs.model_widths.push(64);
     cs.model_slots.push(VC_SLOT_VEC_LEN());
     cs.model_hdr.push(2);
     cs.model_names.push(String::from("p3_vlen"));
     cs.model_params.push(3);
+    cs.model_paths.push(String::from(""));
     cs.model_tys.push(ITY_U64());
     cs.model_widths.push(64);
     cs.model_slots.push(VC_SLOT_VEC_LEN());

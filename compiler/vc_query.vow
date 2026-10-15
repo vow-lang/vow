@@ -31,6 +31,9 @@ struct VcClaims {
     assumed_lens: Vec<i64>,
     model_names: Vec<String>,
     model_params: Vec<i64>,
+    // Parallel to `model_params`: the path from the parameter to the child object a
+    // field belongs to (`.1` for the payload in slot 1), "" for the parameter itself.
+    model_paths: Vec<String>,
     model_tys: Vec<i64>,
     model_widths: Vec<i64>,
     model_slots: Vec<i64>,

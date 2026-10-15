@@ -1,0 +1,17 @@
+// TEST: skip-reason unsupported-opcode
+// The payload of an `Option` parameter is a `Vec`: the pointer read out of the
+// field is a collection, which the model keeps per parameter, not per object.
+module OptionVecPayload
+
+fn first_len(o: Option<Vec<i64>>) -> i64 vow {
+  ensures: result >= 0
+} {
+  match o {
+    Option::Some(v) => v.len() as i64,
+    Option::None => 0,
+  }
+}
+
+fn main() -> i32 {
+  0
+}
