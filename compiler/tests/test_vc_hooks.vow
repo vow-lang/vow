@@ -281,8 +281,138 @@ fn check_opaque_reason_label() -> i64 {
     0
 }
 
+fn params_ptr(n: u64) -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < n {
+        p.push(ITY_PTR());
+        i = i + 1;
+    }
+    p
+}
+
+fn args3(a: i64, b: i64, c: i64) -> Vec<i64> {
+    let v: Vec<i64> = args2(a, b);
+    v.push(c);
+    v
+}
+
+fn replace(id: i64, s: i64, from: i64, to: i64) -> IrInst {
+    mk_inst_call_extern(id, ITY_PTR(), args3(s, from, to), String::from("__vow_string_replace"))
+}
+
+// fn f(s, a, b: String) -> bool { let x = replace(s, a, b); let y = replace(<s2>, <a2>, <b2>); x == y }
+// with `ensures: result`.
+fn replace_pair(s2: i64, a2: i64, b2: i64) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_PTR(), 1));
+    insts.push(mk_inst_arg(2, ITY_PTR(), 2));
+    insts.push(replace(3, 0, 1, 2));
+    insts.push(replace(4, s2, a2, b2));
+    insts.push(string_eq(5, 3, 4));
+    insts.push(mk_ens(6, 5, 0));
+    insts.push(mk_inst_return(7, 5));
+    one_block(params_ptr(3), ITY_BOOL(), insts)
+}
+
+// fn f(s, sep: String) -> u64 { split(s, sep).len() } and the same with the second call on `sep2`.
+fn split_len_pair(sep2: i64) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_PTR(), 1));
+    insts.push(mk_inst_call_extern(2, ITY_PTR(), args2(0, 1), String::from("__vow_string_split")));
+    insts.push(mk_inst_call_extern(3, ITY_PTR(), args2(0, sep2), String::from("__vow_string_split")));
+    insts.push(mk_inst_call_extern(4, ITY_U64(), args1(2), String::from("__vow_vec_len")));
+    insts.push(mk_inst_call_extern(5, ITY_U64(), args1(3), String::from("__vow_vec_len")));
+    insts.push(mk_eq(6, 4, 5));
+    insts.push(mk_ens(7, 6, 0));
+    insts.push(mk_inst_return(8, 6));
+    one_block(params_ptr(2), ITY_BOOL(), insts)
+}
+
+// fn f(sep: String) -> u64 { join(Vec::new(), sep).len() }
+fn join_of_empty() -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_const_i64(1, 8));
+    insts.push(mk_inst_call_extern(2, ITY_PTR(), args2(1, 1), String::from("__vow_vec_new")));
+    insts.push(mk_inst_call_extern(3, ITY_PTR(), args2(2, 0), String::from("__vow_string_join")));
+    insts.push(mk_inst_call_extern(4, ITY_U64(), args1(3), String::from("__vow_string_len")));
+    insts.push(mk_inst_return(5, 4));
+    one_block(params_ptr(1), ITY_U64(), insts)
+}
+
+fn check_multi_operand_kinds() -> i64 {
+    if vc_vec_op_kind(String::from("__vow_string_replace")) != VC_STR_REPLACE() { return 110; }
+    if vc_vec_op_kind(String::from("__vow_string_split")) != VC_STR_SPLIT() { return 111; }
+    if vc_vec_op_kind(String::from("__vow_string_join")) != VC_STR_JOIN() { return 112; }
+    if !vc_str_kind_is_string_op(VC_STR_REPLACE()) || !vc_str_kind_is_string_op(VC_STR_JOIN()) { return 113; }
+    if !vc_str_kind_creates(VC_STR_REPLACE()) || !vc_str_kind_creates(VC_STR_SPLIT()) || !vc_str_kind_creates(VC_STR_JOIN()) { return 114; }
+    if vc_str_kind_object_operands(VC_STR_REPLACE()) != 3 || vc_str_kind_object_operands(VC_STR_SPLIT()) != 2 { return 115; }
+    if vc_str_kind_object_operands(VC_STR_JOIN()) != 2 || vc_str_kind_object_operands(VC_STR_EQ()) != 2 { return 116; }
+    if vc_str_kind_object_operands(VC_STR_LEN()) != 1 || vc_str_kind_object_operands(VC_VEC_PUSH()) != 1 { return 117; }
+    if !vc_str_kind_reads_bytes(VC_STR_REPLACE()) || !vc_str_kind_reads_bytes(VC_STR_SPLIT()) { return 118; }
+    if vc_str_kind_reads_bytes(VC_STR_JOIN()) { return 119; }
+    if vc_str_unmodeled_reason(String::from("__vow_string_replace")).len() != 0 { return 120; }
+    if !catalogue_verifier_known(String::from("__vow_string_split")) { return 121; }
+    0
+}
+
+// The same three operand terms are one application, so the two results are one constant and
+// `x == y` needs no claim; a swapped operand gives a second call, whose result the equality of
+// all three strings ties to the first.
+fn check_replace_congruence() -> i64 {
+    let same: IrFunction = replace_pair(0, 1, 2);
+    if vc_skip_reason(same).len() != 0 { return 130; }
+    let a: VcClaims = vc_claims(same);
+    if a.kinds.len() != 0 { return 131; }
+    if a.hook_vars.len() != 2 { return 132; }
+    let other: IrFunction = replace_pair(0, 2, 1);
+    if vc_skip_reason(other).len() != 0 { return 133; }
+    let b: VcClaims = vc_claims(other);
+    if b.kinds.len() != 1 { return 134; }
+    if b.hook_vars.len() != 4 { return 135; }
+    // the ties between the two calls are assumptions, so the claim's query states them
+    if !contains(query(b, 0), String::from("hkm")) { return 136; }
+    0
+}
+
+// A `split` result is a `Vec` of a fresh array and length with the facts of every run (the
+// count is at least one, at most one more than the string's bytes, below the capacity mask,
+// and exactly one for an empty separator): the lengths of two calls on one string and one
+// separator term are one constant.
+fn check_split_facts() -> i64 {
+    let same: IrFunction = split_len_pair(1);
+    if vc_skip_reason(same).len() != 0 { return 140; }
+    let a: VcClaims = vc_claims(same);
+    if a.kinds.len() != 0 { return 141; }
+    if a.hook_vars.len() != 2 { return 142; }
+    // mask, at least one, at most one more than the bytes, one for an empty separator
+    if a.assumed.len() < 4 { return 143; }
+    let other: IrFunction = split_len_pair(0);
+    let b: VcClaims = vc_claims(other);
+    if b.hook_vars.len() != 4 { return 144; }
+    0
+}
+
+// `join` of no parts is empty and its length is below the capacity mask; the call has no
+// congruence, so every call is a fresh text.
+fn check_join_facts() -> i64 {
+    let f: IrFunction = join_of_empty();
+    if vc_skip_reason(f).len() != 0 { return 150; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.hook_vars.len() != 2 { return 151; }
+    if cs.assumed.len() < 2 { return 152; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_op_table();
+    if r == 0 { r = check_multi_operand_kinds(); }
+    if r == 0 { r = check_replace_congruence(); }
+    if r == 0 { r = check_split_facts(); }
+    if r == 0 { r = check_join_facts(); }
     if r == 0 { r = check_parse_same_operand_is_one_term(); }
     if r == 0 { r = check_parse_distinct_operands_tie_results(); }
     if r == 0 { r = check_parse_axioms_are_pairwise(); }

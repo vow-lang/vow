@@ -39,6 +39,9 @@ fn VC_STR_PARSE_INT() -> i64 { 31 }
 fn VC_STR_TRIM() -> i64 { 32 }
 fn VC_STR_TO_UPPER() -> i64 { 33 }
 fn VC_STR_TO_LOWER() -> i64 { 34 }
+fn VC_STR_REPLACE() -> i64 { 35 }
+fn VC_STR_SPLIT() -> i64 { 36 }
+fn VC_STR_JOIN() -> i64 { 37 }
 
 fn VC_STR_PREFIX() -> String { String::from("__vow_string_") }
 
@@ -82,6 +85,9 @@ fn vc_str_op_kind(sym: String) -> i64 {
     if sym == String::from("__vow_string_trim") { return VC_STR_TRIM(); }
     if sym == String::from("__vow_string_to_upper") { return VC_STR_TO_UPPER(); }
     if sym == String::from("__vow_string_to_lower") { return VC_STR_TO_LOWER(); }
+    if sym == String::from("__vow_string_replace") { return VC_STR_REPLACE(); }
+    if sym == String::from("__vow_string_split") { return VC_STR_SPLIT(); }
+    if sym == String::from("__vow_string_join") { return VC_STR_JOIN(); }
     if sym == String::from("__vow_string_len") { return VC_STR_LEN(); }
     if sym == String::from("__vow_string_new") { return VC_STR_NEW(); }
     if sym == String::from("__vow_string_literal") { return VC_STR_LITERAL(); }
@@ -127,6 +133,7 @@ fn vc_str_kind_creates(k: i64) -> bool {
         || k == VC_STR_SUBSTRING() || k == VC_STR_SUBSTR() || k == VC_STR_FROM_RAW_PARTS()
         || k == VC_STR_FORMAT_F64() || vc_str_kind_formats_int(k)
         || k == VC_STR_HEX_ENCODE() || k == VC_STR_HEX_DECODE() || vc_str_kind_text_hook(k)
+        || k == VC_STR_REPLACE() || k == VC_STR_SPLIT() || k == VC_STR_JOIN()
 }
 
 // A kind whose result is an opaque text (`vc_hooks`): `string_trim`, `string_to_upper` and
@@ -160,6 +167,15 @@ fn vc_str_kind_two_strings(k: i64) -> bool {
         || k == VC_STR_CONTAINS()
 }
 
+// How many leading operands of a kind are objects (a `String`, or the `Vec<String>`
+// `join` takes first): three for `replace`, two for the kinds above, `split` and
+// `join`, one for every other.
+fn vc_str_kind_object_operands(k: i64) -> u64 {
+    if k == VC_STR_REPLACE() { return 3; }
+    if vc_str_kind_two_strings(k) || k == VC_STR_SPLIT() || k == VC_STR_JOIN() { return 2; }
+    1
+}
+
 // A kind that reads the bytes of a string, not only its length: when no
 // instruction of a function is one, the contents of its strings cannot matter and
 // the model leaves them unconstrained (no byte facts, no quantifier). `parse_f64_bits`
@@ -170,6 +186,7 @@ fn vc_str_kind_reads_bytes(k: i64) -> bool {
     k == VC_STR_BYTE_AT() || k == VC_STR_EQ() || k == VC_STR_MATCHES_LITERAL_AT()
         || k == VC_STR_STARTS_WITH() || k == VC_STR_ENDS_WITH() || k == VC_STR_PARSE_F64() || k == VC_STR_CONTAINS()
         || k == VC_STR_HASH() || k == VC_STR_HEX_DECODE() || vc_str_kind_opaque(k)
+        || k == VC_STR_REPLACE() || k == VC_STR_SPLIT()
 }
 
 // Why a `String` runtime symbol that is not a catalogue entry has no model, or ""
@@ -191,7 +208,7 @@ fn vc_str_unmodeled_reason(sym: String) -> String {
 // A kind of this module (`VC_VEC_LEN`, which `__vow_string_len` shares with the
 // `Vec` length, is not one).
 fn vc_str_kind_is_string_op(k: i64) -> bool {
-    k >= VC_STR_NEW() && k <= VC_STR_TO_LOWER()
+    k >= VC_STR_NEW() && k <= VC_STR_JOIN()
 }
 
 // The `dv2` of a `ConstStr` whose bytes the verifier has read from the module's

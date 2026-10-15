@@ -74,8 +74,8 @@ fn check_builtin_model() -> i64 {
     if !catalogue_verifier_known(String::from("__vow_string_to_lower")) { return 740; }
     if !catalogue_verifier_known(String::from("__vow_string_parse_i8_opt")) { return 741; }
     if !catalogue_verifier_known(String::from("__vow_string_parse_u128_opt")) { return 742; }
-    if catalogue_verifier_known(String::from("__vow_string_replace")) { return 743; }
-    if catalogue_verifier_known(String::from("__vow_string_join")) { return 744; }
+    if !catalogue_verifier_known(String::from("__vow_string_replace")) { return 743; }
+    if !catalogue_verifier_known(String::from("__vow_string_join")) { return 744; }
     if catalogue_verifier_known(String::from("__vow_fs_read")) { return 707; }
     if catalogue_verifier_known(String::from("__vow_process_run")) { return 708; }
     if catalogue_verifier_known(String::from("__vow_getenv")) { return 709; }
@@ -87,7 +87,7 @@ fn check_builtin_model() -> i64 {
     if !catalogue_verifier_known(String::from("__vow_parse_f64_bits")) { return 735; }
     if !catalogue_verifier_known(String::from("__vow_format_f64_bits")) { return 736; }
     if !catalogue_verifier_known(String::from("__vow_string_trim")) { return 733; }
-    if catalogue_verifier_known(String::from("__vow_string_split")) { return 734; }
+    if !catalogue_verifier_known(String::from("__vow_string_split")) { return 734; }
     0
 }
 

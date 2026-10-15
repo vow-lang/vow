@@ -1,0 +1,14 @@
+// `string_join` of no parts is the empty string, whatever the separator.
+module StringJoinNoParts
+
+fn join_empty(sep: String) -> u64 vow {
+  ensures: result == 0
+} {
+  let parts: Vec<String> = Vec::new();
+  string_join(parts, sep).len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(join_empty(String::from(",")));
+  0
+}

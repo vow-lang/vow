@@ -329,6 +329,8 @@ fn vc_str_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
     if kind == VC_STR_HASH() { return n == 1 && inst.ty == ITY_U64(); }
     if kind == VC_STR_HEX_ENCODE() || kind == VC_STR_HEX_DECODE() || vc_str_kind_opaque(kind) { return n == 1 && inst.ty == ITY_PTR(); }
     if kind == VC_STR_CONTAINS() { return n == 2 && (inst.ty == ITY_I64() || inst.ty == ITY_BOOL()) && t1 == ITY_PTR(); }
+    if kind == VC_STR_REPLACE() { return n == 3 && inst.ty == ITY_PTR() && t1 == ITY_PTR() && t2 == ITY_PTR(); }
+    if kind == VC_STR_SPLIT() || kind == VC_STR_JOIN() { return n == 2 && inst.ty == ITY_PTR() && t1 == ITY_PTR(); }
     if kind == VC_STR_MATCHES_LITERAL_AT() {
         return n == 4 && inst.ty == ITY_I64() && vc_vec_index_ok(t1) && t2 == ITY_PTR() && vc_ty_is_int(vc_arg_ty(tys, inst, 3));
     }

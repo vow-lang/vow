@@ -101,9 +101,15 @@ struct VcVec {
     // Opaque total functions (`vc_hooks`): per call the function key, the operand `(array, length)`
     // terms and the two result terms (the Some flag and payload of a `parse_*`, or the `(array,
     // length)` of a text).
+    // A call of `replace` or `split` has further operand strings in `ox_arr2`/`ox_len2` and
+    // `ox_arr3`/`ox_len3` (-1 where the function has no such operand).
     ox_fn: Vec<i64>,
     ox_arr: Vec<i64>,
     ox_len: Vec<i64>,
+    ox_arr2: Vec<i64>,
+    ox_len2: Vec<i64>,
+    ox_arr3: Vec<i64>,
+    ox_len3: Vec<i64>,
     ox_r0: Vec<i64>,
     ox_r1: Vec<i64>,
     // The `Vec` and `String` parameters, in the order the walk first read them:
@@ -163,6 +169,10 @@ fn vc_vec_new_state(fl: VcFlow, ar: VcArena, n_blocks: u64) -> VcVec {
         ox_fn: Vec::new(),
         ox_arr: Vec::new(),
         ox_len: Vec::new(),
+        ox_arr2: Vec::new(),
+        ox_len2: Vec::new(),
+        ox_arr3: Vec::new(),
+        ox_len3: Vec::new(),
         ox_r0: Vec::new(),
         ox_r1: Vec::new(),
         pv_param: Vec::new(),
@@ -595,8 +605,11 @@ fn vc_vec_shape_detail(f: IrFunction, n_ids: u64, calls: bool) -> String {
                 // The operands of a creating call are integers (`new`) or the
                 // static bytes of a literal, which is not an object.
                 if k != VC_VEC_NEW() && !vc_str_kind_no_object_operand(k) && inst.args.len() > 0 {
-                    is_vec[inst.args[0] as u64] = 1;
-                    if vc_str_kind_two_strings(k) && inst.args.len() > 1 { is_vec[inst.args[1] as u64] = 1; }
+                    let mut j: u64 = 0;
+                    while j < vc_str_kind_object_operands(k) && j < inst.args.len() {
+                        is_vec[inst.args[j] as u64] = 1;
+                        j = j + 1;
+                    }
                 }
             }
             ii = ii + 1;

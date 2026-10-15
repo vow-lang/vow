@@ -117,9 +117,17 @@ fn vc_hook_opaque_peers(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64
 }
 
 fn vc_hook_opaque_record(vv: VcVec, fid: i64, arr: i64, len: i64, r0: i64, r1: i64) {
+    vc_hook_opaque_record_n(vv, fid, arr, len, -1, -1, -1, -1, r0, r1);
+}
+
+fn vc_hook_opaque_record_n(vv: VcVec, fid: i64, arr: i64, len: i64, arr2: i64, len2: i64, arr3: i64, len3: i64, r0: i64, r1: i64) {
     vv.ox_fn.push(fid);
     vv.ox_arr.push(arr);
     vv.ox_len.push(len);
+    vv.ox_arr2.push(arr2);
+    vv.ox_len2.push(len2);
+    vv.ox_arr3.push(arr3);
+    vv.ox_len3.push(len3);
     vv.ox_r0.push(r0);
     vv.ox_r1.push(r1);
 }
@@ -181,6 +189,94 @@ fn vc_hook_text_fn(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, fi
         k = k + 1;
     }
     vc_hook_opaque_record(vv, fid, arr, len, ra, rl);
+    vv.hk_vars.push(ra);
+    vv.hk_vars.push(rl);
+    out.push(ra);
+    out.push(rl);
+}
+
+// `string_replace(s, from, to)` and `string_split(s, sep)`, opaque total functions of their
+// operand strings like the text functions above: the result of `replace` is a fresh text, and
+// that of `split` a fresh `(array, length)` of a `Vec<String>` whose elements are addresses
+// of strings the model does not hold, so a read of one is a read of unconstrained memory.
+// Calls on the same operand terms share a result and equal operand strings give equal
+// results (a result length for `split`: the pieces of two calls are distinct objects), under
+// the same Ackermann axioms. Facts true of every run are kept: a length is below
+// `VOW_CAP_VALUE_MASK`, and `split` returns at least one piece, at most one more than the
+// bytes of `s`, and exactly one for an empty separator. A counterexample that needs the value
+// is `unknown` (`vc_hook_recheck`). `n` is the number of operand strings (2 or 3).
+
+// The index in `ox_*` of the earlier call of `fid` on exactly these operand terms, or -1.
+fn vc_hook_multi_find(vv: VcVec, fid: i64, ops: Vec<i64>) -> i64 {
+    let mut i: u64 = 0;
+    while i < vv.ox_fn.len() {
+        if vv.ox_fn[i] == fid && vv.ox_arr[i] == ops[0] && vv.ox_len[i] == ops[1] && vv.ox_arr2[i] == ops[2] && vv.ox_len2[i] == ops[3]
+            && (ops.len() < 6 || (vv.ox_arr3[i] == ops[4] && vv.ox_len3[i] == ops[5])) { return i as i64; }
+        i = i + 1;
+    }
+    -1
+}
+
+// The Bool term "the operand strings `ops` equal those of the earlier call `i`".
+fn vc_hook_multi_same(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, i: u64, ops: Vec<i64>) -> i64 {
+    let mut same: i64 = vc_str_eq(vv, ar, hdr, assumed, ops[0], ops[1], vv.ox_arr[i], vv.ox_len[i]);
+    same = vc_tm_and(ar, same, vc_str_eq(vv, ar, hdr, assumed, ops[2], ops[3], vv.ox_arr2[i], vv.ox_len2[i]));
+    if ops.len() >= 6 {
+        same = vc_tm_and(ar, same, vc_str_eq(vv, ar, hdr, assumed, ops[4], ops[5], vv.ox_arr3[i], vv.ox_len3[i]));
+    }
+    same
+}
+
+// `ops` is `(arr, len)` per operand; the result `(array, length)` is pushed on `out`.
+fn vc_hook_multi_text_fn(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, fid: i64, ops: Vec<i64>, out: Vec<i64>) {
+    let known: i64 = vc_hook_multi_find(vv, fid, ops);
+    if known >= 0 {
+        out.push(vv.ox_r0[known as u64]);
+        out.push(vv.ox_r1[known as u64]);
+        return;
+    }
+    let ra: i64 = vc_str_fresh_array(vv, ar, hdr, String::from("hkm"));
+    let rl: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("hkq")), 64);
+    vc_str_axiom(ar, assumed, vc_tm_app2(ar, VC_OP_BVULT(), rl, vc_vec_len_mask(ar)));
+    if fid == VC_STR_SPLIT() {
+        let one: i64 = vc_tm_bv(ar, 64, 1, 0);
+        vc_str_axiom(ar, assumed, vc_tm_app2(ar, VC_OP_BVUGE(), rl, one));
+        vc_str_axiom(ar, assumed, vc_tm_app2(ar, VC_OP_BVULE(), rl, vc_tm_app2(ar, VC_OP_BVADD(), ops[1], one)));
+        let no_sep: i64 = vc_tm_app2(ar, VC_OP_EQ(), ops[3], vc_str_zero(ar));
+        vc_str_axiom(ar, assumed, vc_tm_implies(ar, no_sep, vc_tm_app2(ar, VC_OP_EQ(), rl, one)));
+    }
+    let mut i: u64 = 0;
+    while i < vv.ox_fn.len() {
+        if vv.ox_fn[i] == fid {
+            let same: i64 = vc_hook_multi_same(vv, ar, hdr, assumed, i, ops);
+            if !vc_tm_is_false(ar, same) {
+                let agree: i64 = { if fid == VC_STR_SPLIT() { vc_tm_app2(ar, VC_OP_EQ(), rl, vv.ox_r1[i]) } else { vc_str_eq(vv, ar, hdr, assumed, ra, rl, vv.ox_r0[i], vv.ox_r1[i]) } };
+                vc_str_axiom(ar, assumed, vc_tm_implies(ar, same, agree));
+            }
+        }
+        i = i + 1;
+    }
+    if ops.len() >= 6 {
+        vc_hook_opaque_record_n(vv, fid, ops[0], ops[1], ops[2], ops[3], ops[4], ops[5], ra, rl);
+    } else {
+        vc_hook_opaque_record_n(vv, fid, ops[0], ops[1], ops[2], ops[3], -1, -1, ra, rl);
+    }
+    vv.hk_vars.push(ra);
+    vv.hk_vars.push(rl);
+    out.push(ra);
+    out.push(rl);
+}
+
+// `string_join(parts, sep)`: a fresh text whose length is below `VOW_CAP_VALUE_MASK`, empty for
+// no parts. The runtime reads the contents of every part, which the model does not hold for an
+// object the function stored (`vc_ptr_store_detail`), so two calls on the same terms need not
+// agree and no congruence is stated.
+fn vc_hook_join(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, parts_len: i64, out: Vec<i64>) {
+    let ra: i64 = vc_str_fresh_array(vv, ar, hdr, String::from("hkj"));
+    let rl: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("hkk")), 64);
+    vc_str_axiom(ar, assumed, vc_tm_app2(ar, VC_OP_BVULT(), rl, vc_vec_len_mask(ar)));
+    let none: i64 = vc_tm_app2(ar, VC_OP_EQ(), parts_len, vc_str_zero(ar));
+    vc_str_axiom(ar, assumed, vc_tm_implies(ar, none, vc_tm_app2(ar, VC_OP_EQ(), rl, vc_str_zero(ar))));
     vv.hk_vars.push(ra);
     vv.hk_vars.push(rl);
     out.push(ra);

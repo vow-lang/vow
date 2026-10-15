@@ -165,7 +165,7 @@ fn vc_opaque_hook_label() -> String { String::from("opaque builtin result") }
 
 fn vc_opaque_hook_reason() -> String {
     let out: String = vc_opaque_hook_label();
-    out.push_str(String::from(": the counterexample depends on the result of parse_f64_bits, format_f64_bits, a parse_* builtin, string_trim, string_to_upper or string_to_lower, which the native verifier models only as a total function of its operands"));
+    out.push_str(String::from(": the counterexample depends on the result of parse_f64_bits, format_f64_bits, a parse_* builtin, string_trim, string_to_upper, string_to_lower, string_replace, string_split or string_join, which the native verifier models only as a total function of its operands"));
     out
 }
 
