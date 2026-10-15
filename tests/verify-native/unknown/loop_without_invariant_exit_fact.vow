@@ -1,0 +1,25 @@
+// The cut with the clause `true` knows nothing at the top of the header, so a fact about the
+// state after a loop (`i == n`) is out of its reach: with two loops the k-induction step case
+// (exactly one loop) is out too, bounded unwinding is open for a symbolic bound, and the result
+// is `unknown`, never a proof and never a counterexample (the cut's failing claim may be a state
+// no run reaches).
+module LoopWithoutInvariantExitFact
+
+fn count_twice(n: u64) -> u64 vow {
+  ensures: result == n
+} {
+  let mut i: u64 = 0u64;
+  while i < n {
+    i = i + 1u64;
+  }
+  let mut j: u64 = 0u64;
+  while j < n {
+    j = j + 1u64;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  print_u64(count_twice(3u64));
+  0
+}

@@ -311,6 +311,43 @@ fn check_not_applicable() -> i64 {
     0
 }
 
+// A loop without an `invariant` is cut with the clause `true` by `vc_induct_cut_trivial`: the
+// header proper is the same havoc state with one assumption, there is one claim on entry and
+// one on the back edge, and the function is well formed. A loop that has an invariant is cut as
+// before, and a loop-free function is still not cut.
+fn check_trivial_cut() -> i64 {
+    let f: IrFunction = count_up_no_invariant();
+    if vc_induct_cut(f).status != VC_INDUCT_NA() { return 1; }
+    let c: VcInduct = vc_induct_cut_trivial(f);
+    if c.status != VC_INDUCT_OK() { return 2; }
+    let g: IrFunction = c.f;
+    if g.blocks.len() != 6 || !well_formed(g) { return 3; }
+    if count_op(g, IOP_VOW_INV()) != 2 || count_op(g, IOP_VOW_REQ()) != 1 { return 4; }
+    if count_marker(g, VC_INTERNAL_CUT_END()) != 1 || count_marker(g, VC_INTERNAL_HAVOC()) != 1 { return 5; }
+    // the original function is untouched
+    if count_op(f, IOP_VOW_INV()) != 0 { return 6; }
+    // the same cut as `count_up` gives, apart from the clause's id (no vow id)
+    let h: IrBlock = block_by_id(g, 1);
+    let mut synthetic: i64 = 0;
+    let mut i: u64 = 0;
+    while i < h.insts.len() {
+        let inst: IrInst = h.insts[i];
+        if inst.op == IOP_VOW_REQ() && inst.dv == -1 { synthetic = synthetic + 1; }
+        i = i + 1;
+    }
+    if synthetic != 1 { return 7; }
+    // every loop has a clause: the cut with `true` has nothing to add
+    if vc_induct_cut_trivial(count_up()).status != VC_INDUCT_NA() { return 8; }
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_const_i64(0, 1));
+    e.push(mk_inst_return(1, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    let flat: IrFunction = mk_function(1, String::from("flat"), Vec::new(), ITY_I64(), blocks);
+    if vc_induct_cut_trivial(flat).status != VC_INDUCT_NA() { return 10; }
+    0
+}
+
 fn check_ptr_phi() -> i64 {
     let f: IrFunction = count_up();
     let e: IrBlock = f.blocks[0];
@@ -578,6 +615,7 @@ fn main() -> i32 {
     if r == 0 { r = check_claims() + 150; if r == 150 { r = 0; } }
     if r == 0 { r = check_deterministic() + 200; if r == 200 { r = 0; } }
     if r == 0 { r = check_not_applicable() + 300; if r == 300 { r = 0; } }
+    if r == 0 { r = check_trivial_cut() + 350; if r == 350 { r = 0; } }
     if r == 0 { r = check_ptr_phi() + 400; if r == 400 { r = 0; } }
     if r == 0 { r = check_vec_written_in_loop() + 500; if r == 500 { r = 0; } }
     if r == 0 { r = check_vec_written_in_region_header() + 540; if r == 540 { r = 0; } }

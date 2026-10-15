@@ -1137,3 +1137,20 @@ proof whose cut reaches no abort ends the check, and otherwise the rounds end at
 cover the cut's (`vc_sites_cover`). The warnings are the same set; only rounds that could add none are
 skipped. This is what lets a writer reach the encoder's abort on a value that has no encoding
 (`reject_encode_u8`, a checked add) and still be proven for every value that has one.
+
+## Addendum (#1663): a loop without an invariant
+
+One small rule, each sound for proofs and none a cap or a havoc.
+
+- **A loop with no `invariant` is also cut, with the clause `true`.** After the bounded rounds end
+  open at the largest bound, when the inductive attempt did not prove and some loop has no clause,
+  the cut is made again with `ConstBool true; VowInvariant` after each such header's Phis
+  (`vc_induct_trivial_invariants`): an arbitrary state at the top of the header, the same havoc of
+  every Phi, `Vec` and map the loop writes. It only ever proves (`unsat` on every claim); a `sat` is
+  a state no run need reach and leaves the verdict `unknown`, as for any cut. The attempt is last, so a
+  function the bounded rounds decide pays nothing. It proves what holds in every state: a bound
+  read through the loop variable, a callee's `requires` under a guard, which is the shape of the
+  `HashMap`-as-a-set loops of `decl_unprintable_enum` (`pass/loop_without_invariant_cut.vow`); a
+  fact about the state after the loop stays `unknown` (`unknown/loop_without_invariant_exit_fact.vow`)
+  and a wrong postcondition is still refuted by the bounded rounds
+  (`fail/loop_without_invariant_cut_wrong.vow`).
