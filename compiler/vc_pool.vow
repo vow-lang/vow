@@ -7,16 +7,18 @@ use vc_native
 use vc_cex
 use vc_worker
 use vc_queue
+use vc_irwire
 
 // The parent's side of native verification: a pool of `vowc verify-worker`
-// sessions over a shared task queue (`vc_queue`). A session lowers the program
-// once and then decides tasks one after another, so the frontend is paid per
-// session (at most `--verify-jobs` of them), not per function. The isolation of
-// D11 is kept per task: a session runs under an address-space cap in its own
-// process group, the group is killed when the task it is on overruns the
-// `--timeout` budget, and a session that dies on a task costs that task's
-// verdict (`timeout`, `unknown` for memory, `panicked` otherwise) and nothing
-// else: the tasks it never reached stay on the queue for another session.
+// sessions over a shared task queue (`vc_queue`). A session takes the lowered
+// module (the parent's, see `vc_irwire`) once and then decides tasks one after
+// another, so the frontend is paid once, by the parent, not per session or per
+// function. The isolation of D11 is kept per task: a session runs under an
+// address-space cap in its own process group, the group is killed when the task
+// it is on overruns the `--timeout` budget, and a session that dies on a task
+// costs that task's verdict (`timeout`, `unknown` for memory, `panicked`
+// otherwise) and nothing else: the tasks it never reached stay on the queue for
+// another session.
 //
 // A session that runs out of memory after finishing earlier tasks may only have
 // been squeezed by what they left behind, so its task is retried once in a
@@ -44,7 +46,11 @@ fn VC_POOL_IDLE_DEATH_LIMIT() -> i64 { 2 }
 // that spans functions (`contracts`, `test`), so those clear it. `kinds` is per
 // task and `module_root` is the explicit module root the parent lowered with, if
 // any. `cache` is the result cache every worker of the pool shares (off by
-// default). `attempts[k]` counts the retries of task k.
+// default). `attempts[k]` counts the retries of task k. `shared` has the module the
+// tasks index into once `vc_pool_share_module` has been given it, and `ir` one
+// element, the path of its encoding under the queue ("" until the queue is laid
+// out): a worker told that path decodes the module instead of lowering the
+// program itself.
 struct VcPool {
     exe: String,
     path: String,
@@ -68,10 +74,18 @@ struct VcPool {
     cache: VcCache,
     halt: bool,
     module_root: String,
+    shared: Vec<IrModule>,
+    ir: Vec<String>,
 }
 
 fn vc_pool_root(p: VcPool) -> String {
     let r: Vec<String> = p.root;
+    r[0]
+}
+
+// The path workers decode the module from, or "".
+fn vc_pool_ir(p: VcPool) -> String {
+    let r: Vec<String> = p.ir;
     r[0]
 }
 
@@ -96,6 +110,8 @@ fn vc_pool_new(exe: String, path: String, fn_idx: Vec<i64>, fn_names: Vec<String
     state.push(0);
     let root: Vec<String> = Vec::new();
     root.push(String::from(""));
+    let ir: Vec<String> = Vec::new();
+    ir.push(String::from(""));
     VcPool {
         exe: exe,
         path: path,
@@ -119,7 +135,17 @@ fn vc_pool_new(exe: String, path: String, fn_idx: Vec<i64>, fn_names: Vec<String
         cache: vc_cache_off(),
         halt: true,
         module_root: String::from(""),
+        shared: Vec::new(),
+        ir: ir,
     }
+}
+
+// Makes `m`, the module the tasks' function indices refer to, what every worker
+// decides against: it is encoded under the queue once, when the queue is laid out
+// (`vc_pool_prepare`). Left unshared, or when the file cannot be written, a worker
+// lowers the program itself, which decides the same tasks.
+fn vc_pool_share_module(p: VcPool, m: IrModule) {
+    if p.shared.len() == 0 { p.shared.push(m); }
 }
 
 fn vc_worker_argv(p: VcPool, w: i64) -> Vec<String> {
@@ -136,6 +162,11 @@ fn vc_worker_argv(p: VcPool, w: i64) -> Vec<String> {
     if p.module_root.len() > 0 {
         a.push(String::from("--worker-module-root"));
         a.push(p.module_root);
+    }
+    let ir: String = vc_pool_ir(p);
+    if ir.len() > 0 {
+        a.push(String::from("--worker-ir"));
+        a.push(ir);
     }
     if vc_cache_on(p.cache) {
         a.push(String::from("--worker-cache-dir"));
@@ -320,6 +351,11 @@ fn vc_pool_prepare(p: VcPool) [io, read, write] {
         return;
     }
     p.root[0] = root;
+    let shared: Vec<IrModule> = p.shared;
+    if shared.len() > 0 {
+        let file: String = vc_q_join(root, String::from("ir"));
+        if fs_write(file, vc_irw_encode(shared[0])) == 0 { p.ir[0] = file; }
+    }
 }
 
 // Tasks below the halt limit that no session has taken off the queue.
@@ -448,5 +484,6 @@ fn vc_pool_abort(p: VcPool) [io, read] {
     if vc_pool_root(p).len() > 0 {
         fs_remove_dir_all(vc_pool_root(p));
         p.root[0] = String::from("");
+        p.ir[0] = String::from("");
     }
 }

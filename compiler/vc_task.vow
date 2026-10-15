@@ -12,7 +12,7 @@ use vc_queue
 // The worker's side of a task: decide one function (or one weak-contract probe
 // of it) and, for a session, work through the shared queue of `vc_queue`.
 //
-// A session lowers the program once. Every task then starts from the same
+// A session gets the lowered module once. Every task then starts from the same
 // lowered module, and no task may change it: the verifier builds new functions
 // from `f` (inlining, loop closing, unrolling, the probe rewrites) and never
 // writes into the module's vectors, which `check_session_isolation` in

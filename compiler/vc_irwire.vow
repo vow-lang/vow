@@ -1,0 +1,409 @@
+module VcIrwire
+
+use ir
+
+// The lowered module a native verify worker decides tasks against, as one byte
+// string the parent writes once and every worker session reads instead of
+// running the frontend again (the frontend of `compiler/main.vow` is the larger
+// part of a session's cost). Every field of every record is carried, so a
+// decoded module is the module that was encoded and no verdict can depend on
+// which side lowered it.
+//
+// Integers are zigzag LEB128 and only the shortest form is accepted, strings and
+// sequences are length-prefixed, and the stream opens with a version tag. A
+// reader never traps: the first violation (truncation, a count larger than the
+// bytes left, a non-canonical or over-long integer, trailing bytes) fails the
+// whole decode, and a failed decode is `None`, never a partial module.
+//
+// This is not `module_io.vow`: that module mirrors the Rust `.vmod` file format
+// byte for byte (and so holds the `u32` wire limits of that format and works on
+// byte vectors), where this one is a private hand-off between two processes of
+// one binary that must carry every field the verifier can read. The decoder
+// builds `IrInst`, `IrFunction` and `IrModule` with full struct literals, so a
+// field added to those records in `ir.vow` is a compile error here until the
+// encoder and decoder carry it.
+
+fn vc_irw_tag() -> String { String::from("VOWIR1\n") }
+
+fn vc_irw_put(out: String, v: i64) {
+    let mut u: u64 = ((v << 1) ^ (v >> 63)) as u64;
+    while u >= 128 {
+        out.push_byte(u64_to_u8_wrap((u & 127) | 128));
+        u = u >> 7;
+    }
+    out.push_byte(u64_to_u8_wrap(u));
+}
+
+fn vc_irw_put_str(out: String, s: String) {
+    vc_irw_put(out, s.len() as i64);
+    out.push_str(s);
+}
+
+fn vc_irw_put_ints(out: String, xs: Vec<i64>) {
+    vc_irw_put(out, xs.len() as i64);
+    let mut i: u64 = 0;
+    while i < xs.len() {
+        vc_irw_put(out, xs[i]);
+        i = i + 1;
+    }
+}
+
+fn vc_irw_put_strs(out: String, xs: Vec<String>) {
+    vc_irw_put(out, xs.len() as i64);
+    let mut i: u64 = 0;
+    while i < xs.len() {
+        vc_irw_put_str(out, xs[i]);
+        i = i + 1;
+    }
+}
+
+fn vc_irw_put_inst(out: String, inst: IrInst) {
+    vc_irw_put(out, inst.id);
+    vc_irw_put(out, inst.op);
+    vc_irw_put(out, inst.ty);
+    vc_irw_put_ints(out, inst.args);
+    vc_irw_put(out, inst.dk);
+    vc_irw_put(out, inst.dv);
+    vc_irw_put(out, inst.dv2);
+    vc_irw_put_str(out, inst.ds);
+    vc_irw_put(out, inst.ostart);
+    vc_irw_put(out, inst.olen);
+    vc_irw_put(out, inst.rgn);
+}
+
+fn vc_irw_put_block(out: String, blk: IrBlock) {
+    vc_irw_put(out, blk.id);
+    vc_irw_put(out, blk.insts.len() as i64);
+    let mut i: u64 = 0;
+    while i < blk.insts.len() {
+        vc_irw_put_inst(out, blk.insts[i]);
+        i = i + 1;
+    }
+}
+
+fn vc_irw_put_vow(out: String, v: IrVowEntry) {
+    vc_irw_put(out, v.id);
+    vc_irw_put_str(out, v.description);
+    vc_irw_put(out, v.blame);
+    vc_irw_put_ints(out, v.binding_ids);
+    vc_irw_put_strs(out, v.binding_names);
+    vc_irw_put_str(out, v.file);
+    vc_irw_put(out, v.offset);
+}
+
+fn vc_irw_put_function(out: String, f: IrFunction) {
+    vc_irw_put(out, f.id);
+    vc_irw_put_str(out, f.name);
+    vc_irw_put_ints(out, f.params);
+    vc_irw_put_strs(out, f.param_names);
+    vc_irw_put(out, f.return_ty);
+    vc_irw_put(out, f.effects);
+    vc_irw_put(out, f.vows.len() as i64);
+    let mut vi: u64 = 0;
+    while vi < f.vows.len() {
+        vc_irw_put_vow(out, f.vows[vi]);
+        vi = vi + 1;
+    }
+    vc_irw_put(out, f.blocks.len() as i64);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        vc_irw_put_block(out, f.blocks[bi]);
+        bi = bi + 1;
+    }
+    vc_irw_put_ints(out, f.local_names_ids);
+    vc_irw_put_strs(out, f.local_names_strs);
+    vc_irw_put(out, f.rsum_return_kind);
+    vc_irw_put(out, f.rsum_return_aux);
+    vc_irw_put_ints(out, f.rsum_return_aliases);
+    vc_irw_put_ints(out, f.rsum_store_effects);
+    vc_irw_put_ints(out, f.rsum_param_regions);
+    vc_irw_put_str(out, f.source_file);
+}
+
+fn vc_irw_put_fields(out: String, fields: Vec<IrFieldLayout>) {
+    vc_irw_put(out, fields.len() as i64);
+    let mut i: u64 = 0;
+    while i < fields.len() {
+        let fl: IrFieldLayout = fields[i];
+        vc_irw_put_str(out, fl.name);
+        vc_irw_put(out, fl.ty);
+        i = i + 1;
+    }
+}
+
+fn vc_irw_put_enum(out: String, e: IrEnumLayout) {
+    vc_irw_put_str(out, e.name);
+    vc_irw_put(out, e.variants.len() as i64);
+    let mut i: u64 = 0;
+    while i < e.variants.len() {
+        let v: IrVariantLayout = e.variants[i];
+        vc_irw_put_str(out, v.name);
+        vc_irw_put(out, v.tag);
+        vc_irw_put_fields(out, v.payload);
+        i = i + 1;
+    }
+}
+
+fn vc_irw_encode(m: IrModule) -> String {
+    let out: String = vc_irw_tag();
+    vc_irw_put_str(out, m.name);
+    vc_irw_put(out, m.functions.len() as i64);
+    let mut fi: u64 = 0;
+    while fi < m.functions.len() {
+        vc_irw_put_function(out, m.functions[fi]);
+        fi = fi + 1;
+    }
+    vc_irw_put_strs(out, m.strings);
+    vc_irw_put(out, m.struct_layouts.len() as i64);
+    let mut si: u64 = 0;
+    while si < m.struct_layouts.len() {
+        let sl: IrStructLayout = m.struct_layouts[si];
+        vc_irw_put_str(out, sl.name);
+        vc_irw_put_fields(out, sl.fields);
+        vc_irw_put(out, sl.is_linear);
+        si = si + 1;
+    }
+    vc_irw_put(out, m.enum_layouts.len() as i64);
+    let mut ei: u64 = 0;
+    while ei < m.enum_layouts.len() {
+        vc_irw_put_enum(out, m.enum_layouts[ei]);
+        ei = ei + 1;
+    }
+    vc_irw_put_strs(out, m.warnings);
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Reader
+// ---------------------------------------------------------------------------
+
+struct VcIrReader {
+    s: String,
+    pos: u64,
+    bad: bool,
+}
+
+fn vc_irw_get(r: VcIrReader) -> i64 {
+    if r.bad { return 0; }
+    let s: String = r.s;
+    let mut u: u64 = 0;
+    let mut shift: u64 = 0;
+    let mut pos: u64 = r.pos;
+    while true {
+        if pos >= s.len() || shift > 63 {
+            r.bad = true;
+            return 0;
+        }
+        let b: i64 = s.byte_at(pos);
+        pos = pos + 1;
+        if shift == 63 && b > 1 {
+            r.bad = true;
+            return 0;
+        }
+        u = u | (((b & 127) as u64) << shift);
+        if b < 128 {
+            if b == 0 && shift > 0 {
+                r.bad = true;
+                return 0;
+            }
+            break;
+        }
+        shift = shift + 7;
+    }
+    r.pos = pos;
+    ((u >> 1) as i64) ^ (0 - ((u & 1) as i64))
+}
+
+// A sequence length: never more than the bytes left, since each element takes
+// at least one, so a damaged count cannot make the decoder allocate unboundedly.
+fn vc_irw_get_count(r: VcIrReader) -> u64 {
+    let n: i64 = vc_irw_get(r);
+    let s: String = r.s;
+    if n < 0 || n as u64 > s.len() - r.pos {
+        r.bad = true;
+        return 0;
+    }
+    n as u64
+}
+
+fn vc_irw_get_str(r: VcIrReader) -> String {
+    let n: u64 = vc_irw_get_count(r);
+    if r.bad || n == 0 { return String::from(""); }
+    let s: String = r.s;
+    let out: String = s.substring(r.pos, r.pos + n);
+    r.pos = r.pos + n;
+    out
+}
+
+fn vc_irw_get_ints(r: VcIrReader) -> Vec<i64> {
+    let n: u64 = vc_irw_get_count(r);
+    let out: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < n && !r.bad {
+        out.push(vc_irw_get(r));
+        i = i + 1;
+    }
+    out
+}
+
+fn vc_irw_get_strs(r: VcIrReader) -> Vec<String> {
+    let n: u64 = vc_irw_get_count(r);
+    let out: Vec<String> = Vec::new();
+    let mut i: u64 = 0;
+    while i < n && !r.bad {
+        out.push(vc_irw_get_str(r));
+        i = i + 1;
+    }
+    out
+}
+
+fn vc_irw_get_inst(r: VcIrReader) -> IrInst {
+    let id: i64 = vc_irw_get(r);
+    let op: i64 = vc_irw_get(r);
+    let ty: i64 = vc_irw_get(r);
+    let args: Vec<i64> = vc_irw_get_ints(r);
+    let dk: i64 = vc_irw_get(r);
+    let dv: i64 = vc_irw_get(r);
+    let dv2: i64 = vc_irw_get(r);
+    let ds: String = vc_irw_get_str(r);
+    let ostart: i64 = vc_irw_get(r);
+    let olen: i64 = vc_irw_get(r);
+    let rgn: i64 = vc_irw_get(r);
+    IrInst { id: id, op: op, ty: ty, args: args, dk: dk, dv: dv, dv2: dv2, ds: ds, ostart: ostart, olen: olen, rgn: rgn }
+}
+
+fn vc_irw_get_block(r: VcIrReader) -> IrBlock {
+    let blk: IrBlock = ir_block_new(vc_irw_get(r));
+    let n: u64 = vc_irw_get_count(r);
+    let mut i: u64 = 0;
+    while i < n && !r.bad {
+        blk.insts.push(vc_irw_get_inst(r));
+        i = i + 1;
+    }
+    blk
+}
+
+fn vc_irw_get_vow(r: VcIrReader) -> IrVowEntry {
+    let id: i64 = vc_irw_get(r);
+    let description: String = vc_irw_get_str(r);
+    let blame: i64 = vc_irw_get(r);
+    let binding_ids: Vec<i64> = vc_irw_get_ints(r);
+    let binding_names: Vec<String> = vc_irw_get_strs(r);
+    let file: String = vc_irw_get_str(r);
+    let offset: i64 = vc_irw_get(r);
+    IrVowEntry { id: id, description: description, blame: blame, binding_ids: binding_ids, binding_names: binding_names, file: file, offset: offset }
+}
+
+fn vc_irw_get_function(r: VcIrReader) -> IrFunction {
+    let id: i64 = vc_irw_get(r);
+    let name: String = vc_irw_get_str(r);
+    let params: Vec<i64> = vc_irw_get_ints(r);
+    let param_names: Vec<String> = vc_irw_get_strs(r);
+    let return_ty: i64 = vc_irw_get(r);
+    let effects: i64 = vc_irw_get(r);
+    let vows: Vec<IrVowEntry> = Vec::new();
+    let nv: u64 = vc_irw_get_count(r);
+    let mut vi: u64 = 0;
+    while vi < nv && !r.bad {
+        vows.push(vc_irw_get_vow(r));
+        vi = vi + 1;
+    }
+    let blocks: Vec<IrBlock> = Vec::new();
+    let nb: u64 = vc_irw_get_count(r);
+    let mut bi: u64 = 0;
+    while bi < nb && !r.bad {
+        blocks.push(vc_irw_get_block(r));
+        bi = bi + 1;
+    }
+    let local_names_ids: Vec<i64> = vc_irw_get_ints(r);
+    let local_names_strs: Vec<String> = vc_irw_get_strs(r);
+    let rsum_return_kind: i64 = vc_irw_get(r);
+    let rsum_return_aux: i64 = vc_irw_get(r);
+    let rsum_return_aliases: Vec<i64> = vc_irw_get_ints(r);
+    let rsum_store_effects: Vec<i64> = vc_irw_get_ints(r);
+    let rsum_param_regions: Vec<i64> = vc_irw_get_ints(r);
+    let source_file: String = vc_irw_get_str(r);
+    IrFunction {
+        id: id,
+        name: name,
+        params: params,
+        param_names: param_names,
+        return_ty: return_ty,
+        effects: effects,
+        vows: vows,
+        blocks: blocks,
+        local_names_ids: local_names_ids,
+        local_names_strs: local_names_strs,
+        rsum_return_kind: rsum_return_kind,
+        rsum_return_aux: rsum_return_aux,
+        rsum_return_aliases: rsum_return_aliases,
+        rsum_store_effects: rsum_store_effects,
+        rsum_param_regions: rsum_param_regions,
+        source_file: source_file,
+    }
+}
+
+fn vc_irw_get_fields(r: VcIrReader) -> Vec<IrFieldLayout> {
+    let n: u64 = vc_irw_get_count(r);
+    let out: Vec<IrFieldLayout> = Vec::new();
+    let mut i: u64 = 0;
+    while i < n && !r.bad {
+        let name: String = vc_irw_get_str(r);
+        let ty: i64 = vc_irw_get(r);
+        out.push(IrFieldLayout { name: name, ty: ty });
+        i = i + 1;
+    }
+    out
+}
+
+fn vc_irw_get_enum(r: VcIrReader) -> IrEnumLayout {
+    let name: String = vc_irw_get_str(r);
+    let variants: Vec<IrVariantLayout> = Vec::new();
+    let n: u64 = vc_irw_get_count(r);
+    let mut i: u64 = 0;
+    while i < n && !r.bad {
+        let vname: String = vc_irw_get_str(r);
+        let tag: i64 = vc_irw_get(r);
+        let payload: Vec<IrFieldLayout> = vc_irw_get_fields(r);
+        variants.push(IrVariantLayout { name: vname, tag: tag, payload: payload });
+        i = i + 1;
+    }
+    IrEnumLayout { name: name, variants: variants }
+}
+
+// The module `text` encodes, or `None` for anything that is not exactly one
+// complete encoding.
+fn vc_irw_decode(text: String) -> Option<IrModule> {
+    let tag: String = vc_irw_tag();
+    if text.len() < tag.len() || text.substring(0, tag.len()) != tag { return Option::None; }
+    let r: VcIrReader = VcIrReader { s: text, pos: tag.len(), bad: false };
+    let name: String = vc_irw_get_str(r);
+    let functions: Vec<IrFunction> = Vec::new();
+    let nf: u64 = vc_irw_get_count(r);
+    let mut fi: u64 = 0;
+    while fi < nf && !r.bad {
+        functions.push(vc_irw_get_function(r));
+        fi = fi + 1;
+    }
+    let strings: Vec<String> = vc_irw_get_strs(r);
+    let struct_layouts: Vec<IrStructLayout> = Vec::new();
+    let ns: u64 = vc_irw_get_count(r);
+    let mut si: u64 = 0;
+    while si < ns && !r.bad {
+        let sname: String = vc_irw_get_str(r);
+        let fields: Vec<IrFieldLayout> = vc_irw_get_fields(r);
+        let is_linear: i64 = vc_irw_get(r);
+        struct_layouts.push(IrStructLayout { name: sname, fields: fields, is_linear: is_linear });
+        si = si + 1;
+    }
+    let enum_layouts: Vec<IrEnumLayout> = Vec::new();
+    let ne: u64 = vc_irw_get_count(r);
+    let mut ei: u64 = 0;
+    while ei < ne && !r.bad {
+        enum_layouts.push(vc_irw_get_enum(r));
+        ei = ei + 1;
+    }
+    let warnings: Vec<String> = vc_irw_get_strs(r);
+    if r.bad || r.pos != text.len() { return Option::None; }
+    Option::Some(IrModule { name: name, functions: functions, strings: strings, struct_layouts: struct_layouts, enum_layouts: enum_layouts, warnings: warnings })
+}
