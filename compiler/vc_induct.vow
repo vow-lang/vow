@@ -36,7 +36,8 @@ use vc_induct_agg
 //
 // A loop the cut cannot treat exactly (a loop without an invariant, a pointer
 // carried by a header Phi, a String written in a loop, a Vec born in the loop
-// that writes it, an irregular header) makes the whole function `NA`: the caller
+// that writes it, a field write the cut cannot trace to a parameter or an allocation,
+// an irregular header) makes the whole function `NA`: the caller
 // keeps the bounded verdict, as it does for a cut the executor cannot walk. An
 // accepted cut is only a transformation: it never produces a verdict itself.
 
