@@ -200,8 +200,9 @@ fn two_ptr_params() -> Vec<i64> {
 
 // The shape rule is called on IR the instruction gate would already have
 // refused, so each rejection class is checked on its own: a Vec pointer that is
-// read as a struct, handed to a call, or merged by a Phi that supplies two
-// different values; a Phi that always supplies one value is accepted.
+// read as a struct or handed to a call; a Phi that merges two Vecs, or always
+// supplies one, is accepted (the model reads and writes a merge through the Vecs
+// it stands for).
 fn check_shape_rejections() -> i64 {
     let used: Vec<IrInst> = Vec::new();
     used.push(mk_inst_arg(0, ITY_PTR(), 0));
@@ -238,7 +239,7 @@ fn check_shape_rejections() -> i64 {
     merged.push(mk_inst_call_extern(5, ITY_U64(), args1(2), String::from("__vow_vec_len")));
     merged.push(mk_inst_return(6, 5));
     let by_phi: IrFunction = one_block(two_ptr_params(), ITY_U64(), merged);
-    if vc_vec_shape_detail(by_phi, 8, false) != String::from("Vec merged by a Phi") { return 63; }
+    if vc_vec_shape_detail(by_phi, 8, false).len() != 0 { return 63; }
 
     let same: Vec<IrInst> = Vec::new();
     same.push(mk_inst_arg(0, ITY_PTR(), 0));

@@ -1,6 +1,5 @@
-// TEST: skip-reason non-modelable-callee
-// A callee that returns different Vecs on its two paths would make two model objects
-// for one runtime Vec, so the caller stays Skipped (as `Vec merged by a Phi`).
+// A callee that returns different Vecs on its two paths: the result is the merge of
+// the two, and the caller reads the one the callee's branch picked.
 module InlineVecResultTwoBranches
 
 fn pick(c: i64) -> Vec<i64> {
@@ -11,7 +10,7 @@ fn pick(c: i64) -> Vec<i64> {
 }
 
 fn size(c: i64) -> u64 vow {
-  ensures: result <= 1
+  ensures: (c > 0 && result == 0) || (c <= 0 && result == 1)
 } {
   pick(c).len()
 }

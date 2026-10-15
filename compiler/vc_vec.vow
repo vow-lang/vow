@@ -31,12 +31,28 @@ use vc_agg
 // the state of the block being walked. The state is never inherited from the
 // block walked before, only from edges. A block that is not reached is never
 // entered, so it contributes nothing.
+//
+// A pointer Phi that merges different Vec objects (`let v = if c { a } else { b }`,
+// a callee that returns different Vecs on two paths) is a slot of its own whose
+// state is not stored: its array and length are read as the `ite` over the states
+// of the objects it merges, under the condition of the edge that supplies each,
+// and a write to it is a write to each of them under that condition, so the
+// objects stay what every other name for them sees. The conditions are those of
+// the edges (`vc_flow`), final once the Phi's block is entered.
 
 struct VcVec {
     fl: VcFlow,
+    ar: VcArena,
     n_blocks: u64,
     slot_of: Vec<i64>,
     kinds: Vec<i64>,
+    // The objects a Phi slot merges, per slot: `kid_head[s]` is the first entry of
+    // its list (-1 for a slot that is not a Phi), each entry is the slot merged, the
+    // condition of the edge that supplies it and the next entry.
+    kid_head: Vec<i64>,
+    kid_slot: Vec<i64>,
+    kid_cond: Vec<i64>,
+    kid_next: Vec<i64>,
     base_arr: Vec<i64>,
     base_len: Vec<i64>,
     arr: Vec<i64>,
@@ -106,12 +122,17 @@ struct VcVec {
     src_of: Vec<i64>,
 }
 
-fn vc_vec_new_state(fl: VcFlow, n_blocks: u64) -> VcVec {
+fn vc_vec_new_state(fl: VcFlow, ar: VcArena, n_blocks: u64) -> VcVec {
     VcVec {
         fl: fl,
+        ar: ar,
         n_blocks: n_blocks,
         slot_of: Vec::new(),
         kinds: Vec::new(),
+        kid_head: Vec::new(),
+        kid_slot: Vec::new(),
+        kid_cond: Vec::new(),
+        kid_next: Vec::new(),
         base_arr: Vec::new(),
         base_len: Vec::new(),
         arr: Vec::new(),
@@ -174,6 +195,7 @@ fn vc_vec_push_slot(vv: VcVec, obj: i64, kind: i64) -> i64 {
     let s: i64 = vv.kinds.len() as i64;
     vv.slot_of[obj as u64] = s;
     vv.kinds.push(kind);
+    vv.kid_head.push(-1);
     vv.base_arr.push(-1);
     vv.base_len.push(-1);
     vv.lit_text.push(String::from(""));
@@ -200,6 +222,7 @@ fn vc_vec_slot(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i
         return vv.slot_of[obj as u64];
     }
     let kind: i64 = ag.kinds[obj as u64];
+    if kind == VC_OBJ_PHI() { return vc_vec_phi_slot(vv, ag, ar, hdr, assumed, obj); }
     let s: i64 = vc_vec_push_slot(vv, obj, kind);
     let prefix: String = {
         if kind == VC_OBJ_PARAM() {
@@ -229,15 +252,101 @@ fn vc_vec_slot(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i
     s
 }
 
+// The slot of the pointer Phi `obj`: a slot of its own that stores no state, with
+// the slot of each object it merges (created if need be) and the condition of the
+// edge that supplies it. The Phi's block has been entered, so its edges are final.
+fn vc_vec_phi_slot(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, obj: i64) -> i64 {
+    let fl: VcFlow = vv.fl;
+    let phi: i64 = ag.phis[obj as u64];
+    let edges: Vec<i64> = Vec::new();
+    let mut e: i64 = fl.in_head[ag.owners[obj as u64] as u64];
+    while e >= 0 {
+        edges.push(e);
+        e = fl.e_next[e as u64];
+    }
+    let kids: Vec<i64> = Vec::new();
+    let mut k: u64 = 0;
+    while k < edges.len() {
+        let child: i64 = vc_flow_upsilon_from(fl, phi, fl.e_src[edges[k] as u64]);
+        kids.push(vc_vec_slot(vv, ag, ar, hdr, assumed, child));
+        k = k + 1;
+    }
+    let s: i64 = vc_vec_push_slot(vv, obj, VC_OBJ_PHI());
+    let mut last: i64 = -1;
+    k = 0;
+    while k < kids.len() {
+        let entry: i64 = vv.kid_slot.len() as i64;
+        vv.kid_slot.push(kids[k]);
+        vv.kid_cond.push(fl.e_cond[edges[k] as u64]);
+        vv.kid_next.push(-1);
+        if last < 0 { vv.kid_head[s as u64] = entry; } else { vv.kid_next[last as u64] = entry; }
+        last = entry;
+        k = k + 1;
+    }
+    s
+}
+
+// The array (`want_arr`) or length of Phi slot `s` in block `bi`: the `ite` chain
+// `vc_vec_enter` builds, over the state of each object the Phi merges. An object
+// that holds no state here (an allocation created on no path to this block) is
+// supplied by no live edge and is left out; -1 when there is none.
+fn vc_vec_phi_cur(vv: VcVec, s: i64, bi: i64, want_arr: bool) -> i64 {
+    let ar: VcArena = vv.ar;
+    let mut acc: i64 = -1;
+    let mut e: i64 = vv.kid_head[s as u64];
+    while e >= 0 {
+        let k: i64 = vv.kid_slot[e as u64];
+        let v: i64 = { if want_arr { vc_vec_cur_arr(vv, k, bi) } else { vc_vec_cur_len(vv, k, bi) } };
+        if v >= 0 {
+            if acc < 0 {
+                acc = v;
+            } else if v != acc {
+                acc = vc_tm_app3(ar, VC_OP_ITE(), vv.kid_cond[e as u64], v, acc);
+            }
+        }
+        e = vv.kid_next[e as u64];
+    }
+    acc
+}
+
+// A write of `(arr, len)` to Phi slot `s` in block `bi`: each object it merges
+// takes the new state when its edge is the one taken and keeps its own otherwise.
+fn vc_vec_phi_write(vv: VcVec, ar: VcArena, hdr: SmtScript, s: i64, bi: i64, arr: i64, len: i64) {
+    let mut e: i64 = vv.kid_head[s as u64];
+    while e >= 0 {
+        let k: i64 = vv.kid_slot[e as u64];
+        let old_arr: i64 = vc_vec_cur_arr(vv, k, bi);
+        if old_arr >= 0 {
+            let c: i64 = vv.kid_cond[e as u64];
+            let old_len: i64 = vc_vec_cur_len(vv, k, bi);
+            vc_vec_write(vv, ar, hdr, k, bi, vc_tm_app3(ar, VC_OP_ITE(), c, arr, old_arr), vc_tm_app3(ar, VC_OP_ITE(), c, len, old_len));
+        }
+        e = vv.kid_next[e as u64];
+    }
+}
+
 // Records that the function reads or writes the elements of `obj` as `ty` (a 128-bit
 // integer or a float): a counterexample then lists them as values of that type. Only
 // a parameter's contents are ever listed, so a copy of a parameter marks the parameter.
 fn vc_vec_mark_elem(vv: VcVec, ag: VcAgg, obj: i64, ty: i64) {
     let mut o: i64 = obj;
-    while o >= 0 && ag.kinds[o as u64] != VC_OBJ_PARAM() {
+    while o >= 0 && ag.kinds[o as u64] != VC_OBJ_PARAM() && ag.kinds[o as u64] != VC_OBJ_PHI() {
         o = vc_vec_src_of(vv, o);
     }
     if o < 0 { return; }
+    if ag.kinds[o as u64] == VC_OBJ_PHI() {
+        let s: i64 = vv.slot_of[o as u64];
+        let mut e: i64 = vv.kid_head[s as u64];
+        while e >= 0 {
+            let mut k: u64 = 0;
+            while k < vv.slot_of.len() {
+                if vv.slot_of[k] == vv.kid_slot[e as u64] { vc_vec_mark_elem(vv, ag, k as i64, ty); }
+                k = k + 1;
+            }
+            e = vv.kid_next[e as u64];
+        }
+        return;
+    }
     let mut j: u64 = 0;
     while j < vv.pv_param.len() {
         if vv.pv_param[j] == ag.owners[o as u64] { vv.pv_wide[j] = ty; }
@@ -300,18 +409,24 @@ fn vc_vec_create_with(vv: VcVec, ar: VcArena, hdr: SmtScript, obj: i64, bi: i64,
 // never created on this path, which dominance rules out (the gate validates
 // it), so its unconstrained base is a safe answer.
 fn vc_vec_cur_arr(vv: VcVec, s: i64, bi: i64) -> i64 {
+    if vv.kinds[s as u64] == VC_OBJ_PHI() { return vc_vec_phi_cur(vv, s, bi, true); }
     let a: i64 = vv.arr[vc_vec_pos(vv, s, bi)];
     if a >= 0 { return a; }
     vv.base_arr[s as u64]
 }
 
 fn vc_vec_cur_len(vv: VcVec, s: i64, bi: i64) -> i64 {
+    if vv.kinds[s as u64] == VC_OBJ_PHI() { return vc_vec_phi_cur(vv, s, bi, false); }
     let l: i64 = vv.len[vc_vec_pos(vv, s, bi)];
     if l >= 0 { return l; }
     vv.base_len[s as u64]
 }
 
 fn vc_vec_write(vv: VcVec, ar: VcArena, hdr: SmtScript, s: i64, bi: i64, arr: i64, len: i64) {
+    if vv.kinds[s as u64] == VC_OBJ_PHI() {
+        vc_vec_phi_write(vv, ar, hdr, s, bi, arr, len);
+        return;
+    }
     let p: u64 = vc_vec_pos(vv, s, bi);
     vv.arr[p] = vc_flow_name(vv.fl, ar, hdr, VC_SORT_ARRAY64(), arr);
     vv.len[p] = vc_flow_name(vv.fl, ar, hdr, 64, len);
@@ -410,8 +525,9 @@ fn vc_vec_pop(vv: VcVec, ar: VcArena, hdr: SmtScript, s: i64, bi: i64) {
 // one, is supplied two different values: a differing merge would be two model
 // objects for one runtime object. `sup` is the one value a Phi gets (-1 none
 // yet). Marks every Phi and value it links as an object, iterated since a Phi
-// can feed another Phi. Shared by the `Vec` and map gates.
-fn vc_phi_merges_objects(f: IrFunction, is_obj: Vec<i64>, n_ids: u64) -> bool {
+// can feed another Phi. With `allow` a differing merge is not reported (the object
+// kind models one) and only the marking is done. Shared by the `Vec` and map gates.
+fn vc_phi_merges_objects(f: IrFunction, is_obj: Vec<i64>, n_ids: u64, allow: bool) -> bool {
     let sup: Vec<i64> = dom_fill(n_ids, -1);
     let mut changed: bool = true;
     while changed {
@@ -428,7 +544,7 @@ fn vc_phi_merges_objects(f: IrFunction, is_obj: Vec<i64>, n_ids: u64) -> bool {
                     if is_obj[phi] == 1 || is_obj[val] == 1 {
                         if sup[phi] == -1 {
                             sup[phi] = inst.args[0];
-                        } else if sup[phi] != inst.args[0] {
+                        } else if sup[phi] != inst.args[0] && !allow {
                             return true;
                         }
                         if is_obj[phi] != 1 || is_obj[val] != 1 {
@@ -457,10 +573,10 @@ fn vc_vec_any_arg(inst: IrInst, is_vec: Vec<i64>) -> bool {
 
 // Gate rule: a Vec lives only in its own function, as an object no other
 // instruction can alias. A pointer used by a Vec operation must not also be a
-// struct (`FieldGet`/`FieldSet`) or be passed to a user call, and a Phi may
-// merge Vec pointers only when every `Upsilon` feeding it supplies the same
-// value; a differing merge would be two model objects for one runtime Vec. ""
-// when the shape is fine, else the detail of an `unsupported-opcode` skip.
+// struct (`FieldGet`/`FieldSet`) or be passed to a user call. A Phi that merges
+// different Vecs is modelled (`vc_vec_phi_slot`), so every Phi it feeds is marked
+// as a Vec. "" when the shape is fine, else the detail of an `unsupported-opcode`
+// skip.
 fn vc_vec_shape_detail(f: IrFunction, n_ids: u64, calls: bool) -> String {
     let is_vec: Vec<i64> = dom_fill(n_ids, 0);
     let mut any: bool = false;
@@ -488,7 +604,7 @@ fn vc_vec_shape_detail(f: IrFunction, n_ids: u64, calls: bool) -> String {
         bi = bi + 1;
     }
     if !any { return String::from(""); }
-    if vc_phi_merges_objects(f, is_vec, n_ids) { return String::from("Vec merged by a Phi"); }
+    vc_phi_merges_objects(f, is_vec, n_ids, true);
     bi = 0;
     while bi < f.blocks.len() {
         let blk: IrBlock = f.blocks[bi];
