@@ -106,7 +106,7 @@ fn reader_need(r: ModuleReader, n: u64) -> bool {
     if r.err_kind != DEC_OK() {
         return false;
     }
-    if n > r.buf.len() - r.pos {
+    if r.pos > r.buf.len() || n > r.buf.len() - r.pos {
         reader_fail(r, DEC_TRUNCATED(), r.pos, String::new(), 0);
         return false;
     }
