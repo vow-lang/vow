@@ -27,6 +27,15 @@ export VOW_VERIFY_NO_INCREMENTAL=1
 cat > "$FAKE_DIR/bitwuzla" <<'SHIM'
 #!/usr/bin/env bash
 set -eu
+# Waits $1 seconds without a child process: a `sleep` orphaned by a kill would
+# keep the solver's output pipe open and delay the parent's reap.
+nap() {
+    local fifo="$FAKE_BW_DIR/.nap.$$"
+    mkfifo "$fifo"
+    exec 7<>"$fifo"
+    rm -f "$fifo"
+    read -r -t "$1" -u 7 _ || true
+}
 if [ "${1:-}" = "--version" ]; then
     [ -n "${FAKE_BW_VERSION:-}" ] || exit 2
     echo "$FAKE_BW_VERSION"
@@ -69,6 +78,9 @@ if [ "${file%.smt2}" = "$file" ]; then
                 case "$FAKE_BW_MODE" in
                     garbage) echo "what is this" ;;
                     session_error_line) echo '(error "boom")' ;;
+                    hedge_slow_unsat) if [ "$checks" -eq 3 ]; then nap 8; fi; echo unsat ;;
+                    hedge_slow_sat) if [ "$checks" -eq 3 ]; then nap 8; echo sat; else echo unsat; fi ;;
+                    hedge_win) if [ "$checks" -eq 3 ]; then nap 0.3; fi; echo unsat ;;
                     sat) echo sat ;;
                     unknown|session_unknown) echo unknown ;;
                     *) echo unsat ;;
@@ -113,7 +125,9 @@ cp "$file" "$FAKE_BW_DIR/q.$n.smt2"
 echo "$file" >> "$FAKE_BW_DIR/paths"
 echo "$*" >> "$FAKE_BW_DIR/args"
 case "$FAKE_BW_MODE" in
-    unsat|session_unknown|session_die_after_*|session_error_line|session_noscope) echo unsat ;;
+    unsat|session_unknown|session_die_after_*|session_error_line|session_noscope|hedge_slow_unsat) echo unsat ;;
+    hedge_slow_sat) emit_model 7 7 ;;
+    hedge_win) echo $$ >> "$FAKE_BW_DIR/pids"; nap 8; echo unsat ;;
     unknown) echo unknown ;;
     garbage) echo "what is this" ;;
     exit1) echo "[error] boom" >&2; exit 1 ;;
@@ -1720,6 +1734,44 @@ if [ "$elapsed" -gt 10 ]; then fail "session hang took ${elapsed}s with --timeou
 all_dead "$BW_DIR/spids" "hung session"
 all_dead "$BW_DIR/pid" "hung solver"
 no_leftovers "session hang"
+
+# the last claim of a round is hedged (#1745): a session that has not answered it
+# within the window is raced by a fresh process, and the first final answer stands.
+# A claim the session answers at once starts no second process (the `unsat` runs
+# above: no standalone query).
+start=$(date +%s)
+run_incremental hedge_slow_unsat "$THREE_CLAIMS"
+elapsed=$(( $(date +%s) - start ))
+expect "hedge slow session status" "$(field "$RUN_OUT" status)" "Verified"
+expect "hedge slow session: one session" "$(sessions)" "1"
+expect "hedge slow session: only the last claim goes standalone" "$(queries)" "1"
+if [ "$elapsed" -gt 6 ]; then fail "hedge slow session waited for the session: ${elapsed}s"; fi
+no_survivors "hedge slow session"
+no_leftovers "hedge slow session"
+
+# a hard `sat` that the session reaches late is the standalone full query's, model and all.
+start=$(date +%s)
+run_incremental hedge_slow_sat "$THREE_CLAIMS"
+elapsed=$(( $(date +%s) - start ))
+expect "hedge slow sat status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+expect "hedge slow sat vow id" "$(field "$RUN_OUT" counterexamples.0.vow_id)" "0"
+expect "hedge slow sat blame" "$(field "$RUN_OUT" counterexamples.0.blame)" "Callee"
+expect "hedge slow sat model" "$(field "$RUN_OUT" counterexamples.0.values.a)" "7"
+expect "hedge slow sat: one standalone query" "$(queries)" "1"
+if [ "$elapsed" -gt 6 ]; then fail "hedge slow sat waited for the session: ${elapsed}s"; fi
+no_survivors "hedge slow sat"
+no_leftovers "hedge slow sat"
+
+# a session that answers `unsat` inside the race ends the standalone process.
+start=$(date +%s)
+run_incremental hedge_win "$THREE_CLAIMS"
+elapsed=$(( $(date +%s) - start ))
+expect "hedge session wins status" "$(field "$RUN_OUT" status)" "Verified"
+expect "hedge session wins: the standalone query was started" "$(queries)" "1"
+if [ "$elapsed" -gt 6 ]; then fail "hedge session wins waited for the standalone solver: ${elapsed}s"; fi
+all_dead "$BW_DIR/pids" "raced standalone solver"
+no_survivors "hedge session wins"
+no_leftovers "hedge session wins"
 
 # a round with a single claim for the solver has nothing to share.
 run_incremental unsat "$ONE_CLAIM"
