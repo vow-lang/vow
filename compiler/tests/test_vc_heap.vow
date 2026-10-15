@@ -8,6 +8,9 @@ use vc_ops
 use vc_heap
 use vc_overlay
 use vc_exec
+use vc_flow
+use vc_agg
+use vc_vec
 use tests.builders
 
 fn args1(a: i64) -> Vec<i64> {
@@ -305,6 +308,110 @@ fn check_two_reads_one_handle() -> i64 {
     0
 }
 
+// The read interface keeps fallback arrays lazy, including the element declaration
+// that must remain after a caller has captured a bounds claim's header prefix.
+fn check_direct_handle_reads() -> i64 {
+    let f: IrFunction = last_op_fn();
+    let tys: Vec<i64> = vc_ty_table(f);
+    let ar: VcArena = vc_arena_new();
+    let hdr: SmtScript = vc_script_new();
+    let assumed: Vec<i64> = Vec::new();
+    let fl: VcFlow = vc_flow_new(1, tys.len());
+    let ag: VcAgg = vc_agg_new(fl);
+    let vv: VcVec = vc_vec_new_state(fl, ar, 1);
+    let mem: VcHandleMemory = vc_handle_memory_new(f, tys, ag, vv, ar, hdr, assumed);
+    if vc_handle_memory_used(mem) || hdr.kinds.len() != 0 { return 60; }
+    let h: i64 = vc_tm_var(ar, String::from("h"));
+    let idx: i64 = vc_tm_var(ar, String::from("i"));
+    let narrow: i64 = vc_handle_field(mem, h, 3, ITY_U8());
+    if vc_term_text(ar, narrow) != String::from("((_ extract 7 0) (select hf3 h))") { return 61; }
+    let flag: i64 = vc_handle_field(mem, h, 3, ITY_BOOL());
+    if vc_term_text(ar, flag) != String::from("(distinct (select hf3 h) #x0000000000000000)") { return 62; }
+    let op: IrInst = mk_inst_call_extern(0, ITY_U64(), args1(0), String::from("__vow_vec_len"));
+    let len: i64 = vc_handle_len(mem, 0, h, op, VC_VEC_LEN());
+    if vc_term_text(ar, len) != String::from("(select hlen h)") { return 63; }
+    if !vc_handle_memory_used(mem) || assumed.len() != 1 { return 64; }
+    let prefix: String = vc_smt_render(ar, hdr);
+    if prefix.contains(String::from("helem")) || prefix.contains(String::from("hbyte")) { return 65; }
+    let elem: i64 = vc_handle_elem(mem, 0, h, idx);
+    if vc_term_text(ar, elem) != String::from("(select helem (concat h i))") { return 66; }
+    let byte: i64 = vc_handle_byte(mem, 0, h, idx);
+    if vc_term_text(ar, byte) != String::from("(bvand (select hbyte (concat h i)) #x00000000000000ff)") { return 67; }
+    vc_handle_len(mem, 0, h, op, VC_VEC_LEN());
+    vc_handle_elem(mem, 0, h, idx);
+    vc_handle_byte(mem, 0, h, idx);
+    let text: String = vc_smt_render(ar, hdr);
+    if hdr.kinds.len() != 4 || assumed.len() != 1 { return 68; }
+    if text.substring(0, prefix.len()) != prefix { return 69; }
+    0
+}
+
+// The context shares the live object models: later writes, and different blocks,
+// must be visible without rebuilding the read module. Classes remain independent.
+fn check_direct_handle_overlays() -> i64 {
+    let f: IrFunction = push_then_field_len_fn();
+    let tys: Vec<i64> = vc_ty_table(f);
+    let ar: VcArena = vc_arena_new();
+    let hdr: SmtScript = vc_script_new();
+    let assumed: Vec<i64> = Vec::new();
+    let fl: VcFlow = vc_flow_new(2, tys.len());
+    let ag: VcAgg = vc_agg_new(fl);
+    let vv: VcVec = vc_vec_new_state(fl, ar, 2);
+    vc_agg_enable_alias(ag, ar, hdr, vc_agg_alias_params(f, tys.len()));
+    let mem: VcHandleMemory = vc_handle_memory_new(f, tys, ag, vv, ar, hdr, assumed);
+    if vc_handle_memory_used(mem) { return 70; }
+    let before: u64 = hdr.kinds.len();
+    let h: i64 = vc_tm_var(ar, String::from("h"));
+    let idx: i64 = vc_tm_var(ar, String::from("i"));
+    let op: IrInst = mk_inst_call_extern(0, ITY_U64(), args1(0), String::from("__vow_vec_len"));
+    let len: i64 = vc_handle_len(mem, 0, h, op, VC_VEC_LEN());
+    if vc_term_text(ar, len) != String::from("(ite (= h p0_haddr) p0_vlen (select hlen h))") { return 71; }
+    if hdr.names[before] != String::from("hlen") || hdr.names[before + 1] != String::from("p0_varr") { return 80; }
+    let sp: IrInst = mk_inst_call_extern(0, ITY_U64(), args1(0), String::from("__vow_string_len"));
+    let slen: i64 = vc_handle_len(mem, 0, h, sp, VC_VEC_LEN());
+    if vc_term_text(ar, slen) != String::from("(select hlen h)") { return 72; }
+    let slot: i64 = vc_vec_slot(vv, ag, ar, hdr, assumed, vc_agg_param(ag, 0));
+    let arr: i64 = vc_tm_var(ar, String::from("written"));
+    vc_vec_write(vv, ar, hdr, slot, 1, arr, vc_tm_bv(ar, 64, 7, 0));
+    let changed: i64 = vc_handle_len(mem, 1, h, op, VC_VEC_LEN());
+    if vc_term_text(ar, changed) != String::from("(ite (= h p0_haddr) #x0000000000000007 (select hlen h))") { return 73; }
+    if vc_term_text(ar, vc_handle_len(mem, 0, h, op, VC_VEC_LEN())) != vc_term_text(ar, len) { return 74; }
+    let elem: i64 = vc_handle_elem(mem, 1, h, idx);
+    if vc_term_text(ar, elem) != String::from("(ite (= h p0_haddr) (select written i) (select helem (concat h i)))") { return 75; }
+    // A String byte read cannot see the Vec parameter's written contents.
+    let byte: i64 = vc_handle_byte(mem, 1, h, idx);
+    if vc_term_text(ar, byte) != String::from("(bvand (select hbyte (concat h i)) #x00000000000000ff)") { return 76; }
+    let field: i64 = vc_handle_field(mem, h, 2, ITY_BOOL());
+    if !vc_term_text(ar, field).contains(String::from("(= h p1_haddr)")) { return 77; }
+    if ag.ps_ty.len() != 1 || ag.ps_ty[0] != ITY_BOOL() { return 78; }
+    vc_agg_write(ag, ar, hdr, vc_agg_param(ag, 1), 2, 0, vc_tm_bool_const(ar, true), vc_tm_bool_const(ar, true));
+    if !vc_term_text(ar, vc_handle_field(mem, h, 2, ITY_BOOL())).contains(String::from("(ite (= h p1_haddr) true")) { return 79; }
+    0
+}
+
+fn check_direct_string_overlay() -> i64 {
+    let f: IrFunction = string_len_after_push_fn(String::from("__vow_string_len"));
+    let blk: IrBlock = f.blocks[0];
+    blk.insts[4] = mk_inst_call_extern(4, ITY_UNIT(), args2(0, 3), String::from("__vow_string_push_byte"));
+    let tys: Vec<i64> = vc_ty_table(f);
+    let ar: VcArena = vc_arena_new();
+    let hdr: SmtScript = vc_script_new();
+    let assumed: Vec<i64> = Vec::new();
+    let fl: VcFlow = vc_flow_new(1, tys.len());
+    let ag: VcAgg = vc_agg_new(fl);
+    let vv: VcVec = vc_vec_new_state(fl, ar, 1);
+    vc_agg_enable_alias(ag, ar, hdr, vc_agg_alias_params(f, tys.len()));
+    let mem: VcHandleMemory = vc_handle_memory_new(f, tys, ag, vv, ar, hdr, assumed);
+    let h: i64 = vc_tm_var(ar, String::from("h"));
+    let idx: i64 = vc_tm_var(ar, String::from("i"));
+    let byte: i64 = vc_handle_byte(mem, 0, h, idx);
+    if vc_term_text(ar, byte) != String::from("(ite (= h p0_haddr) (bvand (select p0_varr i) #x00000000000000ff) (bvand (select hbyte (concat h i)) #x00000000000000ff))") { return 81; }
+    if vc_term_text(ar, vc_handle_elem(mem, 0, h, idx)) != String::from("(select helem (concat h i))") { return 82; }
+    let op: IrInst = mk_inst_call_extern(0, ITY_U64(), args1(0), String::from("__vow_string_len"));
+    if vc_term_text(ar, vc_handle_len(mem, 0, h, op, VC_VEC_LEN())) != String::from("(ite (= h p0_haddr) p0_vlen (select hlen h))") { return 83; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_handle_reads_accepted();
     if r == 0 { r = check_handle_shapes_rejected(); }
@@ -313,5 +420,8 @@ fn main() -> i32 {
     if r == 0 { r = check_pointer_stores(); }
     if r == 0 { r = check_exec_terms(); }
     if r == 0 { r = check_two_reads_one_handle(); }
+    if r == 0 { r = check_direct_handle_reads(); }
+    if r == 0 { r = check_direct_handle_overlays(); }
+    if r == 0 { r = check_direct_string_overlay(); }
     i64_to_i32_wrap(r)
 }
