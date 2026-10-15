@@ -1259,6 +1259,13 @@ export FAKE_BW_NEEDLE="#x0000000000000007"
 expect "clauses all proven" "$(worker_clauses unsat --worker-clauses)" "0 -1 2:1,3:1"
 expect "clauses: only the second sat" "$(worker_clauses sat_if_contains --worker-clauses)" "1 3 2:1,3:0"
 expect "default mode has no clauses" "$(worker_clauses sat_if_contains)" "1 3 "
+# A worker told a shared module it cannot read (missing, or not an encoding) lowers
+# the program itself and decides the same task.
+printf 'not a module' > "$TMP_ROOT/bad_ir"
+expect "clauses: missing shared module" \
+    "$(worker_clauses unsat --worker-clauses --worker-ir "$TMP_ROOT/no_such_ir")" "0 -1 2:1,3:1"
+expect "clauses: corrupt shared module" \
+    "$(worker_clauses unsat --worker-clauses --worker-ir "$TMP_ROOT/bad_ir")" "0 -1 2:1,3:1"
 expect "clauses: first failure is the overall result" \
     "$(worker_clauses sat --worker-clauses | cut -d' ' -f1,2)" "1 2"
 unset FAKE_BW_NEEDLE

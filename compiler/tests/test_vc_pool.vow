@@ -1,10 +1,12 @@
 module TestVcPool
 
+use ir
 use verifier
 use vc_native
 use vc_cache
 use vc_worker
 use vc_queue
+use vc_irwire
 use vc_pool
 
 fn pool_of(n: u64, jobs: i64) -> VcPool [read] {
@@ -174,6 +176,39 @@ fn check_retry_accounting() -> i64 [io, read, write] {
     0
 }
 
+// A module the pool shares is written under the queue, and workers are told its
+// path only then; the file decodes to what was shared.
+fn check_shared_module() -> i64 [io, read, write] {
+    let p: VcPool = pool_of(2, 1);
+    p.kinds[1] = VC_TASK_KIND_TRIVIAL();
+    let m: IrModule = ir_module_new(String::from("shared"));
+    m.strings.push(String::from("hello"));
+    if argv_has(vc_worker_argv(p, 0), String::from("--worker-ir")) { return 1; }
+    vc_pool_share_module(p, m);
+    let a: Vec<String> = vc_worker_argv(p, 0);
+    let file: String = argv_value(a, String::from("--worker-ir"));
+    let mut r: i64 = 0;
+    if file.len() == 0 { r = 3; }
+    if r == 0 {
+        match vc_q_tasks_decode(fs_read(vc_q_tasks_path(vc_pool_root(p)))) {
+            Option::Some(t) => {
+                if t.kinds.len() != 2 || t.kinds[0] != VC_TASK_KIND_VERIFY() || t.kinds[1] != VC_TASK_KIND_TRIVIAL() { r = 6; }
+            },
+            Option::None => { r = 7; },
+        }
+    }
+    if r == 0 {
+        match vc_irw_decode(fs_read(file)) {
+            Option::Some(back) => {
+                if back.name != String::from("shared") || back.strings.len() != 1 { r = 4; }
+            },
+            Option::None => { r = 5; },
+        }
+    }
+    vc_pool_abort(p);
+    r
+}
+
 fn main() -> i32 [io, read, write] {
     let mut r: i64 = check_session_argv();
     if r == 0 { r = check_clause_mode_flag(); }
@@ -183,5 +218,6 @@ fn main() -> i32 [io, read, write] {
     if r == 0 { r = check_pool_settled(); }
     if r == 0 { r = check_halt_withdraws_queue(); }
     if r == 0 { r = check_retry_accounting(); }
+    if r == 0 { r = check_shared_module(); }
     i64_to_i32_wrap(r)
 }

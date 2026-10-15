@@ -7,6 +7,7 @@ use vc_native
 use vc_cex
 use vc_worker
 use vc_queue
+use vc_irwire
 
 // The parent's side of native verification: a pool of `vowc verify-worker`
 // sessions over a shared task queue (`vc_queue`). A session lowers the program
@@ -44,7 +45,10 @@ fn VC_POOL_IDLE_DEATH_LIMIT() -> i64 { 2 }
 // that spans functions (`contracts`, `test`), so those clear it. `kinds` is per
 // task and `module_root` is the explicit module root the parent lowered with, if
 // any. `cache` is the result cache every worker of the pool shares (off by
-// default). `attempts[k]` counts the retries of task k.
+// default). `attempts[k]` counts the retries of task k. `ir` has one element, the
+// path of the encoding of the module the tasks index into under the queue ("" until
+// `vc_pool_share_module` has written it): a worker told that path decodes the
+// module instead of lowering the program itself.
 struct VcPool {
     exe: String,
     path: String,
@@ -68,10 +72,17 @@ struct VcPool {
     cache: VcCache,
     halt: bool,
     module_root: String,
+    ir: Vec<String>,
 }
 
 fn vc_pool_root(p: VcPool) -> String {
     let r: Vec<String> = p.root;
+    r[0]
+}
+
+// The path workers decode the module from, or "".
+fn vc_pool_ir(p: VcPool) -> String {
+    let r: Vec<String> = p.ir;
     r[0]
 }
 
@@ -96,6 +107,8 @@ fn vc_pool_new(exe: String, path: String, fn_idx: Vec<i64>, fn_names: Vec<String
     state.push(0);
     let root: Vec<String> = Vec::new();
     root.push(String::from(""));
+    let ir: Vec<String> = Vec::new();
+    ir.push(String::from(""));
     VcPool {
         exe: exe,
         path: path,
@@ -119,7 +132,21 @@ fn vc_pool_new(exe: String, path: String, fn_idx: Vec<i64>, fn_names: Vec<String
         cache: vc_cache_off(),
         halt: true,
         module_root: String::from(""),
+        ir: ir,
     }
+}
+
+// Makes `m`, the module the tasks' function indices refer to, what every worker
+// decides against: the queue is laid out now and `m` encoded under it once. Laying
+// out the queue writes the task table, so this is called after `kinds` is set.
+// Left unshared (no tasks, or the file cannot be written), a worker lowers the
+// program itself, which decides the same tasks.
+fn vc_pool_share_module(p: VcPool, m: IrModule) [io, read, write] {
+    vc_pool_prepare(p);
+    let root: String = vc_pool_root(p);
+    if root.len() == 0 { return; }
+    let file: String = vc_q_join(root, String::from("ir"));
+    if fs_write(file, vc_irw_encode(m)) == 0 { p.ir[0] = file; }
 }
 
 fn vc_worker_argv(p: VcPool, w: i64) -> Vec<String> {
@@ -136,6 +163,11 @@ fn vc_worker_argv(p: VcPool, w: i64) -> Vec<String> {
     if p.module_root.len() > 0 {
         a.push(String::from("--worker-module-root"));
         a.push(p.module_root);
+    }
+    let ir: String = vc_pool_ir(p);
+    if ir.len() > 0 {
+        a.push(String::from("--worker-ir"));
+        a.push(ir);
     }
     if vc_cache_on(p.cache) {
         a.push(String::from("--worker-cache-dir"));

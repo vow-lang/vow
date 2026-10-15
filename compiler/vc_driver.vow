@@ -88,6 +88,7 @@ fn vc_driver_run(exe: String, path: String, module_root: String, source_mod: IrM
     pool.halt = !report;
     pool.kinds = task_kind;
     pool.module_root = module_root;
+    vc_pool_share_module(pool, ir_mod);
     while !vc_pool_settled(pool) {
         vc_pool_step(pool);
     }
