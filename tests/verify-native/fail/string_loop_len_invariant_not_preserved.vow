@@ -1,0 +1,22 @@
+// TEST: category invariant
+// Each iteration appends two bytes while the invariant says one per iteration: it holds
+// on entry and is not preserved, and the unwinding finds the failing iteration.
+module StringLoopLenInvariantNotPreserved
+
+fn fill(n: u64) -> String {
+  let s: String = String::new();
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n && s.len() == i
+  } {
+    s.push_byte(65u8);
+    s.push_byte(66u8);
+    i = i + 1;
+  }
+  s
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill(3).len());
+  0
+}

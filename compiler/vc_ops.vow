@@ -161,11 +161,17 @@ fn vc_vec_op_kind(sym: String) -> i64 {
 }
 
 // True for an operation that changes the contents or length of the object its
-// first operand names: the loop cut havocs the object a loop mutates, and refuses
-// a String (`vc_induct_vec_havocs`).
+// first operand names: the loop cut havocs the object a loop mutates, a `Vec` or
+// a `String` alike (`vc_induct_vec_havocs`).
 fn vc_vec_kind_mutates(k: i64) -> bool {
     k == VC_VEC_PUSH() || k == VC_VEC_SET() || k == VC_VEC_POP() || k == VC_VEC_PUSH_WIDE() || k == VC_VEC_SET_WIDE()
         || vc_str_kind_mutates(k)
+}
+
+// True for a mutation that never shortens what it writes: a loop that only does these leaves
+// the object no shorter than when the loop was entered.
+fn vc_vec_kind_grows(k: i64) -> bool {
+    k == VC_VEC_PUSH() || k == VC_VEC_PUSH_WIDE() || k == VC_STR_PUSH_STR() || k == VC_STR_PUSH_BYTE()
 }
 
 // A pure scalar builtin the executor encodes as a closed term of its integer

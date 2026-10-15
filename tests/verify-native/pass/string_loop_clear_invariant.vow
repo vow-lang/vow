@@ -1,0 +1,25 @@
+// TEST: category invariant
+// A loop that clears the String it appends to shortens it, so the cut may not assume it
+// is no shorter than on entry: the invariant alone gives the length at the top of the
+// header, and `clear` then `push_byte` leaves exactly one byte.
+module StringLoopClearInvariant
+
+fn last_byte_only(n: u64) -> String vow {
+  ensures: result.len() <= 1
+} {
+  let s: String = String::new();
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n && s.len() <= 1
+  } {
+    s.clear();
+    s.push_byte(66u8);
+    i = i + 1;
+  }
+  s
+}
+
+fn main() -> i32 [io] {
+  print_u64(last_byte_only(3).len());
+  0
+}

@@ -495,9 +495,14 @@ of this change and stay `Skipped`.
   invariant-based induction (#1645): the cut puts a `__vc_havoc_vec` marker for
   each Vec the loop writes at the top of the header proper, which gives it an
   arbitrary array and an arbitrary length below the capacity mask, as a header Phi
-  gets an arbitrary value (see the addendum below). A function is still not cut
-  when a mutated receiver is a String; bounded unwinding decides such a function
-  alone (a receiver born inside a loop is cut, see the #1726 addendum), and `vc_step_applicable`
+  gets an arbitrary value (see the addendum below). A String the loop writes
+  (`push_str`, `push_byte`, `clear`) is havoced the same way, over the one
+  `(array, length)` slot a String shares with a `Vec`: the length bound is the
+  same capacity mask the runtime keeps for both (a receiver born inside a loop is
+  cut, see the #1726 addendum; a receiver that is a Phi stands for each object it
+  merges, and it is those objects, not the Phi, that are born in the loop or are
+  havoced, so a Phi in the loop that merges a parameter with a fresh object still
+  havocs the parameter), and `vc_step_applicable`
   (k-induction) still refuses a Vec-written loop. A loop that only reads a Vec is
   cut with no marker.
 - **Aliasing.** Two `Vec` parameters are distinct objects, as they are for
@@ -703,8 +708,10 @@ machinery.
   non-catalogue `String` symbols have theirs in `vc_str_unmodeled_reason`. A
   string literal that is mutated (`clear`, a push: the runtime traps on it) is
   outside the model, and a `String` in a struct field, across a call or merged by a
-  Phi is skipped like the `Vec` cases. A loop that writes a String is never cut by
-  induction (`vc_induct_vec_havocs` refuses it).
+  Phi is skipped like the `Vec` cases. A loop that writes a String is cut by
+  induction like one that writes a `Vec` (`vc_induct_vec_havocs`): the marker makes the string's array and length arbitrary
+  at the top of the header, and the grow bit is set only for `push_str` and
+  `push_byte`.
 - **Trusted base.** The binder joins the simplifier of ADR-2026-10-10-2041 in the
   trusted base. The guards: `compiler/tests/test_vc_str.vow` pins the rendered text
   of the binder and of each encoding; `tests/verify-native/pass/string_eq_exact.vow`

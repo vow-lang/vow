@@ -1,0 +1,26 @@
+// TEST: category invariant
+// The same as `string_loop_phi_receiver_forgotten` for a `Vec`: the receiver of the push is a
+// Phi merging the parameter with a `Vec` built in the loop, and the cut must havoc the
+// parameter.
+module VecLoopPhiReceiverForgotten
+
+fn run(a: Vec<i64>, n: u64) vow {
+  requires: a.len() == 0,
+  ensures: a.len() <= 1
+} {
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n && a.len() <= 1
+  } {
+    let t: Vec<i64> = if i >= 100 { a } else { Vec::new() };
+    t.push(1);
+    i = i + 1;
+  }
+}
+
+fn main() -> i32 [io] {
+  let a: Vec<i64> = Vec::new();
+  run(a, 3);
+  print_u64(a.len());
+  0
+}
