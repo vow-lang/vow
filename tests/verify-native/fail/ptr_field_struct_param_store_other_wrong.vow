@@ -1,4 +1,3 @@
-// TEST: replay-skipped field 0 is a struct, which the replay harness cannot build
 // TEST: counterexample-fn "attach"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
