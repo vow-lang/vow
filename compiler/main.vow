@@ -2039,12 +2039,7 @@ fn run_verify_native(argv: Vec<String>, fr: LoweredFrontend, path: String, tctx:
 fn run_verify_worker(argv: Vec<String>) -> i32 [io, read, write] {
     let path: String = frontend_path_from_argv(argv, true, String::from("verify-worker"));
     let budget_ms: i64 = str_to_i64(get_flag_arg(argv, "--worker-budget-ms"));
-    let modules: Vec<IrModule> = worker_shared_module(argv);
-    if modules.len() == 0 {
-        let fr: LoweredFrontend = frontend_lower_path_traced(path, get_flag_arg(argv, "--worker-module-root"), trace_off());
-        let checked: CheckedFrontend = fr.checked;
-        if checked.n_errors == 0 { modules.push(vc_erase_linear(fr.ir_mod)); }
-    }
+    let loaded: Option<IrModule> = worker_module(argv, path);
     let mut cache: VcCache = vc_cache_off();
     if has_flag(argv, "--worker-cache-dir") && has_flag(argv, "--worker-solver-id") {
         cache = VcCache { dir: get_flag_arg(argv, "--worker-cache-dir"), solver_id: get_flag_arg(argv, "--worker-solver-id") };
@@ -2072,15 +2067,16 @@ fn run_verify_worker(argv: Vec<String>) -> i32 [io, read, write] {
             one
         }
     };
+    let have: Vec<IrModule> = worker_module_cell(loaded);
     let why: String = {
-        if modules.len() == 0 || tasks.idx.len() == 0 { String::from("program does not match the planned function table") }
-        else { vc_task_mismatch(modules[0].functions, tasks) }
+        if have.len() == 0 || tasks.idx.len() == 0 { String::from("program does not match the planned function table") }
+        else { vc_task_mismatch(have[0].functions, tasks) }
     };
     if why.len() > 0 {
         diag_eprintln_best_effort(str2(String::from("verify-worker: "), why));
         return 3;
     }
-    let vm: IrModule = modules[0];
+    let vm: IrModule = have[0];
     if session.len() > 0 {
         return vc_task_session(vm, tasks, session, str_to_i64(get_flag_arg(argv, "--worker-id")), budget_ms, cache, clauses);
     }
@@ -2090,19 +2086,39 @@ fn run_verify_worker(argv: Vec<String>) -> i32 [io, read, write] {
     0
 }
 
-// The module the parent shared (`--worker-ir`, see `vc_irwire`), when the file
-// is there and decodes; empty sends the worker to lower the program itself.
-fn worker_shared_module(argv: Vec<String>) -> Vec<IrModule> [io, read, write] {
-    let out: Vec<IrModule> = Vec::new();
+// The module a verify worker decides against: the one the parent shared
+// (`--worker-ir`, see `vc_irwire`) when the file is there and decodes, else the
+// program lowered here. `None` when that does not lower cleanly.
+fn worker_module(argv: Vec<String>, path: String) -> Option<IrModule> [io, read, write] {
     let file: String = get_flag_arg(argv, "--worker-ir");
-    if file.len() == 0 { return out; }
-    match vc_irw_decode(fs_read(file)) {
-        Option::Some(m) => { out.push(m); },
+    let shared: Option<IrModule> = {
+        if file.len() > 0 { vc_irw_decode(fs_read(file)) } else { Option::None }
+    };
+    match shared {
+        Option::Some(m) => { Option::Some(m) },
         Option::None => {
-            diag_eprintln_best_effort(String::from("verify-worker: the shared module cannot be read; lowering the program"));
+            if file.len() > 0 {
+                diag_eprintln_best_effort(String::from("verify-worker: the shared module cannot be read; lowering the program"));
+            }
+            worker_lower(argv, path)
         },
     }
+}
+
+fn worker_module_cell(loaded: Option<IrModule>) -> Vec<IrModule> {
+    let out: Vec<IrModule> = Vec::new();
+    match loaded {
+        Option::Some(m) => { out.push(m); },
+        Option::None => {},
+    }
     out
+}
+
+fn worker_lower(argv: Vec<String>, path: String) -> Option<IrModule> [io, read, write] {
+    let fr: LoweredFrontend = frontend_lower_path_traced(path, get_flag_arg(argv, "--worker-module-root"), trace_off());
+    let checked: CheckedFrontend = fr.checked;
+    if checked.n_errors > 0 { return Option::None; }
+    Option::Some(vc_erase_linear(fr.ir_mod))
 }
 
 

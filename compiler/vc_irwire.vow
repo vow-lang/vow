@@ -228,7 +228,7 @@ fn vc_irw_get_count(r: VcIrReader) -> u64 {
 
 fn vc_irw_get_str(r: VcIrReader) -> String {
     let n: u64 = vc_irw_get_count(r);
-    if r.bad { return String::from(""); }
+    if r.bad || n == 0 { return String::from(""); }
     let s: String = r.s;
     let out: String = s.substring(r.pos, r.pos + n);
     r.pos = r.pos + n;
