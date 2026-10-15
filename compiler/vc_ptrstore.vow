@@ -21,7 +21,15 @@ use vc_vec
 //   - a copy (`pin_to_root`, `vec_sort`) of such a `Vec` carries the slot along;
 //   - a stored pointer may be reachable through any handle the function loaded (the
 //     `Vec` may be a parameter another handle names), so a function that reads memory
-//     through a handle at all is left to ESBMC.
+//     through a handle is left to ESBMC, unless every `Vec` a pointer is stored into is
+//     one the function built and no pointer read out of memory is used as an object.
+//
+// The exception is exact, not a bound. A `Vec` the function built is no object a handle
+// loaded from the memory it was given can name, and the model makes no pointer visible
+// through one: the slot holds a constant nothing else mentions, so a read of the slot is a
+// value the model leaves free, which only a function that uses that value as an object (a
+// `Vec` operation or a field access on a pointer an element read returned) could turn
+// into a claim about the pushed object. A function with no such use cannot tell.
 //
 // The full model (an address per object, read back through the overlay of
 // `vc_overlay`) is the object-identity work tracked by #1663.
@@ -48,6 +56,7 @@ fn vc_ptr_store_detail(f: IrFunction, tys: Vec<i64>) -> String {
     }
     if !any { return String::from(""); }
     vc_phi_merges_objects(f, held, n_ids, true);
+    let mut reads: bool = false;
     bi = 0;
     while bi < f.blocks.len() {
         let blk: IrBlock = f.blocks[bi];
@@ -60,13 +69,74 @@ fn vc_ptr_store_detail(f: IrFunction, tys: Vec<i64>) -> String {
                 if k == VC_VEC_SORT() || k == VC_STR_CLONE() { return String::from("a Vec of pointer elements is copied"); }
             }
             if vc_heap_is_read(inst, tys) {
-                return String::from("a pointer element is stored in a function that reads memory through a handle");
+                reads = true;
             }
             ii = ii + 1;
         }
         bi = bi + 1;
     }
+    if reads && !vc_ptr_store_exact(f, held, tys) {
+        return String::from("a pointer element is stored in a function that reads memory through a handle");
+    }
     String::from("")
+}
+
+// True when the pointer stores of a function that reads memory through a handle are all
+// into `Vec`s it built, and no pointer an element read through memory returned is used as an
+// object. `held[v]` marks the receivers of the stores, closed over Phis.
+fn vc_ptr_store_exact(f: IrFunction, held: Vec<i64>, tys: Vec<i64>) -> bool {
+    let n_ids: u64 = tys.len();
+    let elem: Vec<i64> = dom_fill(n_ids, 0);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.id >= 0 && (inst.id as u64) < n_ids && held[inst.id as u64] == 1 && inst.op != IOP_PHI() {
+                let k: i64 = vc_inst_vec_kind(inst);
+                if inst.op != IOP_CALL() || !(k == VC_VEC_NEW() || vc_str_kind_creates(k)) { return false; }
+            }
+            if inst.op == IOP_CALL() && inst.id >= 0 && (inst.id as u64) < n_ids && inst.args.len() > 0
+                && vc_inst_vec_kind(inst) == VC_VEC_GET() {
+                elem[inst.id as u64] = 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    vc_heap_close_over_phis(f, elem);
+    bi = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            let object_use: bool = inst.op == IOP_FIELD_GET() || inst.op == IOP_FIELD_SET()
+                || (inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && vc_inst_vec_kind(inst) != VC_VEC_NONE());
+            if object_use && vc_ptr_store_uses_elem(inst, elem, n_ids) {
+                return false;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    true
+}
+
+// True when an object operand of `inst` (the first, and the further strings of a `String`
+// operation) is a pointer an element read returned.
+fn vc_ptr_store_uses_elem(inst: IrInst, elem: Vec<i64>, n_ids: u64) -> bool {
+    let k: i64 = vc_inst_vec_kind(inst);
+    let mut n: u64 = 1;
+    if inst.op == IOP_CALL() && k != VC_VEC_NONE() && !vc_str_kind_no_object_operand(k) { n = vc_str_kind_object_operands(k); }
+    let mut p: u64 = 0;
+    while p < n && p < inst.args.len() {
+        let a: i64 = inst.args[p];
+        if a >= 0 && (a as u64) < n_ids && elem[a as u64] == 1 { return true; }
+        p = p + 1;
+    }
+    false
 }
 
 // True when `inst` is a `push` or `set` whose stored value is an object.

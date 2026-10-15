@@ -1156,14 +1156,22 @@ Three small rules, each sound for proofs and none a cap or a havoc.
   everything that never looks at the slot: the length, the bounds of every index and the other
   elements. The gate (`vc_ptr_store_detail`, `compiler/vc_ptrstore.vow`) keeps out of the subset
   every function that could: one that reads such an element back with `get`, copies or sorts a
-  `Vec` that holds one, or reads memory through a handle at all (a stored object may be what a
-  loaded handle names). Each is `unsupported-opcode` with its own detail, never a free answer. The
+  `Vec` that holds one, or reads memory through a handle (a stored object may be what a
+  loaded handle names), unless every `Vec` a pointer is stored into is one the function built
+  and no pointer an element read returned is used as an object (the receiver or a further
+  string operand of a `Vec` or `String` operation, or the object of a field access): a `Vec`
+  the function built is no object a loaded handle can name, and the slot is a constant nothing
+  else mentions, so a function that never uses a read pointer as an object cannot tell it from
+  the object. An element read of a parameter `Vec` counts as well as one through a handle.
+  Each is `unsupported-opcode` with its own detail, never a free answer. The
   alternative that was rejected is to register the fresh constants as hook variables and let the
   recheck turn a counterexample that reads them into `unknown`: a function the ESBMC path still
   decides would become `unknown` instead of `Skipped`. Pinned by `pass/vec_of_vec_push.vow`,
   `pass/vec_pointer_push_loop.vow`, `pass/vec_pointer_push_param.vow`,
-  `skip/vec_pointer_element_read_back_skipped.vow` and
-  `skip/vec_pointer_store_handle_read_skipped.vow`.
+  `skip/vec_pointer_element_read_back_skipped.vow`, `pass/vec_pointer_store_handle_read_built_vec.vow`,
+  `pass/vec_pointer_store_phi_built_vec.vow`, `skip/vec_pointer_store_param_handle_read_skipped.vow`,
+  `skip/vec_pointer_store_element_deref_skipped.vow` and
+  `skip/vec_pointer_store_param_element_deref_skipped.vow`.
 - **A handle returned where an object is declared is a handle.** The IR types a pointer read out of a
   field or an element `i64`, so `fn name(p: Person) -> String { p.name }` returns a handle from a
   function declared to return an object. The `Return` gate accepts it (`vc_handle_for_object`), and

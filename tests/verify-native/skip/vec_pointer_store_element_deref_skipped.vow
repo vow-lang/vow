@@ -1,0 +1,22 @@
+// TEST: skip-reason unsupported-opcode
+// The `Vec` is built by the function, but a pointer an element read returned
+// (`a.names[0]`) is used as an object (`len` of that `String`), which the model reads from
+// memory and cannot tie to what was stored: the function stays `Skipped`.
+module VecPointerStoreElementDerefSkipped
+
+struct Bag { names: Vec<String> }
+
+fn first_plus(a: Bag, s: String) -> u64 vow {
+  requires: a.names.len() > 0
+} {
+  let out: Vec<String> = Vec::new();
+  out.push(s);
+  a.names[0].len() + out.len()
+}
+
+fn main() -> i32 [io] {
+  let a: Bag = Bag { names: Vec::new() };
+  a.names.push(String::from("x"));
+  print_u64(first_plus(a, String::from("a")));
+  0
+}
