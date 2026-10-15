@@ -1,0 +1,27 @@
+module TestModuleIoReader
+
+use ir
+use module_io
+
+// `reader_need` states that a reader never sits past the end of its buffer: a
+// position beyond it is a truncation, not an out-of-bounds read.
+
+fn main() -> i32 {
+    let buf: Vec<i64> = Vec::new();
+    buf.push(7);
+    buf.push(9);
+
+    let ok: ModuleReader = reader_new(buf);
+    if reader_read_u8(ok) != 7 { return 1; }
+    if reader_read_u8(ok) != 9 { return 2; }
+    if ok.err_kind != DEC_OK() { return 3; }
+    if reader_read_u8(ok) != 0 { return 4; }
+    if ok.err_kind != DEC_TRUNCATED() { return 5; }
+
+    let past: ModuleReader = reader_new(buf);
+    past.pos = 5;
+    if reader_read_u8(past) != 0 { return 6; }
+    if past.err_kind != DEC_TRUNCATED() { return 7; }
+    if past.err_offset != 5 { return 8; }
+    0
+}
