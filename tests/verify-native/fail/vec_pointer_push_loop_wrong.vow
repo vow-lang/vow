@@ -1,0 +1,25 @@
+// TEST: counterexample-fn "items"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+module VecPointerPushLoopWrong
+
+struct Item { id: i64, tag: i64 }
+
+fn items(n: u64) -> u64 vow {
+  requires: n < 3
+  ensures: result == n
+} {
+  let v: Vec<Item> = Vec::new();
+  let mut i: u64 = 0;
+  while i < n {
+    v.push(Item { id: 1, tag: 2 });
+    i = i + 1;
+  }
+  v.push(Item { id: 0, tag: 0 });
+  v.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(items(1));
+  0
+}

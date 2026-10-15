@@ -641,31 +641,110 @@ fn vc_induct_phi_loops(f: IrFunction, li: VcLoopInfo, n_ids: u64) -> Vec<i64> {
     out
 }
 
+// True when some reachable block whose innermost loop is `j` holds a `VowInv`.
+fn vc_induct_loop_has_inv(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, j: i64) -> bool {
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        if rpo[b] >= 0 && vc_induct_innermost(li, b) == j && vc_induct_last_inv(f.blocks[b]) >= 0 {
+            return true;
+        }
+        b = b + 1;
+    }
+    false
+}
+
+// 1 for the header block of every loop that has no `invariant`.
+fn vc_induct_bare_headers(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>) -> Vec<i64> {
+    let bare: Vec<i64> = dom_fill(f.blocks.len(), 0);
+    let mut j: i64 = 0;
+    while j < li.n_loops {
+        if !vc_induct_loop_has_inv(f, li, rpo, j) {
+            bare[li.headers[j as u64] as u64] = 1;
+        }
+        j = j + 1;
+    }
+    bare
+}
+
+// `f` with the clause `true` at the head of every loop in `bare` (`vc_induct_bare_headers`):
+// the cut then treats the loop with the weakest invariant, an arbitrary state at the top of
+// the header, so a claim that holds there for every state is proven for every trip count. The
+// clause is placed after the header's Phis, where the invariant region of a loop begins.
+fn vc_induct_trivial_invariants(f: IrFunction, bare: Vec<i64>) -> IrFunction {
+    let g: IrFunction = vc_function_shell(f);
+    let mut next: i64 = dom_max_inst_id(f) + 1;
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let blk: IrBlock = f.blocks[b];
+        if bare[b] != 1 {
+            g.blocks.push(blk);
+        } else {
+            let out: IrBlock = ir_block_new(blk.id);
+            let mut at: u64 = 0;
+            while at < blk.insts.len() && (blk.insts[at].op == IOP_PHI() || blk.insts[at].op == IOP_REGION_OPEN()) {
+                out.insts.push(blk.insts[at]);
+                at = at + 1;
+            }
+            out.insts.push(ir_inst_new(next, IOP_CONST_BOOL(), ITY_BOOL(), Vec::new(), IDATA_CONST_BOOL(), 1, 0, String::from("")));
+            let args: Vec<i64> = Vec::new();
+            args.push(next);
+            out.insts.push(ir_inst_new(next + 1, IOP_VOW_INV(), ITY_UNIT(), args, IDATA_VOW_ID(), -1, 0, String::from("")));
+            next = next + 2;
+            while at < blk.insts.len() {
+                out.insts.push(blk.insts[at]);
+                at = at + 1;
+            }
+            g.blocks.push(out);
+        }
+        b = b + 1;
+    }
+    g
+}
+
 // `f` (loop-closed, accepted by `vc_loop_shape_detail`) with every loop cut as
 // described above; `NA` and `f` itself when some loop cannot be.
 fn vc_induct_cut(f: IrFunction) -> VcInduct {
+    vc_induct_cut_with(f, false)
+}
+
+// The same where a loop without an `invariant` is cut with the clause `true`
+// (`vc_induct_trivial_invariants`) instead of making the function `NA`; `NA` when every
+// loop has one, since `vc_induct_cut` has then said all there is.
+fn vc_induct_cut_trivial(f: IrFunction) -> VcInduct {
+    vc_induct_cut_with(f, true)
+}
+
+fn vc_induct_cut_with(src: IrFunction, trivial: bool) -> VcInduct {
+    let mut f: IrFunction = src;
     let nb: u64 = f.blocks.len();
     if nb == 0 {
-        return vc_induct_status(f, VC_INDUCT_NA());
+        return vc_induct_status(src, VC_INDUCT_NA());
     }
     let id_to_idx: Vec<i64> = dom_block_id_table(f);
     let succ: Vec<i64> = dom_successors(f, id_to_idx);
     let rpo: Vec<i64> = dom_rpo_numbers(nb, succ);
     let li: VcLoopInfo = vc_loop_analysis(nb, succ, rpo);
     if li.n_loops == 0 {
-        return vc_induct_status(f, VC_INDUCT_NA());
+        return vc_induct_status(src, VC_INDUCT_NA());
+    }
+    if trivial {
+        let bare: Vec<i64> = vc_induct_bare_headers(f, li, rpo);
+        if !vc_induct_has(bare, 1) {
+            return vc_induct_status(src, VC_INDUCT_NA());
+        }
+        f = vc_induct_trivial_invariants(f, bare);
     }
     let n_ids: u64 = (dom_max_inst_id(f) + 1) as u64;
     if vc_loop_shape_detail(f, succ, rpo).len() > 0 || vc_induct_ptr_phi(f, li) || vc_induct_agg_written_in_loop(f, li, rpo, n_ids) {
-        return vc_induct_status(f, VC_INDUCT_NA());
+        return vc_induct_status(src, VC_INDUCT_NA());
     }
     let rg: VcRegions = vc_induct_regions(f, li, succ, rpo);
     if !rg.ok {
-        return vc_induct_status(f, VC_INDUCT_NA());
+        return vc_induct_status(src, VC_INDUCT_NA());
     }
     let hv: VcVecHavocs = vc_induct_vec_havocs(f, li, rpo, n_ids);
     if !hv.ok {
-        return vc_induct_status(f, VC_INDUCT_NA());
+        return vc_induct_status(src, VC_INDUCT_NA());
     }
     let n_loops: u64 = li.n_loops as u64;
     let st: VcCut = VcCut {
@@ -707,7 +786,7 @@ fn vc_induct_cut(f: IrFunction) -> VcInduct {
         c = c + 1;
     }
     if st.bad || vc_unrolled_detail(g, vc_ty_table(g)).len() > 0 || ir_non_dominating_read(g).len() > 0 {
-        return vc_induct_status(f, VC_INDUCT_NA());
+        return vc_induct_status(src, VC_INDUCT_NA());
     }
     vc_induct_status(g, VC_INDUCT_OK())
 }

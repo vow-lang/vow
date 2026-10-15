@@ -1,0 +1,22 @@
+// TEST: skip-reason unsupported-opcode
+// The slot a pointer was stored into holds an address the model has not tied to the object
+// (no address is kept for an object the function built), so reading the element back and
+// then reading through it would be a read of memory the model leaves free. The function is
+// `Skipped`, never given a free answer. The object-identity model (an address per object,
+// read back through the overlay) is the remainder of #1663.
+module VecPointerElementReadBackSkipped
+
+fn read_back() -> u64 vow {
+  ensures: result == 0
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let inner: Vec<i64> = Vec::new();
+  outer.push(inner);
+  let again: Vec<i64> = outer[0];
+  again.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(read_back());
+  0
+}

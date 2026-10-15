@@ -519,8 +519,18 @@ fn vc_sites_cover(have: Vec<ParsedArithSite>, want: Vec<ParsedArithSite>) -> boo
 }
 
 fn vc_induction_attempt(f: IrFunction, closed: IrFunction, fr: VcFrames, started: i64, timeout_ms: i64, scratch: String, cache: VcCache, slicing: bool) -> VcInduction [io, read, write] {
+    vc_cut_attempt(f, vc_induct_cut(closed), fr, started, timeout_ms, scratch, cache, slicing)
+}
+
+// The inductive attempt with a loop that has no `invariant` cut by the clause `true`: run only
+// when the bounded schedule ends open, where the claims that hold in an arbitrary header state
+// (a bound read through a loop variable, a call's `requires` under a guard) are still proven.
+fn vc_trivial_attempt(f: IrFunction, closed: IrFunction, fr: VcFrames, started: i64, timeout_ms: i64, scratch: String, cache: VcCache, slicing: bool) -> VcInduction [io, read, write] {
+    vc_cut_attempt(f, vc_induct_cut_trivial(closed), fr, started, timeout_ms, scratch, cache, slicing)
+}
+
+fn vc_cut_attempt(f: IrFunction, c: VcInduct, fr: VcFrames, started: i64, timeout_ms: i64, scratch: String, cache: VcCache, slicing: bool) -> VcInduction [io, read, write] {
     let none: VcInduction = VcInduction { proves: false, soft: false, sites: Vec::new() };
-    let c: VcInduct = vc_induct_cut(closed);
     if c.status != VC_INDUCT_OK() {
         return none;
     }
@@ -692,6 +702,10 @@ fn vc_verify_function_mode(f: IrFunction, m: IrModule, timeout_ms: i64, scratch:
             }
         }
         if !r.ended && round + 1 == bounds.len() {
+            if !ind.proves {
+                let tr: VcInduction = vc_trivial_attempt(f, closed, inl.frames, started, timeout_ms, scratch, cache, slicing);
+                if tr.proves { ind = VcInduction { proves: true, soft: tr.soft || r.soft, sites: tr.sites }; }
+            }
             return vc_open_stop(f, inl.frames, ind, frozen, last_sites, vc_unwinding_reason(bound), acc, targets, all_claims);
         }
         if all_claims { vc_clause_next_round(acc); }

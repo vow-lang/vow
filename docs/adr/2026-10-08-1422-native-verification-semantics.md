@@ -1137,3 +1137,45 @@ proof whose cut reaches no abort ends the check, and otherwise the rounds end at
 cover the cut's (`vc_sites_cover`). The warnings are the same set; only rounds that could add none are
 skipped. This is what lets a writer reach the encoder's abort on a value that has no encoding
 (`reject_encode_u8`, a checked add) and still be proven for every value that has one.
+
+## Addendum (#1663): pointer elements, a handle returned as an object, a loop without an invariant
+
+Three small rules, each sound for proofs and none a cap or a havoc.
+
+- **A pointer stored into a `Vec` is a slot the model does not read.** `push` and `set` of a
+  `String`, `Vec` or struct store the object's address in the 8-byte slot. The verifier keeps no
+  address for an object the function built (an address per object, read back through the overlay of
+  `vc_overlay`, is the remainder of #1663), so the slot is a fresh 64-bit constant. That is exact for
+  everything that never looks at the slot: the length, the bounds of every index and the other
+  elements. The gate (`vc_ptr_store_detail`, `compiler/vc_ptrstore.vow`) keeps out of the subset
+  every function that could: one that reads such an element back with `get`, copies or sorts a
+  `Vec` that holds one, or reads memory through a handle at all (a stored object may be what a
+  loaded handle names). Each is `unsupported-opcode` with its own detail, never a free answer. The
+  alternative that was rejected is to register the fresh constants as hook variables and let the
+  recheck turn a counterexample that reads them into `unknown`: a function the ESBMC path still
+  decides would become `unknown` instead of `Skipped`. Pinned by `pass/vec_of_vec_push.vow`,
+  `pass/vec_pointer_push_loop.vow`, `pass/vec_pointer_push_param.vow`,
+  `skip/vec_pointer_element_read_back_skipped.vow` and
+  `skip/vec_pointer_store_handle_read_skipped.vow`.
+- **A handle returned where an object is declared is a handle.** The IR types a pointer read out of a
+  field or an element `i64`, so `fn name(p: Person) -> String { p.name }` returns a handle from a
+  function declared to return an object. The `Return` gate accepts it (`vc_handle_for_object`), and
+  the inliner retypes the continuation Phi of a call whose every return is a handle `i64`
+  (`vc_retype_handle_phis`, to a fixpoint through Phis of Phis), so every read of the result is a read
+  of memory through the heap model. A Phi that merges a handle with an object keeps its type and
+  stays `Skipped` (`Upsilon type differs from its Phi`): turning a handle into an object would need an
+  array defined by a quantified assumption over the heap. Pinned by `pass/handle_return_getter.vow`,
+  `pass/heap_handle_returned_as_object.vow` (moved out of `skip/`),
+  `skip/handle_object_merge_skipped.vow` and the `_wrong` twins.
+- **A loop with no `invariant` is also cut, with the clause `true`.** After the bounded rounds end
+  open at the largest bound, when the inductive attempt did not prove and some loop has no clause,
+  the cut is made again with `ConstBool true; VowInvariant` after each such header's Phis
+  (`vc_induct_trivial_invariants`): an arbitrary state at the top of the header, the same havoc of
+  every Phi, `Vec` and map the loop writes. It only ever proves (`unsat` on every claim); a `sat` is
+  a state no run need reach and leaves the verdict `unknown`, as for any cut. The attempt is last, so a
+  function the bounded rounds decide pays nothing. It proves what holds in every state: a bound
+  read through the loop variable, a callee's `requires` under a guard, which is the shape of the
+  `HashMap`-as-a-set loops of `decl_unprintable_enum` (`pass/loop_without_invariant_cut.vow`); a
+  fact about the state after the loop stays `unknown` (`unknown/loop_without_invariant_exit_fact.vow`)
+  and a wrong postcondition is still refuted by the bounded rounds
+  (`fail/loop_without_invariant_cut_wrong.vow`).

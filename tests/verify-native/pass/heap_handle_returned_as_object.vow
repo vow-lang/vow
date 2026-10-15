@@ -1,0 +1,27 @@
+// TEST: esbmc-model-artifact fn="size" blame=Callee vow_id=0 "ESBMC reads the Vec field o.bag.items as a fresh Vec of nondeterministic length at each use, so the two reads of its length (the result and the clause) are unrelated values; the runtime reads one field, and the debug build of this program runs with no VowViolation"
+// A callee that returns its struct parameter, called with a struct loaded out of a field: the
+// argument is a handle (an address, `i64`), and so is the value the callee returns where an
+// object is declared. The result is read through the heap model like the handle it is.
+module HeapHandleReturnedAsObject
+
+struct Bag { items: Vec<i64> }
+struct Outer { bag: Bag }
+
+fn pass_through(b: Bag) -> Bag {
+  b
+}
+
+fn size(o: Outer) -> u64 vow {
+  ensures: result == o.bag.items.len()
+} {
+  pass_through(o.bag).items.len()
+}
+
+fn main() -> i32 [io] {
+  let items: Vec<i64> = Vec::new();
+  items.push(1);
+  items.push(2);
+  let o: Outer = Outer { bag: Bag { items: items } };
+  print_u64(size(o));
+  0
+}

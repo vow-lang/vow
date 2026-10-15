@@ -655,9 +655,16 @@ fn check_vec_ops_rejected() -> i64 {
     if vc_skip_reason(clear) != String::from("unmodeled-builtin: __vow_vec_clear") { return 10; }
     let arena: IrFunction = vec_fn_with(String::from("__vow_vec_from_raw_parts_copy_val_in_arena"), ITY_PTR(), args2(2, 2), none);
     if vc_reason_code(vc_skip_reason(arena)) != VC_SKIP_UNMODELED_BUILTIN() { return 11; }
-    // A pointer element (nested Vec, String, struct) is not one 8-byte slot of a scalar.
-    let ptr_push: IrFunction = vec_fn_with(String::from("__vow_vec_push_val"), ITY_UNIT(), args2(2, 2), none);
-    if vc_reason_code(vc_skip_reason(ptr_push)) != VC_SKIP_UNSUPPORTED_OPCODE() { return 12; }
+    // An element narrower than 64 bits is still one slot, widened.
+    let narrow_elem: Vec<IrInst> = Vec::new();
+    narrow_elem.push(mk_inst(31, IOP_CONST_I32(), ITY_I32(), Vec::new()));
+    let i32_push: IrFunction = vec_fn_with(String::from("__vow_vec_push_val"), ITY_UNIT(), args2(2, 31), narrow_elem);
+    if vc_skip_reason(i32_push).len() != 0 { return 12; }
+    // A unit value is no element.
+    let unit_elem: Vec<IrInst> = Vec::new();
+    unit_elem.push(mk_inst(31, IOP_CONST_UNIT(), ITY_UNIT(), Vec::new()));
+    let unit_push: IrFunction = vec_fn_with(String::from("__vow_vec_push_val"), ITY_UNIT(), args2(2, 31), unit_elem);
+    if vc_reason_code(vc_skip_reason(unit_push)) != VC_SKIP_UNSUPPORTED_OPCODE() { return 15; }
     // A 32-bit index is not read as a 64-bit one.
     let narrow: Vec<IrInst> = Vec::new();
     narrow.push(mk_inst(30, IOP_CONST_I32(), ITY_I32(), Vec::new()));
@@ -666,6 +673,67 @@ fn check_vec_ops_rejected() -> i64 {
     // `len` yields u64.
     let bad_len: IrFunction = vec_fn_with(String::from("__vow_vec_len"), ITY_I64(), args1(2), none);
     if vc_reason_code(vc_skip_reason(bad_len)) != VC_SKIP_UNSUPPORTED_OPCODE() { return 14; }
+    0
+}
+
+// A pointer pushed or stored is a slot the model does not read, so a function that never looks
+// at the slot again is inside the subset and one that could is not.
+fn check_pointer_elements() -> i64 {
+    let none: Vec<IrInst> = Vec::new();
+    // let outer = Vec::new(); outer.push(outer)
+    let ptr_push: IrFunction = vec_fn_with(String::from("__vow_vec_push_val"), ITY_UNIT(), args2(2, 2), none);
+    if vc_skip_reason(ptr_push).len() != 0 { return 1; }
+    // outer.set(0, outer)
+    let zero: Vec<IrInst> = Vec::new();
+    zero.push(mk_inst_const_i64(30, 0));
+    let ptr_set: IrFunction = vec_fn_with(String::from("__vow_vec_set_val"), ITY_UNIT(), args3(2, 30, 2), zero);
+    if vc_skip_reason(ptr_set).len() != 0 { return 2; }
+    // outer.push(outer); let h = outer[0]
+    let get_insts: Vec<IrInst> = Vec::new();
+    get_insts.push(mk_inst_call_extern(30, ITY_UNIT(), args2(2, 2), String::from("__vow_vec_push_val")));
+    get_insts.push(mk_inst_const_i64(31, 0));
+    let get: IrFunction = vec_fn_with(String::from("__vow_vec_get_val"), ITY_I64(), args2(2, 31), get_insts);
+    let why: String = vc_skip_reason(get);
+    if why != String::from("unsupported-opcode: a pointer element is read back") { return 3; }
+    // a copy carries the slot along
+    let copy: Vec<IrInst> = Vec::new();
+    copy.push(mk_inst_call_extern(30, ITY_UNIT(), args2(2, 2), String::from("__vow_vec_push_val")));
+    let sorted: IrFunction = vec_fn_with(String::from("__vow_vec_sort"), ITY_PTR(), args1(2), copy);
+    if vc_skip_reason(sorted) != String::from("unsupported-opcode: a Vec of pointer elements is copied") { return 4; }
+    // a handle read in the same function
+    let handle: Vec<IrInst> = Vec::new();
+    handle.push(mk_inst_call_extern(30, ITY_UNIT(), args2(2, 2), String::from("__vow_vec_push_val")));
+    handle.push(mk_inst_arg(31, ITY_I64(), 0));
+    let hf: IrFunction = vec_fn_with(String::from("__vow_vec_len"), ITY_U64(), args1(31), handle);
+    let ps: Vec<i64> = Vec::new();
+    ps.push(ITY_I64());
+    hf.params = ps;
+    if vc_reason_code(vc_skip_reason(hf)) != VC_SKIP_UNSUPPORTED_OPCODE() { return 5; }
+    0
+}
+
+// A pointer-typed `Return` may carry a handle (`i64`); every other type pair is a mismatch.
+fn check_handle_for_object() -> i64 {
+    if !vc_handle_for_object(ITY_PTR(), ITY_I64()) { return 1; }
+    if vc_handle_for_object(ITY_PTR(), ITY_PTR()) { return 2; }
+    if vc_handle_for_object(ITY_I64(), ITY_PTR()) { return 3; }
+    if vc_handle_for_object(ITY_PTR(), ITY_U64()) { return 4; }
+    // fn f(h: i64) -> ptr { h }
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_I64(), 0));
+    insts.push(mk_inst_return(1, 0));
+    let ps: Vec<i64> = Vec::new();
+    ps.push(ITY_I64());
+    let f: IrFunction = one_block(String::from("h"), ps, ITY_PTR(), insts);
+    if vc_skip_reason(f).len() != 0 { return 5; }
+    // fn g(h: u64) -> ptr { h }
+    let bad: Vec<IrInst> = Vec::new();
+    bad.push(mk_inst_arg(0, ITY_U64(), 0));
+    bad.push(mk_inst_return(1, 0));
+    let qs: Vec<i64> = Vec::new();
+    qs.push(ITY_U64());
+    let g: IrFunction = one_block(String::from("g"), qs, ITY_PTR(), bad);
+    if vc_reason_code(vc_skip_reason(g)) != VC_SKIP_UNSUPPORTED_OPCODE() { return 6; }
     0
 }
 
@@ -792,6 +860,8 @@ fn main() -> i32 {
     let mut r: i64 = check_accepted();
     if r == 0 { r = check_vec_ops_accepted(); }
     if r == 0 { r = check_vec_ops_rejected(); }
+    if r == 0 { r = check_pointer_elements(); }
+    if r == 0 { r = check_handle_for_object(); }
     if r == 0 { r = check_vec_sort(); }
     if r == 0 { r = check_vec_copy_ops(); }
     if r == 0 { r = check_wide_vec_ops(); }
