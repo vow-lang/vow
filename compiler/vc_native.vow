@@ -172,7 +172,11 @@ fn vc_check_claim_oneshot(cache: VcCache, bin: String, cs: VcClaims, sx: VcSlice
 // full standalone query, which alone supplies the counterexample (the model of
 // an incremental solver is not promised to equal a fresh one's). Anything else
 // -- `unknown`, a timeout, a dead or absent session -- takes the standalone path
-// in the time that is left. A non-positive budget never reaches the cache.
+// in the time that is left. The last claim of a round that needs a solver is
+// hedged (`vc_check_claim_race`): nothing follows it for the session to help, so
+// when the session has not answered within `vc_session_hedge_window_ms` a fresh
+// process is asked alongside it and the first final answer stands. A
+// non-positive budget never reaches the cache.
 fn vc_check_claim(cache: VcCache, bin: String, cs: VcClaims, sx: VcSlicer, ss: VcSession, slicing: bool, k: u64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
     let started: i64 = time_micros();
     let mut query: String = String::from("");
@@ -181,7 +185,23 @@ fn vc_check_claim(cache: VcCache, bin: String, cs: VcClaims, sx: VcSlicer, ss: V
         let hit: VcSolverAnswer = vc_cache_peek(cache, query, vc_claim_model_count(cs, k));
         if hit.verdict != VC_ANS_NONE() { return hit; }
     }
+    if vc_session_hedges(ss, cs, k) && budget_ms > 0 {
+        let hedged: i64 = vc_session_ask_hedged(ss, bin, cs, k, budget_ms / 2, vc_session_hedge_window_ms());
+        if hedged == VC_SESSION_PENDING() {
+            return vc_check_claim_race(cache, bin, cs, ss, k, budget_ms - (time_micros() - started) / 1000, scratch);
+        }
+        return vc_check_claim_after_session(cache, bin, cs, sx, slicing, k, budget_ms, scratch, started, query, hedged);
+    }
     let said: i64 = vc_session_ask(ss, bin, cs, k, budget_ms / 2);
+    return vc_check_claim_after_session(cache, bin, cs, sx, slicing, k, budget_ms, scratch, started, query, said);
+}
+
+// What `vc_check_claim` does with the session's answer `said` to claim `k`
+// (`VC_ANS_NONE` when it gave none): `unsat`, and `sat` on a soft claim, stand;
+// a hard `sat` is decided by the full standalone query; anything else by the
+// standalone path in the time that is left. `query` is the claim's full query
+// text when the cache is on, else "".
+fn vc_check_claim_after_session(cache: VcCache, bin: String, cs: VcClaims, sx: VcSlicer, slicing: bool, k: u64, budget_ms: i64, scratch: String, started: i64, query: String, said: i64) -> VcSolverAnswer [io, read, write] {
     if said == VC_ANS_UNSAT() {
         let proof: VcSolverAnswer = vc_answer_plain(VC_ANS_UNSAT(), String::from(""));
         if query.len() > 0 { vc_cache_put(cache, query, proof); }
@@ -191,6 +211,55 @@ fn vc_check_claim(cache: VcCache, bin: String, cs: VcClaims, sx: VcSlicer, ss: V
     let left_ms: i64 = budget_ms - (time_micros() - started) / 1000;
     if said == VC_ANS_SAT() { return vc_check_claim_full(cache, bin, cs, k, left_ms, scratch); }
     vc_check_claim_oneshot(cache, bin, cs, sx, slicing, k, left_ms, scratch)
+}
+
+// The session has not answered the last claim of its round within the hedge
+// window: a fresh process is asked the claim's full query alongside it and the
+// first answer that is final stands. A session `unsat`, and its `sat` on a soft
+// claim, end the standalone process; a standalone answer of any kind ends the
+// session (nothing follows this claim). Any other session reply leaves the
+// standalone process to decide, as after a session `sat` on a hard claim. Both
+// run until `budget_ms` is spent, then neither is waited for. The full query is
+// the one a `sat` on a hard claim is decided by, so the counterexample is the
+// standalone model whichever process finishes first.
+fn vc_check_claim_race(cache: VcCache, bin: String, cs: VcClaims, ss: VcSession, k: u64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+    let query: String = vc_claim_query(cs, k);
+    let names: Vec<String> = vc_claim_model_names(cs, k);
+    let run: VcSolverRun = vc_solver_begin(bin, query, scratch);
+    if run.handle < 0 {
+        vc_session_close(ss);
+        return vc_answer_plain(VC_ANS_ERROR(), run.err);
+    }
+    let soft: bool = vc_claim_is_soft(cs, k);
+    let deadline_us: i64 = time_micros() + budget_ms * 1000;
+    let mut waiting: bool = true;
+    let mut decided: bool = false;
+    let mut result: VcSolverAnswer = vc_answer_plain(VC_ANS_TIMEOUT(), String::from(""));
+    while !decided {
+        let wait_ms: i64 = { if waiting { 0 } else { 5 } };
+        let rc: i64 = process_poll_wait(run.handle, wait_ms);
+        if rc != vc_solver_running() {
+            result = vc_solver_end(run, names, vc_claim_model_widths(cs, k), rc);
+            vc_cache_put(cache, query, result);
+            decided = true;
+        } else if time_micros() >= deadline_us {
+            vc_solver_abandon(run);
+            decided = true;
+        } else if waiting {
+            let said: i64 = vc_session_collect(ss, k, time_micros() + 2000);
+            if said == VC_ANS_UNSAT() || (said == VC_ANS_SAT() && soft) {
+                vc_solver_abandon(run);
+                result = vc_answer_plain(said, String::from(""));
+                if said == VC_ANS_UNSAT() { vc_cache_put(cache, query, result); }
+                decided = true;
+            } else if said != VC_SESSION_PENDING() {
+                vc_session_close(ss);
+                waiting = false;
+            }
+        }
+    }
+    vc_session_close(ss);
+    result
 }
 
 // True when the cone of claim `k` reaches one of the constants `vars`: the claim's
@@ -321,9 +390,20 @@ fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, hyp: Vec<i64>, sites
     }
     let binder_at: i64 = vc_claims_first_binder(cs);
     let ss: VcSession = vc_session_new(vc_session_wanted(cs, binder_at), binder_at);
+    ss.last_at = vc_claims_last_solver(cs);
     let r: VcRound = vc_run_claims(f, fr, cs, ss, sites, started, timeout_ms, scratch, cache, slicing, all_claims, acc);
     vc_session_close(ss);
     r
+}
+
+// The index of the last claim of `cs` that needs a solver, -1 when none does.
+fn vc_claims_last_solver(cs: VcClaims) -> i64 {
+    let mut k: u64 = cs.kinds.len();
+    while k > 0 {
+        k = k - 1;
+        if !vc_claim_is_static_sat(cs, k) { return k as i64; }
+    }
+    -1
 }
 
 // Whether the claims of a round share one solver process: only when at least

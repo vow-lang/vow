@@ -6,6 +6,7 @@ use vc_smt
 use vc_exec
 use vc_solver
 use vc_session
+use vc_native
 use vc_slice
 use tests.builders
 
@@ -203,6 +204,54 @@ fn check_session_skips_claims_behind_a_binder() -> i64 [io] {
     0
 }
 
+// The last claim that needs a solver is the one a session hedges, and only a
+// live session that may ask it does.
+fn check_the_last_solver_claim_is_the_hedged_one() -> i64 {
+    let cs: VcClaims = two_claims();
+    if vc_claims_last_solver(cs) != 1 { return 1; }
+    let ss: VcSession = vc_session_new(true, -1);
+    if vc_session_hedges(ss, cs, 1) { return 2; }
+    ss.last_at = vc_claims_last_solver(cs);
+    if !vc_session_hedges(ss, cs, 1) { return 3; }
+    if vc_session_hedges(ss, cs, 0) { return 4; }
+    let dead: VcSession = vc_session_new(false, -1);
+    dead.last_at = 1;
+    if vc_session_hedges(dead, cs, 1) { return 5; }
+    0
+}
+
+// A claim behind a quantifier binder is never asked of the session, so it is
+// never the hedged one either.
+fn check_a_claim_behind_a_binder_is_not_hedged() -> i64 {
+    let cs: VcClaims = binder_claims();
+    let ss: VcSession = vc_session_new(true, vc_claims_first_binder(cs));
+    ss.last_at = vc_claims_last_solver(cs);
+    if ss.last_at != 1 { return 1; }
+    if vc_session_hedges(ss, cs, 1) { return 2; }
+    0
+}
+
+fn check_hedged_ask_without_a_solver_answers_nothing() -> i64 [io] {
+    let cs: VcClaims = two_claims();
+    let ss: VcSession = vc_session_new(true, -1);
+    ss.last_at = 1;
+    if vc_session_ask_hedged(ss, String::from("/nonexistent/bitwuzla"), cs, 1, 1000, 10) != VC_ANS_NONE() { return 1; }
+    if ss.live { return 2; }
+    if vc_session_ask_hedged(ss, String::from("/nonexistent/bitwuzla"), cs, 1, 1000, 10) != VC_ANS_NONE() { return 3; }
+    let off: VcSession = vc_session_new(true, -1);
+    if vc_session_ask_hedged(off, String::from("/nonexistent/bitwuzla"), cs, 1, 0, 10) != VC_ANS_NONE() { return 4; }
+    0
+}
+
+// The pending marker is not one of the solver's verdicts.
+fn check_pending_is_not_a_verdict() -> i64 {
+    let p: i64 = VC_SESSION_PENDING();
+    if p == VC_ANS_SAT() || p == VC_ANS_UNSAT() || p == VC_ANS_UNKNOWN() { return 1; }
+    if p == VC_ANS_ERROR() || p == VC_ANS_TIMEOUT() || p == VC_ANS_NOT_FOUND() { return 2; }
+    if p == VC_ANS_MEMORY() || p == VC_ANS_NONE() { return 3; }
+    0
+}
+
 fn main() -> i32 [io] {
     let mut r: i64 = check_first_delta_is_the_standalone_prefix();
     if r == 0 { r = check_later_delta_is_the_remainder(); }
@@ -213,5 +262,9 @@ fn main() -> i32 [io] {
     if r == 0 { r = check_missing_solver_kills_the_session(); }
     if r == 0 { r = check_first_binder_is_the_first_quantified_assumption(); }
     if r == 0 { r = check_session_skips_claims_behind_a_binder(); }
+    if r == 0 { r = check_the_last_solver_claim_is_the_hedged_one(); }
+    if r == 0 { r = check_a_claim_behind_a_binder_is_not_hedged(); }
+    if r == 0 { r = check_hedged_ask_without_a_solver_answers_nothing(); }
+    if r == 0 { r = check_pending_is_not_a_verdict(); }
     i64_to_i32_wrap(r)
 }
