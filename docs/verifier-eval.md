@@ -428,7 +428,31 @@ the cache off, median of `--runs` runs (default 5, one discarded warm-up), both 
 geometric mean of native/ESBMC at most 1.0 on wall-clock and peak RSS, no root
 above 1.25, native timing out on no root where ESBMC finishes. A root where both
 backends finish within one second is reported but not gated (it measures process
-start-up). `--no-perf-gate` keeps the cost in the report and out of the exit
+start-up).
+
+The cost ratios are **like for like**. A root's wall time and peak RSS cover only
+the functions both backends decide the same way (proven by both or refuted by
+both): a function native proves that ESBMC skips (the `write_*` functions of
+`module_io.vow`), one ESBMC proves that native skips, or one either side leaves
+undecided does work the other backend never does, so it is taken out of both
+sides. The driver's stderr is timestamped as it arrives. Each `Verifying <fn>...`
+line opens a block that ends at its last progress line; a function's time is the
+gap from the end of the previous block to the end of its own, and its memory the
+peak of the process tree in that gap. What precedes the first block (front end,
+worker start-up) and the function reported first stay in both sides. A function
+proven with reachable checked-arithmetic aborts prints only `<owner>: PROVEN
+(checked arithmetic can abort)` lines, so a block that reports nothing else is
+read as a proof of its `Verifying` function (with `--verify-jobs` above 1 the
+lines no longer follow their block and the old per-line reading applies). Each row of
+the report carries `cost_basis`: its `mode` (`whole-root` when both backends decide
+the same functions, `like-for-like` when some were left out, `unattributable` when
+they would have to be but `--verify-jobs` is above 1, which makes the gaps
+overlap, and the root is then not gated), the `compared` functions, the `left_out`
+ones with the reason and the time each backend spent on them, and the `whole_root`
+figures, which stay informational. A root with nothing in common is not gated
+(`no-common-functions`), so skipping everything cannot satisfy the gate: the
+verdict criteria still fail on an unlisted skip, and the left-out list shows what
+was dropped. `--no-perf-gate` keeps the cost in the report and out of the exit
 code; `--allow-esbmc-version` accepts an ESBMC other than the pinned 8.5 and marks
 the report provisional (as does `--runs` below 5).
 

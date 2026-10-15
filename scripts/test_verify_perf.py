@@ -342,6 +342,30 @@ class RunOnceTest(unittest.TestCase):
         got = vp.run_once(self.stub(body), "native", "x.vow", 1, None, 20.0, True)
         self.assertEqual("  f: PROVEN\n", got["stderr"])
 
+    def test_timeline_stamps_stderr_lines_and_samples_the_tree(self):
+        body = (
+            "import sys, time\n"
+            "sys.stderr.write('  a: PROVEN\\n'); sys.stderr.flush()\n"
+            "time.sleep(0.3)\n"
+            "sys.stderr.write('  b: PROVEN\\n'); sys.stderr.flush()\n"
+            "print('{}')\n"
+        )
+        got = vp.run_once(
+            self.stub(body), "native", "x.vow", 1, None, 20.0, timeline=True
+        )
+        self.assertEqual("  a: PROVEN\n  b: PROVEN\n", got["stderr"])
+        (ta, la), (tb, lb) = got["events"]
+        self.assertEqual(("  a: PROVEN\n", "  b: PROVEN\n"), (la, lb))
+        self.assertGreaterEqual(tb - ta, 0.25)
+        self.assertLessEqual(tb, got["wall_s"] + 0.05)
+        self.assertTrue(got["rss_series"])
+        self.assertTrue(all(kb > 0 for _, kb in got["rss_series"]))
+
+    def test_timeline_is_absent_unless_asked_for(self):
+        got = self.run_stub("print('{}')\n")
+        self.assertNotIn("events", got)
+        self.assertNotIn("rss_series", got)
+
     def test_cache_written_while_measuring_invalidates_the_sample(self):
         with self.assertRaisesRegex(ValueError, "cache was used while measuring"):
             self.run_stub(

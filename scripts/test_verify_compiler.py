@@ -30,8 +30,25 @@ def summary(
     rss=1000.0,
     timed_out=False,
     capacity=(),
+    gaps=None,
+    peaks=None,
+    prelude_rss=0.0,
+    tail_rss=0.0,
 ):
-    return {
+    attribution = (
+        [
+            {
+                "wall_s": wall,
+                "gap_s": dict(gaps),
+                "peak_kb": dict(peaks or {}),
+                "prelude_peak_kb": prelude_rss,
+                "tail_peak_kb": tail_rss,
+            }
+        ]
+        if gaps is not None
+        else None
+    )
+    out = {
         "status": status,
         "verify_status": verify_status,
         "functions": dict(functions or {}),
@@ -42,6 +59,9 @@ def summary(
         "timed_out": timed_out,
         "capacity_functions": list(capacity),
     }
+    if attribution is not None:
+        out["attribution"] = attribution
+    return out
 
 
 def write(directory, name, text):
@@ -159,6 +179,58 @@ class ParsingTest(unittest.TestCase):
 
     def test_missing_stderr_is_empty(self):
         self.assertEqual({}, vc.progress_verdicts(None))
+
+    SITES = (
+        "Verifying a...\n"
+        "  helper: PROVEN (checked arithmetic can abort)\n"
+        "  helper: PROVEN (checked arithmetic can abort)\n"
+        "Verifying b...\n"
+        "  b: PROVEN\n"
+        "Verifying c...\n"
+        "  c: PROVEN (checked arithmetic can abort)\n"
+        "  r: SKIPPED (outside the native verifier subset)\n"
+        "Verifying d...\n"
+        "  d: FAILED\n"
+    )
+
+    def test_site_lines_name_the_owner_unless_blocks_are_read(self):
+        self.assertEqual(
+            {
+                "helper": "PROVEN",
+                "b": "PROVEN",
+                "c": "PROVEN",
+                "r": "SKIPPED",
+                "d": "FAILED",
+            },
+            vc.progress_verdicts(self.SITES),
+        )
+
+    def test_a_block_that_reports_only_sites_is_a_proof_of_its_function(self):
+        self.assertEqual(
+            {
+                "a": "PROVEN",
+                "b": "PROVEN",
+                "c": "PROVEN",
+                "r": "SKIPPED",
+                "d": "FAILED",
+            },
+            vc.progress_verdicts(self.SITES, blocks=True),
+        )
+
+    def test_a_site_line_before_any_block_is_not_a_verdict(self):
+        text = "  helper: PROVEN (checked arithmetic can abort)\n  g: PROVEN\n"
+        self.assertEqual({"g": "PROVEN"}, vc.progress_verdicts(text, blocks=True))
+
+    def test_summarise_reads_blocks_only_when_asked(self):
+        sample = {
+            "wall_s": 1.0,
+            "peak_rss_kb": 1.0,
+            "result": {"status": "Verified", "diagnostics": [], "counterexamples": []},
+            "timed_out": False,
+            "stderr": self.SITES.replace("d: FAILED", "d: PROVEN"),
+        }
+        self.assertIn("a", vc.summarise([sample], blocks=True)["functions"])
+        self.assertNotIn("a", vc.summarise([sample])["functions"])
 
     def test_skipped_functions_read_the_verification_skipped_warnings(self):
         result = {
@@ -318,8 +390,8 @@ class NativeProblemsTest(unittest.TestCase):
         )
 
 
-def timed(root, esbmc, native, skips=SKIPS):
-    return vc.timed_row(root, esbmc, native, skips)
+def timed(root, esbmc, native, skips=SKIPS, jobs=1):
+    return vc.timed_row(root, esbmc, native, skips, jobs)
 
 
 class CompareGateTest(unittest.TestCase):
@@ -352,11 +424,12 @@ class CompareGateTest(unittest.TestCase):
 
     def test_a_listed_skip_passes_the_verdict_criteria(self):
         skips = {"f": {"code": "unsupported-opcode", "issue": 1, "reason": "r"}}
-        esbmc = summary({"f": "PROVEN"})
+        esbmc = summary({"f": "PROVEN", "g": "PROVEN"}, gaps={"f": 0, "g": 4})
         native = summary(
-            {"f": "SKIPPED"},
+            {"f": "SKIPPED", "g": "PROVEN"},
             status="Skipped",
             skipped={"f": "unsupported-opcode: Call"},
+            gaps={"f": 0, "g": 4},
         )
         gate = self.gate([timed("/r/main.vow", esbmc, native, skips)], skips=skips)
         self.assertTrue(gate["passed"], gate)
@@ -418,6 +491,238 @@ class CompareGateTest(unittest.TestCase):
         native = summary({}, timed_out=True)
         gate = self.gate([timed("/r/main.vow", esbmc, native)], skips={})
         self.assertTrue(gate["criteria"]["no_new_timeouts"])
+
+
+class AttributeTest(unittest.TestCase):
+    SERIES = [(1.0, 100), (3.0, 150), (5.0, 900), (7.0, 300), (8.0, 120), (9.5, 80)]
+
+    def test_a_function_costs_the_gap_since_the_previous_function_ended(self):
+        # ESBMC's driver: `Verifying` at the start of a run, the result at its end.
+        events = [
+            (0.5, "Verifying a...\n"),
+            (3.0, "  a: PROVEN\n"),
+            (3.0, "Verifying b...\n"),
+            (7.0, "  b: PROVEN\n"),
+            (7.0, "Verifying c...\n"),
+            (9.0, "  c: PROVEN\n"),
+        ]
+        got = vc.attribute(events, self.SERIES, 10.0)
+        self.assertEqual({"a": 0.0, "b": 4.0, "c": 2.0}, got["gap_s"])
+        self.assertEqual({"b": 900, "c": 120}, got["peak_kb"])
+        self.assertEqual(150, got["prelude_peak_kb"])
+        self.assertEqual(80, got["tail_peak_kb"])
+        self.assertEqual(10.0, got["wall_s"])
+
+    def test_a_native_block_is_charged_the_wait_before_it_was_ready(self):
+        # The native driver prints `Verifying` and the results when an answer is ready.
+        events = [
+            (3.0, "Verifying a...\n"),
+            (3.0, "  a: PROVEN\n"),
+            (3.0, "  r: SKIPPED (outside the native verifier subset)\n"),
+            (7.0, "Verifying b...\n"),
+            (7.0, "  helper: PROVEN (checked arithmetic can abort)\n"),
+            (7.0, "Verifying c...\n"),
+            (7.0, "  c: PROVEN\n"),
+        ]
+        got = vc.attribute(events, self.SERIES, 10.0)
+        self.assertEqual({"a": 0.0, "b": 4.0, "c": 0.0}, got["gap_s"])
+        self.assertEqual({"b": 900, "c": 0}, got["peak_kb"])
+
+    def test_a_skip_line_between_runs_does_not_end_a_block_early(self):
+        # ESBMC's driver reports a skipped function while the previous run is in flight.
+        events = [
+            (0.5, "Verifying a...\n"),
+            (0.6, "  s: SKIPPED (outside the native verifier subset)\n"),
+            (3.0, "  a: PROVEN\n"),
+            (3.0, "Verifying b...\n"),
+            (4.0, "  b: PROVEN\n"),
+        ]
+        got = vc.attribute(events, [], 5.0)
+        self.assertEqual({"a": 0.0, "b": 1.0}, got["gap_s"])
+
+    def test_lines_before_the_first_verifying_line_are_start_up(self):
+        events = [
+            (0.1, "  early: SKIPPED (outside the native verifier subset)\n"),
+            (2.0, "Verifying a...\n"),
+            (2.5, "  a: PROVEN\n"),
+        ]
+        got = vc.attribute(events, [(0.2, 7), (2.4, 9), (3.0, 4)], 4.0)
+        self.assertEqual({"a": 0.0}, got["gap_s"])
+        self.assertEqual(9, got["prelude_peak_kb"])
+        self.assertEqual(4, got["tail_peak_kb"])
+
+    def test_a_run_without_verifying_lines_has_only_a_prelude(self):
+        got = vc.attribute([(1.0, "note\n")], [(1.0, 10), (2.0, 40)], 3.0)
+        self.assertEqual({}, got["gap_s"])
+        self.assertEqual(40, got["prelude_peak_kb"])
+        self.assertEqual(0, got["tail_peak_kb"])
+
+    def test_summarise_attributes_each_sample_that_has_a_timeline(self):
+        sample = {
+            "wall_s": 4.0,
+            "peak_rss_kb": 100.0,
+            "result": {"status": "Verified", "diagnostics": [], "counterexamples": []},
+            "timed_out": False,
+            "stderr": "  f: PROVEN\n  g: PROVEN\n",
+            "events": [
+                (0.5, "Verifying f...\n"),
+                (1.0, "  f: PROVEN\n"),
+                (1.0, "Verifying g...\n"),
+                (3.0, "  g: PROVEN\n"),
+            ],
+            "rss_series": [(2.0, 50)],
+        }
+        result = vc.summarise([sample])
+        self.assertEqual({"f": 0.0, "g": 2.0}, result["attribution"][0]["gap_s"])
+        del sample["events"]
+        self.assertNotIn("attribution", vc.summarise([sample]))
+
+
+class LikeForLikeCostTest(unittest.TestCase):
+    ROOT = "/r/compiler/module_io.vow"
+
+    def pair(self, native_gaps, native_wall, **kw):
+        esbmc = summary(
+            {"f": "PROVEN", "g": "PROVEN", "h": "SKIPPED"},
+            gaps={"f": 0, "g": 4, "h": 0},
+            wall=10.0,
+            rss=1000.0,
+            peaks={"g": 800},
+            prelude_rss=500.0,
+        )
+        native = summary(
+            {"f": "PROVEN", "g": "PROVEN", "h": "PROVEN"},
+            gaps=native_gaps,
+            wall=native_wall,
+            rss=3000.0,
+            **kw,
+        )
+        return esbmc, native
+
+    def test_functions_only_native_decides_are_left_out_of_both_sides(self):
+        esbmc, native = self.pair(
+            {"f": 0, "g": 5, "h": 18},
+            30.0,
+            peaks={"g": 900, "h": 3000},
+            prelude_rss=600.0,
+        )
+        row = timed(self.ROOT, esbmc, native)
+        basis = row["cost_basis"]
+        self.assertEqual("like-for-like", basis["mode"])
+        self.assertEqual(["f", "g"], basis["compared"])
+        self.assertEqual(12.0, basis["native_wall_s"])
+        self.assertEqual(10.0, basis["esbmc_wall_s"])
+        self.assertAlmostEqual(1.2, row["ratio_wall"])
+        self.assertEqual(900, basis["native_peak_rss_kb"])
+        self.assertEqual(800, basis["esbmc_peak_rss_kb"])
+        self.assertEqual(3.0, basis["whole_root"]["native_wall_s"] / 10.0)
+        self.assertTrue(row["comparable"])
+
+    def test_the_report_names_each_left_out_function_with_reason_and_time(self):
+        esbmc, native = self.pair({"f": 0, "g": 5, "h": 18}, 30.0)
+        (entry,) = timed(self.ROOT, esbmc, native)["cost_basis"]["left_out"]
+        self.assertEqual("h", entry["function"])
+        self.assertEqual("skipped", entry["esbmc"])
+        self.assertEqual("proven", entry["native"])
+        self.assertIn("esbmc skipped it", entry["reason"])
+        self.assertEqual(0, entry["esbmc_s"])
+        self.assertEqual(18, entry["native_s"])
+
+    def test_a_root_both_decide_completely_is_compared_whole(self):
+        esbmc = summary({"f": "PROVEN", "g": "PROVEN"}, gaps={"f": 0, "g": 4})
+        native = summary(
+            {"f": "PROVEN", "g": "PROVEN"}, gaps={"f": 0, "g": 9}, wall=14.0
+        )
+        row = timed(self.ROOT, esbmc, native)
+        self.assertEqual("whole-root", row["cost_basis"]["mode"])
+        self.assertEqual([], row["cost_basis"]["left_out"])
+        self.assertAlmostEqual(1.4, row["ratio_wall"])
+
+    def test_a_function_esbmc_decides_and_native_skips_is_left_out_too(self):
+        esbmc = summary(
+            {"f": "PROVEN", "g": "PROVEN"}, gaps={"f": 0, "g": 60}, wall=70.0
+        )
+        native = summary(
+            {"f": "PROVEN", "g": "SKIPPED"},
+            status="Skipped",
+            skipped={"g": "unmodeled-builtin: x"},
+            gaps={"f": 0, "g": 0},
+            wall=10.0,
+        )
+        row = timed(self.ROOT, esbmc, native)
+        self.assertEqual(10.0, row["cost_basis"]["esbmc_wall_s"])
+        self.assertAlmostEqual(1.0, row["ratio_wall"])
+        (entry,) = row["cost_basis"]["left_out"]
+        self.assertIn("native skipped it (unmodeled-builtin)", entry["reason"])
+        self.assertEqual(60, entry["esbmc_s"])
+
+    def test_a_timed_function_without_a_verdict_line_is_left_out_and_listed(self):
+        esbmc = summary({"f": "PROVEN"}, gaps={"f": 0, "w": 7}, wall=10.0)
+        native = summary({"f": "PROVEN"}, gaps={"f": 0, "w": 3}, wall=8.0)
+        basis = timed(self.ROOT, esbmc, native)["cost_basis"]
+        self.assertEqual(["f"], basis["compared"])
+        (entry,) = basis["left_out"]
+        self.assertEqual("w", entry["function"])
+        self.assertIn("no verdict line of its own", entry["reason"])
+        self.assertEqual((7, 3), (entry["esbmc_s"], entry["native_s"]))
+        self.assertEqual(3.0, basis["esbmc_wall_s"])
+        self.assertEqual(5.0, basis["native_wall_s"])
+
+    def test_a_function_neither_side_decides_is_left_out(self):
+        esbmc = summary(
+            {"f": "PROVEN", "g": "UNKNOWN"}, gaps={"f": 0, "g": 5}, wall=10.0
+        )
+        native = summary(
+            {"f": "PROVEN", "g": "TIMEOUT"}, gaps={"f": 0, "g": 5}, wall=10.0
+        )
+        (entry,) = timed(self.ROOT, esbmc, native)["cost_basis"]["left_out"]
+        self.assertIn("neither backend decides it", entry["reason"])
+
+    def test_several_jobs_cannot_attribute_time_so_the_root_is_not_gated(self):
+        esbmc, native = self.pair({"f": 0, "g": 5, "h": 18}, 30.0)
+        row = timed(self.ROOT, esbmc, native, jobs=4)
+        self.assertEqual("unattributable", row["cost_basis"]["mode"])
+        self.assertFalse(row["comparable"])
+        self.assertEqual("unattributable", row["excluded"])
+
+    def test_several_jobs_still_compare_a_root_with_nothing_to_leave_out(self):
+        esbmc = summary({"f": "PROVEN"}, wall=10.0)
+        native = summary({"f": "PROVEN"}, wall=11.0)
+        row = timed(self.ROOT, esbmc, native, jobs=4)
+        self.assertTrue(row["comparable"])
+        self.assertAlmostEqual(1.1, row["ratio_wall"])
+
+    def test_functions_both_skip_cost_nothing_so_several_jobs_still_compare(self):
+        esbmc = summary({"f": "PROVEN", "s": "SKIPPED"}, wall=10.0)
+        native = summary({"f": "PROVEN", "s": "SKIPPED"}, wall=11.0)
+        row = timed(self.ROOT, esbmc, native, jobs=4)
+        self.assertEqual("whole-root", row["cost_basis"]["mode"])
+        self.assertEqual(["s"], [e["function"] for e in row["cost_basis"]["left_out"]])
+        self.assertTrue(row["comparable"])
+
+    def test_a_run_with_no_timeline_cannot_leave_functions_out(self):
+        esbmc = summary({"f": "PROVEN", "h": "SKIPPED"})
+        native = summary({"f": "PROVEN", "h": "PROVEN"}, wall=50.0)
+        row = timed(self.ROOT, esbmc, native)
+        self.assertEqual("unattributable", row["excluded"])
+
+    def test_a_root_with_no_function_in_common_is_not_gated(self):
+        esbmc = summary({"h": "SKIPPED"}, gaps={"h": 0})
+        native = summary({"h": "PROVEN"}, gaps={"h": 0})
+        row = timed(self.ROOT, esbmc, native)
+        self.assertEqual("no-common-functions", row["excluded"])
+
+    def test_the_gate_uses_the_like_for_like_ratio(self):
+        esbmc, native = self.pair({"f": 0, "g": 5, "h": 18}, 30.0)
+        row = timed(self.ROOT, esbmc, native)
+        gate = vc.compare_criteria([row], {}, True, 5)
+        self.assertTrue(gate["criteria"]["worst_wall"], gate)
+        self.assertAlmostEqual(1.2, gate["metrics"]["wall"]["worst"]["ratio"])
+
+    def test_a_slow_compared_function_still_fails_the_gate(self):
+        esbmc, native = self.pair({"f": 0, "g": 9, "h": 18}, 34.0)
+        gate = vc.compare_criteria([timed(self.ROOT, esbmc, native)], {}, True, 5)
+        self.assertFalse(gate["criteria"]["worst_wall"])
 
 
 class PartialRootsTest(unittest.TestCase):
@@ -535,7 +840,7 @@ class MeasureTest(unittest.TestCase):
         self.assertEqual(4, run.call_count)
         self.assertEqual(2.0, result["wall_s"])
         self.assertEqual({"f": "PROVEN"}, result["functions"])
-        self.assertTrue(all(c.kwargs["capture_stderr"] for c in run.call_args_list))
+        self.assertTrue(all(c.kwargs["timeline"] for c in run.call_args_list))
 
     def test_measure_with_one_run_is_not_warmed_up(self):
         with mock.patch.object(

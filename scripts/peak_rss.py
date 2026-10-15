@@ -93,24 +93,33 @@ def sample_tree(root):
     return total, single
 
 
-def sample_loop(root, stop, peaks, clock):
+def sample_loop(root, stop, peaks, clock, series=None, origin=0.0):
     started = clock()
     while not stop.is_set():
         tree, single = sample_tree(root)
         peaks["tree"] = max(peaks["tree"], tree)
         peaks["single"] = max(peaks["single"], single)
+        if series is not None:
+            series.append((clock() - origin, tree))
         fast = clock() - started < FAST_WINDOW_S
         stop.wait(FAST_INTERVAL_S if fast else SLOW_INTERVAL_S)
 
 
 class TreeSampler:
-    """Samples the tree of `root` on a thread until `stop()`."""
+    """Samples the tree of `root` on a thread until `stop()`.
 
-    def __init__(self, root, clock):
+    With `origin` (a `clock()` instant) every sample is also kept in `series` as
+    `(seconds since origin, summed VmRSS)`, so a caller can ask for the peak
+    inside a time window.
+    """
+
+    def __init__(self, root, clock, origin=None):
         self.peaks = {"tree": 0, "single": 0}
+        self.series = [] if origin is not None else None
         self._stop = threading.Event()
         self._thread = threading.Thread(
-            target=sample_loop, args=(root, self._stop, self.peaks, clock)
+            target=sample_loop,
+            args=(root, self._stop, self.peaks, clock, self.series, origin or 0.0),
         )
         self._thread.start()
 
