@@ -3,7 +3,6 @@
 // TEST: counterexample-blame Callee
 // TEST: counterexample-value o.0 1
 // TEST: counterexample-value o.1.0 1
-// TEST: replay-skipped the payload of an Option parameter is a struct, which the replay harness does not rebuild (#1742)
 // A payload that holds a payload: the slots of the inner object are listed under
 // the path of slots that reaches it (`o.1.1.0` is slot 0 of the object in slot 1
 // of the object in slot 1 of `o`).

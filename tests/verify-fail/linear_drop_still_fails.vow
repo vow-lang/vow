@@ -21,4 +21,3 @@ fn bad_fd(h: Handle) -> i64 vow {
 fn main() -> i32 {
     0
 }
-// TEST: replay-skipped linear struct parameter is not rebuilt by the replay harness (#1649)

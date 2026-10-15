@@ -162,6 +162,12 @@ fn agg_src() -> String {
     s.push_str(String::from("fn ffl(f: Fl) -> i64 { 0 }\n"));
     s.push_str(String::from("fn ffl32(g: Fl32) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fnest(n: Nest) -> i64 { 0 }\n"));
+    s.push_str(String::from("struct HasVec { v: Vec<i64> }\n"));
+    s.push_str(String::from("struct Rec { next: Option<Rec> }\n"));
+    s.push_str(String::from("struct Both { a: Option<Pair>, b: Shape }\n"));
+    s.push_str(String::from("fn fhv(h: HasVec) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn frec(r: Rec) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fboth(b: Both) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fh(h: Holder) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fs(s: Shape) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fo(o: Option<i64>) -> i64 { 0 }\n"));
@@ -187,9 +193,17 @@ fn agg_src() -> String {
     s
 }
 
-fn agg(fname: String, pi: i64, kv: String) -> ReplayArg [io] {
+fn agg_avoiding(fname: String, pi: i64, kv: String, avoid: Vec<i64>) -> ReplayArg [io] {
     let m: Module = parse_src(agg_src());
-    replay_agg_arg(m, fname, pi, kv_part(kv, false), kv_part(kv, true))
+    replay_agg_arg(m, fname, pi, kv_part(kv, false), kv_part(kv, true), avoid)
+}
+
+fn agg(fname: String, pi: i64, kv: String) -> ReplayArg [io] {
+    let all: Vec<i64> = Vec::new();
+    all.push(0);
+    all.push(1);
+    all.push(2);
+    agg_avoiding(fname, pi, kv, all)
 }
 
 fn lit_of(fname: String, kv: String) -> String [io] {
@@ -245,10 +259,8 @@ fn check_option_result_arg() -> i32 [io] {
 }
 
 fn check_unsupported_args_are_skipped_with_a_reason() -> i32 [io] {
-    if agg(String::from("fnest"), 0, String::from("")).reason.len() == 0 { return 131; }
+    if agg(String::from("fhv"), 0, String::from("h.0.len=1,h.0[0]=1")).reason.len() == 0 { return 131; }
     if agg(String::from("ffl32"), 0, String::from("g.0=1")).reason.len() == 0 { return 147; }
-    if agg(String::from("fh"), 0, String::from("")).reason.len() == 0 { return 132; }
-    if agg(String::from("fop"), 0, String::from("o.0=1")).reason.len() == 0 { return 133; }
     if lit_of(String::from("fop"), String::from("o.0=0")) != String::from("Option::None") { return 146; }
     if agg(String::from("fvs"), 0, String::from("v.len=1")).reason.len() == 0 { return 134; }
     if agg(String::from("fvf"), 0, String::from("v.len=1,v[0]=0")).reason.len() == 0 { return 148; }
@@ -257,6 +269,57 @@ fn check_unsupported_args_are_skipped_with_a_reason() -> i32 [io] {
     if agg(String::from("fu"), 0, String::from("")).reason.len() == 0 { return 137; }
     if agg(String::from("missing"), 0, String::from("")).reason.len() == 0 { return 138; }
     if agg(String::from("fp"), 5, String::from("")).reason.len() == 0 { return 139; }
+    0
+}
+
+// A struct, enum, `Option` or `Result` held in a field or a payload is an object of its own: slot
+// `j` of what slot `k` of `p` holds is the entry `p.k.j`, and a slot never read takes zero.
+// A tag the model chose outside the enum takes the arm no test selects: replay builds the
+// smallest variant the program never tests, or skips when every variant is tested.
+fn check_tag_outside_the_enum() -> i32 [io] {
+    let one: Vec<i64> = Vec::new();
+    one.push(1);
+    let none: Vec<i64> = Vec::new();
+    let r: ReplayArg = agg_avoiding(String::from("fop"), 0, String::from("o.0=-1,o.1=9"), one);
+    if r.lit != String::from("Option::None") { return 321; }
+    let big: ReplayArg = agg_avoiding(String::from("fs"), 0, String::from("s.0=7"), none);
+    if big.lit != String::from("Shape::Circle(0)") { return 322; }
+    let two: Vec<i64> = Vec::new();
+    two.push(0);
+    two.push(2);
+    let mid: ReplayArg = agg_avoiding(String::from("fs"), 0, String::from("s.0=-9223372036854775808"), two);
+    if mid.lit != String::from("Shape::Rect(0, 0)") { return 323; }
+    let tested: ReplayArg = agg(String::from("fo"), 0, String::from("o.0=-1"));
+    if index_of(tested.reason, String::from("discriminant -1 outside Option")) < 0 { return 324; }
+    let nested: Vec<i64> = Vec::new();
+    nested.push(1);
+    let inner: ReplayArg = agg_avoiding(String::from("fop"), 0, String::from("o.0=1,o.1.0=3"), nested);
+    if inner.lit != String::from("Option::Some(Pair { lo: 3, hi: 0 })") { return 325; }
+    0
+}
+
+fn check_nested_aggregates() -> i32 [io] {
+    let h: String = String::from("Holder { p: Pair { lo: 3, hi: -4 } }");
+    if lit_of(String::from("fh"), String::from("h.0.0=3,h.0.1=-4")) != h { return 301; }
+    if lit_of(String::from("fh"), String::from("")) != String::from("Holder { p: Pair { lo: 0, hi: 0 } }") { return 302; }
+    if lit_of(String::from("fnest"), String::from("n.0.0=1,n.0.1=-5")) != String::from("Nest { w: Wide { a: 1, w: -5i128 } }") { return 303; }
+    if lit_of(String::from("fop"), String::from("o.0=1,o.1.0=7,o.1.1=8")) != String::from("Option::Some(Pair { lo: 7, hi: 8 })") { return 304; }
+    if lit_of(String::from("fop"), String::from("o.0=1")) != String::from("Option::Some(Pair { lo: 0, hi: 0 })") { return 305; }
+    if agg(String::from("fop"), 0, String::from("o.0=1")).ty_text != String::from("Option<Pair>") { return 306; }
+    if lit_of(String::from("fboth"), String::from("b.0=1,b.0.0=1,b.0.1.0=2,b.0.1.1=3,b.1.0=1,b.1.1=6,b.1.2=7")) != String::from("Both { a: Option::Some(Pair { lo: 2, hi: 3 }), b: Shape::Rect(6, 7) }") { return 307; }
+    let out: ReplayArg = agg(String::from("fboth"), 0, String::from("b.1.0=9"));
+    if index_of(out.reason, String::from("discriminant 9 outside Shape")) < 0 { return 311; }
+    let deep: String = String::from("");
+    let mut p: String = String::from("r.0");
+    let mut i: i64 = 0;
+    while i < 12 {
+        deep.push_str(p);
+        deep.push_str(String::from(".0=1,"));
+        p = str2s(p, String::from(".1.0"));
+        i = i + 1;
+    }
+    let too_deep: ReplayArg = agg(String::from("frec"), 0, deep);
+    if index_of(too_deep.reason, String::from("nested too deep")) < 0 { return 312; }
     0
 }
 
@@ -465,6 +528,10 @@ fn main() -> i32 [io] {
     if r12 != 0 { return r12; }
     let r13: i32 = check_alias_identities();
     if r13 != 0 { return r13; }
+    let r20: i32 = check_nested_aggregates();
+    if r20 != 0 { return r20; }
+    let r21: i32 = check_tag_outside_the_enum();
+    if r21 != 0 { return r21; }
     let r19: i32 = check_float_vec_elements();
     if r19 != 0 { return r19; }
     0

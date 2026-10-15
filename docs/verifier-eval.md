@@ -600,8 +600,8 @@ unrolling bound (#1645) verify through the loop cut. `REPLAY_SKIPS` is empty
 too: `--replay-cex` rebuilds `Vec`, `String`, aggregate, narrow, 128-bit and `f64`
 parameters (#1649), so no generated shape needs a `replay-skipped` line (an entry is
 `(shape, class) -> "why (#N)"`, rendered at the end of the file). A hand-written
-fixture keeps one for a linear struct parameter or result, which the replay does
-not rebuild yet (#1649), for a struct held in an enum, `Option` or `Result` payload (#1742), and for an `f32` parameter, which no source text denotes. Only a `known-control-gap` goes stale (a control that now
+fixture keeps one for a linear struct result, which the replay does not
+consume (#1649), and for an `f32` parameter, which no source text denotes. Only a `known-control-gap` goes stale (a control that now
 verifies fails the run); a `known-soundness-gap` that stops reproducing
 is not detected. The runner does not apply `ulimit -v`: the native verifier worker carries its
 own address-space cap and the generated programs are small and bounded. A real

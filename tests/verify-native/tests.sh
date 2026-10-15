@@ -1015,12 +1015,9 @@ fn area(s: Shape) -> i64 vow {
 SRC
 run_native sat_tag_9 "$AGG_ENUM" --replay-cex
 expect "enum param discriminant value" "$(ce_value s.0)" "9"
-expect "enum param out-of-range replay" "$(field "$RUN_OUT" counterexamples.0.replay)" "skipped"
-case "$(field "$RUN_OUT" counterexamples.0.replay_reason)" in
-    *"discriminant 9 outside Shape (3 variants)"*) ;;
-    *) fail "enum param skip reason: $(field "$RUN_OUT" counterexamples.0.replay_reason)" ;;
-esac
-expect "skipped enum replay is not a bug" "$(field "$RUN_OUT" diagnostics.1.error_code)" ""
+# a tag outside the enum takes the arm no test selects, which `Shape::Empty` takes too
+expect "enum param out-of-range replay" "$(field "$RUN_OUT" counterexamples.0.replay)" "confirmed"
+expect "confirmed enum replay is not a bug" "$(field "$RUN_OUT" diagnostics.1.error_code)" ""
 no_leftovers "enum param"
 
 run_native sat_zero "$AGG_ENUM" --replay-cex
