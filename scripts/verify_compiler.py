@@ -13,6 +13,18 @@ workload for the native verifier, and holds the native backend to three claims:
   2. Cost. Wall-clock and peak RSS against ESBMC with the gate of
      `scripts/verify_perf.py` (geometric mean <= 1.0, worst root <= 1.25,
      native times out nowhere ESBMC finishes), median of `--runs` runs, cache off.
+     The comparison is like for like: it covers the functions both backends
+     decide the same way (proven by both, or refuted by both). A function only
+     one backend decides (native proves what ESBMC skips, ESBMC proves what
+     native skips, either side undecided) is left out of both sides, and the
+     report names each with the reason and the time it took. The time of a
+     function is the gap between the end of the previous function's progress
+     lines and the end of its own on the driver's stderr, and its memory the
+     peak of the process tree in that gap, so the attribution needs
+     `--verify-jobs 1`; with more jobs a root whose decided sets differ is left
+     out of the cost gate. Everything else (front end, start-up, the function
+     reported first) stays in both sides. The whole-root numbers are still
+     reported next to the like-for-like ones.
   3. Stages. `--native-only` verifies with each of several `vowc` binaries (the
      bootstrap's stage 1 and stage 2) and requires identical outcomes, so a
      native verdict never depends on which stage compiled the verifier.
@@ -41,6 +53,7 @@ import json
 import os
 import re
 import shutil
+import statistics
 import sys
 import tomllib
 from collections import Counter
@@ -77,6 +90,8 @@ PROGRESS_RE = re.compile(
     r"^  ([\w.:]+): (PROVEN|SKIPPED|UNKNOWN|TIMEOUT|FAILED|ERROR|PANICKED)\b",
     re.MULTILINE,
 )
+SITE_NOTE = "(checked arithmetic can abort)"
+VERIFYING_RE = re.compile(r"^Verifying ([\w.:]+)\.\.\.$")
 SKIPPED_RE = re.compile(r"^skipped verification of `([^`]+)`: (.*)$", re.DOTALL)
 
 PROGRESS_VERDICT = {
@@ -89,6 +104,8 @@ PROGRESS_VERDICT = {
     "PANICKED": verify_diff.INCONCLUSIVE,
 }
 ABSENT = "absent"
+
+CONCLUSIVE = verify_diff.CONCLUSIVE
 
 CAPACITY_REASON = "the counterexample is ESBMC's vec/string capacity assertion"
 
@@ -151,9 +168,33 @@ def load_skips(path):
     return skips
 
 
-def progress_verdicts(stderr):
-    """`{function: progress word}` from the driver's stderr; the last line per function wins."""
-    return {m.group(1): m.group(2) for m in PROGRESS_RE.finditer(stderr or "")}
+def progress_verdicts(stderr, blocks=False):
+    """`{function: progress word}` from the driver's stderr; the last line per function wins.
+
+    A function proven with reachable checked-arithmetic aborts prints no
+    `<fn>: PROVEN` line: each site prints `<owner>: PROVEN (checked arithmetic
+    can abort)` under the name of the function that owns the site, which is the
+    verified function or a callee. With `blocks` (the lines are in the order of a
+    sequential run) such a line is read as the verdict of the `Verifying <fn>...`
+    block it sits in, and a site line of a callee is not a verdict on the callee.
+    """
+    if not blocks:
+        return {m.group(1): m.group(2) for m in PROGRESS_RE.finditer(stderr or "")}
+    verdicts, current = {}, None
+    for line in (stderr or "").splitlines():
+        opened = VERIFYING_RE.match(line)
+        if opened:
+            current = opened.group(1)
+            continue
+        m = PROGRESS_RE.match(line)
+        if not m:
+            continue
+        if SITE_NOTE in line:
+            if current is not None:
+                verdicts[current] = "PROVEN"
+        else:
+            verdicts[m.group(1)] = m.group(2)
+    return verdicts
 
 
 def skipped_functions(result):
@@ -186,16 +227,65 @@ def capacity_functions(result):
     )
 
 
-def summarise(sample_set):
-    """One backend's summary over its timed samples (median cost, modal outcome)."""
+def attribute(events, rss_series, wall_s):
+    """Time and memory per verified function of one run.
+
+    `events` are `(seconds, stderr line)`, `rss_series` `(seconds, kB)`. Each
+    `Verifying <fn>...` line opens a block that runs to the next one; the block
+    ends at its last progress line (the native driver prints both together when
+    a worker's answer is ready, ESBMC's driver prints the first at the start and
+    the others at the end). A function's time is the gap from the end of the
+    previous block to the end of its own, its memory the largest sample in that
+    gap. The first block has no gap of its own: what precedes it, and the
+    function reported first, are common start-up. `prelude_peak_kb` covers the
+    time up to the first block's end and `tail_peak_kb` what follows the last.
+    """
+    blocks = []
+    for t, line in events or ():
+        opened = VERIFYING_RE.match(line.rstrip("\n"))
+        if opened:
+            blocks.append([opened.group(1), t])
+        elif blocks and PROGRESS_RE.match(line):
+            blocks[-1][1] = max(blocks[-1][1], t)
+    gaps, peaks = {}, {}
+
+    def peak_in(lo, hi):
+        return max((kb for t, kb in rss_series or () if lo < t <= hi), default=0)
+
+    previous = None
+    for name, end in blocks:
+        gaps[name] = gaps.get(name, 0.0) + (
+            0.0 if previous is None else max(0.0, end - previous)
+        )
+        if previous is not None:
+            peaks[name] = max(peaks.get(name, 0), peak_in(previous, end))
+        previous = max(end, previous) if previous is not None else end
+    return {
+        "wall_s": wall_s,
+        "gap_s": gaps,
+        "peak_kb": peaks,
+        "prelude_peak_kb": peak_in(-1.0, blocks[0][1] if blocks else float("inf")),
+        "tail_peak_kb": peak_in(previous, float("inf")) if blocks else 0,
+    }
+
+
+def summarise(sample_set, blocks=False):
+    """One backend's summary over its timed samples (median cost, modal outcome).
+
+    `blocks` says the runs were sequential (`--verify-jobs 1`), so a progress
+    line belongs to the `Verifying` line before it."""
     summary = verify_perf.summarise_backend(sample_set)
+    if all("events" in s for s in sample_set):
+        summary["attribution"] = [
+            attribute(s["events"], s.get("rss_series"), s["wall_s"]) for s in sample_set
+        ]
     modal = sample_set[
         [verify_diff.verdict_of(s["result"]) for s in sample_set].index(
             summary["verdict"]
         )
     ]
     result = modal["result"] or {}
-    summary["functions"] = progress_verdicts(modal["stderr"])
+    summary["functions"] = progress_verdicts(modal["stderr"], blocks)
     summary["skipped"] = skipped_functions(result)
     summary["capacity_functions"] = capacity_functions(result)
     summary["diagnostic_counts"] = dict(
@@ -280,31 +370,165 @@ def stale_skips(runs_native, skips):
 def measure(vowc, backend, path, jobs, timeout, watchdog_s, runs):
     def once():
         return verify_perf.run_once(
-            vowc, backend, path, jobs, timeout, watchdog_s, capture_stderr=True
+            vowc, backend, path, jobs, timeout, watchdog_s, timeline=True
         )
 
     if runs > 1:
         once()
-    return summarise([once() for _ in range(runs)])
+    return summarise([once() for _ in range(runs)], blocks=jobs == 1)
 
 
-def timed_row(root, esbmc, native, skips):
+def left_out_reason(e, n, native_skip):
+    """Why a function is not in the like-for-like cost comparison."""
+    if e == ABSENT and n == ABSENT:
+        return (
+            "no verdict line of its own (the sites of its checked arithmetic are "
+            "reported under their owner)"
+        )
+    if n == verify_diff.SKIPPED and e in CONCLUSIVE:
+        return f"native skipped it ({native_skip or 'no reason'}), esbmc {e}"
+    if e == verify_diff.SKIPPED and n in CONCLUSIVE:
+        return f"esbmc skipped it, native {n}"
+    if e in CONCLUSIVE and n in CONCLUSIVE:
+        return f"backends disagree: esbmc {e}, native {n}"
+    if e in CONCLUSIVE or n in CONCLUSIVE:
+        return f"one side undecided: esbmc {e}, native {n}"
+    return f"neither backend decides it: esbmc {e}, native {n}"
+
+
+def cost_functions(rows, esbmc, native):
+    """`(compared, left_out)`: the functions both backends decide the same way,
+    and every other function the driver verified or reported, with the reason and
+    the median time each backend spent on it."""
+    verdicts = {r["function"]: (r["esbmc"], r["native"]) for r in rows}
+    timed = {
+        name
+        for summary in (esbmc, native)
+        for a in summary.get("attribution", ())
+        for name in a["gap_s"]
+    }
+    compared, left_out = [], []
+    for name in sorted(set(verdicts) | timed):
+        e, n = verdicts.get(name, (ABSENT, ABSENT))
+        if e == n and e in CONCLUSIVE:
+            compared.append(name)
+            continue
+        if e == ABSENT and n == ABSENT and name not in timed:
+            continue
+        reason = native["skipped"].get(name, "")
+        entry = {
+            "function": name,
+            "esbmc": e,
+            "native": n,
+            "reason": left_out_reason(e, n, skip_code(reason) or reason.split(":")[0]),
+        }
+        for side, summary in (("esbmc_s", esbmc), ("native_s", native)):
+            gaps = [
+                a["gap_s"][name]
+                for a in summary.get("attribution", ())
+                if name in a["gap_s"]
+            ]
+            entry[side] = statistics.median(gaps) if gaps else None
+        left_out.append(entry)
+    return compared, left_out
+
+
+def like_for_like(summary, compared):
+    """`(wall_s, peak_rss_kb)` medians of one backend over the compared
+    functions: the run less the gap of every function not in `compared`, and the
+    tree peak outside those gaps (the whole-run peak when no sample fell there).
+    None when the run carries no attribution."""
+    samples = summary.get("attribution")
+    if not samples:
+        return None
+    keep = set(compared)
+    walls, peaks = [], []
+    for a in samples:
+        walls.append(
+            a["wall_s"] - sum(g for fn, g in a["gap_s"].items() if fn not in keep)
+        )
+        peaks.append(
+            max(
+                [a["prelude_peak_kb"], a["tail_peak_kb"]]
+                + [kb for fn, kb in a["peak_kb"].items() if fn in keep]
+            )
+        )
+    return statistics.median(walls), statistics.median(peaks) or summary["peak_rss_kb"]
+
+
+def cost_basis(rows, esbmc, native, jobs):
+    """What the cost ratios of one root compare, and the numbers they use.
+
+    `whole-root` when no function left out was verified by either backend (the
+    whole run is then the like-for-like figure; a function both skip costs
+    nothing); `like-for-like` when some was and the run could say what it cost;
+    `unattributable` when it cannot (`--verify-jobs` above 1, or no timeline)."""
+    compared, left_out = cost_functions(rows, esbmc, native)
+    basis = {
+        "mode": "whole-root",
+        "compared": compared,
+        "left_out": left_out,
+        "whole_root": {
+            "esbmc_wall_s": esbmc["wall_s"],
+            "native_wall_s": native["wall_s"],
+            "esbmc_peak_rss_kb": esbmc["peak_rss_kb"],
+            "native_peak_rss_kb": native["peak_rss_kb"],
+        },
+        "esbmc_wall_s": esbmc["wall_s"],
+        "native_wall_s": native["wall_s"],
+        "esbmc_peak_rss_kb": esbmc["peak_rss_kb"],
+        "native_peak_rss_kb": native["peak_rss_kb"],
+    }
+    costly = [
+        x
+        for x in left_out
+        if x["esbmc"] not in (verify_diff.SKIPPED, ABSENT)
+        or x["native"] not in (verify_diff.SKIPPED, ABSENT)
+        or x["esbmc_s"] is not None
+        or x["native_s"] is not None
+    ]
+    if not costly:
+        return basis
+    e_cost = like_for_like(esbmc, compared) if jobs == 1 else None
+    n_cost = like_for_like(native, compared) if jobs == 1 else None
+    if e_cost is None or n_cost is None:
+        basis["mode"] = "unattributable"
+        return basis
+    basis["mode"] = "like-for-like"
+    basis["esbmc_wall_s"], basis["esbmc_peak_rss_kb"] = e_cost
+    basis["native_wall_s"], basis["native_peak_rss_kb"] = n_cost
+    return basis
+
+
+def timed_row(root, esbmc, native, skips, jobs=1):
     """The report row of one root: both backends' summaries, ratios and verdict rows."""
     rows = function_rows(esbmc, native, skips)
-    big = max(esbmc["wall_s"], native["wall_s"]) >= MIN_GATED_WALL_S
+    basis = cost_basis(rows, esbmc, native, jobs)
     timed_out = esbmc["timed_out"] or native["timed_out"]
-    gated = big and not timed_out
+    excluded = None
+    if timed_out:
+        excluded = "timeout"
+    elif basis["mode"] == "unattributable":
+        excluded = "unattributable"
+    elif not basis["compared"] and basis["left_out"]:
+        excluded = "no-common-functions"
+    elif max(basis["esbmc_wall_s"], basis["native_wall_s"]) < MIN_GATED_WALL_S:
+        excluded = "below-floor"
+    gated = excluded is None
     return {
         "fixture": os.path.relpath(root, REPO_ROOT),
         "gating": True,
         "comparable": gated,
-        "excluded": None if gated else ("timeout" if timed_out else "below-floor"),
-        "ratio_wall": verify_perf.ratio(native["wall_s"], esbmc["wall_s"])
+        "excluded": excluded,
+        "ratio_wall": verify_perf.ratio(basis["native_wall_s"], basis["esbmc_wall_s"])
         if gated
         else None,
-        "ratio_rss": verify_perf.ratio(native["peak_rss_kb"], esbmc["peak_rss_kb"])
+        "ratio_rss": verify_perf.ratio(
+            basis["native_peak_rss_kb"], basis["esbmc_peak_rss_kb"]
+        )
         if gated
         else None,
+        "cost_basis": basis,
         "esbmc": esbmc,
         "native": native,
         "functions": rows,
@@ -440,7 +664,7 @@ def run_compare(args, roots, skips):
             args.watchdog,
             args.runs,
         )
-        rows.append(timed_row(root, esbmc, native, skips))
+        rows.append(timed_row(root, esbmc, native, skips, args.verify_jobs))
     report = {
         "mode": "compare",
         "rows": rows,
@@ -502,6 +726,20 @@ def print_summary(report, stream):
                 "  " + verify_perf.format_metric(metric, gate["metrics"][metric]),
                 file=stream,
             )
+        for row in report["rows"]:
+            basis = row["cost_basis"]
+            if basis["mode"] == "whole-root":
+                continue
+            print(
+                f"  {row['fixture']}: cost {basis['mode']}, "
+                f"{len(basis['compared'])} compared, {len(basis['left_out'])} left out"
+                + (f" ({row['excluded']})" if row["excluded"] else ""),
+                file=stream,
+            )
+            for entry in basis["left_out"]:
+                print(
+                    f"    left out {entry['function']}: {entry['reason']}", file=stream
+                )
         if not gate["perf_gated"]:
             print(
                 f"  cost criteria informational (perf gate off, passed={gate['perf_passed']})",

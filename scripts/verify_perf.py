@@ -75,6 +75,7 @@ BACKENDS = verify_diff.BACKENDS
 # Shipped per-function default: 300s kernel watchdog plus the 30s BV phase.
 DEFAULT_BUDGET_S = 330
 RATIO_TOLERANCE = 1e-9
+STAMPER_JOIN_S = 5.0
 
 Fixture = namedtuple("Fixture", "group name path truth")
 
@@ -263,11 +264,39 @@ def parse_result(text, killed, status):
     return None
 
 
-def run_once(vowc, backend, path, jobs, timeout, watchdog_s, capture_stderr=False):
+class StderrStamper(threading.Thread):
+    """Reads a child's stderr line by line, stamping each with its arrival time."""
+
+    def __init__(self, stream, start):
+        super().__init__(daemon=True)
+        self.stream = stream
+        self.start_at = start
+        self.events = []
+
+    def run(self):
+        for raw in iter(self.stream.readline, b""):
+            self.events.append(
+                (time.monotonic() - self.start_at, raw.decode("utf-8", "replace"))
+            )
+
+
+def run_once(
+    vowc,
+    backend,
+    path,
+    jobs,
+    timeout,
+    watchdog_s,
+    capture_stderr=False,
+    timeline=False,
+):
     """Run one `vowc verify`; return wall time, peak RSS and the parsed result.
 
     `capture_stderr` adds the run's stderr text to the returned dict (the
-    per-function progress lines scripts/verify_compiler.py reads).
+    per-function progress lines scripts/verify_compiler.py reads). `timeline`
+    implies it and also returns `events` (`(seconds since start, stderr line)`)
+    and `rss_series` (`(seconds since start, tree RSS kB)`), the data that
+    attributes time and memory to the function being verified.
 
     The child leads its own session so a watchdog kill also reaches the solver
     processes it spawned. Wall time ends the instant the child exits (blocking
@@ -285,17 +314,25 @@ def run_once(vowc, backend, path, jobs, timeout, watchdog_s, capture_stderr=Fals
         env["VOW_CACHE_DIR"] = cache
         out_path = os.path.join(scratch, "stdout")
         err_path = os.path.join(scratch, "stderr")
+        stamper = None
         with open(out_path, "wb") as out, open(err_path, "wb") as err:
             start = time.monotonic()
             proc = subprocess.Popen(
                 args,
                 stdout=out,
-                stderr=err,
+                stderr=subprocess.PIPE if timeline else err,
                 cwd=REPO_ROOT,
                 env=env,
                 start_new_session=True,
             )
-            measured = wait_measured(proc.pid, watchdog_s, start)
+            if timeline:
+                stamper = StderrStamper(proc.stderr, start)
+                stamper.start()
+            measured = wait_measured(proc.pid, watchdog_s, start, timeline)
+        if stamper is not None:
+            # A solver orphaned by a kill may keep the pipe open; do not wait on it.
+            stamper.join(STAMPER_JOIN_S)
+            proc.stderr.close()
         # wait4 reaped the child behind Popen's back; mark it finished
         proc.returncode = os.waitstatus_to_exitcode(measured["status"])
         leftovers = os.listdir(cache)
@@ -307,7 +344,9 @@ def run_once(vowc, backend, path, jobs, timeout, watchdog_s, capture_stderr=Fals
             stdout = fh.read()
         result = parse_result(stdout, measured["killed"], measured["status"])
         stderr = None
-        if result is None or capture_stderr:
+        if stamper is not None:
+            stderr = "".join(line for _, line in stamper.events)
+        elif result is None or capture_stderr:
             with open(err_path, "r", encoding="utf-8", errors="replace") as fh:
                 stderr = fh.read()
         if result is None:
@@ -324,17 +363,21 @@ def run_once(vowc, backend, path, jobs, timeout, watchdog_s, capture_stderr=Fals
         measured["rusage"].ru_maxrss,
         peak_rss.own_peak_kb(),
     )
-    return {
+    sample = {
         "wall_s": measured["wall_s"],
         "peak_rss_kb": peak_kb,
         "rss_source": source,
         "result": result,
         "timed_out": timed_out,
-        "stderr": stderr if capture_stderr else None,
+        "stderr": stderr if capture_stderr or timeline else None,
     }
+    if timeline:
+        sample["events"] = stamper.events
+        sample["rss_series"] = measured["series"]
+    return sample
 
 
-def wait_measured(pid, watchdog_s, start):
+def wait_measured(pid, watchdog_s, start, timeline=False):
     killed = threading.Event()
 
     def kill_group():
@@ -344,7 +387,7 @@ def wait_measured(pid, watchdog_s, start):
         except ProcessLookupError:
             pass
 
-    sampler = peak_rss.TreeSampler(pid, time.monotonic)
+    sampler = peak_rss.TreeSampler(pid, time.monotonic, start if timeline else None)
     watchdog = threading.Timer(watchdog_s, kill_group)
     watchdog.start()
     try:
@@ -368,6 +411,7 @@ def wait_measured(pid, watchdog_s, start):
         "killed": killed.is_set(),
         "tree": tree_kb,
         "single": single_kb,
+        "series": sampler.series,
     }
 
 
