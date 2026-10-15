@@ -535,11 +535,11 @@ fn vc_skip_reason_with(src: IrFunction, calls: bool) -> String {
     if stored.len() > 0 {
         return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), stored);
     }
-    let elems: String = vc_ptr_store_detail(f, tys);
-    if elems.len() > 0 {
-        return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), elems);
-    }
     if has_vec {
+        let elems: String = vc_ptr_store_detail(f, tys);
+        if elems.len() > 0 {
+            return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), elems);
+        }
         let vec_shape: String = vc_vec_shape_detail(f, tys.len(), calls);
         if vec_shape.len() > 0 {
             return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), vec_shape);
