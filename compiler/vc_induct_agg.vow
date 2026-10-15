@@ -116,7 +116,8 @@ fn vc_fh_roots(t: i64, src: VcPhiSources, def_op: Vec<i64>, tys: Vec<i64>, seen:
     out
 }
 
-// Records, for every loop of the chain of block `b`, the triples `inst` writes.
+// Records `(root, slot, ty)` for each root, on every loop of the chain of block `b` the root is not
+// born in; false when a root has no defining block.
 fn vc_fh_record(h: VcFieldHavocs, li: VcLoopInfo, defs: VcDefs, b: u64, roots: Vec<i64>, slot: i64, ty: i64) -> bool {
     let mut r: u64 = 0;
     while r < roots.len() {

@@ -32,7 +32,7 @@ use vc_induct_agg
 //
 // A Vec a loop writes gets the same treatment as a header Phi: a marker at the
 // top of the header proper makes its `(array, length)` arbitrary there. So does a
-// struct slot a loop writes (`vc_induct_agg`): one marker per `(object, slot)`.
+// struct slot a loop writes (`vc_induct_agg`): one marker per `(object, slot, type)`.
 //
 // A loop the cut cannot treat exactly (a loop without an invariant, a pointer
 // carried by a header Phi, a String written in a loop, a Vec born in the loop
@@ -597,7 +597,7 @@ fn vc_induct_push_vec_havocs(st: VcCut, j: i64, out: IrBlock) {
     }
 }
 
-// One havoc marker per `(object, slot)` loop `j` writes, after the header's Phis.
+// One havoc marker per `(object, slot, type)` loop `j` writes, after the header's Phis.
 fn vc_induct_push_field_havocs(st: VcCut, j: i64, out: IrBlock) {
     let fh: VcFieldHavocs = st.field_havocs;
     let objs: Vec<i64> = fh.obj[j as u64];
