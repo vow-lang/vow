@@ -420,8 +420,7 @@ fn reader_read_effects(r: ModuleReader) -> i64 {
 }
 
 fn ty_disc(ty: i64) -> i64 vow {
-    ensures: result >= 0,
-    ensures: result <= 255
+    ensures: result == (ty & 255)
 } {
     ty & 255
 }
@@ -443,8 +442,7 @@ fn disc_blame(d: i64) -> i64 {
 }
 
 fn opcode_disc(op: i64) -> i64 vow {
-    ensures: result >= 0,
-    ensures: result <= 65535
+    ensures: result == (op & 65535)
 } {
     op & 65535
 }
@@ -454,7 +452,8 @@ fn disc_opcode(d: i64) -> i64 {
 }
 
 fn region_wire(rgn: i64) -> i64 vow {
-    ensures: result >= 0,
+    ensures: (rgn & 3) <= 1 || result == (rgn & 3),
+    ensures: (rgn & 3) > 1 || result == (rgn & 3) + 4 * ((rgn / 4) & 4294967295),
     ensures: region_val(result) <= 4294967295,
     ensures: region_kind(result) <= 1 || region_val(result) == 0
 } {

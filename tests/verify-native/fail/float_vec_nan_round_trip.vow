@@ -1,6 +1,6 @@
 // TEST: category float
 // TEST: counterexample-fn "round_trip"
-// TEST: counterexample-vow-id 1
+// TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
 // TEST: counterexample-value x NaN
 // A float read back out of a `Vec` is the float that was stored, so `result == x`
