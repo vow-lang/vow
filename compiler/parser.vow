@@ -309,7 +309,11 @@ fn parse_type_alias(p: Parser) -> i64 {
 fn parse_item(p: Parser) -> i64 {
     if at(p, tok_kw_fn()) {
         let fid: i64 = parse_fn_def(p);
-        item_pack(ITEM_FN(), fid)
+        if fid == -1 {
+            -1
+        } else {
+            item_pack(ITEM_FN(), fid)
+        }
     } else if at(p, tok_kw_linear()) {
         let _kw: Token = advance(p);
         let sid: i64 = parse_struct_def(p, 1);
@@ -402,6 +406,7 @@ fn parse_fn_def(p: Parser) -> i64 {
     let name_sid: i64 = expect_ident(p);
     if name_sid == -1 {
         parser_abort(p);
+        return -1;
     }
     let params_lid: i64 = parse_params(p, true);
     let mut ret_tid: i64 = -1;
@@ -755,8 +760,9 @@ fn parse_block(p: Parser) -> i64 {
     }
     p.no_struct = saved_no_struct;
     let rb_ok: bool = if open { false } else { expect(p, tok_rbrace()) };
-    // A `let` without `=` ends the block like the Rust parser: the block closes
-    // if `}` is next, and otherwise the module is abandoned.
+    // A `let` without `=` ends the block: it closes if `}` is next, and otherwise
+    // the module is abandoned. The Rust parser abandons it only for a function body
+    // and carries on past a nested block, so error counts there can differ.
     if let_failed && !rb_ok {
         parser_abort(p);
     }

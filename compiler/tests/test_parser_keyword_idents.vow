@@ -1,26 +1,25 @@
 module TestParserKeywordIdents
 
 use lexer
+use token
 use ast
 use diag
 use parser
 
 // A keyword where an identifier is required (#1777) must be reported at the
-// keyword and the parser must terminate. Failures return a distinct exit code:
-// 1000 * template number + 1 + keyword index, 1 for a keyword that was accepted.
+// keyword and the parser must terminate. The keywords come from the token
+// table, so a new one is probed without touching this file. A failure prints
+// the source that was mishandled and exits with 100 + the template number.
 
 fn keywords() -> Vec<String> {
     let kws: Vec<String> = Vec::new();
-    let names: String = String::from("fn let mut struct enum match if else while loop break continue return pub use module vow requires ensures invariant where region linear extern impl trait type for in as read write io panic unsafe const");
-    let mut start: u64 = 0;
-    let mut i: u64 = 0;
-    let n: u64 = names.len();
-    while i <= n {
-        if i == n || names.byte_at(i) == 32 {
-            kws.push(names.substring(start, i));
-            start = i + 1;
+    let mut tag: i64 = 0;
+    while tag < 128 {
+        let text: String = keyword_text(tag);
+        if text.len() > 0 {
+            kws.push(text);
         }
-        i = i + 1;
+        tag = tag + 1;
     }
     kws
 }
@@ -36,7 +35,7 @@ fn first_error_offset(src: String) -> i64 {
     d.span_start
 }
 
-fn probe(prefix: String, suffix: String, skip_mut: bool, base: i64) -> i64 {
+fn probe(prefix: String, suffix: String, skip_mut: bool) -> bool [io] {
     let kws: Vec<String> = keywords();
     let mut k: u64 = 0;
     while k < kws.len() {
@@ -47,15 +46,16 @@ fn probe(prefix: String, suffix: String, skip_mut: bool, base: i64) -> i64 {
             src.push_str(kw);
             src.push_str(suffix);
             if first_error_offset(src) != prefix.len() as i64 {
-                return base + 1 + k as i64;
+                print_str(src);
+                return false;
             }
         }
         k = k + 1;
     }
-    0
+    true
 }
 
-fn main() -> i32 {
+fn main() -> i32 [io] {
     let prefixes: Vec<String> = Vec::new();
     let suffixes: Vec<String> = Vec::new();
     let skip: Vec<bool> = Vec::new();
@@ -122,9 +122,8 @@ fn main() -> i32 {
 
     let mut t: u64 = 0;
     while t < prefixes.len() {
-        let r: i64 = probe(prefixes[t], suffixes[t], skip[t], 1000 * (t as i64 + 1));
-        if r != 0 {
-            return i64_to_i32_wrap(r);
+        if !probe(prefixes[t], suffixes[t], skip[t]) {
+            return i64_to_i32_wrap(101 + t as i64);
         }
         t = t + 1;
     }

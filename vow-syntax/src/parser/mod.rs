@@ -1185,7 +1185,7 @@ mod tests {
         let src =
             "module M\nstruct Holder {\n    n: i64,\n    module: i64,\n}\nfn main() -> i32 { 0 }\n";
         let (module, diags) = parse_module(src, "<test>");
-        assert!(module.items.len() <= 1);
+        assert_eq!(module.items.len(), 1);
         assert_eq!(diags.len(), 3, "{diags:?}");
         assert!(diags.iter().all(|d| d.code == ErrorCode::UnexpectedToken));
     }
