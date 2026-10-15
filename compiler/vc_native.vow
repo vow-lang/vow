@@ -704,7 +704,10 @@ fn vc_verify_function_mode(f: IrFunction, m: IrModule, timeout_ms: i64, scratch:
         if !r.ended && round + 1 == bounds.len() {
             if !ind.proves {
                 let tr: VcInduction = vc_trivial_attempt(f, closed, inl.frames, started, timeout_ms, scratch, cache, slicing);
-                if tr.proves { ind = VcInduction { proves: true, soft: tr.soft || r.soft, sites: tr.sites }; }
+                if tr.proves {
+                    ind = VcInduction { proves: true, soft: tr.soft || r.soft, sites: tr.sites };
+                    last_sites = vc_merge_sites(last_sites, tr.sites);
+                }
             }
             return vc_open_stop(f, inl.frames, ind, frozen, last_sites, vc_unwinding_reason(bound), acc, targets, all_claims);
         }

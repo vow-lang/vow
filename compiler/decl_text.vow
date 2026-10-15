@@ -232,6 +232,7 @@ fn decl_unprintable_enum(m: Module) -> String {
                     return arena_str(a, sid);
                 }
             }
+            return String::from("<unnamed enum>");
         }
         i = i + 1u64;
     }

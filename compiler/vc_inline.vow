@@ -422,6 +422,23 @@ fn vc_resolve_str_literals(f: IrFunction, m: IrModule) -> IrFunction {
     g
 }
 
+// True when `g` has a pointer-typed Phi: the only candidate `vc_retype_handle_phis` can change,
+// found without building the type table.
+fn vc_has_ptr_phi(g: IrFunction) -> bool {
+    let mut bi: u64 = 0;
+    while bi < g.blocks.len() {
+        let blk: IrBlock = g.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_PHI() && inst.ty == ITY_PTR() { return true; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    false
+}
+
 // The result Phi of a call is typed like the callee's declared return, but the IR
 // types a pointer loaded out of a field or a `Vec` element `i64` (a handle, see
 // `vc_heap`), so a callee declared to return an object may return handles on every
@@ -430,7 +447,7 @@ fn vc_resolve_str_literals(f: IrFunction, m: IrModule) -> IrFunction {
 // a handle with an object keeps its type and the gate rejects the mismatch. Only the
 // Phis changed are copied; the blocks and the instructions of `g` are its own.
 fn vc_retype_handle_phis(g: IrFunction) {
-    let mut changed: bool = true;
+    let mut changed: bool = vc_has_ptr_phi(g);
     while changed {
         changed = false;
         let tys: Vec<i64> = vc_ty_table(g);
