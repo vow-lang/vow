@@ -21,8 +21,9 @@ use vc_agg_shape
 // model cannot attribute to roots (a target that is none of the three, a value of
 // unit type, a `WideSlot` element address) makes the function not cut.
 //
-// A pointer written into a field is never read back (`vc_heap_store_detail`), so no
-// state is tracked for it and no marker is needed.
+// A pointer written into a field is the address of the object it names (`vc_overlay`), a
+// 64-bit slot like any other that a later read of the field returns, so it is havoced as one
+// (type `i64`): the loop may have stored a different object in it.
 
 // `obj[j]`, `slot[j]` and `ty[j]` are the parallel lists of loop `j`: the id of a
 // root value, the slot index and the IR type of the value written.
@@ -215,12 +216,12 @@ fn vc_induct_field_havocs(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, n_ids: u
                     if val < 0 || (val as u64) >= tys.len() || tys[val as u64] < 0 || tys[val as u64] == ITY_UNIT() {
                         return h;
                     }
-                    if tys[val as u64] != ITY_PTR() {
-                        stamp = stamp + 1;
-                        let r: VcRoots = vc_fh_roots(inst.args[0], src, def_op, tys, seen, stamp);
-                        if !r.ok || !vc_fh_record(h, li, defs, b, r.ids, inst.dv, tys[val as u64]) {
-                            return h;
-                        }
+                    let mut slot_ty: i64 = tys[val as u64];
+                    if slot_ty == ITY_PTR() { slot_ty = ITY_I64(); }
+                    stamp = stamp + 1;
+                    let r: VcRoots = vc_fh_roots(inst.args[0], src, def_op, tys, seen, stamp);
+                    if !r.ok || !vc_fh_record(h, li, defs, b, r.ids, inst.dv, slot_ty) {
+                        return h;
                     }
                 }
                 i = i + 1;
