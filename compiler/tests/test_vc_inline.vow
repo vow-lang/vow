@@ -401,6 +401,86 @@ fn check_field_write_to_call_result() -> i64 {
     0
 }
 
+fn find_inst(f: IrFunction, id: i64) -> IrInst {
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            if blk.insts[ii].id == id { return blk.insts[ii]; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    ir_inst_new(-1, IOP_UNREACHABLE(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""))
+}
+
+// A callee declared to return an object may return a handle (an `i64` read out of a field or an
+// element): the call's result Phi is then a handle too. A callee that returns a handle on one path
+// and an object on another keeps the pointer Phi, which the gate rejects.
+fn check_handle_result_retyped() -> i64 {
+    // fn getter(h: i64) -> ptr { h }
+    let g: Vec<IrInst> = Vec::new();
+    g.push(mk_inst_arg(0, ITY_I64(), 0));
+    g.push(mk_inst_return(1, 0));
+    let getter: IrFunction = fn_of(1, String::from("getter"), ITY_PTR(), one(mk_block(0, g)));
+    // fn user(h: i64) -> u64 { let s = getter(h); s.len() }
+    let u: Vec<IrInst> = Vec::new();
+    u.push(mk_inst_arg(0, ITY_I64(), 0));
+    u.push(mk_inst_call_target(1, ITY_PTR(), args1(0), 1));
+    u.push(mk_inst_call_extern(2, ITY_U64(), args1(1), String::from("__vow_string_len")));
+    u.push(mk_inst_return(3, 2));
+    let user: IrFunction = fn_of(0, String::from("user"), ITY_U64(), one(mk_block(0, u)));
+    let fs: Vec<IrFunction> = Vec::new();
+    fs.push(user);
+    fs.push(getter);
+    let m: IrModule = mk_module(fs);
+    if vc_module_skip_reason(m.functions[0], m).len() != 0 { return 1; }
+    let inl: VcInlined = vc_inline(m.functions[0], m, VC_INLINE_INST_CAP());
+    if inl.status != VC_INLINE_OK() { return 2; }
+    let phi: IrInst = find_inst(inl.f, 1);
+    if phi.op != IOP_PHI() || phi.ty != ITY_I64() { return 3; }
+    // the original call keeps its declared type
+    if m.functions[0].blocks[0].insts[1].ty != ITY_PTR() { return 4; }
+
+    // fn pick(h: i64, c: bool) -> ptr { if c { h } else { alloc } }
+    let b0: Vec<IrInst> = Vec::new();
+    b0.push(mk_inst_arg(0, ITY_I64(), 0));
+    b0.push(mk_inst_arg(1, ITY_BOOL(), 1));
+    b0.push(mk_inst_branch(2, 1, 1, 2));
+    let b1: Vec<IrInst> = Vec::new();
+    b1.push(mk_inst_return(3, 0));
+    let b2: Vec<IrInst> = Vec::new();
+    b2.push(mk_inst_alloc(4, 16));
+    b2.push(mk_inst_return(5, 4));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, b0));
+    blocks.push(mk_block(1, b1));
+    blocks.push(mk_block(2, b2));
+    let ps: Vec<i64> = Vec::new();
+    ps.push(ITY_I64());
+    ps.push(ITY_BOOL());
+    let pick: IrFunction = mk_function(1, String::from("pick"), ps, ITY_PTR(), blocks);
+    let w: Vec<IrInst> = Vec::new();
+    w.push(mk_inst_arg(0, ITY_I64(), 0));
+    w.push(mk_inst_const_bool(1, 1));
+    let a2: Vec<i64> = Vec::new();
+    a2.push(0);
+    a2.push(1);
+    w.push(mk_inst_call_target(2, ITY_PTR(), a2, 1));
+    w.push(mk_inst_call_extern(3, ITY_U64(), args1(2), String::from("__vow_string_len")));
+    w.push(mk_inst_return(4, 3));
+    let user2: IrFunction = fn_of(0, String::from("user2"), ITY_U64(), one(mk_block(0, w)));
+    let fs2: Vec<IrFunction> = Vec::new();
+    fs2.push(user2);
+    fs2.push(pick);
+    let m2: IrModule = mk_module(fs2);
+    let inl2: VcInlined = vc_inline(m2.functions[0], m2, VC_INLINE_INST_CAP());
+    let phi2: IrInst = find_inst(inl2.f, 2);
+    if phi2.op != IOP_PHI() || phi2.ty != ITY_PTR() { return 5; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_cycles();
     if r == 0 { let d: i64 = check_diamond_is_acyclic(); if d != 0 { r = 100 + d; } }
@@ -413,5 +493,6 @@ fn main() -> i32 {
     if r == 0 { let d: i64 = check_frame_marks(); if d != 0 { r = 800 + d; } }
     if r == 0 { let d: i64 = check_unwrap_abort_frame(); if d != 0 { r = 900 + d; } }
     if r == 0 { let d: i64 = check_field_write_to_call_result(); if d != 0 { r = 1000 + d; } }
+    if r == 0 { let d: i64 = check_handle_result_retyped(); if d != 0 { r = 1100 + d; } }
     i64_to_i32_wrap(r)
 }

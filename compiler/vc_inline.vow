@@ -422,6 +422,54 @@ fn vc_resolve_str_literals(f: IrFunction, m: IrModule) -> IrFunction {
     g
 }
 
+// The result Phi of a call is typed like the callee's declared return, but the IR
+// types a pointer loaded out of a field or a `Vec` element `i64` (a handle, see
+// `vc_heap`), so a callee declared to return an object may return handles on every
+// path. Such a Phi (and a Phi that merges only such Phis) is itself a handle:
+// retyped `i64`, it is read through the heap model like any other. A Phi that merges
+// a handle with an object keeps its type and the gate rejects the mismatch. Only the
+// Phis changed are copied; the blocks and the instructions of `g` are its own.
+fn vc_retype_handle_phis(g: IrFunction) {
+    let mut changed: bool = true;
+    while changed {
+        changed = false;
+        let tys: Vec<i64> = vc_ty_table(g);
+        let fed: Vec<i64> = dom_fill(tys.len(), 0);
+        let handles: Vec<i64> = dom_fill(tys.len(), 0);
+        let mut bi: u64 = 0;
+        while bi < g.blocks.len() {
+            let blk: IrBlock = g.blocks[bi];
+            let mut ii: u64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                if inst.op == IOP_UPSILON() && inst.args.len() == 1 && inst.dv >= 0 && (inst.dv as u64) < tys.len() {
+                    fed[inst.dv as u64] = fed[inst.dv as u64] + 1;
+                    if vc_arg_ty(tys, inst, 0) == ITY_I64() { handles[inst.dv as u64] = handles[inst.dv as u64] + 1; }
+                }
+                ii = ii + 1;
+            }
+            bi = bi + 1;
+        }
+        bi = 0;
+        while bi < g.blocks.len() {
+            let blk: IrBlock = g.blocks[bi];
+            let mut ii: u64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                if inst.op == IOP_PHI() && inst.ty == ITY_PTR() && inst.id >= 0 && fed[inst.id as u64] > 0 && fed[inst.id as u64] == handles[inst.id as u64] {
+                    let out: IrInst = vc_clone_inst(inst, inst.id, inst.args, inst.dv, inst.dv2);
+                    out.ty = ITY_I64();
+                    let insts: Vec<IrInst> = blk.insts;
+                    insts[ii] = out;
+                    changed = true;
+                }
+                ii = ii + 1;
+            }
+            bi = bi + 1;
+        }
+    }
+}
+
 // `f` with every call of a user function in `m` replaced by the callee's body,
 // recursively, and its string literals resolved (`vc_resolve_str_literals`). `cap`
 // bounds the instructions of the result; a call tree above it is
@@ -450,6 +498,7 @@ fn vc_inline(f: IrFunction, m: IrModule, cap: i64) -> VcInlined {
     vc_splice_fn(sp, f, -1, none, 0, 0, -1, -1, false);
     let g: IrFunction = vc_function_shell(f);
     g.blocks = sp.blocks;
+    vc_retype_handle_phis(g);
     let mut status: i64 = VC_INLINE_OK();
     if sp.bad { status = VC_INLINE_MALFORMED(); }
     VcInlined { f: vc_resolve_str_literals(g, m), frames: frames, status: status }
@@ -459,7 +508,7 @@ fn vc_inline(f: IrFunction, m: IrModule, cap: i64) -> VcInlined {
 // the same type, or a handle (`i64`, see `vc_heap`) for an object parameter,
 // because the IR types a pointer loaded out of a field or a `Vec` element `i64`.
 fn vc_param_accepts(param: i64, arg: i64) -> bool {
-    arg == param || (param == ITY_PTR() && arg == ITY_I64())
+    arg == param || vc_handle_for_object(param, arg)
 }
 
 // "" when every call of `g` agrees with its callee's signature: arity, argument

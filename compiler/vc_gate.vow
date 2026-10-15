@@ -228,6 +228,15 @@ fn vc_vec_elem_ok(ty: i64) -> bool {
     ty == ITY_BOOL() || (vc_ty_is_int(ty) && vc_ty_bits(ty) <= 64)
 }
 
+// True when a value of type `have` stands for one of type `want` through the heap
+// model: the IR types a pointer loaded out of a field or a `Vec` element `i64` (a
+// handle, see `vc_heap`), so such a value is passed and returned where an object is
+// declared. A consumer that needs the object itself (a write, a merge with an object)
+// has its own gate and rejects the handle.
+fn vc_handle_for_object(want: i64, have: i64) -> bool {
+    want == ITY_PTR() && have == ITY_I64()
+}
+
 // A value a `push` or `set` may store: an element (`vc_vec_elem_ok`) or an object
 // (`String`, `Vec`, struct), which the slot holds as an address the model does not
 // track. `vc_ptr_store_detail` keeps every function that could read such an address
@@ -407,7 +416,7 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
     }
     if op == IOP_RETURN() {
         if f.return_ty == ITY_UNIT() { return n == 0 || (n == 1 && t0 == ITY_UNIT()); }
-        return n == 1 && t0 == f.return_ty
+        return n == 1 && (t0 == f.return_ty || vc_handle_for_object(f.return_ty, t0))
             && (vc_scalar_value_ty(f.return_ty) || f.return_ty == ITY_PTR());
     }
     false
