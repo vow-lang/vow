@@ -77,13 +77,17 @@ fn check_only_declared_vecs_are_read() -> i64 {
     let cs: VcClaims = two_vec_claims();
     let vecs: Vec<i64> = vc_cex_vecs(cs, 0);
     if vecs.len() != 1 || vecs[0] != 0 { return 1; }
-    let names: Vec<String> = vc_cex_elem_names(cs, vecs, 8);
+    let names: Vec<String> = Vec::new();
+    let widths: Vec<i64> = Vec::new();
+    vc_append_vec_projection(cs, vecs, 8, vc_script_new(), names, widths);
     if names.len() != 8 { return 2; }
     if names[0] != String::from("p0_varr_e0") { return 3; }
     if names[7] != String::from("p0_varr_e7") { return 4; }
     cs.header_lens[0] = 21;
     if vc_cex_vecs(cs, 0).len() != 2 { return 5; }
-    let both: Vec<String> = vc_cex_elem_names(cs, vc_cex_vecs(cs, 0), 8);
+    let both: Vec<String> = Vec::new();
+    let both_widths: Vec<i64> = Vec::new();
+    vc_append_vec_projection(cs, vc_cex_vecs(cs, 0), 8, vc_script_new(), both, both_widths);
     if both.len() != 16 { return 6; }
     if both[8] != String::from("p3_varr_e0") { return 7; }
     0
@@ -129,7 +133,9 @@ fn check_bounds_grow() -> i64 {
 fn check_elements_are_defined_from_the_array() -> i64 {
     let cs: VcClaims = two_vec_claims();
     let s: SmtScript = vc_script_new();
-    vc_cex_define_elems(cs, s, vc_cex_vecs(cs, 0), 4);
+    let names: Vec<String> = Vec::new();
+    let widths: Vec<i64> = Vec::new();
+    vc_append_vec_projection(cs, vc_cex_vecs(cs, 0), 4, s, names, widths);
     if s.kinds.len() != 4 { return 30; }
     let text: String = vc_command_text(cs.arena, s, 1);
     if text != String::from("(define-fun p0_varr_e1 () (_ BitVec 64) (select p0_varr #x0000000000000001))") { return 31; }
@@ -140,17 +146,109 @@ fn check_elements_are_defined_from_the_array() -> i64 {
 fn check_wide_elements_are_128_bit() -> i64 {
     let cs: VcClaims = two_vec_claims();
     cs.vec_wide[0] = ITY_I128();
-    let widths: Vec<i64> = vc_cex_elem_widths(cs, vc_cex_vecs(cs, 0), 3);
+    let names: Vec<String> = Vec::new();
+    let widths: Vec<i64> = Vec::new();
+    vc_append_vec_projection(cs, vc_cex_vecs(cs, 0), 3, vc_script_new(), names, widths);
     if widths.len() != 3 || widths[0] != 128 || widths[2] != 128 { return 60; }
     let s: SmtScript = vc_script_new();
-    vc_cex_define_elems(cs, s, vc_cex_vecs(cs, 0), 2);
+    vc_append_vec_projection(cs, vc_cex_vecs(cs, 0), 2, s, Vec::new(), Vec::new());
     if s.kinds.len() != 2 { return 61; }
     let text: String = vc_command_text(cs.arena, s, 1);
     let want: String = String::from("(define-fun p0_varr_e1 () (_ BitVec 128) (concat (select p0_varr #x0000000000000003) (select p0_varr #x0000000000000002)))");
     if text != want { return 62; }
     let narrow: VcClaims = two_vec_claims();
-    let nw: Vec<i64> = vc_cex_elem_widths(narrow, vc_cex_vecs(narrow, 0), 2);
+    let nw: Vec<i64> = Vec::new();
+    vc_append_vec_projection(narrow, vc_cex_vecs(narrow, 0), 2, vc_script_new(), Vec::new(), nw);
     if nw[0] != 64 || nw[1] != 64 { return 63; }
+    0
+}
+
+// The projection appends one coordinated request to existing script/name/width
+// prefixes. Raw and float slots stay 64-bit; signed and unsigned wide elements
+// each join two slots. The late parameter is absent from every output.
+fn add_projection_vec(cs: VcClaims, p: i64, arr: String, ty: i64, hdr: i64) {
+    cs.vec_param.push(p);
+    cs.vec_arr.push(arr);
+    cs.vec_len.push(String::from("unused_len"));
+    cs.vec_hdr.push(hdr);
+    cs.vec_wide.push(ty);
+}
+
+fn check_mixed_projection_stays_aligned() -> i64 {
+    let cs: VcClaims = two_vec_claims();
+    cs.vec_hdr[1] = 3;
+    cs.vec_wide[1] = ITY_I128();
+    add_projection_vec(cs, 6, String::from("p6_varr"), ITY_U128(), 4);
+    add_projection_vec(cs, 7, String::from("p7_varr"), ITY_F32(), 5);
+    add_projection_vec(cs, 8, String::from("p8_varr"), ITY_F64(), 6);
+    add_projection_vec(cs, 9, String::from("late_varr"), ITY_U128(), 20);
+    let s: SmtScript = vc_script_new();
+    vc_script_check_sat(s);
+    let names: Vec<String> = Vec::new();
+    names.push(String::from("regular"));
+    let widths: Vec<i64> = Vec::new();
+    widths.push(16);
+    vc_append_vec_projection(cs, vc_cex_vecs(cs, 0), 2, s, names, widths);
+    if names.len() != 11 || widths.len() != 11 || s.kinds.len() != 11 { return 70; }
+    if names[0] != String::from("regular") || widths[0] != 16 { return 71; }
+    if vc_command_text(cs.arena, s, 0) != String::from("(check-sat)") { return 72; }
+    let expected_names: Vec<String> = Vec::new();
+    expected_names.push(String::from("p0_varr_e0"));
+    expected_names.push(String::from("p0_varr_e1"));
+    expected_names.push(String::from("p3_varr_e0"));
+    expected_names.push(String::from("p3_varr_e1"));
+    expected_names.push(String::from("p6_varr_e0"));
+    expected_names.push(String::from("p6_varr_e1"));
+    expected_names.push(String::from("p7_varr_e0"));
+    expected_names.push(String::from("p7_varr_e1"));
+    expected_names.push(String::from("p8_varr_e0"));
+    expected_names.push(String::from("p8_varr_e1"));
+    let expected_widths: Vec<i64> = Vec::new();
+    expected_widths.push(64);
+    expected_widths.push(64);
+    expected_widths.push(128);
+    expected_widths.push(128);
+    expected_widths.push(128);
+    expected_widths.push(128);
+    expected_widths.push(64);
+    expected_widths.push(64);
+    expected_widths.push(64);
+    expected_widths.push(64);
+    let expected_defs: Vec<String> = Vec::new();
+    expected_defs.push(String::from("(define-fun p0_varr_e0 () (_ BitVec 64) (select p0_varr #x0000000000000000))"));
+    expected_defs.push(String::from("(define-fun p0_varr_e1 () (_ BitVec 64) (select p0_varr #x0000000000000001))"));
+    expected_defs.push(String::from("(define-fun p3_varr_e0 () (_ BitVec 128) (concat (select p3_varr #x0000000000000001) (select p3_varr #x0000000000000000)))"));
+    expected_defs.push(String::from("(define-fun p3_varr_e1 () (_ BitVec 128) (concat (select p3_varr #x0000000000000003) (select p3_varr #x0000000000000002)))"));
+    expected_defs.push(String::from("(define-fun p6_varr_e0 () (_ BitVec 128) (concat (select p6_varr #x0000000000000001) (select p6_varr #x0000000000000000)))"));
+    expected_defs.push(String::from("(define-fun p6_varr_e1 () (_ BitVec 128) (concat (select p6_varr #x0000000000000003) (select p6_varr #x0000000000000002)))"));
+    expected_defs.push(String::from("(define-fun p7_varr_e0 () (_ BitVec 64) (select p7_varr #x0000000000000000))"));
+    expected_defs.push(String::from("(define-fun p7_varr_e1 () (_ BitVec 64) (select p7_varr #x0000000000000001))"));
+    expected_defs.push(String::from("(define-fun p8_varr_e0 () (_ BitVec 64) (select p8_varr #x0000000000000000))"));
+    expected_defs.push(String::from("(define-fun p8_varr_e1 () (_ BitVec 64) (select p8_varr #x0000000000000001))"));
+    let mut i: u64 = 0;
+    while i < expected_names.len() {
+        if names[i + 1] != expected_names[i] { return 73; }
+        if widths[i + 1] != expected_widths[i] { return 74; }
+        if vc_command_text(cs.arena, s, i + 1) != expected_defs[i] { return 75; }
+        i = i + 1;
+    }
+    0
+}
+
+fn check_empty_projection_keeps_prefixes() -> i64 {
+    let cs: VcClaims = two_vec_claims();
+    let s: SmtScript = vc_script_new();
+    vc_script_check_sat(s);
+    let names: Vec<String> = Vec::new();
+    names.push(String::from("regular"));
+    let widths: Vec<i64> = Vec::new();
+    widths.push(64);
+    vc_append_vec_projection(cs, vc_cex_vecs(cs, 0), 0, s, names, widths);
+    if names.len() != 1 || names[0] != String::from("regular") { return 80; }
+    if widths.len() != 1 || widths[0] != 64 { return 81; }
+    if s.kinds.len() != 1 || vc_command_text(cs.arena, s, 0) != String::from("(check-sat)") { return 82; }
+    vc_append_vec_projection(cs, Vec::new(), 8, s, names, widths);
+    if names.len() != 1 || widths.len() != 1 || s.kinds.len() != 1 { return 83; }
     0
 }
 
@@ -188,6 +286,8 @@ fn main() -> i32 {
     if r == 0 { r = check_bounds_grow(); }
     if r == 0 { r = check_elements_are_defined_from_the_array(); }
     if r == 0 { r = check_wide_elements_are_128_bit(); }
+    if r == 0 { r = check_mixed_projection_stays_aligned(); }
+    if r == 0 { r = check_empty_projection_keeps_prefixes(); }
     if r == 0 { r = check_max_vec_len(); }
     if r == 0 { r = check_pin_leaves_lengths_free(); }
     i64_to_i32_wrap(r)
