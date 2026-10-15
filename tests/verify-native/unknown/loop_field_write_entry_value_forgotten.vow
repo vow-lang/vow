@@ -1,0 +1,28 @@
+// TEST: category invariant
+// The postcondition is false for `n > 0` (the loop adds `n` to the field), but a
+// run that shows it needs more iterations than the largest unwinding bound. The
+// cut must forget the entry value of the field `c.v` at the top of the header: an
+// induction that kept `c.v == 0` there would "prove" the false `ensures`.
+module LoopFieldWriteEntryValueForgotten
+
+struct Counter { v: u64 }
+
+fn bump(c: Counter, n: u64) -> u64 vow {
+  requires: c.v == 0 && n > 100
+  ensures: result == 0
+} {
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n
+  } {
+    c.v = c.v + 1;
+    i = i + 1;
+  }
+  c.v
+}
+
+fn main() -> i32 [io] {
+  let c: Counter = Counter { v: 0 };
+  print_u64(bump(c, 101));
+  0
+}

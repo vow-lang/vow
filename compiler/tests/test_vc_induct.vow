@@ -567,45 +567,150 @@ fn check_map_havoc_refused() -> i64 {
     0
 }
 
-// A field written in the loop body on an object allocated before the loop is
-// not a header Phi either, so the function is not cut. An object allocated and
-// written inside the body is fresh each iteration and keeps the cut.
-fn check_agg_written_in_loop() -> i64 {
+// `count_up` with `pre` ahead of the preheader's code and `writes` right after the
+// loop body's constant 9, so a write may name it.
+fn count_up_writing(pre: Vec<IrInst>, writes: Vec<IrInst>) -> IrFunction {
     let f: IrFunction = count_up();
     let e: IrBlock = f.blocks[0];
-    let pre: Vec<IrInst> = Vec::new();
-    pre.push(mk_inst_alloc(30, 8));
     let mut i: u64 = 0;
     while i < e.insts.len() {
         pre.push(e.insts[i]);
         i = i + 1;
     }
     f.blocks[0] = mk_block(0, pre);
-    let body: IrBlock = f.blocks[2];
-    let w: Vec<IrInst> = Vec::new();
-    w.push(body.insts[0]);
-    w.push(mk_inst_field_set(31, 30, 0, 9));
-    let mut j: u64 = 1;
-    while j < body.insts.len() {
-        w.push(body.insts[j]);
-        j = j + 1;
-    }
-    f.blocks[2] = mk_block(2, w);
-    if vc_induct_cut(f).status != VC_INDUCT_NA() { return 1; }
-
-    let g: IrFunction = count_up();
-    let gb: IrBlock = g.blocks[2];
-    let loc: Vec<IrInst> = Vec::new();
-    loc.push(mk_inst_alloc(32, 8));
-    loc.push(gb.insts[0]);
-    loc.push(mk_inst_field_set(33, 32, 0, 9));
-    let mut k: u64 = 1;
-    while k < gb.insts.len() {
-        loc.push(gb.insts[k]);
+    let lb: IrBlock = f.blocks[2];
+    let body: Vec<IrInst> = Vec::new();
+    body.push(lb.insts[0]);
+    let mut k: u64 = 0;
+    while k < writes.len() {
+        body.push(writes[k]);
         k = k + 1;
     }
-    g.blocks[2] = mk_block(2, loc);
-    if vc_induct_cut(g).status != VC_INDUCT_OK() { return 2; }
+    let mut j: u64 = 1;
+    while j < lb.insts.len() {
+        body.push(lb.insts[j]);
+        j = j + 1;
+    }
+    f.blocks[2] = mk_block(2, body);
+    f
+}
+
+// The `(object, slot, type)` of the `i`-th field marker of the header block.
+fn field_marker(g: IrFunction, i: u64) -> IrInst {
+    let h: IrBlock = block_by_id(g, 1);
+    h.insts[1 + i]
+}
+
+// A field written in the loop body on an object allocated before the loop is not a
+// header Phi: the header proper havocs the slot with one marker after the Phis (the
+// object, the slot, the type of the value written). An object allocated and written
+// inside the body is fresh each iteration and gets none.
+fn check_agg_written_in_loop() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(mk_inst_alloc(30, 16));
+    let w: Vec<IrInst> = Vec::new();
+    w.push(mk_inst_field_set(31, 30, 1, 9));
+    let c: VcInduct = vc_induct_cut(count_up_writing(pre, w));
+    if c.status != VC_INDUCT_OK() { return 1; }
+    if count_marker(c.f, VC_INTERNAL_HAVOC_FIELD()) != 1 { return 2; }
+    let m: IrInst = field_marker(c.f, 0);
+    if !vc_is_havoc_field(m) || m.args.len() != 1 || m.args[0] != 30 || m.dv != 1 || m.dv2 != ITY_I64() { return 3; }
+    if m.ty != ITY_UNIT() || vc_is_havoc_vec(m) || vc_is_havoc_map(m) { return 4; }
+    if !well_formed(c.f) { return 5; }
+    if m.id <= dom_max_inst_id(count_up()) { return 6; }
+
+    let born: Vec<IrInst> = Vec::new();
+    born.push(mk_inst_alloc(32, 8));
+    born.push(mk_inst_field_set(33, 32, 0, 9));
+    let g: VcInduct = vc_induct_cut(count_up_writing(Vec::new(), born));
+    if g.status != VC_INDUCT_OK() { return 7; }
+    if count_marker(g.f, VC_INTERNAL_HAVOC_FIELD()) != 0 { return 8; }
+    0
+}
+
+// One marker per distinct `(object, slot, type)`, in the order the writes appear;
+// a Vec the same loop pushes to keeps its own marker ahead of them.
+fn check_agg_slots_deduplicated() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(mk_inst_alloc(30, 16));
+    pre.push(mk_inst_alloc(31, 16));
+    pre.push(vec_new_inst(40));
+    let w: Vec<IrInst> = Vec::new();
+    w.push(mk_inst_field_set(50, 30, 0, 9));
+    w.push(mk_inst_field_set(51, 30, 0, 9));
+    w.push(mk_inst_field_set(52, 30, 1, 9));
+    w.push(mk_inst_field_set(53, 31, 0, 9));
+    w.push(mk_inst_call_extern(54, ITY_UNIT(), pair(40, 0), String::from("__vow_vec_push_val")));
+    let c: VcInduct = vc_induct_cut(count_up_writing(pre, w));
+    if c.status != VC_INDUCT_OK() { return 1; }
+    if count_marker(c.f, VC_INTERNAL_HAVOC_FIELD()) != 3 { return 2; }
+    if count_marker(c.f, VC_INTERNAL_HAVOC_VEC()) != 1 { return 3; }
+    let m0: IrInst = field_marker(c.f, 1);
+    let m1: IrInst = field_marker(c.f, 2);
+    let m2: IrInst = field_marker(c.f, 3);
+    if !vc_is_havoc_field(m0) || m0.args[0] != 30 || m0.dv != 0 { return 4; }
+    if !vc_is_havoc_field(m1) || m1.args[0] != 30 || m1.dv != 1 { return 5; }
+    if !vc_is_havoc_field(m2) || m2.args[0] != 31 || m2.dv != 0 { return 6; }
+    if !well_formed(c.f) { return 7; }
+    0
+}
+
+// A pointer parameter is a root like an allocation born before the loop.
+fn check_agg_param_written_in_loop() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(mk_inst_arg(30, ITY_PTR(), 0));
+    let w: Vec<IrInst> = Vec::new();
+    w.push(mk_inst_field_set(31, 30, 2, 9));
+    let f: IrFunction = count_up_writing(pre, w);
+    f.params.push(ITY_PTR());
+    let c: VcInduct = vc_induct_cut(f);
+    if c.status != VC_INDUCT_OK() { return 1; }
+    if count_marker(c.f, VC_INTERNAL_HAVOC_FIELD()) != 1 { return 2; }
+    let m: IrInst = field_marker(c.f, 0);
+    if m.args[0] != 30 || m.dv != 2 { return 3; }
+    if !well_formed(c.f) { return 4; }
+    0
+}
+
+// A pointer stored in a field is never read back, so it gets no marker. A write the
+// model cannot attribute to a parameter or an allocation leaves the loop uncut: the
+// target is a call result, a `WideSlot` element address, or a value of unit type.
+fn check_agg_write_refused() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(mk_inst_alloc(30, 16));
+    pre.push(mk_inst_alloc(31, 16));
+    let w: Vec<IrInst> = Vec::new();
+    w.push(mk_inst_field_set(32, 30, 0, 31));
+    let c: VcInduct = vc_induct_cut(count_up_writing(pre, w));
+    if c.status != VC_INDUCT_OK() { return 1; }
+    if count_marker(c.f, VC_INTERNAL_HAVOC_FIELD()) != 0 { return 2; }
+
+    let call: Vec<IrInst> = Vec::new();
+    call.push(mk_inst_call_extern(30, ITY_PTR(), Vec::new(), String::from("__vow_string_new")));
+    let cw: Vec<IrInst> = Vec::new();
+    cw.push(mk_inst_field_set(32, 30, 0, 9));
+    if vc_induct_cut(count_up_writing(call, cw)).status != VC_INDUCT_NA() { return 3; }
+
+    let addr: Vec<IrInst> = Vec::new();
+    addr.push(mk_inst_call_extern(30, ITY_PTR(), Vec::new(), String::from("__vow_vec_get_wide_ptr")));
+    let aw: Vec<IrInst> = Vec::new();
+    aw.push(mk_inst_field_set_wide(32, 30, 0, 9));
+    if vc_induct_cut(count_up_writing(addr, aw)).status != VC_INDUCT_NA() { return 4; }
+    0
+}
+
+// A 128-bit field of an object is written through a `WideSlot` like any other slot,
+// so it gets a marker of its own; only an element address (a call result) is refused.
+fn check_agg_wide_field_write() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(mk_inst_alloc(30, 16));
+    let w: Vec<IrInst> = Vec::new();
+    w.push(mk_inst_field_set_wide(32, 30, 1, 9));
+    let c: VcInduct = vc_induct_cut(count_up_writing(pre, w));
+    if c.status != VC_INDUCT_OK() { return 1; }
+    if count_marker(c.f, VC_INTERNAL_HAVOC_FIELD()) != 1 { return 2; }
+    let m: IrInst = field_marker(c.f, 0);
+    if !vc_is_havoc_field(m) || m.args[0] != 30 || m.dv != 1 { return 3; }
     0
 }
 
@@ -626,5 +731,9 @@ fn main() -> i32 {
     if r == 0 { r = check_map_havoc_refused() + 585; if r == 585 { r = 0; } }
     if r == 0 { r = check_vec_set_pop_in_loop() + 590; if r == 590 { r = 0; } }
     if r == 0 { r = check_agg_written_in_loop() + 600; if r == 600 { r = 0; } }
+    if r == 0 { r = check_agg_slots_deduplicated() + 620; if r == 620 { r = 0; } }
+    if r == 0 { r = check_agg_param_written_in_loop() + 640; if r == 640 { r = 0; } }
+    if r == 0 { r = check_agg_write_refused() + 660; if r == 660 { r = 0; } }
+    if r == 0 { r = check_agg_wide_field_write() + 680; if r == 680 { r = 0; } }
     i64_to_i32_wrap(r)
 }

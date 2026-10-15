@@ -1,0 +1,27 @@
+// The loop writes a field of its parameter and its bound is a parameter, so no
+// unwinding covers it. The cut makes the field unconstrained at the top of the
+// header; the invariant relates it to the value it had on entry.
+module LoopFieldWriteCounter
+
+struct Counter { v: u64 }
+
+fn bump(c: Counter, n: u64) -> u64 vow {
+  requires: c.v == 0
+  ensures: result == n
+} {
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n
+    invariant: c.v == i
+  } {
+    c.v = c.v + 1;
+    i = i + 1;
+  }
+  c.v
+}
+
+fn main() -> i32 [io] {
+  let c: Counter = Counter { v: 0 };
+  print_u64(bump(c, 3));
+  0
+}

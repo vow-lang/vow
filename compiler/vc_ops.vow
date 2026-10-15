@@ -216,6 +216,17 @@ fn vc_is_havoc_vec(inst: IrInst) -> bool {
     inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == VC_INTERNAL_HAVOC_VEC()
 }
 
+// A loop cut puts one at the top of a loop header proper for each `(object, slot)`
+// the loop writes through a `FieldSet`: operand 0 is the object (a parameter or an
+// allocation born outside the loop), the data value is the slot and the second data
+// value the IR type of the value written there, which fixes the slot's sort. The
+// slot becomes an unconstrained constant, the way a header Phi's value does.
+fn VC_INTERNAL_HAVOC_FIELD() -> String { String::from("__vc_havoc_field") }
+
+fn vc_is_havoc_field(inst: IrInst) -> bool {
+    inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == VC_INTERNAL_HAVOC_FIELD()
+}
+
 fn VC_INTERNAL_CUT_END() -> String { String::from("__vc_cut_end") }
 
 fn vc_is_cut_end(inst: IrInst) -> bool {
