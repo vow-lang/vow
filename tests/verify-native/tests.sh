@@ -151,6 +151,14 @@ case "$FAKE_BW_MODE" in
         ;;
     slow_unsat) echo $$ >> "$FAKE_BW_DIR/pids"; sleep 0.3; echo unsat ;;
     record_unsat) echo "$PPID" >> "$FAKE_BW_DIR/worker_ppids"; echo unsat ;;
+    copy_ir)
+        # keeps the module file the worker (our parent) was told to decode.
+        if [ ! -s "$FAKE_BW_DIR/ir.bin" ]; then
+            ir=$(tr '\0' '\n' < "/proc/$PPID/cmdline" | grep -x -A1 -- '--worker-ir' | tail -1)
+            [ -z "$ir" ] || cp "$ir" "$FAKE_BW_DIR/ir.bin"
+        fi
+        echo unsat
+        ;;
     kill_once_3)
         # the third query of the run kills its worker, once: a retry succeeds.
         echo "$PPID" >> "$FAKE_BW_DIR/worker_ppids"
@@ -1270,6 +1278,28 @@ expect "clauses: first failure is the overall result" \
     "$(worker_clauses sat --worker-clauses | cut -d' ' -f1,2)" "1 2"
 unset FAKE_BW_NEEDLE
 no_leftovers "worker clauses"
+
+# The module the parent shares is what a worker decides from: a worker started on
+# the file the parent wrote needs no source (the path below does not exist), and
+# one handed the module of another program refuses the task table.
+OUTER_BW_DIR="$BW_DIR"
+run_native copy_ir "$MANY" --verify-jobs 1
+expect "shared module: status" "$(field "$RUN_OUT" status)" "Verified"
+if [ ! -s "$BW_DIR/ir.bin" ]; then fail "shared module: the worker was not told a module to decode"; fi
+IR_BIN="$BW_DIR/ir.bin"
+SHARED_BW_DIR=$(mktemp -d "$TMP_ROOT/bw.XXXXXX")
+shared_worker() {
+    PATH="$FAKE_DIR:$PATH" TMPDIR="$SCRATCH" FAKE_BW_MODE=unsat FAKE_BW_DIR="$SHARED_BW_DIR" \
+        "$VOWC_BIN" verify-worker "$TMP_ROOT/no_such_source.vow" --worker-index 0 --worker-name "$1" \
+        --worker-ir "$IR_BIN" --worker-budget-ms 60000 2>/dev/null
+}
+expect "shared module: a worker decides from it without the source" \
+    "$(shared_worker keep0 | python3 "$WIRE_DECODE")" "0 -1 "
+SHARED_RC=0
+shared_worker not_in_that_module >/dev/null || SHARED_RC=$?
+expect "shared module: another program's task table is refused" "$SHARED_RC" "3"
+no_leftovers "shared module"
+BW_DIR="$OUTER_BW_DIR"
 
 # A solver answer that no later claim can improve on stops the schedule, and the
 # clauses it left undecided get no verdict (the caller maps them to the overall).

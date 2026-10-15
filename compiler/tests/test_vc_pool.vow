@@ -176,8 +176,9 @@ fn check_retry_accounting() -> i64 [io, read, write] {
     0
 }
 
-// A module the pool shares is written under the queue, and workers are told its
-// path only then; the file decodes to what was shared.
+// A module the pool shares is written under the queue when it is laid out, and
+// workers are told its path only then; the task table written with it keeps the
+// probe kinds, and the file decodes to what was shared.
 fn check_shared_module() -> i64 [io, read, write] {
     let p: VcPool = pool_of(2, 1);
     p.kinds[1] = VC_TASK_KIND_TRIVIAL();
@@ -185,6 +186,8 @@ fn check_shared_module() -> i64 [io, read, write] {
     m.strings.push(String::from("hello"));
     if argv_has(vc_worker_argv(p, 0), String::from("--worker-ir")) { return 1; }
     vc_pool_share_module(p, m);
+    if argv_has(vc_worker_argv(p, 0), String::from("--worker-ir")) { return 2; }
+    vc_pool_prepare(p);
     let a: Vec<String> = vc_worker_argv(p, 0);
     let file: String = argv_value(a, String::from("--worker-ir"));
     let mut r: i64 = 0;

@@ -139,9 +139,40 @@ fn check_damage_refused() -> i64 {
     0
 }
 
+// The integer 0 written as two bytes, and a tenth byte with bits above the 64th,
+// are not encodings of anything the encoder writes.
+fn check_noncanonical_integer() -> i64 {
+    let ok: String = vc_irw_tag();
+    let mut z: u64 = 0;
+    while z < 6 {
+        ok.push_byte(0);
+        z = z + 1;
+    }
+    if !decodes(ok) { return 1; }
+    let overlong: String = vc_irw_tag();
+    overlong.push_byte(128);
+    let mut w: u64 = 0;
+    while w < 6 {
+        overlong.push_byte(0);
+        w = w + 1;
+    }
+    if decodes(overlong) { return 2; }
+    let wide: String = vc_irw_tag();
+    let mut i: u64 = 0;
+    while i < 9 {
+        wide.push_byte(255);
+        i = i + 1;
+    }
+    wide.push_byte(2);
+    wide.push_byte(0);
+    if decodes(wide) { return 3; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_round_trip();
     if r == 0 { r = check_empty_module(); }
     if r == 0 { r = check_damage_refused(); }
+    if r == 0 { r = check_noncanonical_integer(); }
     i64_to_i32_wrap(r)
 }

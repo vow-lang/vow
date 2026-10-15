@@ -37,9 +37,12 @@ state) that only the lowering needed.
    decides exactly what a worker that lowered the program would have decided;
    the task table check of ADR-2026-10-13-2212 still runs against it.
 3. **A decode failure is not a verdict.** A missing, truncated or foreign file
-   (the reader never traps and refuses anything that is not exactly one complete
-   encoding) makes the worker lower the program itself, as before; the only
-   cost of an unreadable file is the time the frontend takes.
+   (the reader never traps and refuses anything that is not exactly one complete,
+   canonical encoding) makes the worker lower the program itself, as before, and
+   say so on its stderr; the cost of an unreadable file is the time the frontend
+   takes. That fallback is the old behaviour, with the old (and unchanged)
+   guarantee: the task table names functions by index and name, so a source
+   edited in between is refused only if it changes those.
 4. **`contracts --verify` and `test --verify` share the module the same way**
    (`vc_driver_run`).
 
@@ -51,14 +54,22 @@ state) that only the lowering needed.
 - A session holds the lowered module and nothing the lowering needed to build
   it, so the resident size of a worker drops with the syntax tree and the type
   environment.
-- The worker no longer depends on the sources being readable at the moment it
-  starts: it decides the module the parent planned, which closes the window in
-  which an edited file could make a worker lower a different program (the task
-  table check made that an exit 3, never a wrong verdict).
+- On the normal path the worker no longer reads the sources: it decides the
+  module the parent planned from, so an edit made while a run is in progress
+  cannot make a worker lower a different program than the parent reports on.
 - The one-function `--worker-index` form, used by the wiring tests, still
   lowers the program: it is not given a module.
 - Not changed: the wire format of answers, the task kinds, the statuses and
   every report.
+
+## Encoder and decoder
+
+The encoder and decoder enumerate every field by hand. The decoder builds
+`IrInst`, `IrFunction` and `IrModule` with full struct literals, so a field added
+to one of them in `compiler/ir.vow` is a compile error in `vc_irwire.vow` until
+both directions carry it. `compiler/module_io.vow` is not reused: it mirrors the
+Rust `.vmod` format (with that format's `u32` limits) and works on byte vectors,
+where this is a private hand-off between two processes of one binary.
 
 ## Measurements
 
