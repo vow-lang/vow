@@ -166,7 +166,7 @@ fn vc_induct_field_havocs(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, n_ids: u
             while i < blk.insts.len() {
                 let inst: IrInst = blk.insts[i];
                 if inst.op == IOP_FIELD_SET() {
-                    if inst.dk != IDATA_FIELD() || inst.args.len() != 2 {
+                    if (inst.dk != IDATA_FIELD() && inst.dk != IDATA_WIDE_SLOT()) || inst.args.len() != 2 {
                         return h;
                     }
                     let val: i64 = inst.args[1];
