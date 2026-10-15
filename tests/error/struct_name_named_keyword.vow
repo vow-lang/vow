@@ -1,0 +1,11 @@
+// TEST: error-code UnexpectedToken
+// TEST: error-count 5
+module StructNameKeyword
+
+struct module {
+    n: i64,
+}
+
+fn main() -> i32 {
+    0
+}

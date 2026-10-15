@@ -1,0 +1,11 @@
+// TEST: error-code UnexpectedToken
+// TEST: error-count 1
+module EffectListKeyword
+
+fn f() -> i64 [module] {
+    0
+}
+
+fn main() -> i32 {
+    0
+}
