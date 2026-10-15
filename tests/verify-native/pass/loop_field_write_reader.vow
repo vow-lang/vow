@@ -1,0 +1,35 @@
+// A decoder reading through a struct reader: the loop writes `r.pos` and `r.err_kind`
+// (through the inlined `read_u8`) and its trip count is a parameter. The cut havocs
+// the slots the loop writes, so the `invariant` decides it, not unwinding.
+module LoopFieldWriteReader
+
+struct R { buf: Vec<i64>, pos: u64, err_kind: i64 }
+
+fn read_u8(r: R) -> i64 {
+  if r.pos >= r.buf.len() { r.err_kind = 1; return 0; }
+  let b: i64 = r.buf[r.pos];
+  r.pos = r.pos + 1;
+  b
+}
+
+fn read_n(r: R, n: u64) -> Vec<i64> vow {
+  ensures: result.len() <= n
+} {
+  let out: Vec<i64> = Vec::new();
+  let mut i: u64 = 0;
+  while i < n && r.err_kind == 0 vow {
+    invariant: i <= n
+    invariant: out.len() == i
+  } {
+    out.push(read_u8(r));
+    i = i + 1;
+  }
+  out
+}
+
+fn main() -> i32 [io] {
+  let r: R = R { buf: Vec::new(), pos: 0, err_kind: 0 };
+  r.buf.push(7);
+  print_u64(read_n(r, 1).len());
+  0
+}

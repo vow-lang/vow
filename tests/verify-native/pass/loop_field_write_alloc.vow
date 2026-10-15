@@ -1,0 +1,30 @@
+// A struct built before the loop and written in its body, reached after the loop
+// through two names: one the loop writes through and a merge of two such structs.
+// An allocation born in the body is fresh each iteration and needs no havoc.
+module LoopFieldWriteAlloc
+
+struct Cell { v: u64, flag: bool }
+
+fn run(n: u64, pick: bool) -> u64 vow {
+  ensures: result == n
+} {
+  let a: Cell = Cell { v: 0, flag: false };
+  let b: Cell = Cell { v: 0, flag: false };
+  let p: Cell = if pick { a } else { b };
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n
+    invariant: a.v + b.v == i
+  } {
+    p.v = p.v + 1;
+    let t: Cell = Cell { v: i, flag: true };
+    t.v = t.v + 1;
+    i = i + 1;
+  }
+  a.v + b.v
+}
+
+fn main() -> i32 [io] {
+  print_u64(run(3, true));
+  0
+}
