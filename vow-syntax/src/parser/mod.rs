@@ -1010,45 +1010,7 @@ mod tests {
 
     #[test]
     fn keyword_as_str_all_variants() {
-        let pairs: &[(TokenKind, &str)] = &[
-            (TokenKind::KwFn, "fn"),
-            (TokenKind::KwLet, "let"),
-            (TokenKind::KwMut, "mut"),
-            (TokenKind::KwStruct, "struct"),
-            (TokenKind::KwEnum, "enum"),
-            (TokenKind::KwMatch, "match"),
-            (TokenKind::KwIf, "if"),
-            (TokenKind::KwElse, "else"),
-            (TokenKind::KwWhile, "while"),
-            (TokenKind::KwLoop, "loop"),
-            (TokenKind::KwBreak, "break"),
-            (TokenKind::KwContinue, "continue"),
-            (TokenKind::KwReturn, "return"),
-            (TokenKind::KwPub, "pub"),
-            (TokenKind::KwUse, "use"),
-            (TokenKind::KwModule, "module"),
-            (TokenKind::KwVow, "vow"),
-            (TokenKind::KwRequires, "requires"),
-            (TokenKind::KwEnsures, "ensures"),
-            (TokenKind::KwInvariant, "invariant"),
-            (TokenKind::KwWhere, "where"),
-            (TokenKind::KwRegion, "region"),
-            (TokenKind::KwLinear, "linear"),
-            (TokenKind::KwExtern, "extern"),
-            (TokenKind::KwImpl, "impl"),
-            (TokenKind::KwTrait, "trait"),
-            (TokenKind::KwType, "type"),
-            (TokenKind::KwFor, "for"),
-            (TokenKind::KwIn, "in"),
-            (TokenKind::KwAs, "as"),
-            (TokenKind::KwConst, "const"),
-            (TokenKind::KwRead, "read"),
-            (TokenKind::KwWrite, "write"),
-            (TokenKind::KwIO, "io"),
-            (TokenKind::KwPanic, "panic"),
-            (TokenKind::KwUnsafe, "unsafe"),
-        ];
-        for (kind, expected) in pairs {
+        for (kind, expected) in KEYWORD_PAIRS {
             assert_eq!(keyword_as_str(kind), Some(*expected), "keyword: {kind:?}");
         }
         assert_eq!(keyword_as_str(&TokenKind::LBrace), None);
@@ -1073,43 +1035,43 @@ mod tests {
         );
     }
 
-    const KEYWORD_LEXEMES: &[&str] = &[
-        "fn",
-        "let",
-        "mut",
-        "struct",
-        "enum",
-        "match",
-        "if",
-        "else",
-        "while",
-        "loop",
-        "break",
-        "continue",
-        "return",
-        "pub",
-        "use",
-        "module",
-        "vow",
-        "requires",
-        "ensures",
-        "invariant",
-        "where",
-        "region",
-        "linear",
-        "extern",
-        "impl",
-        "trait",
-        "type",
-        "for",
-        "in",
-        "as",
-        "read",
-        "write",
-        "io",
-        "panic",
-        "unsafe",
-        "const",
+    const KEYWORD_PAIRS: &[(TokenKind, &str)] = &[
+        (TokenKind::KwFn, "fn"),
+        (TokenKind::KwLet, "let"),
+        (TokenKind::KwMut, "mut"),
+        (TokenKind::KwStruct, "struct"),
+        (TokenKind::KwEnum, "enum"),
+        (TokenKind::KwMatch, "match"),
+        (TokenKind::KwIf, "if"),
+        (TokenKind::KwElse, "else"),
+        (TokenKind::KwWhile, "while"),
+        (TokenKind::KwLoop, "loop"),
+        (TokenKind::KwBreak, "break"),
+        (TokenKind::KwContinue, "continue"),
+        (TokenKind::KwReturn, "return"),
+        (TokenKind::KwPub, "pub"),
+        (TokenKind::KwUse, "use"),
+        (TokenKind::KwModule, "module"),
+        (TokenKind::KwVow, "vow"),
+        (TokenKind::KwRequires, "requires"),
+        (TokenKind::KwEnsures, "ensures"),
+        (TokenKind::KwInvariant, "invariant"),
+        (TokenKind::KwWhere, "where"),
+        (TokenKind::KwRegion, "region"),
+        (TokenKind::KwLinear, "linear"),
+        (TokenKind::KwExtern, "extern"),
+        (TokenKind::KwImpl, "impl"),
+        (TokenKind::KwTrait, "trait"),
+        (TokenKind::KwType, "type"),
+        (TokenKind::KwFor, "for"),
+        (TokenKind::KwIn, "in"),
+        (TokenKind::KwAs, "as"),
+        (TokenKind::KwConst, "const"),
+        (TokenKind::KwRead, "read"),
+        (TokenKind::KwWrite, "write"),
+        (TokenKind::KwIO, "io"),
+        (TokenKind::KwPanic, "panic"),
+        (TokenKind::KwUnsafe, "unsafe"),
     ];
 
     // (source before the keyword, source after it, whether `mut` is valid there).
@@ -1165,7 +1127,7 @@ mod tests {
     #[test]
     fn keyword_in_identifier_position_is_reported_at_the_keyword() {
         for (before, after, mut_is_valid) in KEYWORD_IDENT_POSITIONS {
-            for kw in KEYWORD_LEXEMES {
+            for (_, kw) in KEYWORD_PAIRS {
                 if *mut_is_valid && *kw == "mut" {
                     continue;
                 }

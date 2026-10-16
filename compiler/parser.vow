@@ -67,6 +67,15 @@ fn advance(p: Parser) -> Token {
     t
 }
 
+fn eat_comma(p: Parser) -> bool {
+    if at(p, tok_comma()) {
+        let _comma: Token = advance(p);
+        true
+    } else {
+        false
+    }
+}
+
 fn expect(p: Parser, tag: i64) -> bool {
     if at(p, tag) {
         let _adv: Token = advance(p);
@@ -445,9 +454,7 @@ fn parse_struct_def(p: Parser, is_linear: i64) -> i64 {
         let ftid: i64 = parse_type(p);
         field_items.push(fsid);
         field_items.push(ftid);
-        if at(p, tok_comma()) {
-            let _comma: Token = advance(p);
-        } else {
+        if !eat_comma(p) {
             break;
         }
     }
@@ -479,9 +486,7 @@ fn parse_enum_def(p: Parser) -> i64 {
             while !at(p, tok_rparen()) && !at_end(p) {
                 let tid: i64 = parse_type(p);
                 payload_types.push(tid);
-                if at(p, tok_comma()) {
-                    let _c: Token = advance(p);
-                } else {
+                if !eat_comma(p) {
                     break;
                 }
             }
@@ -500,9 +505,7 @@ fn parse_enum_def(p: Parser) -> i64 {
                 let _colon: bool = expect(p, tok_colon());
                 let ftid: i64 = parse_type(p);
                 payload_types.push(ftid);
-                if at(p, tok_comma()) {
-                    let _c: Token = advance(p);
-                } else {
+                if !eat_comma(p) {
                     break;
                 }
             }
@@ -513,9 +516,7 @@ fn parse_enum_def(p: Parser) -> i64 {
             let empty_lid: i64 = arena_add_list(p.arena, Vec::new());
             variant_items.push(empty_lid);
         }
-        if at(p, tok_comma()) {
-            let _comma: Token = advance(p);
-        } else {
+        if !eat_comma(p) {
             break;
         }
     }
@@ -552,9 +553,7 @@ fn parse_effects(p: Parser) -> i64 {
             push_error(p, String::from("expected effect keyword"));
         }
         let _eff_tok: Token = advance(p);
-        if at(p, tok_comma()) {
-            let _c: Token = advance(p);
-        } else {
+        if !eat_comma(p) {
             break;
         }
     }
@@ -594,9 +593,7 @@ fn parse_params(p: Parser, strict: bool) -> i64 {
         items.push(tid);
         items.push(refinement_eid);
         items.push(name_span);
-        if at(p, tok_comma()) {
-            let _c: Token = advance(p);
-        } else {
+        if !eat_comma(p) {
             break;
         }
     }
@@ -699,9 +696,7 @@ fn parse_type(p: Parser) -> i64 {
         let gen_items: Vec<i64> = Vec::new();
         while !at(p, tok_gt()) && !at_end(p) {
             gen_items.push(parse_type(p));
-            if at(p, tok_comma()) {
-                let _c: Token = advance(p);
-            } else {
+            if !eat_comma(p) {
                 break;
             }
         }
@@ -1347,9 +1342,7 @@ fn parse_match_expr(p: Parser) -> i64 {
         };
         arm_items.push(pat);
         arm_items.push(body);
-        if at(p, tok_comma()) {
-            let _c: Token = advance(p);
-        } else {
+        if !eat_comma(p) {
             break;
         }
     }
@@ -1393,9 +1386,7 @@ fn parse_pattern(p: Parser) -> i64 {
                 let inner_items: Vec<i64> = Vec::new();
                 while !at(p, tok_rparen()) && !at_end(p) {
                     inner_items.push(parse_pattern(p));
-                    if at(p, tok_comma()) {
-                        let _c: Token = advance(p);
-                    } else {
+                    if !eat_comma(p) {
                         break;
                     }
                 }
@@ -1414,9 +1405,7 @@ fn parse_pattern(p: Parser) -> i64 {
                 let fpid: i64 = parse_pattern(p);
                 field_items.push(fsid);
                 field_items.push(fpid);
-                if at(p, tok_comma()) {
-                    let _c: Token = advance(p);
-                } else {
+                if !eat_comma(p) {
                     break;
                 }
             }
@@ -1436,9 +1425,7 @@ fn parse_pattern(p: Parser) -> i64 {
         let elem_items: Vec<i64> = Vec::new();
         while !at(p, tok_rparen()) && !at_end(p) {
             elem_items.push(parse_pattern(p));
-            if at(p, tok_comma()) {
-                let _c: Token = advance(p);
-            } else {
+            if !eat_comma(p) {
                 break;
             }
         }

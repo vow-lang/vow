@@ -35,95 +35,79 @@ fn first_error_offset(src: String) -> i64 {
     d.span_start
 }
 
-fn probe(prefix: String, suffix: String, skip_mut: bool) -> bool [io] {
-    let kws: Vec<String> = keywords();
+fn probe(kws: Vec<String>, prefix: String, suffix: String, skip_mut: bool) -> bool [io] {
     let mut k: u64 = 0;
     while k < kws.len() {
         let kw: String = kws[k];
-        if !(skip_mut && kw == String::from("mut")) {
-            let src: String = String::from("");
-            src.push_str(prefix);
-            src.push_str(kw);
-            src.push_str(suffix);
-            if first_error_offset(src) != prefix.len() as i64 {
-                print_str(src);
-                return false;
-            }
+        if skip_mut && kw == String::from("mut") {
+            k = k + 1;
+            continue;
+        }
+        let src: String = String::from("");
+        src.push_str(prefix);
+        src.push_str(kw);
+        src.push_str(suffix);
+        if first_error_offset(src) != prefix.len() as i64 {
+            print_str(src);
+            return false;
         }
         k = k + 1;
     }
     true
 }
 
+fn match_arm_prefix(pat: String) -> String {
+    let s: String = String::from("module M\nfn f(e: E) -> i64 {\n    match e {\n        ");
+    s.push_str(pat);
+    s
+}
+
+// Template `t` is the source before the keyword and the source after it; `mut`
+// is skipped where it is a valid start of a pattern.
+fn probe_template(kws: Vec<String>, t: i64) -> bool [io] {
+    let fn_close: String = String::from("() -> i64 {\n    0\n}\n");
+    let param_close: String = String::from(": i64) -> i64 {\n    0\n}\n");
+    let struct_close: String = String::from(": i64,\n}\n");
+    let arm_close: String = String::from(") => 0,\n    }\n}\n");
+    if t == 0 {
+        probe(kws, String::from("module M\nstruct S {\n    "), struct_close, false)
+    } else if t == 1 {
+        probe(kws, String::from("module M\nstruct S {\n    a: i64,\n    "), struct_close, false)
+    } else if t == 2 {
+        probe(kws, String::from("module M\nstruct "), String::from(" {\n}\n"), false)
+    } else if t == 3 {
+        probe(kws, String::from("module M\nenum E {\n    A,\n    "), String::from(",\n}\n"), false)
+    } else if t == 4 {
+        probe(kws, String::from("module M\nenum E {\n    A("), String::from("),\n}\n"), false)
+    } else if t == 5 {
+        probe(kws, String::from("module M\nenum E {\n    A { "), String::from(": i64 },\n}\n"), false)
+    } else if t == 6 {
+        probe(kws, String::from("module M\nfn "), fn_close, false)
+    } else if t == 7 {
+        probe(kws, String::from("module M\nfn f() -> i64 {\n    for "), String::from(" in v { }\n    0\n}\n"), false)
+    } else if t == 8 {
+        probe(kws, String::from("module M\nfn f("), param_close, false)
+    } else if t == 9 {
+        probe(kws, String::from("module M\nfn f(a: "), String::from(") -> i64 {\n    0\n}\n"), false)
+    } else if t == 10 {
+        probe(kws, String::from("module M\nfn f() -> i64 {\n    let "), String::from(" = 1;\n    0\n}\n"), true)
+    } else if t == 11 {
+        probe(kws, match_arm_prefix(String::from("E::A(")), arm_close, true)
+    } else if t == 12 {
+        probe(kws, match_arm_prefix(String::from("E::A(x, ")), arm_close, true)
+    } else if t == 13 {
+        probe(kws, match_arm_prefix(String::from("S { ")), String::from(": x } => 0,\n    }\n}\n"), false)
+    } else {
+        probe(kws, match_arm_prefix(String::from("(a, ")), arm_close, true)
+    }
+}
+
 fn main() -> i32 [io] {
-    let prefixes: Vec<String> = Vec::new();
-    let suffixes: Vec<String> = Vec::new();
-    let skip: Vec<bool> = Vec::new();
-
-    prefixes.push(String::from("module M\nstruct S {\n    "));
-    suffixes.push(String::from(": i64,\n}\n"));
-    skip.push(false);
-
-    prefixes.push(String::from("module M\nstruct S {\n    a: i64,\n    "));
-    suffixes.push(String::from(": i64,\n}\n"));
-    skip.push(false);
-
-    prefixes.push(String::from("module M\nstruct "));
-    suffixes.push(String::from(" {\n}\n"));
-    skip.push(false);
-
-    prefixes.push(String::from("module M\nenum E {\n    A,\n    "));
-    suffixes.push(String::from(",\n}\n"));
-    skip.push(false);
-
-    prefixes.push(String::from("module M\nenum E {\n    A("));
-    suffixes.push(String::from("),\n}\n"));
-    skip.push(false);
-
-    prefixes.push(String::from("module M\nenum E {\n    A { "));
-    suffixes.push(String::from(": i64 },\n}\n"));
-    skip.push(false);
-
-    prefixes.push(String::from("module M\nfn "));
-    suffixes.push(String::from("() -> i64 {\n    0\n}\n"));
-    skip.push(false);
-
-    prefixes.push(String::from("module M\nfn f() -> i64 {\n    for "));
-    suffixes.push(String::from(" in v { }\n    0\n}\n"));
-    skip.push(false);
-
-    prefixes.push(String::from("module M\nfn f("));
-    suffixes.push(String::from(": i64) -> i64 {\n    0\n}\n"));
-    skip.push(false);
-
-    prefixes.push(String::from("module M\nfn f(a: "));
-    suffixes.push(String::from(") -> i64 {\n    0\n}\n"));
-    skip.push(false);
-
-    prefixes.push(String::from("module M\nfn f() -> i64 {\n    let "));
-    suffixes.push(String::from(" = 1;\n    0\n}\n"));
-    skip.push(true);
-
-    prefixes.push(String::from("module M\nfn f(e: E) -> i64 {\n    match e {\n        E::A("));
-    suffixes.push(String::from(") => 0,\n    }\n}\n"));
-    skip.push(true);
-
-    prefixes.push(String::from("module M\nfn f(e: E) -> i64 {\n    match e {\n        E::A(x, "));
-    suffixes.push(String::from(") => 0,\n    }\n}\n"));
-    skip.push(true);
-
-    prefixes.push(String::from("module M\nfn f(e: E) -> i64 {\n    match e {\n        S { "));
-    suffixes.push(String::from(": x } => 0,\n    }\n}\n"));
-    skip.push(false);
-
-    prefixes.push(String::from("module M\nfn f(e: E) -> i64 {\n    match e {\n        (a, "));
-    suffixes.push(String::from(") => 0,\n    }\n}\n"));
-    skip.push(true);
-
-    let mut t: u64 = 0;
-    while t < prefixes.len() {
-        if !probe(prefixes[t], suffixes[t], skip[t]) {
-            return i64_to_i32_wrap(101 + t as i64);
+    let kws: Vec<String> = keywords();
+    let mut t: i64 = 0;
+    while t < 15 {
+        if !probe_template(kws, t) {
+            return i64_to_i32_wrap(101 + t);
         }
         t = t + 1;
     }
