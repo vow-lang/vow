@@ -36,7 +36,7 @@ use vc_vec
 
 // "" when no pointer is stored, or none can be read back; else the detail of an
 // `unsupported-opcode` skip.
-fn vc_ptr_store_detail(f: IrFunction, tys: Vec<i64>) -> String {
+fn vc_ptr_store_detail(f: IrFunction, tys: Vec<i64>, calls: bool) -> String {
     let n_ids: u64 = tys.len();
     let held: Vec<i64> = dom_fill(n_ids, 0);
     let mut any: bool = false;
@@ -75,7 +75,7 @@ fn vc_ptr_store_detail(f: IrFunction, tys: Vec<i64>) -> String {
         }
         bi = bi + 1;
     }
-    if reads && !vc_ptr_store_exact(f, held, tys) {
+    if reads && !vc_ptr_store_exact(f, held, tys, calls) {
         return String::from("a pointer element is stored in a function that reads memory through a handle");
     }
     String::from("")
@@ -84,7 +84,7 @@ fn vc_ptr_store_detail(f: IrFunction, tys: Vec<i64>) -> String {
 // True when the pointer stores of a function that reads memory through a handle are all
 // into `Vec`s it built, and no pointer an element read through memory returned is used as an
 // object. `held[v]` marks the receivers of the stores, closed over Phis.
-fn vc_ptr_store_exact(f: IrFunction, held: Vec<i64>, tys: Vec<i64>) -> bool {
+fn vc_ptr_store_exact(f: IrFunction, held: Vec<i64>, tys: Vec<i64>, calls: bool) -> bool {
     let n_ids: u64 = tys.len();
     let elem: Vec<i64> = dom_fill(n_ids, 0);
     let mut bi: u64 = 0;
@@ -95,7 +95,12 @@ fn vc_ptr_store_exact(f: IrFunction, held: Vec<i64>, tys: Vec<i64>) -> bool {
             let inst: IrInst = blk.insts[ii];
             if inst.id >= 0 && (inst.id as u64) < n_ids && held[inst.id as u64] == 1 && inst.op != IOP_PHI() {
                 let k: i64 = vc_inst_vec_kind(inst);
-                if inst.op != IOP_CALL() || !(k == VC_VEC_NEW() || vc_str_kind_creates(k)) { return false; }
+                // With `calls` (one function of a call tree, before `vc_inline` flattens it) a
+                // collection read out of a field of a struct a callee builds is what
+                // `vc_resolve_ptr_fields` names by the object it holds once the callee is inlined;
+                // the check of the flattened function, which has no `calls`, refuses it if it did not.
+                let deferred: bool = calls && inst.op == IOP_FIELD_GET() && inst.ty == ITY_I64();
+                if !deferred && (inst.op != IOP_CALL() || !(k == VC_VEC_NEW() || vc_str_kind_creates(k))) { return false; }
             }
             if inst.op == IOP_CALL() && inst.id >= 0 && (inst.id as u64) < n_ids && inst.args.len() > 0
                 && vc_inst_vec_kind(inst) == VC_VEC_GET() {
