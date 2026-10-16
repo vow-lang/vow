@@ -750,9 +750,10 @@ fn check_agg_param_written_in_loop() -> i64 {
     0
 }
 
-// A pointer stored in a field is never read back, so it gets no marker. A write the
-// model cannot attribute to a parameter or an allocation leaves the loop uncut: the
-// target is a call result, a `WideSlot` element address, or a value of unit type.
+// A pointer stored in a field is the address of the object it names, a 64-bit slot the loop
+// may overwrite, so it gets a marker of type `i64` like any other slot. A write the model
+// cannot attribute to a parameter or an allocation leaves the loop uncut: the target is a
+// call result, a `WideSlot` element address, or a value of unit type.
 fn check_agg_write_refused() -> i64 {
     let pre: Vec<IrInst> = Vec::new();
     pre.push(mk_inst_alloc(30, 16));
@@ -761,7 +762,9 @@ fn check_agg_write_refused() -> i64 {
     w.push(mk_inst_field_set(32, 30, 0, 31));
     let c: VcInduct = vc_induct_cut(count_up_writing(pre, w));
     if c.status != VC_INDUCT_OK() { return 1; }
-    if count_marker(c.f, VC_INTERNAL_HAVOC_FIELD()) != 0 { return 2; }
+    if count_marker(c.f, VC_INTERNAL_HAVOC_FIELD()) != 1 { return 2; }
+    let pm: IrInst = field_marker(c.f, 0);
+    if !vc_is_havoc_field(pm) || pm.args[0] != 30 || pm.dv != 0 || pm.dv2 != ITY_I64() { return 5; }
 
     let call: Vec<IrInst> = Vec::new();
     call.push(mk_inst_call_extern(30, ITY_PTR(), Vec::new(), String::from("__vow_string_new")));
@@ -804,9 +807,9 @@ fn main() -> i32 {
     if r == 0 { r = check_vec_written_in_region_header() + 540; if r == 540 { r = 0; } }
     if r == 0 { r = check_vec_read_in_loop() + 550; if r == 550 { r = 0; } }
     if r == 0 { r = check_vec_born_in_loop() + 560; if r == 560 { r = 0; } }
-    if r == 0 { r = check_string_written_in_loop() + 620; if r == 620 { r = 0; } }
-    if r == 0 { r = check_string_phi_receiver() + 630; if r == 630 { r = 0; } }
-    if r == 0 { r = check_grow_per_receiver() + 640; if r == 640 { r = 0; } }
+    if r == 0 { r = check_string_written_in_loop() + 700; if r == 700 { r = 0; } }
+    if r == 0 { r = check_string_phi_receiver() + 720; if r == 720 { r = 0; } }
+    if r == 0 { r = check_grow_per_receiver() + 740; if r == 740 { r = 0; } }
     if r == 0 { r = check_vec_havoc_refused() + 570; if r == 570 { r = 0; } }
     if r == 0 { r = check_map_written_in_loop() + 580; if r == 580 { r = 0; } }
     if r == 0 { r = check_map_havoc_refused() + 585; if r == 585 { r = 0; } }

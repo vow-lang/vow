@@ -264,10 +264,41 @@ fn store_fn(read_back: bool, target_is_param: bool) -> IrFunction {
 
 fn check_pointer_stores() -> i64 {
     if vc_skip_reason(store_fn(false, false)).len() != 0 { return 30; }
-    let back: String = vc_skip_reason(store_fn(true, false));
-    if back != String::from("unsupported-opcode: a field that holds a pointer is read back") { return 31; }
-    let onto: String = vc_skip_reason(store_fn(false, true));
-    if !onto.contains(String::from("pointer written into a field of a value that is not an allocation")) { return 32; }
+    if vc_skip_reason(store_fn(true, false)).len() != 0 { return 31; }
+    if vc_skip_reason(store_fn(false, true)).len() != 0 { return 32; }
+    0
+}
+
+// `len` of the `Vec` stored in field 0 of a fresh struct, which holds `n` pushed elements.
+fn stored_len_fn(claimed: i64) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_const_i64(0, 0));
+    i.push(mk_inst_const_i64(1, 8));
+    i.push(mk_inst_call_extern(2, ITY_PTR(), args2(0, 1), String::from("__vow_vec_new")));
+    i.push(mk_inst_const_i64(3, 1));
+    i.push(mk_inst_call_extern(4, ITY_UNIT(), args2(2, 3), String::from("__vow_vec_push_val")));
+    i.push(mk_inst_alloc(5, 16));
+    i.push(mk_inst_field_set(6, 5, 0, 2));
+    i.push(mk_inst_field_get(7, ITY_I64(), 5, 0));
+    i.push(mk_inst_call_extern(8, ITY_U64(), args1(7), String::from("__vow_vec_len")));
+    i.push(mk_inst_const_i64(9, claimed));
+    i.push(mk_inst(10, IOP_EQ(), ITY_BOOL(), args2(8, 9)));
+    i.push(mk_vow(11, IOP_VOW_ENS(), 10, 0));
+    i.push(mk_inst_return(12, 8));
+    one_block(String::from("stored"), Vec::new(), ITY_U64(), i)
+}
+
+// A pointer written into a field is its object's address, and a read through the field is a
+// read of the object: the length of a stored `Vec` is its own, so the claim that it is 1 is
+// decided at once and the claim that it is 2 is a query over the stored address.
+fn check_stored_pointer_read_back() -> i64 {
+    let ok: IrFunction = stored_len_fn(1);
+    if vc_skip_reason(ok).len() != 0 { return 60; }
+    let cs: VcClaims = vc_claims(ok);
+    if cs.kinds.len() != 0 { return 61; }
+    if !vc_smt_render(cs.arena, cs.header).contains(String::from("(declare-const o0_haddr (_ BitVec 64))")) { return 62; }
+    let bad: VcClaims = vc_claims(stored_len_fn(2));
+    if bad.kinds.len() != 1 { return 63; }
     0
 }
 
@@ -311,6 +342,7 @@ fn main() -> i32 {
     if r == 0 { r = check_parameter_writes_overlaid(); }
     if r == 0 { r = check_overlay_read_classes(); }
     if r == 0 { r = check_pointer_stores(); }
+    if r == 0 { r = check_stored_pointer_read_back(); }
     if r == 0 { r = check_exec_terms(); }
     if r == 0 { r = check_two_reads_one_handle(); }
     i64_to_i32_wrap(r)

@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "sum"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// A write to the inner struct after the store is seen through the outer field, so the
+// sum is not the one before the write.
+module PtrFieldNestedStructWriteSeenWrong
+
+struct Inner { a: i64, b: i64 }
+struct Outer { inner: Inner, c: i64 }
+
+fn sum() -> i64 vow {
+  ensures: result == 6
+} {
+  let i: Inner = Inner { a: 1, b: 2 };
+  let o: Outer = Outer { inner: i, c: 3 };
+  i.b = 10;
+  o.inner.a + o.inner.b + o.c
+}
+
+fn main() -> i32 [io] {
+  print_i64(sum());
+  0
+}

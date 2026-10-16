@@ -488,9 +488,8 @@ of this change and stay `Skipped`.
   class even where the source types differ. The weaker alternative (assume a
   field `Vec` is distinct from every `Vec` parameter, as two `Vec` parameters
   are) was rejected: it would prove a property that fails when they are one
-  `Vec`. The model of a pointer written into a `Vec` or into a parameter's
-  field is not built. A pointer written into a field of a fresh struct is
-  admitted as a write with no effect when nothing reads that field back.
+  `Vec`. The model of a pointer written into a `Vec` is not built; the one
+  for a pointer written into a field is the #1704 addendum below.
 - **Induction.** A loop body that writes a Vec (`push`, `set`, `pop`) is cut for
   invariant-based induction (#1645): the cut puts a `__vc_havoc_vec` marker for
   each Vec the loop writes at the top of the header proper, which gives it an
@@ -1240,3 +1239,51 @@ Three builtins that were `unmodeled-builtin` are opaque total functions of their
   `unknown/string_split_count_opaque.vow` and `fail/string_join_no_parts_wrong.vow`.
 
 `String::from_cstr` and the arena variants remain `unmodeled-builtin` (`vc_str_unmodeled_reason`).
+
+## Addendum: a pointer written into a field (#1704)
+
+A pointer stored into a field used to be admitted only as a write with no effect into a fresh
+allocation that nothing read back; any other store, and any read back, was `Skipped`. A pointer in a
+slot is now its object's 64-bit address, kept in the ordinary scalar slot of `vc_agg`, and the
+overlay of the #1703 addendum reads through it.
+
+- **Why an address and not an object in the slot.** A slot is written under a path condition
+  (`ite(pc, new, old)`), merged by Phis, copied between aliasing parameters and havoced at a loop cut,
+  all for a 64-bit term. An object id in the slot would need the same four mechanisms again for
+  objects, and an object Phi on top. The address reuses them: the IR already types the field read
+  back `i64` (a handle), and a read through a handle is `ite(h == address(o), state of o, ...,
+  array[h])` over the entries of the overlay (`vc_overlay_addr_of`). A merge of two stored objects
+  is an `ite` of two addresses and the read is the `ite` of their states.
+- **Entries.** A parameter that is stored takes its overlay entry (`p<k>_haddr`) even when the
+  function's reads would not have needed one; an object the function allocated takes a free
+  address `o<n>_haddr` on its first store, assumed distinct from every other entry (an allocation is
+  no other object, a parameter or an earlier allocation). A pointer Phi is the `ite` of the
+  addresses of the objects its edges supply. Only parameter entries are listed in a counterexample.
+  The class of an entry (`Vec`, `String`, struct) is the class of the stored value's uses
+  (`vc_overlay_class_table`), so a `String` operation never names a `Vec` entry.
+- **Handles from the given memory are not fresh objects.** A 64-bit term read out of the memory
+  the function was given (a parameter's field symbol, a field or an element read through a handle)
+  is assumed different from the address of every object the function allocates, whichever of the two
+  was introduced first (`vc_overlay_note_loaded`, `vc_overlay_scan_params`). That is a fact about
+  allocation, not a bound: a fresh object is no object that existed before it. Without it a read of
+  a parameter's field before and after a store into a fresh struct could differ, because only the
+  second read would consider the stored object (`ptr_field_loaded_handle_is_not_fresh.vow`).
+- **Absent state.** An object the function allocated has a `Vec` state only in the blocks its
+  creation reaches; the overlay skips an entry whose state is absent in the block of the read
+  (`ptr_field_object_absent_on_other_branch.vow`).
+- **Imprecision, never unsoundness.** Two struct parameters stay possibly one object, so storing one
+  into the other's field can overwrite the slot the parameter has to be (`o.inner = i` with `o` and
+  `i` one object); the fixtures that store a struct into a parameter's field build the stored struct
+  themselves. A pointer's class is the class of its uses, so a stored object that is only ever read
+  through the field is not consulted for a collection read (it reads as the array does).
+- **What stays skipped.** A write through a handle (`h.items.push(1)` where `h.items` is read from
+  memory) and a `Vec` merged by a Phi (#1662) are as before. The `unsupported-opcode` details `pointer
+  written into a field of a value that is not an allocation` and `a field that holds a pointer is read
+  back` are gone.
+- **What this does not unskip.** The `reader_*` functions of `compiler/module_io.vow` store a
+  `String` into the reader (`reader_fail`), `module_encode` and `write_function` read a stored
+  `Vec` back; all eight stop being `Skipped` for that reason and end in `unknown`, `timeout` or a
+  structural counterexample instead, because a loop that writes a struct field is decided by
+  unwinding alone (#1754) and `reader_need` does not say `pos <= buf.len()` (#1755). Until those land
+  the eight functions cannot be proved natively, which is why this change lands only together with a
+  harness that accepts them.

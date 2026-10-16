@@ -1,0 +1,20 @@
+// A struct stored in a field of another: a scalar field of the inner struct is read back,
+// including a write made to the inner struct after the store.
+module PtrFieldNestedStructReadBack
+
+struct Inner { a: i64, b: i64 }
+struct Outer { inner: Inner, c: i64 }
+
+fn sum() -> i64 vow {
+  ensures: result == 14
+} {
+  let i: Inner = Inner { a: 1, b: 2 };
+  let o: Outer = Outer { inner: i, c: 3 };
+  i.b = 10;
+  o.inner.a + o.inner.b + o.c
+}
+
+fn main() -> i32 [io] {
+  print_i64(sum());
+  0
+}

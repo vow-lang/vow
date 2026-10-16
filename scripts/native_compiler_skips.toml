@@ -8,85 +8,13 @@
 # `code` is checked against the reason the native verifier reports.
 
 [[skip]]
-function = "module_decode"
-code = "non-modelable-callee"
-issue = 1704
-reason = "calls reader_fail, which stores a String into a parameter's field (module_io.vow)"
-
-[[skip]]
-function = "read_block"
-code = "non-modelable-callee"
-issue = 1704
-reason = "calls read_inst, which calls reader_fail, which stores a String into a parameter's field (module_io.vow)"
-
-[[skip]]
-function = "read_enum_layout"
-code = "non-modelable-callee"
-issue = 1704
-reason = "calls reader_fail, which stores a String into a parameter's field (module_io.vow)"
-
-[[skip]]
 function = "read_function"
-code = "unsupported-opcode"
-issue = 1663
-reason = "pushes a pointer into a Vec in a function that reads memory through a handle (module_io.vow)"
+code = "inlining-too-large"
+issue = 1791
+reason = "the call tree flattens to more than 16384 instructions (23331), which a worker does not decide within its 4 GB cap (module_io.vow); callee summaries close it"
 
 [[skip]]
-function = "read_inst"
-code = "non-modelable-callee"
-issue = 1704
-reason = "calls reader_fail, which stores a String into a parameter's field (module_io.vow)"
-
-[[skip]]
-function = "read_region_summary"
-code = "non-modelable-callee"
-issue = 1704
-reason = "calls reader_fail, which stores a String into a parameter's field (module_io.vow)"
-
-[[skip]]
-function = "read_struct_layout"
-code = "non-modelable-callee"
-issue = 1704
-reason = "calls reader_fail, which stores a String into a parameter's field (module_io.vow)"
-
-[[skip]]
-function = "read_variant"
-code = "non-modelable-callee"
-issue = 1704
-reason = "calls reader_fail, which stores a String into a parameter's field (module_io.vow)"
-
-[[skip]]
-function = "read_vow_entry"
-code = "non-modelable-callee"
-issue = 1704
-reason = "calls reader_fail, which stores a String into a parameter's field (module_io.vow)"
-
-[[skip]]
-function = "reader_check_bytes"
-code = "non-modelable-callee"
-issue = 1704
-reason = "calls reader_fail, which stores a String into a parameter's field (module_io.vow)"
-
-[[skip]]
-function = "reader_read_effects"
-code = "non-modelable-callee"
-issue = 1704
-reason = "calls reader_fail, which stores a String into a parameter's field (module_io.vow)"
-
-[[skip]]
-function = "reader_read_leb"
-code = "non-modelable-callee"
-issue = 1704
-reason = "calls reader_fail, which stores a String into a parameter's field (module_io.vow)"
-
-[[skip]]
-function = "region_constraint_decode"
-code = "non-modelable-callee"
-issue = 1704
-reason = "calls reader_fail, which stores a String into a parameter's field (module_io.vow)"
-
-[[skip]]
-function = "reader_read_string"
-code = "non-modelable-callee"
-issue = 1704
-reason = "its callee reader_fail stores a String into a field of the reader parameter (module_io.vow)"
+function = "module_decode"
+code = "inlining-too-large"
+issue = 1791
+reason = "the call tree flattens to more than 16384 instructions, which a worker does not decide within its 4 GB cap (module_io.vow); callee summaries close it"

@@ -1,0 +1,26 @@
+// TEST: counterexample-fn "lens"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// `ids` holds the one-element Vec and `names` the three-element one, so the length of
+// `ids` is not 3.
+module PtrFieldTwoFieldsSwappedWrong
+
+struct Pair { ids: Vec<i64>, names: Vec<i64> }
+
+fn lens() -> u64 vow {
+  ensures: result == 3
+} {
+  let a: Vec<i64> = Vec::new();
+  a.push(1);
+  let b: Vec<i64> = Vec::new();
+  b.push(1);
+  b.push(2);
+  b.push(3);
+  let p: Pair = Pair { ids: a, names: b };
+  p.ids.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(lens());
+  0
+}
