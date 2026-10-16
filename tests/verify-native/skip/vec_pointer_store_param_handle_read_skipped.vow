@@ -1,0 +1,20 @@
+// TEST: skip-reason unsupported-opcode
+// The `Vec` a pointer is stored into is a parameter, which a handle the function loads
+// (`a.names`) may name, so the function that reads through a handle stays `Skipped`.
+module VecPointerStoreParamHandleReadSkipped
+
+struct Bag { names: Vec<String> }
+
+fn total(a: Bag, out: Vec<String>, s: String) -> u64 vow {
+  ensures: result == a.names.len() + out.len()
+} {
+  out.push(s);
+  a.names.len() + out.len()
+}
+
+fn main() -> i32 [io] {
+  let a: Bag = Bag { names: Vec::new() };
+  let out: Vec<String> = Vec::new();
+  print_u64(total(a, out, String::from("a")));
+  0
+}

@@ -708,7 +708,21 @@ fn check_pointer_elements() -> i64 {
     let ps: Vec<i64> = Vec::new();
     ps.push(ITY_I64());
     hf.params = ps;
-    if vc_reason_code(vc_skip_reason(hf)) != VC_SKIP_UNSUPPORTED_OPCODE() { return 5; }
+    // the Vec the pointer is stored into is built by the function: no handle can name it
+    if vc_skip_reason(hf).len() != 0 { return 5; }
+    // the same with a parameter Vec: a handle may be that parameter
+    let pv: Vec<IrInst> = Vec::new();
+    pv.push(mk_inst_arg(40, ITY_PTR(), 0));
+    pv.push(mk_inst_arg(41, ITY_I64(), 1));
+    pv.push(mk_inst_call_extern(30, ITY_UNIT(), args2(40, 40), String::from("__vow_vec_push_val")));
+    pv.push(mk_inst_call_extern(31, ITY_U64(), args1(41), String::from("__vow_vec_len")));
+    pv.push(mk_inst_const_i64(32, 0));
+    pv.push(mk_inst_return(33, 32));
+    let pp: Vec<i64> = Vec::new();
+    pp.push(ITY_PTR());
+    pp.push(ITY_I64());
+    let pf: IrFunction = one_block(String::from("v"), pp, ITY_I64(), pv);
+    if vc_skip_reason(pf) != String::from("unsupported-opcode: a pointer element is stored in a function that reads memory through a handle") { return 6; }
     0
 }
 
