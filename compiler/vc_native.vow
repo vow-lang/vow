@@ -625,10 +625,29 @@ fn vc_open_stop(f: IrFunction, fr: VcFrames, ind: VcInduction, frozen: VcRound, 
 // undecided: then it is proven, with the sites of this and the last round.
 fn vc_decided_outcome(f: IrFunction, fr: VcFrames, ind: VcInduction, frozen: VcRound, sites: Vec<ParsedArithSite>, last_sites: Vec<ParsedArithSite>, acc: VcClauseAcc, targets: Vec<i64>, all_claims: bool, closed: bool) -> VcOutcome {
     if ind.proves && vc_undecided(frozen) {
-        return vc_with_clauses(vc_proven_with(vc_merge_sites(sites, last_sites)), vc_clause_acc_new(), targets, all_claims, true);
+        // The round that was undecided may have been stopped by the refinement budget
+        // (`vc_refine_ms`) before it reached every abort: the cut over-approximates every run, so
+        // the aborts it found are the warnings that cannot miss one.
+        let seen: Vec<ParsedArithSite> = vc_merge_sites(sites, last_sites);
+        return vc_with_clauses(vc_proven_with(vc_merge_sites(seen, ind.sites)), vc_clause_acc_new(), targets, all_claims, true);
     }
     let oc: VcOutcome = vc_chain_outcome(f, fr, frozen.frame, frozen.result);
     vc_with_clauses(oc, acc, targets, all_claims, closed)
+}
+
+// The budget the bounded rounds run in once an inductive proof stands. The proof decides the
+// verdict; the rounds only find which checked-arithmetic aborts a run reaches, so they get
+// what the proof left of a quarter of `--timeout` on top of what it took, and an undecided one
+// is answered with the aborts the cut found (`vc_decided_outcome`) instead of costing the
+// function its proof.
+fn vc_refine_limit(spent_ms: i64, timeout_ms: i64) -> i64 {
+    let limit: i64 = spent_ms + timeout_ms / 4;
+    if limit < timeout_ms { return limit; }
+    timeout_ms
+}
+
+fn vc_refine_ms(started: i64, timeout_ms: i64) -> i64 [io] {
+    vc_refine_limit((time_micros() - started) / 1000, timeout_ms)
 }
 
 // The engine. Without `all_claims` the first hard claim that is not `unsat`
@@ -672,7 +691,9 @@ fn vc_verify_function_mode(f: IrFunction, m: IrModule, timeout_ms: i64, scratch:
             return vc_stopped_outcome(f, inl.frames, frozen, bad, acc, targets, all_claims);
         }
         let sites: Vec<ParsedArithSite> = Vec::new();
-        let r: VcRound = vc_run_round(f, g, inl.frames, Vec::new(), sites, started, timeout_ms, scratch, cache, slicing, all_claims, acc);
+        let mut round_ms: i64 = timeout_ms;
+        if ind.proves && !all_claims { round_ms = vc_refine_ms(started, timeout_ms); }
+        let r: VcRound = vc_run_round(f, g, inl.frames, Vec::new(), sites, started, round_ms, scratch, cache, slicing, all_claims, acc);
         if r.ended && !frozen.ended {
             frozen = r;
         }
