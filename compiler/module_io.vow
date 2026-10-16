@@ -232,8 +232,8 @@ fn write_i64_bits(out: Vec<i64>, v: i64) {
 // byte's value.
 fn reader_elem(r: ModuleReader, at: u64) -> i64 vow {
     requires: at < r.buf.len(),
-    ensures: result >= 0,
-    ensures: result <= 255
+    ensures: (r.buf[at] >= 0 && r.buf[at] <= 255 && result == r.buf[at])
+        || ((r.buf[at] < 0 || r.buf[at] > 255) && result == 0)
 } {
     let b: i64 = r.buf[at];
     if b < 0 || b > 255 {
