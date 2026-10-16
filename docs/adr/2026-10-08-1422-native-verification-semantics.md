@@ -1162,7 +1162,7 @@ Three small rules, each sound for proofs and none a cap or a havoc.
   string operand of a `Vec` or `String` operation, or the object of a field access): a `Vec`
   the function built is no object a loaded handle can name, and the slot is a constant nothing
   else mentions, so a function that never uses a read pointer as an object cannot tell it from
-  the object. An element read of a parameter `Vec` counts as well as one through a handle.
+  the object. An element read of a parameter `Vec` counts as well as one through a handle. In the check of one function of a call tree, before inlining, a receiver that is a collection read out of a struct field is taken as the `Vec` `vc_resolve_ptr_fields` will name once the callee that builds the struct is inlined (`pass/vec_pointer_store_callee_built_struct.vow`); the check of the flattened function refuses it if that did not happen.
   Each is `unsupported-opcode` with its own detail, never a free answer. The
   alternative that was rejected is to register the fresh constants as hook variables and let the
   recheck turn a counterexample that reads them into `unknown`: a function the ESBMC path still

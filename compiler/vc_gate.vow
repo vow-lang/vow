@@ -543,7 +543,7 @@ fn vc_skip_reason_with(src: IrFunction, calls: bool) -> String {
         return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), stored);
     }
     if has_vec {
-        let elems: String = vc_ptr_store_detail(f, tys);
+        let elems: String = vc_ptr_store_detail(f, tys, calls);
         if elems.len() > 0 {
             return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), elems);
         }

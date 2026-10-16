@@ -9,9 +9,9 @@
 
 [[skip]]
 function = "module_decode"
-code = "unsupported-opcode"
-issue = 1663
-reason = "pushes a pointer into a Vec in a function that reads memory through a handle (module_io.vow)"
+code = "non-modelable-callee"
+issue = 1704
+reason = "calls reader_fail, which stores a String into a parameter's field (module_io.vow)"
 
 [[skip]]
 function = "read_block"
