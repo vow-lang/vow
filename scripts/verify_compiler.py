@@ -83,6 +83,7 @@ NATIVE_SKIP_CODES = (
     "unsupported-opcode",
     "non-modelable-callee",
     "reserved-verifier-symbol",
+    "inlining-too-large",
 )
 
 USE_RE = re.compile(r"^use\s+(\w+)\s*$", re.MULTILINE)
