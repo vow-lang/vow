@@ -1,0 +1,19 @@
+// A `Vec` or `String` that is only stored into a parameter's field (nothing else uses it as an
+// operand) is still the object the field names: a read of the field sees it.
+module PtrFieldFreshObjectStoredOnly
+
+struct Holder { items: Vec<i64>, name: String }
+
+fn reset(h: Holder) vow {
+  ensures: h.items.len() == 0 && h.name.len() == 2
+} {
+  h.items = Vec::new();
+  h.name = String::from("hi");
+}
+
+fn main() -> i32 [io] {
+  let h: Holder = Holder { items: Vec::new(), name: String::new() };
+  reset(h);
+  print_u64(h.name.len());
+  0
+}

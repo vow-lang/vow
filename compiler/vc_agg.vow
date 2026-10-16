@@ -155,6 +155,12 @@ fn vc_agg_child(ag: VcAgg, parent: i64, slot: i64) -> i64 {
     vc_agg_push_obj(ag, VC_OBJ_CHILD(), parent, slot)
 }
 
+// True when `obj` is memory the function was given or may be (a parameter, a child of one, or a
+// merge), not an object the function allocated.
+fn vc_agg_is_param(ag: VcAgg, obj: i64) -> bool {
+    obj >= 0 && ag.kinds[obj as u64] != VC_OBJ_ALLOC()
+}
+
 // The parameter a parameter or child object belongs to.
 fn vc_agg_root_param(ag: VcAgg, obj: i64) -> i64 {
     let mut o: i64 = obj;

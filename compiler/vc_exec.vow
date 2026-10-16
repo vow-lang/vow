@@ -441,7 +441,7 @@ fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
         let mut ty: i64 = w.tys[val as u64];
         if ty == ITY_PTR() {
             // The slot holds the address of the object (`vc_overlay`).
-            term = vc_overlay_addr_of(w.ov, ag, cs.arena, cs.header, cs.assumed, w.obj_of[val as u64], vc_overlay_class_of(w.ov, val));
+            term = vc_overlay_addr_of(w.ov, ag, cs.arena, cs.header, cs.assumed, w.obj_of[val as u64], vc_overlay_stored_class(w.ov, val, vc_agg_is_param(ag, w.obj_of[inst.args[0] as u64])));
             ty = ITY_I64();
         }
         let seen: u64 = ag.ps_param.len();
@@ -456,7 +456,7 @@ fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
     if op == IOP_FIELD_GET() && w.tys[inst.args[0] as u64] == ITY_I64() {
         let h: i64 = w.var_of[inst.args[0] as u64];
         let base: i64 = vc_heap_field(w.hp, cs.arena, cs.header, h, inst.dv, inst.ty);
-        vc_define(w, inst, vc_overlay_field(w.ov, ag, cs.arena, cs.header, h, inst.dv, inst.ty, base));
+        vc_define(w, inst, vc_overlay_field(w.ov, ag, cs.arena, cs.header, cs.assumed, h, inst.dv, inst.ty, base));
         vc_note_loaded(w, base, inst.ty);
         return true;
     }
@@ -1042,6 +1042,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
     w.vv.content = vc_str_reads_bytes(f);
     if vc_overlay_stores_pointer(f, tys) {
         w.ov.class_of = vc_overlay_class_table(f, tys);
+        w.ov.built_of = vc_overlay_built_table(f, tys.len());
     }
     vc_agg_enable_alias(w.ag, ar, hdr, vc_agg_alias_params(f, tys.len()));
     if vc_heap_overlay_needed(f, tys) {
