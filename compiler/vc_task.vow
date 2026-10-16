@@ -5,6 +5,7 @@ use diag
 use verifier
 use vc_cache
 use vc_native
+use vc_summary
 use vc_probe
 use vc_worker
 use vc_queue
@@ -20,7 +21,7 @@ use vc_queue
 // one-function workers'.
 
 fn vc_task_applies(f: IrFunction, kind: i64) -> bool {
-    if kind == VC_TASK_KIND_VERIFY() { return true; }
+    if kind == VC_TASK_KIND_VERIFY() || kind == VC_TASK_KIND_PROOF() { return true; }
     if kind == VC_TASK_KIND_VACUITY() { return vc_probe_vacuity_applicable(f); }
     if kind == VC_TASK_KIND_TRIVIAL() { return vc_probe_trivial_applicable(f); }
     false
@@ -34,8 +35,8 @@ fn vc_task_target(f: IrFunction, kind: i64) -> IrFunction {
 }
 
 // Probes never ask for per-clause verdicts; only a verify task does.
-fn vc_task_run(m: IrModule, f: IrFunction, kind: i64, budget_ms: i64, scratch: String, cache: VcCache, clauses: bool) -> VcOutcome [io, read, write] {
-    vc_verify_function_mode(vc_task_target(f, kind), m, budget_ms, scratch, cache, clauses && kind == VC_TASK_KIND_VERIFY())
+fn vc_task_run(m: IrModule, f: IrFunction, kind: i64, budget_ms: i64, scratch: String, cache: VcCache, clauses: bool, cfg: VcSummaryCfg) -> VcOutcome [io, read, write] {
+    vc_verify_function_summarised(vc_task_target(f, kind), m, budget_ms, scratch, cache, clauses && kind == VC_TASK_KIND_VERIFY(), cfg, kind == VC_TASK_KIND_PROOF())
 }
 
 // Why the plan cannot be run against `fns`, or "" when it can: the parent
@@ -105,7 +106,7 @@ fn vc_task_parent_gone(parent: i64) -> bool [read] {
 
 // Decides claimed task `k` and publishes its answer. False when the answer
 // cannot be written.
-fn vc_task_decide(m: IrModule, t: VcQTasks, root: String, w: i64, k: u64, budget_ms: i64, cache: VcCache, clauses: bool) -> bool [io, read, write] {
+fn vc_task_decide(m: IrModule, t: VcQTasks, root: String, w: i64, k: u64, budget_ms: i64, cache: VcCache, clauses: bool, cfg: VcSummaryCfg) -> bool [io, read, write] {
     let task: i64 = k as i64;
     diag_eprintln_best_effort(vc_task_marker(task));
     let scratch: String = vc_q_scratch_path(root, w, task);
@@ -113,7 +114,7 @@ fn vc_task_decide(m: IrModule, t: VcQTasks, root: String, w: i64, k: u64, budget
     let dir: String = { if owned { scratch } else { String::from("") } };
     let fns: Vec<IrFunction> = m.functions;
     let f: IrFunction = fns[t.idx[k] as u64];
-    let oc: VcOutcome = vc_task_run(m, f, t.kinds[k], budget_ms, dir, cache, clauses);
+    let oc: VcOutcome = vc_task_run(m, f, t.kinds[k], budget_ms, dir, cache, clauses, cfg);
     if owned { fs_remove_dir_all(scratch); }
     vc_q_publish(root, task, vc_wire_encode(oc))
 }
@@ -123,18 +124,18 @@ fn vc_task_decide(m: IrModule, t: VcQTasks, root: String, w: i64, k: u64, budget
 // A retry is only ever claimed first, so it runs in a worker that has decided
 // nothing before it. Exit 4 when an answer cannot be written, which the parent
 // reads as a worker that produced no result; exit 5 when the parent is gone.
-fn vc_task_session(m: IrModule, t: VcQTasks, root: String, w: i64, budget_ms: i64, cache: VcCache, clauses: bool) -> i32 [io, read, write] {
+fn vc_task_session(m: IrModule, t: VcQTasks, root: String, w: i64, budget_ms: i64, cache: VcCache, clauses: bool, cfg: VcSummaryCfg) -> i32 [io, read, write] {
     let parent: i64 = vc_task_parent_pid();
     let first: i64 = vc_q_claim_retry(root, w, t.idx.len() as i64);
     if first >= 0 {
         if vc_task_parent_gone(parent) { return 5; }
-        if !vc_task_decide(m, t, root, w, first as u64, budget_ms, cache, clauses) { return 4; }
+        if !vc_task_decide(m, t, root, w, first as u64, budget_ms, cache, clauses, cfg) { return 4; }
     }
     let mut k: u64 = 0;
     while k < t.idx.len() {
         if vc_q_claim(root, w, k as i64) {
             if vc_task_parent_gone(parent) { return 5; }
-            if !vc_task_decide(m, t, root, w, k, budget_ms, cache, clauses) { return 4; }
+            if !vc_task_decide(m, t, root, w, k, budget_ms, cache, clauses, cfg) { return 4; }
         }
         k = k + 1;
     }

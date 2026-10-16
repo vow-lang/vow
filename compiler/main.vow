@@ -17,6 +17,7 @@ use vc_worker
 use vc_queue
 use vc_irwire
 use vc_pool
+use vc_summary
 use vc_task
 use vc_probe
 use vc_driver
@@ -1896,7 +1897,7 @@ fn native_report_result(f: IrFunction, ir_mod: IrModule, m: Module, path: String
         diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": UNKNOWN")));
         let why: String = {
             if output_has_memory_limit(vr.raw_output) { memory_limit_reason() }
-            else if vc_output_has_unwinding(vr.raw_output) || vc_output_has_inline_budget(vr.raw_output) || vc_output_has_opaque_hook(vr.raw_output) || vc_output_has_map_state(vr.raw_output) { vr.raw_output }
+            else if vc_output_has_unwinding(vr.raw_output) || vc_output_has_inline_budget(vr.raw_output) || vc_output_has_opaque_hook(vr.raw_output) || vc_output_has_map_state(vr.raw_output) || vc_output_has_summary(vr.raw_output) { vr.raw_output }
             else { String::from("the solver answered unknown") }
         };
         record_soft_fail(soft_meta, String::from("unknown"), why, f.name);
@@ -2022,7 +2023,7 @@ fn run_verify_native(argv: Vec<String>, fr: LoweredFrontend, path: String, tctx:
 }
 
 // `verify-worker <source> --worker-budget-ms MS [--worker-clauses]
-// [--worker-module-root DIR] [--worker-ir FILE]
+// [--worker-module-root DIR] [--worker-ir FILE] [--worker-summaries IDS]
 // [--worker-cache-dir D --worker-solver-id V]` plus
 // either `--worker-session ROOT --worker-id W` or `--worker-index N
 // --worker-name F [--worker-probe vacuity|trivial] [--worker-scratch DIR]`:
@@ -2077,12 +2078,13 @@ fn run_verify_worker(argv: Vec<String>) -> i32 [io, read, write] {
         return 3;
     }
     let vm: IrModule = have[0];
+    let cfg: VcSummaryCfg = VcSummaryCfg { trusted: vc_ids_parse(get_flag_arg(argv, "--worker-summaries")), budget: vc_summary_budget() };
     if session.len() > 0 {
-        return vc_task_session(vm, tasks, session, str_to_i64(get_flag_arg(argv, "--worker-id")), budget_ms, cache, clauses);
+        return vc_task_session(vm, tasks, session, str_to_i64(get_flag_arg(argv, "--worker-id")), budget_ms, cache, clauses, cfg);
     }
     let fns: Vec<IrFunction> = vm.functions;
     let f: IrFunction = fns[tasks.idx[0] as u64];
-    print_str(vc_wire_encode(vc_task_run(vm, f, tasks.kinds[0], budget_ms, get_flag_arg(argv, "--worker-scratch"), cache, clauses)));
+    print_str(vc_wire_encode(vc_task_run(vm, f, tasks.kinds[0], budget_ms, get_flag_arg(argv, "--worker-scratch"), cache, clauses, cfg)));
     0
 }
 

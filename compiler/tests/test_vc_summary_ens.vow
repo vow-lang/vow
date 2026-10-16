@@ -1,0 +1,99 @@
+module TestVcSummaryEns
+
+use ir
+use frontend
+use perfetto
+use verifier
+use vc_ops
+use vc_gate
+use vc_inline
+use vc_summary
+use vc_linear
+
+// The `ensures` clauses `vc_stub_of` copies into a summary, on the fixtures of
+// tests/verify-native/summary/ lowered by the real front end.
+
+fn count_assumes(f: IrFunction) -> i64 {
+    let mut n: i64 = 0;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            if vc_is_assume(blk.insts[ii]) { n = n + 1; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    n
+}
+
+fn count_ens(f: IrFunction) -> i64 {
+    let mut n: i64 = 0;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            if blk.insts[ii].op == IOP_VOW_ENS() { n = n + 1; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    n
+}
+
+fn stub_of_fixture(path: String, name: String, ens: bool) -> IrFunction [io, read, write] {
+    let fr: LoweredFrontend = frontend_lower_path_traced(path, String::from(""), trace_off());
+    let m: IrModule = vc_erase_linear(fr.ir_mod);
+    let fns: Vec<IrFunction> = m.functions;
+    let mut i: u64 = 0;
+    while i < fns.len() {
+        let g: IrFunction = fns[i];
+        if g.name == name {
+            let flat: VcInlined = vc_inline(g, m, VC_INLINE_INST_CAP());
+            let e: VcEffects = vc_effects_of(g, flat.f);
+            if !e.ok { return ir_function_new(-1, String::from("rejected"), ITY_UNIT(), 0, String::from("")); }
+            return vc_stub_of(g, e, ens);
+        }
+        i = i + 1;
+    }
+    ir_function_new(-1, String::from("absent"), ITY_UNIT(), 0, String::from(""))
+}
+
+fn check_clauses_copied() -> i64 [io, read, write] {
+    let dir: String = String::from("tests/verify-native/summary/");
+    // two conjuncts, one return site: one assumption, no claim left
+    let a: IrFunction = stub_of_fixture(str2(dir, String::from("ensures_chain_proven.vow")), String::from("bump"), true);
+    if a.id < 0 { return 1; }
+    if count_assumes(a) != 1 || count_ens(a) != 0 { return 2; }
+    // the clauses are not copied unless asked for
+    let b: IrFunction = stub_of_fixture(str2(dir, String::from("ensures_chain_proven.vow")), String::from("bump"), false);
+    if count_assumes(b) != 0 { return 3; }
+    // two return sites that read the same clause
+    let c: IrFunction = stub_of_fixture(str2(dir, String::from("ensures_early_return_branches.vow")), String::from("clampish"), true);
+    if c.id < 0 || count_assumes(c) != 1 || count_ens(c) != 0 { return 4; }
+    // a clause that calls a function
+    let d: IrFunction = stub_of_fixture(str2(dir, String::from("ensures_helper_call.vow")), String::from("inc"), true);
+    if d.id < 0 || count_assumes(d) != 1 { return 5; }
+    // the clause reads the result: it is the unconstrained value of the stub
+    let e: IrFunction = stub_of_fixture(str2(dir, String::from("ensures_result_chain.vow")), String::from("inc"), true);
+    if e.id < 0 || count_assumes(e) != 1 { return 6; }
+    0
+}
+
+// A name a `let` of the body shadows reads another value at the later return: the two copies
+// differ and the clause is not assumed.
+fn check_shadowed_parameter() -> i64 [io, read, write] {
+    let p: String = String::from("tests/verify-native/summary/ensures_shadowed_param.vow");
+    let a: IrFunction = stub_of_fixture(p, String::from("pick"), true);
+    if a.id < 0 { return 1; }
+    if count_assumes(a) != 0 { return 2; }
+    0
+}
+
+fn main() -> i32 [io, read, write] {
+    let mut r: i64 = check_clauses_copied();
+    if r == 0 { let d: i64 = check_shadowed_parameter(); if d != 0 { r = 100 + d; } }
+    i64_to_i32_wrap(r)
+}

@@ -633,3 +633,38 @@ fn vc_close_loops(f: IrFunction) -> IrFunction {
     }
     cur
 }
+
+// The `VowReq` whose position in reverse postorder is last, as [block, index],
+// or [-1, -1]. The requires of a function are lowered in sequence ahead of its
+// body, so each one dominates the next and the last of them is the point where
+// every `requires` has been assumed.
+fn vc_last_requires_at(f: IrFunction, rpo: Vec<i64>) -> Vec<i64> {
+    let at: Vec<i64> = Vec::new();
+    at.push(-1);
+    at.push(-1);
+    let mut best: i64 = -1;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        if rpo[bi] >= 0 {
+            let blk: IrBlock = f.blocks[bi];
+            let mut ii: u64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                let here: i64 = ii as i64;
+                if inst.op == IOP_VOW_REQ() && (rpo[bi] > best || (rpo[bi] == best && here > at[1])) {
+                    best = rpo[bi];
+                    at[0] = bi as i64;
+                    at[1] = ii as i64;
+                }
+                ii = ii + 1;
+            }
+        }
+        bi = bi + 1;
+    }
+    at
+}
+
+fn vc_cfg_rpo(f: IrFunction) -> Vec<i64> {
+    let ids: Vec<i64> = dom_block_id_table(f);
+    dom_rpo_numbers(f.blocks.len(), dom_successors(f, ids))
+}

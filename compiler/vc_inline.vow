@@ -269,7 +269,7 @@ fn vc_map_inst(inst: IrInst, frame: i64, sub: Vec<i64>, vbase: i64, bbase: i64) 
     if id >= 0 { id = vbase + id; }
     let out: IrInst = vc_clone_inst(inst, id, vc_map_args(inst, sub, vbase), dv, dv2);
     if vc_op_frame_marked(inst.op) {
-        out.ds = vc_frame_mark(frame);
+        if !vc_is_assume(inst) { out.ds = vc_frame_mark(frame); }
     } else if vc_frame_in_dv2(inst) {
         out.dv2 = frame + 1;
     }
@@ -588,6 +588,14 @@ fn vc_non_modelable_callee(g: IrFunction, why: String) -> String {
 // `vc_skip_reason` alone. A call tree above the size budget is not skipped: the
 // worker answers `unknown` for it.
 fn vc_module_skip_reason(f: IrFunction, m: IrModule) -> String {
+    vc_module_skip_reason_via(f, m, m, VC_INLINE_SKIP_INSTS())
+}
+
+// The same decision where the flattened body is built from `inl_m`, the module whose
+// summarised callees stand for their bodies (`vc_summary`), and bounded by `budget`
+// instructions. Every check of the call tree itself reads `m`: a summarised callee is
+// still vetted, only its body is not part of the flattened function.
+fn vc_module_skip_reason_via(f: IrFunction, m: IrModule, inl_m: IrModule, budget: i64) -> String {
     if !vc_has_user_call(f) {
         return vc_skip_reason(vc_prepare_for_gate(f, m));
     }
@@ -622,16 +630,16 @@ fn vc_module_skip_reason(f: IrFunction, m: IrModule) -> String {
         if gsig.len() > 0 { return vc_non_modelable_callee(g, gsig); }
         oi = oi + 1;
     }
-    let inl: VcInlined = vc_inline(f, m, VC_INLINE_INST_CAP());
+    let inl: VcInlined = vc_inline(f, inl_m, VC_INLINE_INST_CAP());
     if inl.status == VC_INLINE_TOO_LARGE() { return String::from(""); }
     if inl.status != VC_INLINE_OK() {
         return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), String::from("call target is not in the module"));
     }
     let size: i64 = vc_inst_count(inl.f);
-    if size > VC_INLINE_SKIP_INSTS() {
+    if size > budget {
         let detail: String = i64_to_string(size);
         detail.push_str(String::from(" instructions after inlining, above the "));
-        detail.push_str(i64_to_string(VC_INLINE_SKIP_INSTS()));
+        detail.push_str(i64_to_string(budget));
         detail.push_str(String::from(" a worker decides within its memory cap"));
         return vc_reason(VC_SKIP_INLINING_TOO_LARGE(), detail);
     }
