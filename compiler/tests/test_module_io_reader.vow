@@ -24,25 +24,35 @@ fn main() -> i32 {
     if past.err_kind != DEC_TRUNCATED() { return 7; }
     if past.err_offset != 5 { return 8; }
 
-    // A buffer holds bytes: an element outside 0..=255 is a decode error at its index,
-    // never another byte's value, and later reads return 0.
+    // The readers read the low 8 bits of an element, so a value outside 0..=255 can neither
+    // go negative nor widen the integer a multi-byte read builds.
     let wide: Vec<i64> = Vec::new();
-    wide.push(1);
     wide.push(259);
-    wide.push(7);
+    wide.push(0 - 1);
+    wide.push(256);
+    wide.push(511);
+    wide.push(0 - 256);
+    wide.push(1);
+    wide.push(2);
+    wide.push(3);
     let w: ModuleReader = reader_new(wide);
-    if reader_read_u8(w) != 1 { return 9; }
-    if reader_read_u8(w) != 0 { return 10; }
-    if w.err_kind != DEC_INVALID_KIND() || w.err_offset != 1 || w.err_value != 259 { return 11; }
-    if reader_read_u8(w) != 0 { return 12; }
+    if reader_read_u8(w) != 3 { return 9; }
+    if reader_read_u8(w) != 255 { return 10; }
+    if reader_read_u16_le(w) != 255 * 256 { return 11; }
+    if reader_read_u32_le(w) != 1 * 256 + 2 * 65536 + 3 * 16777216 { return 12; }
+    if w.err_kind != DEC_OK() { return 13; }
 
+    // `module_decode` rejects such an element up front: an error at its index, never another
+    // byte's value.
+    let bad: Vec<i64> = Vec::new();
+    bad.push(86);
+    bad.push(77);
+    bad.push(259);
+    let d: ModuleDecode = module_decode(bad);
+    if d.err_kind != DEC_INVALID_KIND() || d.err_offset != 2 || d.err_value != 259 { return 14; }
     let neg: Vec<i64> = Vec::new();
-    neg.push(1);
-    neg.push(2);
     neg.push(0 - 1);
-    neg.push(4);
-    let n: ModuleReader = reader_new(neg);
-    if reader_read_u32_le(n) != 0 { return 13; }
-    if n.err_kind != DEC_INVALID_KIND() || n.err_offset != 2 || n.err_value != 0 - 1 { return 14; }
+    let e: ModuleDecode = module_decode(neg);
+    if e.err_kind != DEC_INVALID_KIND() || e.err_offset != 0 || e.err_value != 0 - 1 { return 15; }
     0
 }
