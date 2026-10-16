@@ -1,6 +1,5 @@
-// TEST: skip-reason unsupported-opcode
-// The model keeps no object in a field: a Vec stored in a struct field that the
-// function reads back stays skipped.
+// A Vec stored in a struct field and read back: the only store of the field dominates
+// the read, so `p.ids` is that Vec and `p.ids.len()` is its length.
 module HeapPointerFieldReadBack
 
 struct Pair { ids: Vec<i64>, n: i64 }

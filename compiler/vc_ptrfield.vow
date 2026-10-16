@@ -1,0 +1,373 @@
+module VcPtrField
+
+use ir
+use ir_dominance
+use vc_ops
+use vc_strops
+use vc_gate
+use vc_loops
+use vc_agg_shape
+use vc_induct_agg
+
+// A collection held in a field of a struct the function allocated, and used where an
+// object is declared. The IR types such a field `i64` (a handle, see `vc_heap`), so
+// `block.insts.push(x)` is a call whose receiver is a value the model reads through
+// memory and cannot write. When the function stores that field exactly once and the
+// store dominates the read, the read is the stored object, and the call is the call on
+// that object. `vc_resolve_ptr_fields` makes this substitution on the inlined function,
+// before the gate: it changes which value an object operand names, never what an
+// instruction does.
+//
+// The rule is flow-insensitive on purpose, so that it is easy to see exact:
+//
+//   - the field is read from an allocation `A` (a `RegionAlloc`, reached through the
+//     Phis a call result is after inlining, which must lead to nothing else);
+//   - exactly one `FieldSet` of that slot may name `A`: a store through `A`, through a
+//     Phi that merges `A`, through a receiver the rule cannot place, or, when `A` has
+//     escaped (it was stored into a field, pushed into a collection or passed as a value,
+//     so a pointer the function loaded may be it), through any pointer that is not a
+//     parameter or an allocation. A second such store leaves the read alone;
+//   - the stored value is a pointer and the store dominates the read, so on every path to
+//     the read the slot holds that value, and the value is defined where the read is.
+//
+// Only the object operands of a `Vec` or `String` operation are replaced. A read with
+// another use keeps its instruction; a read whose every use was replaced is dropped,
+// so the gate no longer sees a field read back. A parameter's field is never resolved:
+// another parameter may be the same object and store the slot too. A `FieldSet` of a
+// shape the rule does not know makes the whole pass a no-op.
+
+// What the rule knows about one function. `s_*` are the `FieldSet`s of the reachable blocks
+// (stored value, slot, block index, position). Each store is linked under every allocation or
+// parameter its receiver may be (`a_head[v]` is a list through `a_next` of indices into
+// `s_*`), and a store whose receiver is none of those is `loose` (`loose_any` when it has no
+// leaves at all, so it may be anything; `loose_loaded` when a leaf was loaded from memory,
+// which only an allocation that escaped may be). `escaped[v]` is 1 for an allocation that may
+// be reached by a pointer the function did not name. `nums` is the dominator numbering, built
+// when a store and a read in different blocks first need it (`nums` is empty until then).
+struct VcPfCtx {
+    ok: bool,
+    f: IrFunction,
+    src: VcPhiSources,
+    def_op: Vec<i64>,
+    tys: Vec<i64>,
+    nums: Vec<i64>,
+    s_val: Vec<i64>,
+    s_slot: Vec<i64>,
+    s_blk: Vec<i64>,
+    s_pos: Vec<i64>,
+    a_head: Vec<i64>,
+    a_next: Vec<i64>,
+    a_store: Vec<i64>,
+    loose_any: Vec<i64>,
+    loose_loaded: Vec<i64>,
+    escaped: Vec<i64>,
+}
+
+// The number of leading operands of `inst` that are objects of a `Vec` or `String`
+// operation: 0 for an instruction that is none.
+fn vc_pf_object_operands(inst: IrInst) -> u64 {
+    if inst.op != IOP_CALL() || inst.dk != IDATA_CALL_EXTERN() { return 0; }
+    let k: i64 = vc_inst_vec_kind(inst);
+    if k == VC_VEC_NONE() || vc_str_kind_no_object_operand(k) { return 0; }
+    if string_starts_with(inst.ds, VC_STR_PREFIX()) == 1 { return vc_str_kind_object_operands(k); }
+    1
+}
+
+// True when a leaf is a pointer that is neither built in this function nor received as a
+// parameter: one the function loaded, which an allocation that escaped may be.
+fn vc_pf_loaded_leaf(leaves: Vec<i64>, def_op: Vec<i64>) -> bool {
+    let mut i: u64 = 0;
+    while i < leaves.len() {
+        let v: i64 = leaves[i];
+        if v < 0 || (v as u64) >= def_op.len() { return true; }
+        let op: i64 = def_op[v as u64];
+        if op != IOP_REGION_ALLOC() && op != IOP_GET_ARG() { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+fn vc_pf_mark_escaped(c: VcPfCtx, v: i64, src: VcPhiSources, seen: Vec<i64>, stamp: i64) {
+    if v < 0 || (v as u64) >= c.tys.len() || c.tys[v as u64] != ITY_PTR() { return; }
+    let leaves: Vec<i64> = vc_fh_leaves(v, src, c.def_op, seen, stamp);
+    let mut i: u64 = 0;
+    while i < leaves.len() {
+        if leaves[i] >= 0 && (leaves[i] as u64) < c.escaped.len() { c.escaped[leaves[i] as u64] = 1; }
+        i = i + 1;
+    }
+}
+
+// Links store `s` under `leaf`.
+fn vc_pf_link(c: VcPfCtx, leaf: i64, s: i64) {
+    let at: i64 = c.a_store.len() as i64;
+    c.a_store.push(s);
+    c.a_next.push(c.a_head[leaf as u64]);
+    c.a_head[leaf as u64] = at;
+}
+
+// The context of `f`; `ok` is false when a `FieldSet` has a shape the rule does not know.
+fn vc_pf_context(f: IrFunction, tys: Vec<i64>, rpo: Vec<i64>, n_ids: u64) -> VcPfCtx {
+    let src: VcPhiSources = vc_fh_phi_sources(f, rpo, n_ids);
+    let c: VcPfCtx = VcPfCtx {
+        ok: false,
+        f: f,
+        src: src,
+        def_op: vc_agg_def_ops(f, n_ids),
+        tys: tys,
+        nums: Vec::new(),
+        s_val: Vec::new(),
+        s_slot: Vec::new(),
+        s_blk: Vec::new(),
+        s_pos: Vec::new(),
+        a_head: dom_fill(n_ids, -1),
+        a_next: Vec::new(),
+        a_store: Vec::new(),
+        loose_any: Vec::new(),
+        loose_loaded: Vec::new(),
+        escaped: dom_fill(n_ids, 0),
+    };
+    let seen: Vec<i64> = dom_fill(n_ids, -1);
+    let mut stamp: i64 = 0;
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        if rpo[b] >= 0 {
+            let blk: IrBlock = f.blocks[b];
+            let mut i: u64 = 0;
+            while i < blk.insts.len() {
+                let inst: IrInst = blk.insts[i];
+                if inst.op == IOP_FIELD_SET() {
+                    if inst.args.len() != 2 || inst.dv < 0 { return c; }
+                    let s: i64 = c.s_val.len() as i64;
+                    c.s_val.push(inst.args[1]);
+                    c.s_slot.push(inst.dv);
+                    c.s_blk.push(b as i64);
+                    c.s_pos.push(i as i64);
+                    stamp = stamp + 1;
+                    let leaves: Vec<i64> = vc_fh_leaves(inst.args[0], src, c.def_op, seen, stamp);
+                    let mut l: u64 = 0;
+                    while l < leaves.len() {
+                        let v: i64 = leaves[l];
+                        if v >= 0 && (v as u64) < n_ids && (c.def_op[v as u64] == IOP_REGION_ALLOC() || c.def_op[v as u64] == IOP_GET_ARG()) {
+                            vc_pf_link(c, v, s);
+                        }
+                        l = l + 1;
+                    }
+                    if leaves.len() == 0 {
+                        c.loose_any.push(s);
+                    } else if vc_pf_loaded_leaf(leaves, c.def_op) {
+                        c.loose_loaded.push(s);
+                    }
+                    stamp = stamp + 1;
+                    vc_pf_mark_escaped(c, inst.args[1], src, seen, stamp);
+                } else if inst.op == IOP_CALL() {
+                    let objs: u64 = vc_pf_object_operands(inst);
+                    let mut p: u64 = objs;
+                    while p < inst.args.len() {
+                        stamp = stamp + 1;
+                        vc_pf_mark_escaped(c, inst.args[p], src, seen, stamp);
+                        p = p + 1;
+                    }
+                }
+                i = i + 1;
+            }
+        }
+        b = b + 1;
+    }
+    c.ok = true;
+    c
+}
+
+// The value stored into slot `slot` of allocation `a` when exactly one store may name `a`
+// and it dominates the read at (`rb`, `ri`); -1 otherwise.
+fn vc_pf_single_store(c: VcPfCtx, a: i64, slot: i64, rb: i64, ri: i64) -> i64 {
+    let mut found: i64 = -1;
+    let mut e: i64 = c.a_head[a as u64];
+    while e >= 0 {
+        let s: i64 = c.a_store[e as u64];
+        if c.s_slot[s as u64] == slot {
+            if found >= 0 { return -1; }
+            found = s;
+        }
+        e = c.a_next[e as u64];
+    }
+    let mut n: u64 = 0;
+    while n < c.loose_any.len() {
+        if c.s_slot[c.loose_any[n] as u64] == slot { return -1; }
+        n = n + 1;
+    }
+    if c.escaped[a as u64] == 1 {
+        n = 0;
+        while n < c.loose_loaded.len() {
+            if c.s_slot[c.loose_loaded[n] as u64] == slot { return -1; }
+            n = n + 1;
+        }
+    }
+    if found < 0 { return -1; }
+    let k: u64 = found as u64;
+    let v: i64 = c.s_val[k];
+    if v < 0 || (v as u64) >= c.tys.len() || c.tys[v as u64] != ITY_PTR() { return -1; }
+    if c.s_blk[k] == rb {
+        if c.s_pos[k] >= ri { return -1; }
+    } else if !vc_pf_dominates(c, c.s_blk[k], rb) {
+        return -1;
+    }
+    v
+}
+
+// True when block `a` dominates block `b`; the numbering is built on first use.
+fn vc_pf_dominates(c: VcPfCtx, a: i64, b: i64) -> bool {
+    let f: IrFunction = c.f;
+    let nb: u64 = f.blocks.len();
+    if c.nums.len() == 0 {
+        let id_to_idx: Vec<i64> = dom_block_id_table(f);
+        let succ: Vec<i64> = dom_successors(f, id_to_idx);
+        let rpo: Vec<i64> = dom_rpo_numbers(nb, succ);
+        let order: Vec<i64> = dom_rpo_order(rpo);
+        let off: Vec<i64> = dom_pred_offsets(nb, succ, rpo);
+        let preds: Vec<i64> = dom_pred_list(nb, succ, rpo, off);
+        let nums: Vec<i64> = dom_tree_numbers(nb, dom_idoms(nb, rpo, order, off, preds), order);
+        let mut i: u64 = 0;
+        while i < nums.len() {
+            c.nums.push(nums[i]);
+            i = i + 1;
+        }
+    }
+    dom_dominates(c.nums, nb, a, b)
+}
+
+// `repl[id]` is the pointer value the field read `id` resolves to, -1 for a read left alone.
+fn vc_pf_resolve(c: VcPfCtx, rpo: Vec<i64>, n_ids: u64) -> Vec<i64> {
+    let f: IrFunction = c.f;
+    let repl: Vec<i64> = dom_fill(n_ids, -1);
+    let src: VcPhiSources = c.src;
+    let seen: Vec<i64> = dom_fill(n_ids, -1);
+    let mut stamp: i64 = 0;
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        if rpo[b] >= 0 {
+            let blk: IrBlock = f.blocks[b];
+            let mut i: u64 = 0;
+            while i < blk.insts.len() {
+                let inst: IrInst = blk.insts[i];
+                if inst.op == IOP_FIELD_GET() && inst.ty == ITY_I64() && inst.dk == IDATA_FIELD() && inst.id >= 0
+                    && inst.args.len() == 1 && inst.args[0] >= 0 && (inst.args[0] as u64) < n_ids && c.tys[inst.args[0] as u64] == ITY_PTR() {
+                    stamp = stamp + 1;
+                    let leaves: Vec<i64> = vc_fh_leaves(inst.args[0], src, c.def_op, seen, stamp);
+                    if leaves.len() == 1 && leaves[0] >= 0 && (leaves[0] as u64) < n_ids && c.def_op[leaves[0] as u64] == IOP_REGION_ALLOC() {
+                        repl[inst.id as u64] = vc_pf_single_store(c, leaves[0], inst.dv, b as i64, i as i64);
+                    }
+                }
+                i = i + 1;
+            }
+        }
+        b = b + 1;
+    }
+    repl
+}
+
+fn vc_pf_candidate(f: IrFunction) -> bool {
+    let mut gets: bool = false;
+    let mut sets: bool = false;
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let blk: IrBlock = f.blocks[b];
+        let mut i: u64 = 0;
+        while i < blk.insts.len() {
+            let inst: IrInst = blk.insts[i];
+            if inst.op == IOP_FIELD_GET() && inst.ty == ITY_I64() { gets = true; }
+            if inst.op == IOP_FIELD_SET() { sets = true; }
+            i = i + 1;
+        }
+        b = b + 1;
+    }
+    gets && sets
+}
+
+// The value operand `p` of `inst` is replaced by, -1 when it stays.
+fn vc_pf_operand(inst: IrInst, p: u64, objs: u64, repl: Vec<i64>) -> i64 {
+    let a: i64 = inst.args[p];
+    if p < objs && a >= 0 && (a as u64) < repl.len() { return repl[a as u64]; }
+    -1
+}
+
+// `inst` with its object operands replaced, or `inst` itself when none is.
+fn vc_pf_rewrite(inst: IrInst, repl: Vec<i64>) -> IrInst {
+    let objs: u64 = vc_pf_object_operands(inst);
+    if objs == 0 { return inst; }
+    let mut hit: bool = false;
+    let mut p: u64 = 0;
+    while p < objs && p < inst.args.len() {
+        if vc_pf_operand(inst, p, objs, repl) >= 0 { hit = true; }
+        p = p + 1;
+    }
+    if !hit { return inst; }
+    let args: Vec<i64> = Vec::new();
+    p = 0;
+    while p < inst.args.len() {
+        let r: i64 = vc_pf_operand(inst, p, objs, repl);
+        if r >= 0 { args.push(r); } else { args.push(inst.args[p]); }
+        p = p + 1;
+    }
+    vc_clone_inst(inst, inst.id, args, inst.dv, inst.dv2)
+}
+
+// `f` with every resolvable field read replaced where it is an object operand. `f` itself is
+// returned when nothing resolves; an untouched block of the result is `f`'s own.
+fn vc_resolve_ptr_fields(f: IrFunction) -> IrFunction {
+    if !vc_pf_candidate(f) { return f; }
+    let nb: u64 = f.blocks.len();
+    let id_to_idx: Vec<i64> = dom_block_id_table(f);
+    let succ: Vec<i64> = dom_successors(f, id_to_idx);
+    let rpo: Vec<i64> = dom_rpo_numbers(nb, succ);
+    let n_ids: u64 = (dom_max_inst_id(f) + 1) as u64;
+    let tys: Vec<i64> = vc_ty_table(f);
+    if tys.len() < n_ids { return f; }
+    let c: VcPfCtx = vc_pf_context(f, tys, rpo, n_ids);
+    if !c.ok { return f; }
+    let repl: Vec<i64> = vc_pf_resolve(c, rpo, n_ids);
+    let uses: Vec<i64> = dom_fill(n_ids, 0);
+    let done: Vec<i64> = dom_fill(n_ids, 0);
+    let mut any: bool = false;
+    let mut b: u64 = 0;
+    while b < nb {
+        let blk: IrBlock = f.blocks[b];
+        let mut i: u64 = 0;
+        while i < blk.insts.len() {
+            let inst: IrInst = blk.insts[i];
+            let objs: u64 = vc_pf_object_operands(inst);
+            let mut p: u64 = 0;
+            while p < inst.args.len() {
+                let a: i64 = inst.args[p];
+                if a >= 0 && (a as u64) < n_ids {
+                    uses[a as u64] = uses[a as u64] + 1;
+                    if p < objs && repl[a as u64] >= 0 {
+                        done[a as u64] = done[a as u64] + 1;
+                        any = true;
+                    }
+                }
+                p = p + 1;
+            }
+            i = i + 1;
+        }
+        b = b + 1;
+    }
+    if !any { return f; }
+    let g: IrFunction = vc_function_shell(f);
+    b = 0;
+    while b < nb {
+        let blk: IrBlock = f.blocks[b];
+        let out: IrBlock = ir_block_new(blk.id);
+        let mut i: u64 = 0;
+        while i < blk.insts.len() {
+            let inst: IrInst = blk.insts[i];
+            let dead: bool = inst.id >= 0 && (inst.id as u64) < n_ids && done[inst.id as u64] > 0 && done[inst.id as u64] == uses[inst.id as u64];
+            if !dead {
+                out.insts.push(vc_pf_rewrite(inst, repl));
+            }
+            i = i + 1;
+        }
+        g.blocks.push(out);
+        b = b + 1;
+    }
+    g
+}

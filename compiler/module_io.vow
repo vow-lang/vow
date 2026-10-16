@@ -1183,6 +1183,9 @@ fn write_function(out: Vec<i64>, f: IrFunction) {
     reject_unless_u32(f.id);
     if f.local_names_strs.len() != f.local_names_ids.len() { let _rejected: u64 = reject_malformed_count(); }
     reject_unencodable_local_ids(f.local_names_ids);
+    // Sorted before anything is written: `out` may be the very Vec a local-name list is, and the
+    // sort needs both lists as they were checked.
+    let sorted: SortedLocalNames = sort_local_names(f.local_names_ids, f.local_names_strs);
     write_u32_wire(out, f.id);
     write_string(out, f.name);
 
@@ -1225,7 +1228,6 @@ fn write_function(out: Vec<i64>, f: IrFunction) {
         i = i + 1;
     }
 
-    let sorted: SortedLocalNames = sort_local_names(f.local_names_ids, f.local_names_strs);
     write_leb(out, sorted.ids.len());
     i = 0;
     while i < sorted.ids.len() vow {

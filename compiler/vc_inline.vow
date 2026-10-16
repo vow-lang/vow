@@ -7,6 +7,7 @@ use vc_strops
 use vc_gate
 use vc_loops
 use vc_unroll
+use vc_ptrfield
 
 // Callee inlining for the native verifier. A call of a user function is spliced
 // into its caller before symbolic execution, so the executor only ever sees one
@@ -431,6 +432,14 @@ fn vc_resolve_str_literals(f: IrFunction, m: IrModule) -> IrFunction {
     g
 }
 
+// `f` as the gate and the executor read it: string literals resolved, and a collection held
+// in a field of a struct the function built named by the object it holds. Every decision
+// about a function (the skip reason of the function and of each callee, the flattened body)
+// goes through this one rewrite, so they cannot disagree.
+fn vc_prepare_for_gate(f: IrFunction, m: IrModule) -> IrFunction {
+    vc_resolve_ptr_fields(vc_resolve_str_literals(f, m))
+}
+
 // True when `g` has a pointer-typed Phi: the only candidate `vc_retype_handle_phis` can change,
 // found without building the type table.
 fn vc_has_ptr_phi(g: IrFunction) -> bool {
@@ -504,7 +513,7 @@ fn vc_inline(f: IrFunction, m: IrModule, cap: i64) -> VcInlined {
     let fns: Vec<IrFunction> = m.functions;
     let frames: VcFrames = vc_frames_new();
     if !vc_has_user_call(f) {
-        return VcInlined { f: vc_resolve_str_literals(f, m), frames: frames, status: VC_INLINE_OK() };
+        return VcInlined { f: vc_prepare_for_gate(f, m), frames: frames, status: VC_INLINE_OK() };
     }
     let idx_of: Vec<i64> = vc_fn_index_table(fns);
     let sizes: Vec<i64> = dom_fill(fns.len(), -1);
@@ -527,7 +536,7 @@ fn vc_inline(f: IrFunction, m: IrModule, cap: i64) -> VcInlined {
     vc_retype_handle_phis(g);
     let mut status: i64 = VC_INLINE_OK();
     if sp.bad { status = VC_INLINE_MALFORMED(); }
-    VcInlined { f: vc_resolve_str_literals(g, m), frames: frames, status: status }
+    VcInlined { f: vc_prepare_for_gate(g, m), frames: frames, status: status }
 }
 
 // True when an argument of type `arg` may stand for a parameter of type `param`:
@@ -580,7 +589,7 @@ fn vc_non_modelable_callee(g: IrFunction, why: String) -> String {
 // worker answers `unknown` for it.
 fn vc_module_skip_reason(f: IrFunction, m: IrModule) -> String {
     if !vc_has_user_call(f) {
-        return vc_skip_reason(vc_resolve_str_literals(f, m));
+        return vc_skip_reason(vc_prepare_for_gate(f, m));
     }
     let fns: Vec<IrFunction> = m.functions;
     let idx_of: Vec<i64> = vc_fn_index_table(fns);
@@ -592,7 +601,7 @@ fn vc_module_skip_reason(f: IrFunction, m: IrModule) -> String {
     if cycle.len() > 0 {
         return vc_reason(VC_SKIP_RECURSION(), cycle);
     }
-    let own: String = vc_skip_reason_calls(vc_resolve_str_literals(f, m));
+    let own: String = vc_skip_reason_calls(vc_prepare_for_gate(f, m));
     if own.len() > 0 { return own; }
     let seen: Vec<i64> = dom_fill(fns.len(), 0);
     let order: Vec<i64> = Vec::new();
@@ -600,7 +609,7 @@ fn vc_module_skip_reason(f: IrFunction, m: IrModule) -> String {
     let mut oi: u64 = 0;
     while oi < order.len() {
         let g: IrFunction = fns[order[oi] as u64];
-        let why: String = vc_skip_reason_calls(vc_resolve_str_literals(g, m));
+        let why: String = vc_skip_reason_calls(vc_prepare_for_gate(g, m));
         if why.len() > 0 { return vc_non_modelable_callee(g, why); }
         oi = oi + 1;
     }
