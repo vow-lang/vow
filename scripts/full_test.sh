@@ -1672,6 +1672,18 @@ print(sum(1 for d in ds if d.get('error_code') == sys.argv[2]))
         fail "verify-native/${native_dir}/${name}" "$(IFS='; '; echo "${native_errors[*]}")"
     fi
 done
+# Callee summaries (#1791): tests/verify-native/summary/run.sh decides each fixture with the
+# inlining budget lowered so a proven callee is summarised, and with the default budget.
+if [ "$native_have_solver" -eq 0 ]; then
+    skip "verify-native/summary fixtures" "bitwuzla not on PATH"
+else
+    while IFS= read -r summary_line; do
+        case "$summary_line" in
+            PASS\ *) pass "verify-native/${summary_line#PASS }" ;;
+            FAIL\ *) fail "verify-native/${summary_line#FAIL }" "see tests/verify-native/summary/run.sh" ;;
+        esac
+    done < <(bash tests/verify-native/summary/run.sh "$SELF" 2>/dev/null)
+fi
 # Every code of the closed `Skipped` list is pinned by a skip/ fixture (or an
 # explicit exemption) and the list matches ADR-1430 section 4.
 skip_codes_log="$TMPDIR/verify-native-skip-codes.log"

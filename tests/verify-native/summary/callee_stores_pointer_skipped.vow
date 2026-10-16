@@ -1,0 +1,23 @@
+// TEST: summary-expect skipped
+// TEST: summary-baseline proven
+struct H { items: Vec<i64>, pos: i64 }
+
+fn keep(h: H, v: Vec<i64>, n: i64) {
+    let p1: i64 = n & 255;
+    let p2: i64 = (n / 2) & 255;
+    let p3: i64 = (p1 + p2) & 255;
+    let p4: i64 = (p3 * 3) & 255;
+    let p5: i64 = (p4 + p1) & 255;
+    let p6: i64 = (p5 + p2) & 255;
+    h.pos = p6;
+    h.items = v;
+}
+
+fn run(h: H, v: Vec<i64>) -> i64 vow {
+    ensures: result == 0
+} {
+    keep(h, v, 1); keep(h, v, 2); keep(h, v, 3); keep(h, v, 4);
+    0
+}
+
+fn main() -> i32 { 0 }

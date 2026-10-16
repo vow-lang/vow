@@ -6,15 +6,3 @@
 # commit that closes its issue.
 #
 # `code` is checked against the reason the native verifier reports.
-
-[[skip]]
-function = "read_function"
-code = "inlining-too-large"
-issue = 1791
-reason = "the call tree flattens to more than 16384 instructions (23331), which a worker does not decide within its 4 GB cap (module_io.vow); callee summaries close it"
-
-[[skip]]
-function = "module_decode"
-code = "inlining-too-large"
-issue = 1791
-reason = "the call tree flattens to more than 16384 instructions, which a worker does not decide within its 4 GB cap (module_io.vow); callee summaries close it"

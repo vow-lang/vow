@@ -1,0 +1,23 @@
+// TEST: summary-expect skipped
+// TEST: summary-baseline proven
+struct R { pos: i64, end: i64 }
+
+fn bad(v: Vec<i64>, r: R, n: i64) -> i64 {
+    let p1: i64 = n & 255;
+    let p2: i64 = (n / 2) & 255;
+    let p3: i64 = (p1 + p2) & 255;
+    let p4: i64 = (p3 * 3) & 255;
+    let p5: i64 = (p4 + p1) & 255;
+    let p6: i64 = (p5 + p2) & 255;
+    r.pos = p6;
+    v[n as u64]
+}
+
+fn run(v: Vec<i64>, r: R) -> i64 vow {
+    requires: v.len() > 10,
+    ensures: r.end == r.end
+} {
+    bad(v, r, 1) + bad(v, r, 2) + bad(v, r, 3) + bad(v, r, 4)
+}
+
+fn main() -> i32 { 0 }
