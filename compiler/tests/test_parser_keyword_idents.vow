@@ -1,0 +1,115 @@
+module TestParserKeywordIdents
+
+use lexer
+use token
+use ast
+use diag
+use parser
+
+// A keyword where an identifier is required (#1777) must be reported at the
+// keyword and the parser must terminate. The keywords come from the token
+// table, so a new one is probed without touching this file. A failure prints
+// the source that was mishandled and exits with 100 + the template number.
+
+fn keywords() -> Vec<String> {
+    let kws: Vec<String> = Vec::new();
+    let mut tag: i64 = 0;
+    while tag < 128 {
+        let text: String = keyword_text(tag);
+        if text.len() > 0 {
+            kws.push(text);
+        }
+        tag = tag + 1;
+    }
+    kws
+}
+
+fn first_error_offset(src: String) -> i64 {
+    let arena: AstArena = arena_new();
+    let dctx: DiagCtx = diag_ctx_new();
+    let _parsed: Module = parse_module_into(lex(src), arena, dctx, String::from("kw.vow"));
+    if dctx.error_count == 0 {
+        return -1;
+    }
+    let d: Diagnostic = dctx.diags[0];
+    d.span_start
+}
+
+fn probe(kws: Vec<String>, prefix: String, suffix: String, skip_mut: bool) -> bool [io] {
+    let mut k: u64 = 0;
+    while k < kws.len() {
+        let kw: String = kws[k];
+        if skip_mut && kw == String::from("mut") {
+            k = k + 1;
+            continue;
+        }
+        let src: String = String::from("");
+        src.push_str(prefix);
+        src.push_str(kw);
+        src.push_str(suffix);
+        if first_error_offset(src) != prefix.len() as i64 {
+            print_str(src);
+            return false;
+        }
+        k = k + 1;
+    }
+    true
+}
+
+fn match_arm_prefix(pat: String) -> String {
+    let s: String = String::from("module M\nfn f(e: E) -> i64 {\n    match e {\n        ");
+    s.push_str(pat);
+    s
+}
+
+// Template `t` is the source before the keyword and the source after it; `mut`
+// is skipped where it is a valid start of a pattern.
+fn probe_template(kws: Vec<String>, t: i64) -> bool [io] {
+    let fn_close: String = String::from("() -> i64 {\n    0\n}\n");
+    let param_close: String = String::from(": i64) -> i64 {\n    0\n}\n");
+    let struct_close: String = String::from(": i64,\n}\n");
+    let arm_close: String = String::from(") => 0,\n    }\n}\n");
+    if t == 0 {
+        probe(kws, String::from("module M\nstruct S {\n    "), struct_close, false)
+    } else if t == 1 {
+        probe(kws, String::from("module M\nstruct S {\n    a: i64,\n    "), struct_close, false)
+    } else if t == 2 {
+        probe(kws, String::from("module M\nstruct "), String::from(" {\n}\n"), false)
+    } else if t == 3 {
+        probe(kws, String::from("module M\nenum E {\n    A,\n    "), String::from(",\n}\n"), false)
+    } else if t == 4 {
+        probe(kws, String::from("module M\nenum E {\n    A("), String::from("),\n}\n"), false)
+    } else if t == 5 {
+        probe(kws, String::from("module M\nenum E {\n    A { "), String::from(": i64 },\n}\n"), false)
+    } else if t == 6 {
+        probe(kws, String::from("module M\nfn "), fn_close, false)
+    } else if t == 7 {
+        probe(kws, String::from("module M\nfn f() -> i64 {\n    for "), String::from(" in v { }\n    0\n}\n"), false)
+    } else if t == 8 {
+        probe(kws, String::from("module M\nfn f("), param_close, false)
+    } else if t == 9 {
+        probe(kws, String::from("module M\nfn f(a: "), String::from(") -> i64 {\n    0\n}\n"), false)
+    } else if t == 10 {
+        probe(kws, String::from("module M\nfn f() -> i64 {\n    let "), String::from(" = 1;\n    0\n}\n"), true)
+    } else if t == 11 {
+        probe(kws, match_arm_prefix(String::from("E::A(")), arm_close, true)
+    } else if t == 12 {
+        probe(kws, match_arm_prefix(String::from("E::A(x, ")), arm_close, true)
+    } else if t == 13 {
+        probe(kws, match_arm_prefix(String::from("S { ")), String::from(": x } => 0,\n    }\n}\n"), false)
+    } else {
+        probe(kws, match_arm_prefix(String::from("(a, ")), arm_close, true)
+    }
+}
+
+fn main() -> i32 [io] {
+    let kws: Vec<String> = keywords();
+    let mut t: i64 = 0;
+    while t < 15 {
+        if !probe_template(kws, t) {
+            return i64_to_i32_wrap(101 + t);
+        }
+        t = t + 1;
+    }
+    0
+}

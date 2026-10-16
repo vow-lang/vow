@@ -1,0 +1,11 @@
+// TEST: error-code UnexpectedToken
+// TEST: error-count 4
+module EnumStructFieldKeyword
+
+enum Shape {
+    Circle { module: i64 },
+}
+
+fn main() -> i32 {
+    0
+}
