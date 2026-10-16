@@ -212,8 +212,19 @@ fn check_shared_module() -> i64 [io, read, write] {
     r
 }
 
+// The bounded rounds after an inductive proof get a quarter of `--timeout` on top of what the
+// proof took, and never more than `--timeout` itself.
+fn check_refine_budget() -> i64 {
+    if vc_refine_limit(0, 300000) != 75000 { return 1; }
+    if vc_refine_limit(100000, 300000) != 175000 { return 2; }
+    if vc_refine_limit(250000, 300000) != 300000 { return 3; }
+    if vc_refine_limit(400000, 300000) != 300000 { return 4; }
+    0
+}
+
 fn main() -> i32 [io, read, write] {
     let mut r: i64 = check_session_argv();
+    if r == 0 { r = check_refine_budget() + 900; if r == 900 { r = 0; } }
     if r == 0 { r = check_clause_mode_flag(); }
     if r == 0 { r = check_module_root_flag(); }
     if r == 0 { r = check_cache_flags(); }
