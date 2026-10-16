@@ -1,0 +1,28 @@
+// TEST: category invariant
+// The receiver of the push is a Phi that merges the parameter with a String built in the loop;
+// from iteration 100 on it is the parameter, so `a` grows. The false postcondition needs more
+// than 64 iterations to be refuted. The cut must havoc the parameter the Phi may stand for,
+// not only a String born in the loop: if it did not, the loop would look like it leaves `a`
+// at its entry length and the postcondition would be proven.
+module StringLoopPhiReceiverForgotten
+
+fn run(a: String, n: u64) vow {
+  requires: a.len() == 0,
+  ensures: a.len() <= 1
+} {
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n && a.len() <= 1
+  } {
+    let t: String = if i >= 100 { a } else { String::new() };
+    t.push_byte(65u8);
+    i = i + 1;
+  }
+}
+
+fn main() -> i32 [io] {
+  let a: String = String::new();
+  run(a, 3);
+  print_u64(a.len());
+  0
+}

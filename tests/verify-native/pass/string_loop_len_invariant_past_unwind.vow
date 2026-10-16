@@ -1,0 +1,23 @@
+// TEST: category invariant
+// A String filled by a 100-iteration loop, past the 64-iteration unwinding bound: the
+// loop is cut for induction and `s.len() == i` is the inductive fact.
+module StringLoopLenInvariantPastUnwind
+
+fn fill() -> String vow {
+  ensures: result.len() == 100
+} {
+  let s: String = String::new();
+  let mut i: u64 = 0;
+  while i < 100 vow {
+    invariant: i <= 100 && s.len() == i
+  } {
+    s.push_byte(65u8);
+    i = i + 1;
+  }
+  s
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill().len());
+  0
+}

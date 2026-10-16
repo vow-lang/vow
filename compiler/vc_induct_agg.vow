@@ -78,6 +78,48 @@ fn vc_fh_phi_sources(f: IrFunction, rpo: Vec<i64>, n_ids: u64) -> VcPhiSources {
     src
 }
 
+// True when `x` is in `v`.
+fn vc_ids_has(v: Vec<i64>, x: i64) -> bool {
+    let mut i: u64 = 0;
+    while i < v.len() {
+        if v[i] == x { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// The values `t` may be looking through Phis: its non-Phi sources, in discovery order. `seen`
+// is scratch of the id space, restamped with `stamp` for this walk. A value that is not an id
+// of the function is returned as is, for the caller to refuse.
+fn vc_fh_leaves(t: i64, src: VcPhiSources, def_op: Vec<i64>, seen: Vec<i64>, stamp: i64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    if t < 0 || (t as u64) >= def_op.len() || def_op[t as u64] != IOP_PHI() {
+        out.push(t);
+        return out;
+    }
+    let stack: Vec<i64> = Vec::new();
+    stack.push(t);
+    while stack.len() > 0 {
+        let v: i64 = stack[stack.len() - 1];
+        stack.pop();
+        if v < 0 || (v as u64) >= def_op.len() {
+            out.push(v);
+        } else if seen[v as u64] != stamp {
+            seen[v as u64] = stamp;
+            if def_op[v as u64] == IOP_PHI() {
+                let mut e: i64 = src.head[v as u64];
+                while e >= 0 {
+                    stack.push(src.val[e as u64]);
+                    e = src.next[e as u64];
+                }
+            } else {
+                out.push(v);
+            }
+        }
+    }
+    out
+}
+
 // The roots (parameters and allocations) the pointer `t` may stand for, in
 // discovery order; `ok` is false when some value it reaches is none of a pointer
 // parameter, an allocation or a Phi.

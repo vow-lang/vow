@@ -1,0 +1,28 @@
+// TEST: category invariant
+// The postcondition is false, but only a run of 100 iterations pushes the byte, past the
+// unwinding bound, so no counterexample is in reach. The cut must forget the length the
+// String had on entry at the top of the header: if it kept it, the exit state would have
+// the entry length and the false postcondition would be proven.
+module StringLoopEntryLenForgotten
+
+fn late(s: String) vow {
+  requires: s.len() == 0,
+  ensures: s.len() == 0
+} {
+  let mut i: u64 = 0;
+  while i < 100 vow {
+    invariant: i <= 100
+  } {
+    if i == 99 {
+      s.push_byte(65u8);
+    }
+    i = i + 1;
+  }
+}
+
+fn main() -> i32 [io] {
+  let s: String = String::new();
+  late(s);
+  print_u64(s.len());
+  0
+}
