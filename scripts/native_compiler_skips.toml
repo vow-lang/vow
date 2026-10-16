@@ -62,7 +62,7 @@ issue = 1704
 reason = "calls reader_fail, which stores a String into a parameter's field (module_io.vow)"
 
 [[skip]]
-function = "reader_elem"
+function = "reader_check_bytes"
 code = "non-modelable-callee"
 issue = 1704
 reason = "calls reader_fail, which stores a String into a parameter's field (module_io.vow)"

@@ -227,27 +227,15 @@ fn write_i64_bits(out: Vec<i64>, v: i64) {
     }
 }
 
-// The byte at index `at` of the buffer: a buffer holds bytes, so an element outside
-// 0..=255 is a decode error (`InvalidKind`, label `Byte`) and reads as 0, never another
-// byte's value.
-fn reader_elem(r: ModuleReader, at: u64) -> i64 vow {
-    requires: at < r.buf.len(),
-    ensures: (r.buf[at] >= 0 && r.buf[at] <= 255 && result == r.buf[at])
-        || ((r.buf[at] < 0 || r.buf[at] > 255) && result == 0)
-} {
-    let b: i64 = r.buf[at];
-    if b < 0 || b > 255 {
-        reader_fail(r, DEC_INVALID_KIND(), at, String::from("Byte"), b);
-        return 0;
-    }
-    b
-}
-
+// A buffer holds bytes. The readers read the low 8 bits of an element, which is the byte for
+// every element a real buffer holds, so that the decoder is total over any `Vec<i64>`;
+// `module_decode` rejects an element outside 0..=255 up front (`reader_check_bytes`), so a
+// malformed buffer is a decode error and never another byte's value.
 fn reader_read_u8(r: ModuleReader) -> i64 {
     if !reader_need(r, 1) {
         return 0;
     }
-    let b: i64 = reader_elem(r, r.pos);
+    let b: i64 = r.buf[r.pos] & 255;
     r.pos = r.pos + 1;
     b
 }
@@ -256,12 +244,9 @@ fn reader_read_u16_le(r: ModuleReader) -> i64 {
     if !reader_need(r, 2) {
         return 0;
     }
-    let b0: i64 = reader_elem(r, r.pos);
-    let b1: i64 = reader_elem(r, r.pos + 1);
+    let b0: i64 = r.buf[r.pos] & 255;
+    let b1: i64 = r.buf[r.pos + 1] & 255;
     r.pos = r.pos + 2;
-    if r.err_kind != DEC_OK() {
-        return 0;
-    }
     b0 + b1 * 256
 }
 
@@ -269,14 +254,11 @@ fn reader_read_u32_le(r: ModuleReader) -> i64 {
     if !reader_need(r, 4) {
         return 0;
     }
-    let b0: i64 = reader_elem(r, r.pos);
-    let b1: i64 = reader_elem(r, r.pos + 1);
-    let b2: i64 = reader_elem(r, r.pos + 2);
-    let b3: i64 = reader_elem(r, r.pos + 3);
+    let b0: i64 = r.buf[r.pos] & 255;
+    let b1: i64 = r.buf[r.pos + 1] & 255;
+    let b2: i64 = r.buf[r.pos + 2] & 255;
+    let b3: i64 = r.buf[r.pos + 3] & 255;
     r.pos = r.pos + 4;
-    if r.err_kind != DEC_OK() {
-        return 0;
-    }
     b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
 }
 
@@ -1375,8 +1357,28 @@ fn decode_result(r: ModuleReader, m: IrModule) -> ModuleDecode {
     ModuleDecode { m: m, err_kind: DEC_OK(), err_offset: 0, err_label: String::new(), err_value: 0 }
 }
 
+// Records the first buffer element that is not a byte as the decode error (`InvalidKind`, label
+// `Byte`, the element's index and value).
+fn reader_check_bytes(r: ModuleReader) {
+    let n: u64 = r.buf.len();
+    let mut i: u64 = 0;
+    while i < n && r.err_kind == DEC_OK() vow {
+        invariant: i <= n
+    } {
+        let b: i64 = r.buf[i];
+        if b < 0 || b > 255 {
+            reader_fail(r, DEC_INVALID_KIND(), i, String::from("Byte"), b);
+        }
+        i = i + 1;
+    }
+}
+
 fn module_decode(buf: Vec<i64>) -> ModuleDecode {
     let r: ModuleReader = reader_new(buf);
+    reader_check_bytes(r);
+    if r.err_kind != DEC_OK() {
+        return decode_result(r, ir_module_new(String::new()));
+    }
     if reader_need(r, 4) {
         let m0: i64 = reader_read_u8(r);
         let m1: i64 = reader_read_u8(r);
