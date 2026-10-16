@@ -20,6 +20,7 @@ fn VC_SKIP_UNMODELED_BUILTIN() -> String { String::from("unmodeled-builtin") }
 fn VC_SKIP_UNSUPPORTED_OPCODE() -> String { String::from("unsupported-opcode") }
 fn VC_SKIP_NON_MODELABLE_CALLEE() -> String { String::from("non-modelable-callee") }
 fn VC_SKIP_RESERVED_SYMBOL() -> String { String::from("reserved-verifier-symbol") }
+fn VC_SKIP_INLINING_TOO_LARGE() -> String { String::from("inlining-too-large") }
 
 // The closed list; adding a code requires amending the ADR.
 fn vc_skip_code_valid(code: String) -> bool {
@@ -31,6 +32,7 @@ fn vc_skip_code_valid(code: String) -> bool {
         || code == VC_SKIP_UNSUPPORTED_OPCODE()
         || code == VC_SKIP_NON_MODELABLE_CALLEE()
         || code == VC_SKIP_RESERVED_SYMBOL()
+        || code == VC_SKIP_INLINING_TOO_LARGE()
 }
 
 // A function named after one of the checker's own intrinsics is never verified

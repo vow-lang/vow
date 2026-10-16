@@ -160,6 +160,7 @@ opcode or builtin name); `detail` is never part of the enumerated set.
 | `unsupported-opcode` | An opcode absent from `compiler/vc_ops.vow`, a module the `vc_ops` child introduces (today `Load`, `Store`, `LinearBorrow`). `detail` is the opcode (D10). | Shrinks. |
 | `non-modelable-callee` | An inlined callee is itself `Skipped`. `detail` is `<callee> (<code>)`, the callee's own code (#1416). | Permanent. |
 | `reserved-verifier-symbol` | The function name starts with a reserved checker prefix (`__ESBMC_`, `__VERIFIER_`). | Permanent; the reserved set is the ESBMC model's (#1409). |
+| `inlining-too-large` | The function and everything it calls flatten to more than 16 384 instructions (`VC_INLINE_SKIP_INSTS`), which a worker does not decide within its memory cap: `read_inst` (11 031) is decided in about a minute, `read_function` (23 331) exhausts 4 GB. `detail` is the size. | Until callee summaries (#1791). |
 
 **Prerequisite for `unmodeled-builtin`.** Absent stays fail-closed, so the gate
 can only be enabled once the catalogue says which builtins are modelled. Today

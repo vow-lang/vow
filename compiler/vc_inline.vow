@@ -33,6 +33,15 @@ fn VC_INLINE_MALFORMED() -> i64 { 2 }
 // Instructions in the flattened function, same bound as the unroller's.
 fn VC_INLINE_INST_CAP() -> i64 { VC_UNWIND_INST_CAP() }
 
+// A flattened function above this many instructions is `Skipped` as `inlining-too-large`. The
+// whole call tree is one query set, and its cost grows faster than its size: `read_inst` of
+// `compiler/module_io.vow` (11 031 instructions) is decided in about a minute, `read_function`
+// (23 331) exhausts the 4 GB worker (`VC_WORKER_MEM_KB`) on one bounds claim. Above the
+// bound the answer would be `unknown` after minutes of work, which says no more than the skip
+// and costs the budget of every other function. A bound on size, not on the program; it goes
+// away with callee summaries (#1791).
+fn VC_INLINE_SKIP_INSTS() -> i64 { 16384 }
+
 struct VcInlined {
     f: IrFunction,
     frames: VcFrames,
@@ -608,6 +617,14 @@ fn vc_module_skip_reason(f: IrFunction, m: IrModule) -> String {
     if inl.status == VC_INLINE_TOO_LARGE() { return String::from(""); }
     if inl.status != VC_INLINE_OK() {
         return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), String::from("call target is not in the module"));
+    }
+    let size: i64 = vc_inst_count(inl.f);
+    if size > VC_INLINE_SKIP_INSTS() {
+        let detail: String = i64_to_string(size);
+        detail.push_str(String::from(" instructions after inlining, above the "));
+        detail.push_str(i64_to_string(VC_INLINE_SKIP_INSTS()));
+        detail.push_str(String::from(" a worker decides within its memory cap"));
+        return vc_reason(VC_SKIP_INLINING_TOO_LARGE(), detail);
     }
     vc_skip_reason(inl.f)
 }

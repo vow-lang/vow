@@ -1,0 +1,37 @@
+// TEST: skip-reason inlining-too-large
+// Four layers of calls that flatten to well above 16 384 instructions. The function is
+// correct and fully modelled; the call tree is what a worker cannot decide within its memory
+// cap, so it is skipped at once with the size instead of ending in `unknown` after minutes.
+module InliningTooLarge
+
+fn base(v: Vec<i64>, k: i64) {
+  v.push(k); v.push(k + 1); v.push(k + 2); v.push(k + 3); v.push(k + 4);
+  v.push(k + 5); v.push(k + 6); v.push(k + 7); v.push(k + 8); v.push(k + 9);
+  v.push(k + 10); v.push(k + 11); v.push(k + 12); v.push(k + 13); v.push(k + 14);
+  v.push(k + 15); v.push(k + 16); v.push(k + 17); v.push(k + 18); v.push(k + 19);
+  v.push(k + 20); v.push(k + 21); v.push(k + 22); v.push(k + 23); v.push(k + 24);
+  v.push(k + 25); v.push(k + 26); v.push(k + 27); v.push(k + 28); v.push(k + 29);
+}
+
+fn layer1(v: Vec<i64>, k: i64) {
+  base(v, k); base(v, k + 1); base(v, k + 2); base(v, k + 3);
+  base(v, k + 4); base(v, k + 5); base(v, k + 6); base(v, k + 7);
+}
+
+fn layer2(v: Vec<i64>, k: i64) {
+  layer1(v, k); layer1(v, k + 1); layer1(v, k + 2); layer1(v, k + 3);
+  layer1(v, k + 4); layer1(v, k + 5); layer1(v, k + 6); layer1(v, k + 7);
+}
+
+fn layer3(v: Vec<i64>, k: i64) vow {
+  ensures: v.len() < 9223372036854775807
+} {
+  layer2(v, k); layer2(v, k + 1); layer2(v, k + 2); layer2(v, k + 3);
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  layer3(v, 0);
+  print_u64(v.len());
+  0
+}
