@@ -23,5 +23,26 @@ fn main() -> i32 {
     if reader_read_u8(past) != 0 { return 6; }
     if past.err_kind != DEC_TRUNCATED() { return 7; }
     if past.err_offset != 5 { return 8; }
+
+    // A buffer holds bytes: an element outside 0..=255 is a decode error at its index,
+    // never another byte's value, and later reads return 0.
+    let wide: Vec<i64> = Vec::new();
+    wide.push(1);
+    wide.push(259);
+    wide.push(7);
+    let w: ModuleReader = reader_new(wide);
+    if reader_read_u8(w) != 1 { return 9; }
+    if reader_read_u8(w) != 0 { return 10; }
+    if w.err_kind != DEC_INVALID_KIND() || w.err_offset != 1 || w.err_value != 259 { return 11; }
+    if reader_read_u8(w) != 0 { return 12; }
+
+    let neg: Vec<i64> = Vec::new();
+    neg.push(1);
+    neg.push(2);
+    neg.push(0 - 1);
+    neg.push(4);
+    let n: ModuleReader = reader_new(neg);
+    if reader_read_u32_le(n) != 0 { return 13; }
+    if n.err_kind != DEC_INVALID_KIND() || n.err_offset != 2 || n.err_value != 0 - 1 { return 14; }
     0
 }
