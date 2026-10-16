@@ -68,6 +68,12 @@ issue = 1771
 reason = "pushes onto a Vec read out of a field of a struct the function allocated, a write through a handle (module_io.vow)"
 
 [[skip]]
+function = "reader_elem"
+code = "non-modelable-callee"
+issue = 1704
+reason = "calls reader_fail, which stores a String into a parameter's field (module_io.vow)"
+
+[[skip]]
 function = "reader_read_effects"
 code = "non-modelable-callee"
 issue = 1704
