@@ -130,20 +130,35 @@ fn vc_trust_repeated(c: VcWaveCtx, fi: u64, order: Vec<i64>) -> Vec<i64> {
 // is within the budget), the callees worth a proof of their own (`vc_trust_needs`); and, for a
 // function above `root_min`, the callees its call tree repeats (`vc_trust_repeated`).
 fn vc_waves_needs(c: VcWaveCtx, fi: u64) -> Vec<i64> {
-    if c.known[fi] == 1 { return c.needs[fi]; }
+    vc_waves_resolve(c, fi);
+    c.needs[fi]
+}
+
+// Works out the needs of the function at index `fi` once and stores them in `c`. The summarised
+// module it asks for is scratch: only the ids are copied out, so that the module and its
+// summaries are freed on return instead of staying in the arena of `c`. Region inference cannot
+// tell a loaded id from a loaded pointer, and `+ 0` makes a new value of it: stored as loaded,
+// the id would tie the module it was read from to `c`.
+fn vc_waves_resolve(c: VcWaveCtx, fi: u64) {
+    if c.known[fi] == 1 { return; }
     let sm: VcSummarised = vc_summary_module(c.fns[fi], c.vm, vc_trust_all(), c.budget);
-    let mut ids: Vec<i64> = sm.used_ids;
+    let used: Vec<i64> = sm.used_ids;
+    let mut ids: Vec<i64> = Vec::new();
+    let mut k: u64 = 0;
+    while k < used.len() {
+        ids.push(used[k] + 0);
+        k = k + 1;
+    }
     let order: Vec<i64> = vc_trust_reach(c, fi);
     if ids.len() == 0 { ids = vc_trust_needs(c, order); }
     let rep: Vec<i64> = vc_trust_repeated(c, fi, order);
     let mut r: u64 = 0;
     while r < rep.len() {
-        if !vc_id_in(ids, rep[r]) { ids.push(rep[r]); }
+        if !vc_id_in(ids, rep[r]) { ids.push(rep[r] + 0); }
         r = r + 1;
     }
     c.needs[fi] = ids;
     c.known[fi] = 1;
-    ids
 }
 
 // True when every function of `needs` has been tried: proven, or not, which then is only
