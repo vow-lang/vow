@@ -93,6 +93,8 @@ PROGRESS_RE = re.compile(
 )
 SITE_NOTE = "(checked arithmetic can abort)"
 VERIFYING_RE = re.compile(r"^Verifying ([\w.:]+)\.\.\.$")
+WAVE_RE = re.compile(r"^Wave \d+: proving \d+ function")
+PROOF_RE = re.compile(r"^Proof ([\w.:]+): \w+$")
 SKIPPED_RE = re.compile(r"^skipped verification of `([^`]+)`: (.*)$", re.DOTALL)
 
 PROGRESS_VERDICT = {
@@ -240,19 +242,54 @@ def attribute(events, rss_series, wall_s):
     gap. The first block has no gap of its own: what precedes it, and the
     function reported first, are common start-up. `prelude_peak_kb` covers the
     time up to the first block's end and `tail_peak_kb` what follows the last.
+
+    The native driver proves some functions before its first `Verifying` line
+    (callee summaries, #1791), in waves: `Wave R: proving N function(s)...`
+    starts a round and each `Proof <fn>: <WORD>` line ends the proof of one
+    function. A proof is charged the time and memory from the round's start, or
+    from the previous proof of the round, to its own line, and `wave_s` lists
+    those times; the same function still gets its (short) block when its verdict
+    is reported. What runs between rounds, and the pool start-up after the last
+    one, stay common start-up, so wave time is attributed and none of it is
+    dropped.
     """
-    blocks = []
-    for t, line in events or ():
-        opened = VERIFYING_RE.match(line.rstrip("\n"))
+    blocks, proofs, started = [], [], None
+    for t, raw in events or ():
+        line = raw.rstrip("\n")
+        if WAVE_RE.match(line):
+            started = t
+            continue
+        proved = PROOF_RE.match(line)
+        if proved:
+            if started is not None:
+                proofs.append((proved.group(1), started, t))
+                started = t
+            continue
+        opened = VERIFYING_RE.match(line)
         if opened:
             blocks.append([opened.group(1), t])
         elif blocks and PROGRESS_RE.match(line):
             blocks[-1][1] = max(blocks[-1][1], t)
-    gaps, peaks = {}, {}
+    gaps, peaks, wave_s = {}, {}, {}
 
-    def peak_in(lo, hi):
-        return max((kb for t, kb in rss_series or () if lo < t <= hi), default=0)
+    def peak_in(lo, hi, outside_proofs=False):
+        return max(
+            (
+                kb
+                for t, kb in rss_series or ()
+                if lo < t <= hi
+                and not (
+                    outside_proofs and any(plo < t <= phi for _, plo, phi in proofs)
+                )
+            ),
+            default=0,
+        )
 
+    for name, lo, hi in proofs:
+        took = max(0.0, hi - lo)
+        gaps[name] = gaps.get(name, 0.0) + took
+        wave_s[name] = wave_s.get(name, 0.0) + took
+        peaks[name] = max(peaks.get(name, 0), peak_in(lo, hi))
     previous = None
     for name, end in blocks:
         gaps[name] = gaps.get(name, 0.0) + (
@@ -264,8 +301,11 @@ def attribute(events, rss_series, wall_s):
     return {
         "wall_s": wall_s,
         "gap_s": gaps,
+        "wave_s": wave_s,
         "peak_kb": peaks,
-        "prelude_peak_kb": peak_in(-1.0, blocks[0][1] if blocks else float("inf")),
+        "prelude_peak_kb": peak_in(
+            -1.0, blocks[0][1] if blocks else float("inf"), outside_proofs=True
+        ),
         "tail_peak_kb": peak_in(previous, float("inf")) if blocks else 0,
     }
 
@@ -397,10 +437,28 @@ def left_out_reason(e, n, native_skip):
     return f"neither backend decides it: esbmc {e}, native {n}"
 
 
+def median_gap(summary, name):
+    """Median over the runs of the time one backend spent on `name`, None if untimed."""
+    gaps = [
+        a["gap_s"][name] for a in summary.get("attribution", ()) if name in a["gap_s"]
+    ]
+    return statistics.median(gaps) if gaps else None
+
+
+def wave_only(native):
+    """Names native proved in a wave (`Proof <fn>` lines). One that has no verdict
+    on either backend was proven only for the callers that use its summary, which
+    makes its time and memory part of what native pays."""
+    return {name for a in native.get("attribution", ()) for name in a.get("wave_s", ())}
+
+
 def cost_functions(rows, esbmc, native):
     """`(compared, left_out)`: the functions both backends decide the same way,
     and every other function the driver verified or reported, with the reason and
-    the median time each backend spent on it."""
+    the median time each backend spent on it. A function proven only in a wave
+    (`wave_only`) is neither: nothing ESBMC does corresponds to it, so it is not
+    taken out of native's side."""
+    waved = wave_only(native)
     verdicts = {r["function"]: (r["esbmc"], r["native"]) for r in rows}
     timed = {
         name
@@ -414,6 +472,8 @@ def cost_functions(rows, esbmc, native):
         if e == n and e in CONCLUSIVE:
             compared.append(name)
             continue
+        if e == ABSENT and n == ABSENT and name in waved:
+            continue
         if e == ABSENT and n == ABSENT and name not in timed:
             continue
         reason = native["skipped"].get(name, "")
@@ -423,13 +483,8 @@ def cost_functions(rows, esbmc, native):
             "native": n,
             "reason": left_out_reason(e, n, skip_code(reason) or reason.split(":")[0]),
         }
-        for side, summary in (("esbmc_s", esbmc), ("native_s", native)):
-            gaps = [
-                a["gap_s"][name]
-                for a in summary.get("attribution", ())
-                if name in a["gap_s"]
-            ]
-            entry[side] = statistics.median(gaps) if gaps else None
+        entry["esbmc_s"] = median_gap(esbmc, name)
+        entry["native_s"] = median_gap(native, name)
         left_out.append(entry)
     return compared, left_out
 
@@ -465,9 +520,18 @@ def cost_basis(rows, esbmc, native, jobs):
     nothing); `like-for-like` when some was and the run could say what it cost;
     `unattributable` when it cannot (`--verify-jobs` above 1, or no timeline)."""
     compared, left_out = cost_functions(rows, esbmc, native)
+    verdicts = {r["function"]: (r["esbmc"], r["native"]) for r in rows}
+    counted = sorted(
+        name
+        for name in wave_only(native)
+        if verdicts.get(name, (ABSENT, ABSENT)) == (ABSENT, ABSENT)
+    )
     basis = {
         "mode": "whole-root",
         "compared": compared,
+        "counted": [
+            {"function": name, "native_s": median_gap(native, name)} for name in counted
+        ],
         "left_out": left_out,
         "whole_root": {
             "esbmc_wall_s": esbmc["wall_s"],
@@ -490,8 +554,8 @@ def cost_basis(rows, esbmc, native, jobs):
     ]
     if not costly:
         return basis
-    e_cost = like_for_like(esbmc, compared) if jobs == 1 else None
-    n_cost = like_for_like(native, compared) if jobs == 1 else None
+    e_cost = like_for_like(esbmc, compared + counted) if jobs == 1 else None
+    n_cost = like_for_like(native, compared + counted) if jobs == 1 else None
     if e_cost is None or n_cost is None:
         basis["mode"] = "unattributable"
         return basis

@@ -557,6 +557,72 @@ class AttributeTest(unittest.TestCase):
         self.assertEqual(40, got["prelude_peak_kb"])
         self.assertEqual(0, got["tail_peak_kb"])
 
+    def test_a_wave_proof_is_charged_from_the_start_of_its_round(self):
+        # Two rounds of the native waves, then the reports (instant: the answers are in).
+        events = [
+            (1.0, "2 items, 0 errors\n"),
+            (2.0, "Wave 1: proving 2 function(s)...\n"),
+            (5.0, "Proof a: PROVEN\n"),
+            (9.0, "Proof b: PROVEN\n"),
+            (10.0, "Wave 2: proving 1 function(s)...\n"),
+            (12.0, "Proof c: FAILED\n"),
+            (13.0, "Verifying a...\n"),
+            (13.0, "  a: PROVEN\n"),
+            (13.0, "Verifying c...\n"),
+            (14.0, "  c: FAILED\n"),
+        ]
+        series = [
+            (1.5, 10),
+            (3.0, 700),
+            (7.0, 900),
+            (9.5, 20),
+            (11.0, 400),
+            (13.5, 40),
+            (15.0, 30),
+        ]
+        got = vc.attribute(events, series, 16.0)
+        self.assertEqual({"a": 3.0, "b": 4.0, "c": 2.0}, got["wave_s"])
+        # `a` and `c` also have the block of their report: the first has no gap of its own,
+        # the second only the second it took to print after the first block.
+        self.assertEqual({"a": 3.0, "b": 4.0, "c": 3.0}, got["gap_s"])
+        self.assertEqual({"a": 700, "b": 900, "c": 400}, got["peak_kb"])
+        # Between the rounds and before the first round the run is common start-up.
+        self.assertEqual(20, got["prelude_peak_kb"])
+        self.assertEqual(30, got["tail_peak_kb"])
+
+    def test_the_wave_windows_are_not_start_up_memory(self):
+        events = [
+            (0.0, "Wave 1: proving 1 function(s)...\n"),
+            (4.0, "Proof a: PROVEN\n"),
+            (5.0, "Verifying b...\n"),
+            (5.0, "  b: PROVEN\n"),
+        ]
+        got = vc.attribute(events, [(2.0, 900), (4.5, 50)], 6.0)
+        self.assertEqual(50, got["prelude_peak_kb"])
+        self.assertEqual({"a": 900}, got["peak_kb"])
+
+    def test_a_proof_line_without_a_round_is_not_attributed(self):
+        events = [
+            (3.0, "Proof a: PROVEN\n"),
+            (4.0, "Verifying b...\n"),
+            (4.0, "  b: PROVEN\n"),
+        ]
+        got = vc.attribute(events, [(1.0, 5)], 5.0)
+        self.assertEqual({"b": 0.0}, got["gap_s"])
+        self.assertEqual({}, got["wave_s"])
+
+    def test_wave_lines_are_not_verdict_lines(self):
+        stderr = (
+            "Wave 1: proving 1 function(s)...\nProof a: PROVEN\n"
+            "Verifying a...\n  a: PROVEN\n"
+        )
+        self.assertEqual({"a": "PROVEN"}, vc.progress_verdicts(stderr, blocks=True))
+        self.assertEqual({"a": "PROVEN"}, vc.progress_verdicts(stderr))
+        self.assertEqual(
+            {},
+            vc.progress_verdicts("Wave 1: proving 1 function(s)...\nProof a: PROVEN\n"),
+        )
+
     def test_summarise_attributes_each_sample_that_has_a_timeline(self):
         sample = {
             "wall_s": 4.0,
@@ -667,6 +733,75 @@ class LikeForLikeCostTest(unittest.TestCase):
         self.assertEqual((7, 3), (entry["esbmc_s"], entry["native_s"]))
         self.assertEqual(3.0, basis["esbmc_wall_s"])
         self.assertEqual(5.0, basis["native_wall_s"])
+
+    def waved(self, native_gaps, waves, native_wall, **kw):
+        esbmc = summary(
+            {"f": "PROVEN", "g": "PROVEN", "h": "SKIPPED"},
+            gaps={"f": 0, "g": 4, "h": 0},
+            wall=10.0,
+            rss=1000.0,
+            peaks={"g": 800},
+            prelude_rss=500.0,
+        )
+        native = summary(
+            {"f": "PROVEN", "g": "PROVEN", "h": "PROVEN"},
+            gaps=native_gaps,
+            wall=native_wall,
+            rss=3000.0,
+            **kw,
+        )
+        native["attribution"][0]["wave_s"] = dict(waves)
+        return esbmc, native
+
+    def test_the_proof_of_a_function_esbmc_skips_is_left_out_like_its_report(self):
+        # `h` is proven in a wave (20 s of the native wall) and reported at once.
+        esbmc, native = self.waved(
+            {"f": 0, "g": 5, "h": 20}, {"h": 20}, 33.0, peaks={"g": 900, "h": 3000}
+        )
+        row = timed(self.ROOT, esbmc, native)
+        basis = row["cost_basis"]
+        self.assertEqual(["f", "g"], basis["compared"])
+        self.assertEqual(13.0, basis["native_wall_s"])
+        self.assertEqual(900, basis["native_peak_rss_kb"])
+        (entry,) = basis["left_out"]
+        self.assertEqual((20, "proven"), (entry["native_s"], entry["native"]))
+
+    def test_the_proof_of_a_compared_function_is_native_cost(self):
+        esbmc, native = self.waved(
+            {"f": 0, "g": 25, "h": 3}, {"g": 24}, 33.0, peaks={"g": 3000, "h": 100}
+        )
+        row = timed(self.ROOT, esbmc, native)
+        basis = row["cost_basis"]
+        self.assertEqual(["f", "g"], basis["compared"])
+        self.assertEqual(30.0, basis["native_wall_s"])
+        self.assertEqual(3000, basis["native_peak_rss_kb"])
+        self.assertAlmostEqual(3.0, row["ratio_wall"])
+        self.assertAlmostEqual(3.75, row["ratio_rss"])
+
+    def test_a_helper_proven_only_in_a_wave_stays_in_the_native_cost(self):
+        # `w` has no verdict line on either side: it was proven for the callers that use
+        # its summary, and ESBMC's counterpart of that work is inside their runs.
+        esbmc, native = self.waved(
+            {"f": 0, "g": 5, "h": 18, "w": 9},
+            {"w": 9},
+            33.0,
+            peaks={"g": 900, "h": 3000, "w": 2500},
+        )
+        row = timed(self.ROOT, esbmc, native)
+        basis = row["cost_basis"]
+        self.assertEqual(["h"], [x["function"] for x in basis["left_out"]])
+        self.assertEqual([{"function": "w", "native_s": 9}], basis["counted"])
+        self.assertEqual(33.0 - 18, basis["native_wall_s"])
+        self.assertEqual(2500, basis["native_peak_rss_kb"])
+
+    def test_a_wave_helper_alone_leaves_nothing_out(self):
+        esbmc = summary({"f": "PROVEN"}, gaps={"f": 0}, wall=10.0)
+        native = summary({"f": "PROVEN"}, gaps={"f": 0, "w": 9}, wall=19.0)
+        native["attribution"][0]["wave_s"] = {"w": 9}
+        basis = timed(self.ROOT, esbmc, native)["cost_basis"]
+        self.assertEqual("whole-root", basis["mode"])
+        self.assertEqual([], basis["left_out"])
+        self.assertEqual(19.0, basis["native_wall_s"])
 
     def test_a_function_neither_side_decides_is_left_out(self):
         esbmc = summary(

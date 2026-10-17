@@ -5,6 +5,7 @@ use vc_ops
 use vc_inline
 use vc_summary
 use vc_waves
+use verifier
 use tests.builders
 
 fn padded(id: i64, name: String, pad: i64, callee: i64) -> IrFunction {
@@ -64,8 +65,22 @@ fn check_waves_needs_within_budget() -> i64 [read] {
     0
 }
 
+// The wave lines carry the function and the outcome in the family the progress lines belong to,
+// and no word the verdict lines use after `  <fn>: `.
+fn check_wave_lines() -> i64 {
+    if vc_wave_start_line(2, 3) != String::from("Wave 2: proving 3 function(s)...") { return 1; }
+    if vc_wave_proof_line(String::from("read_block"), VERIFY_PROVEN()) != String::from("Proof read_block: PROVEN") { return 2; }
+    if vc_wave_proof_line(String::from("f"), VERIFY_FAILED()) != String::from("Proof f: FAILED") { return 3; }
+    if vc_wave_proof_line(String::from("f"), VERIFY_TIMEOUT()) != String::from("Proof f: TIMEOUT") { return 4; }
+    if vc_wave_proof_line(String::from("f"), VERIFY_UNKNOWN()) != String::from("Proof f: UNKNOWN") { return 5; }
+    if vc_wave_proof_line(String::from("f"), VERIFY_PANICKED()) != String::from("Proof f: PANICKED") { return 6; }
+    if vc_wave_proof_line(String::from("f"), VERIFY_ERROR()) != String::from("Proof f: ERROR") { return 7; }
+    0
+}
+
 fn main() -> i32 [read] {
     let mut r: i64 = check_trust_needs();
     if r == 0 { let d: i64 = check_waves_needs_within_budget(); if d != 0 { r = 100 + d; } }
+    if r == 0 { let l: i64 = check_wave_lines(); if l != 0 { r = 200 + l; } }
     i64_to_i32_wrap(r)
 }
