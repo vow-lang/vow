@@ -52,7 +52,8 @@ decided again in every caller, although the callee was proven on its own.
    only), and a `PROVEN` one is trusted. The parent runs them in waves
    (`compiler/vc_waves.vow`): callees whose own call tree needs no summary first,
    then those whose summaries the first wave proved, until nothing is left that
-   can be tried. A callee that is not proven, or that the native subset does not
+   can be tried. A callee that is no verify target but is itself above the budget (an uncontracted
+   intermediate) is wanted too, together with the callees it needs. A callee that is not proven, or that the native subset does not
    take, is never trusted and the function that needed it is skipped as before.
    The parent plans from the proven ids and tells every worker the same ids
    (`--worker-summaries`), so planner and worker build the same module.
