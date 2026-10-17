@@ -1044,7 +1044,13 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         w.ov.class_of = vc_overlay_class_table(f, tys);
         w.ov.built_of = vc_overlay_built_table(f, tys.len());
     }
-    vc_agg_enable_alias(w.ag, ar, hdr, vc_agg_alias_params(f, tys.len()));
+    let alias_params: Vec<i64> = vc_agg_alias_params(f, tys.len());
+    let group_facts: Vec<i64> = vc_agg_enable_alias(w.ag, ar, hdr, alias_params, vc_agg_alias_keys(f, alias_params));
+    let mut gi: u64 = 0;
+    while gi < group_facts.len() {
+        vc_heap_assume(ar, cs.assumed, group_facts[gi]);
+        gi = gi + 1;
+    }
     if vc_heap_overlay_needed(f, tys) {
         vc_overlay_enable(w.ov, w.ag, ar, hdr, cs.assumed, vc_overlay_params(f, tys, VC_OV_VEC()), vc_overlay_params(f, tys, VC_OV_STRING()), vc_overlay_params(f, tys, VC_OV_STRUCT()));
     }

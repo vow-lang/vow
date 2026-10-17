@@ -96,6 +96,7 @@ fn vc_irw_put_function(out: String, f: IrFunction) {
     vc_irw_put_str(out, f.name);
     vc_irw_put_ints(out, f.params);
     vc_irw_put_strs(out, f.param_names);
+    vc_irw_put_strs(out, f.param_keys);
     vc_irw_put(out, f.return_ty);
     vc_irw_put(out, f.effects);
     vc_irw_put(out, f.vows.len() as i64);
@@ -299,6 +300,7 @@ fn vc_irw_get_function(r: VcIrReader) -> IrFunction {
     let name: String = vc_irw_get_str(r);
     let params: Vec<i64> = vc_irw_get_ints(r);
     let param_names: Vec<String> = vc_irw_get_strs(r);
+    let param_keys: Vec<String> = vc_irw_get_strs(r);
     let return_ty: i64 = vc_irw_get(r);
     let effects: i64 = vc_irw_get(r);
     let vows: Vec<IrVowEntry> = Vec::new();
@@ -328,6 +330,7 @@ fn vc_irw_get_function(r: VcIrReader) -> IrFunction {
         name: name,
         params: params,
         param_names: param_names,
+        param_keys: param_keys,
         return_ty: return_ty,
         effects: effects,
         vows: vows,

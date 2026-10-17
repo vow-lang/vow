@@ -8,6 +8,7 @@ use vc_ops
 use vc_agg
 use vc_flow
 use vc_exec
+use vc_summary
 use tests.builders
 
 fn args1(a: i64) -> Vec<i64> {
@@ -842,6 +843,79 @@ fn check_alias_identities_decide_the_write() -> i64 {
     0
 }
 
+// f(a, b, c, d): a.0 = 3 and a read of each of the others, ensures b.0 == 3.
+fn four_params_fn() -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_arg(1, ITY_PTR(), 1));
+    i.push(mk_inst_arg(2, ITY_PTR(), 2));
+    i.push(mk_inst_arg(3, ITY_PTR(), 3));
+    i.push(mk_inst_const_i64(4, 3));
+    i.push(mk_inst_field_set(5, 0, 0, 4));
+    i.push(mk_inst_field_get(6, ITY_I64(), 1, 0));
+    i.push(mk_inst_field_get(7, ITY_I64(), 2, 0));
+    i.push(mk_inst_field_get(8, ITY_I64(), 3, 0));
+    i.push(mk_inst(9, IOP_EQ(), ITY_BOOL(), args2(6, 4)));
+    i.push(mk_vow(10, IOP_VOW_ENS(), 9, 0));
+    i.push(mk_inst_return(11, 6));
+    let four: Vec<i64> = Vec::new();
+    four.push(ITY_PTR());
+    four.push(ITY_PTR());
+    four.push(ITY_PTR());
+    four.push(ITY_PTR());
+    one_block(String::from("f4"), four, ITY_I64(), i)
+}
+
+fn keyed(f: IrFunction, a: String, b: String, c: String, d: String) -> IrFunction {
+    f.param_keys.push(a);
+    f.param_keys.push(b);
+    if c.len() > 0 { f.param_keys.push(c); }
+    if d.len() > 0 { f.param_keys.push(d); }
+    f
+}
+
+// Parameters of different declared types are never one object: only those that share their
+// type with another marked parameter keep an identity, and a parameter whose type is not known
+// puts all of them back in one group.
+fn check_alias_params_by_type() -> i64 {
+    let f: IrFunction = keyed(four_params_fn(), String::from("P"), String::from("P"), String::from("Q"), String::from("Q"));
+    if vc_ids_text(vc_agg_alias_params(f, vc_ty_table(f).len())) != String::from("0,1,2,3") { return 200; }
+    let g: IrFunction = keyed(four_params_fn(), String::from("P"), String::from("P"), String::from("Q"), String::from("R"));
+    if vc_ids_text(vc_agg_alias_params(g, vc_ty_table(g).len())) != String::from("0,1") { return 201; }
+    let h: IrFunction = keyed(four_params_fn(), String::from("P"), String::from("Q"), String::from("R"), String::from("S"));
+    if vc_agg_alias_params(h, vc_ty_table(h).len()).len() != 0 { return 202; }
+    let u: IrFunction = keyed(four_params_fn(), String::from("P"), String::from("Q"), String::from("R"), String::from(""));
+    if u.param_keys.len() != 3 { return 203; }
+    if vc_ids_text(vc_agg_alias_params(u, vc_ty_table(u).len())) != String::from("0,1,2,3") { return 204; }
+    let blank: IrFunction = keyed(four_params_fn(), String::from("P"), String::from("Q"), String::from("R"), String::from(" "));
+    blank.param_keys[3] = String::from("");
+    if vc_ids_text(vc_agg_alias_params(blank, vc_ty_table(blank).len())) != String::from("0,1,2,3") { return 205; }
+    let k: Vec<String> = vc_agg_alias_keys(g, vc_agg_alias_params(g, vc_ty_table(g).len()));
+    if k.len() != 2 || k[0] != String::from("P") || k[1] != String::from("P") { return 206; }
+    let ku: Vec<String> = vc_agg_alias_keys(blank, vc_agg_alias_params(blank, vc_ty_table(blank).len()));
+    if ku.len() != 4 || ku[0].len() != 0 { return 207; }
+    0
+}
+
+// A pair of other types keeps no identity (a write to one cannot reach the other); two pairs
+// keep theirs, and the identities of different pairs are assumed to differ.
+fn check_alias_identities_by_type() -> i64 {
+    let two: IrFunction = alias_params_fn();
+    two.param_keys.push(String::from("P"));
+    two.param_keys.push(String::from("Q"));
+    let cs: VcClaims = vc_claims(two);
+    if query(cs, 0).contains(String::from("alias")) { return 211; }
+    let same: IrFunction = alias_params_fn();
+    same.param_keys.push(String::from("P"));
+    same.param_keys.push(String::from("P"));
+    if !query(vc_claims(same), 0).contains(String::from("(= p0alias p1alias)")) { return 212; }
+    let f: IrFunction = keyed(four_params_fn(), String::from("P"), String::from("P"), String::from("Q"), String::from("Q"));
+    let q: String = query(vc_claims(f), 0);
+    if !q.contains(String::from("(not (= p0alias p2alias))")) { return 213; }
+    if !q.contains(String::from("(not (= p1alias p3alias))")) { return 214; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_struct_gate_accepts();
     if r == 0 { r = check_param_read_accepted(); }
@@ -872,5 +946,7 @@ fn main() -> i32 {
     if r == 0 { r = check_slot_read_at_two_sorts_is_ambiguous(); }
     if r == 0 { r = check_alias_params_selected(); }
     if r == 0 { r = check_alias_identities_decide_the_write(); }
+    if r == 0 { r = check_alias_params_by_type(); }
+    if r == 0 { r = check_alias_identities_by_type(); }
     i64_to_i32_wrap(r)
 }
