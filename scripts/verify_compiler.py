@@ -462,10 +462,11 @@ def wave_only(native):
 
 
 def cost_functions(rows, esbmc, native):
-    """`(compared, left_out)`: the functions both backends decide the same way,
-    and every other function the driver verified or reported, with the reason and
-    the median time each backend spent on it. A function proven only in a wave
-    (`wave_only`) is neither: nothing ESBMC does corresponds to it, so it is not
+    """`(compared, left_out, counted)`: the functions both backends decide the same
+    way, every other function the driver verified or reported (with the reason and
+    the median time each backend spent on it), and the functions proven only in a
+    wave (`wave_only`) that have no verdict on either backend. Those are neither
+    compared nor left out: nothing ESBMC does corresponds to them, so they are not
     taken out of native's side."""
     waved = wave_only(native)
     verdicts = {r["function"]: (r["esbmc"], r["native"]) for r in rows}
@@ -475,13 +476,14 @@ def cost_functions(rows, esbmc, native):
         for a in summary.get("attribution", ())
         for name in a["gap_s"]
     }
-    compared, left_out = [], []
+    compared, left_out, counted = [], [], []
     for name in sorted(set(verdicts) | timed):
         e, n = verdicts.get(name, (ABSENT, ABSENT))
         if e == n and e in CONCLUSIVE:
             compared.append(name)
             continue
         if e == ABSENT and n == ABSENT and name in waved:
+            counted.append(name)
             continue
         if e == ABSENT and n == ABSENT and name not in timed:
             continue
@@ -495,7 +497,7 @@ def cost_functions(rows, esbmc, native):
         entry["esbmc_s"] = median_gap(esbmc, name)
         entry["native_s"] = median_gap(native, name)
         left_out.append(entry)
-    return compared, left_out
+    return compared, left_out, counted
 
 
 def like_for_like(summary, compared):
@@ -528,13 +530,7 @@ def cost_basis(rows, esbmc, native, jobs):
     whole run is then the like-for-like figure; a function both skip costs
     nothing); `like-for-like` when some was and the run could say what it cost;
     `unattributable` when it cannot (`--verify-jobs` above 1, or no timeline)."""
-    compared, left_out = cost_functions(rows, esbmc, native)
-    verdicts = {r["function"]: (r["esbmc"], r["native"]) for r in rows}
-    counted = sorted(
-        name
-        for name in wave_only(native)
-        if verdicts.get(name, (ABSENT, ABSENT)) == (ABSENT, ABSENT)
-    )
+    compared, left_out, counted = cost_functions(rows, esbmc, native)
     basis = {
         "mode": "whole-root",
         "compared": compared,

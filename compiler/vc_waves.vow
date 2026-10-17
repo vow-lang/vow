@@ -135,8 +135,9 @@ fn vc_waves_outcome_of(p: VcWaveProofs, fi: i64) -> i64 {
 // `scripts/verify_compiler.py` to attribute the time and the memory of a proof to the function it
 // proves (the proofs run before the first `Verifying` line, and without a line of their own the
 // run books them as common start-up). `Wave R: proving N function(s)...` is printed when the Rth
-// round that has something to prove starts its pool, `Proof <fn>: <WORD>` as each proof of the round is answered. Neither matches
-// the `  <fn>: <WORD>` verdict lines, so no function gains or loses a verdict.
+// round that has something to prove starts its pool, `Proof <fn>: <WORD>` as each proof of the
+// round is answered. Neither matches the `  <fn>: <WORD>` verdict lines, so no function gains or
+// loses a verdict.
 fn vc_wave_start_line(round: u64, n: u64) -> String {
     let s: String = String::from("Wave ");
     s.push_str(i64_to_string(round as i64));
