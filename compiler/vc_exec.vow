@@ -1080,6 +1080,6 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
     vc_claims_harvest_fields(cs, w.ag, w.vv, w.ov);
     cs.hook_vars = w.vv.hk_vars;
     cs.map_vars = vc_map_inexact_vars(w.mp);
-    vc_script_replace_logic(hdr, vc_logic_name(vc_vec_count(w.vv) > 0 || vc_heap_used(w.hp) || vc_map_count(w.mp) > 0, vc_function_has_float(f, tys), w.vv.quantified));
+    vc_script_replace_logic(hdr, vc_logic_name(vc_vec_count(w.vv) > 0 || vc_heap_used(w.hp) || vc_map_count(w.mp) > 0 || w.ov.tags >= 0, vc_function_has_float(f, tys), w.vv.quantified));
     cs
 }

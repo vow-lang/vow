@@ -336,6 +336,81 @@ fn check_two_reads_one_handle() -> i64 {
     0
 }
 
+// `n` fresh structs stored into fields of the parameter, then `n` more fields of it read as
+// `i64` (terms of the memory the function was given), then a claim on the first of those.
+fn churn_fn(n: i64) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    let mut id: i64 = 1;
+    let mut k: i64 = 0;
+    while k < n {
+        i.push(mk_inst_alloc(id, 16));
+        i.push(mk_inst_field_set(id + 1, 0, k, id));
+        id = id + 2;
+        k = k + 1;
+    }
+    let first: i64 = id;
+    k = 0;
+    while k < n {
+        i.push(mk_inst_field_get(id, ITY_I64(), 0, n + k));
+        id = id + 1;
+        k = k + 1;
+    }
+    i.push(mk_inst_const_i64(id, 5));
+    i.push(mk_inst(id + 1, IOP_EQ(), ITY_BOOL(), args2(first, id)));
+    i.push(mk_vow(id + 2, IOP_VOW_ENS(), id + 1, 0));
+    i.push(mk_inst_return(id + 3, first));
+    one_block(String::from("churn"), ptr_param(), ITY_I64(), i)
+}
+
+// Each allocation and each loaded term is one fact about its tag (`vc_overlay_tag_start`), not
+// one disequality per pair: 12 allocations and 12 loaded terms are 24 facts, where a pair per
+// (loaded term, allocation) and per two allocations is more than 200.
+fn check_allocation_facts_are_linear() -> i64 {
+    let f: IrFunction = churn_fn(12);
+    if vc_skip_reason(f).len() != 0 { return 70; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 71; }
+    if cs.assumed.len() > 60 { return 72; }
+    let q: String = query(cs, 0);
+    if count_of(q, String::from("(select hatag ")) < 24 { return 73; }
+    if !vc_smt_render(cs.arena, cs.header).contains(String::from("(declare-const hatag (Array (_ BitVec 64) (_ BitVec 64)))")) { return 74; }
+    0
+}
+
+// A struct stored into a field of the parameter, then a parameter pointer stored into another
+// field (its entry is added after the allocation's), then a claim on a field read as `i64`.
+fn late_param_fn() -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_arg(1, ITY_PTR(), 1));
+    i.push(mk_inst_alloc(2, 16));
+    i.push(mk_inst_field_set(3, 0, 0, 2));
+    i.push(mk_inst_field_set(4, 0, 1, 1));
+    i.push(mk_inst_field_get(5, ITY_I64(), 0, 2));
+    i.push(mk_inst_const_i64(6, 5));
+    i.push(mk_inst(7, IOP_EQ(), ITY_BOOL(), args2(5, 6)));
+    i.push(mk_vow(8, IOP_VOW_ENS(), 7, 0));
+    i.push(mk_inst_return(9, 5));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    p.push(ITY_PTR());
+    one_block(String::from("late"), p, ITY_I64(), i)
+}
+
+// A function with a stored allocation and no collection still needs the array logic, and a
+// parameter whose address is first needed after an allocation's is tagged 0 like the others.
+fn check_tags_cover_late_entries() -> i64 {
+    let cs: VcClaims = vc_claims(late_param_fn());
+    if cs.kinds.len() != 1 { return 80; }
+    let head: String = vc_smt_render(cs.arena, cs.header);
+    if !head.contains(String::from("QF_ABV")) { return 81; }
+    let q: String = query(cs, 0);
+    if !q.contains(String::from("(= (select hatag o0_haddr) #x0000000000000001)")) { return 82; }
+    if !q.contains(String::from("(= (select hatag p1_haddr) #x0000000000000000)")) { return 83; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_handle_reads_accepted();
     if r == 0 { r = check_handle_shapes_rejected(); }
@@ -343,6 +418,8 @@ fn main() -> i32 {
     if r == 0 { r = check_overlay_read_classes(); }
     if r == 0 { r = check_pointer_stores(); }
     if r == 0 { r = check_stored_pointer_read_back(); }
+    if r == 0 { r = check_allocation_facts_are_linear(); }
+    if r == 0 { r = check_tags_cover_late_entries(); }
     if r == 0 { r = check_exec_terms(); }
     if r == 0 { r = check_two_reads_one_handle(); }
     i64_to_i32_wrap(r)
