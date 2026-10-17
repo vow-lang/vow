@@ -1,0 +1,25 @@
+// TEST: counterexample-fn "unwrap_fd"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value o.0 1
+// A payload of `0` is not positive: the counterexample lists the tag `o.0` and the
+// slots of the payload object under its slot `o.1`.
+module OptionStructPayloadWrong
+
+struct Handle {
+  fd: i64,
+}
+
+fn unwrap_fd(o: Option<Handle>) -> i64 vow {
+  ensures: result > 0
+} {
+  match o {
+    Option::Some(h) => h.fd,
+    Option::None => 1,
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(unwrap_fd(Option::Some(Handle { fd: 3 })));
+  0
+}

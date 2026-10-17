@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "copy_first"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value v.len 1
+// TEST: counterexample-value v.elem f64
+// TEST: counterexample-value v[0] 3
+// A float read from a copy of a `Vec` parameter (`pin_to_root`) is a float read of the
+// parameter, so the counterexample lists the element as the float 3 (an integer-valued float
+// prints like a raw slot) and marks the parameter `f64`, which is how replay tells them apart.
+module FloatVecCloneMarksSource
+
+fn copy_first(v: Vec<f64>) -> f64 vow {
+  requires: v.len() > 0 && v[0] == 3.0
+  ensures: result == 4.0
+} {
+  let p: Vec<f64> = pin_to_root(v);
+  p[0]
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

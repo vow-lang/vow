@@ -1,0 +1,21 @@
+// `out` receives the length of the `Vec` in `b.items`: pushing onto a `Vec` parameter while
+// reading a length through a field is verified, and `out` has an element afterwards.
+module HeapParamPushOfFieldLen
+
+// TEST: esbmc-capacity-artifact "ESBMC fails its Vec capacity assertion pushing onto an out that already holds its model limit of 128 elements, and proves the claim once that assertion is assumed; the runtime Vec grows past 128 and out.len() >= 1 holds after every push, as a debug-mode replay over sizes 0 to 300 shows"
+
+struct Bag { items: Vec<i64>, n: i64 }
+
+fn copy_len(out: Vec<i64>, b: Bag) -> u64 vow {
+  ensures: result >= 1
+} {
+  out.push(b.items.len() as i64);
+  out.len()
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), n: 0 };
+  let out: Vec<i64> = Vec::new();
+  print_u64(copy_len(out, b));
+  0
+}

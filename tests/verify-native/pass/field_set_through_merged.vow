@@ -1,0 +1,18 @@
+module FieldSetThroughMerged
+
+struct Cell { v: i64 }
+
+fn through(x: i64) -> i64 vow {
+  ensures: result >= 1
+} {
+  let a: Cell = Cell { v: 1 };
+  let b: Cell = Cell { v: 2 };
+  let p: Cell = if x > 0 { a } else { b };
+  p.v = 5;
+  a.v
+}
+
+fn main() -> i32 [io] {
+  print_i64(through(1));
+  0
+}

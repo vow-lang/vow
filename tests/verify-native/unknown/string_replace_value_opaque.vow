@@ -1,0 +1,16 @@
+// TEST: unknown-reason opaque builtin result
+// Whether `replace` changes the length of its operand depends on the matches the model does
+// not encode: a run of the call where the result is as long as the operand is allowed by the
+// opaque result, and so is the real call on a string with no match, but the verifier cannot
+// tell which, so a counterexample that needs the value is `unknown`.
+module StringReplaceValueOpaque
+
+fn same_length(s: String) -> bool vow {
+  ensures: result == true
+} {
+  string_replace(s, String::from("a"), String::from("bb")).len() == s.len()
+}
+
+fn main() -> i32 [io] {
+  if same_length(String::from("xyz")) { 0 } else { 1 }
+}

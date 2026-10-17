@@ -109,7 +109,7 @@ fn check_field_set_targets() -> i64 {
     if vc_skip_reason(one_block(String::from("s"), ptr_param(), ITY_PTR(), i)).len() != 0 { return 20; }
     // a write in a block other than the one that allocates the target
     if vc_skip_reason(two_block_set()).len() != 0 { return 21; }
-    // two pointer parameters may be one object
+    // a write to a parameter beside another pointer parameter is modelled
     let two: Vec<i64> = Vec::new();
     two.push(ITY_PTR());
     two.push(ITY_PTR());
@@ -118,8 +118,7 @@ fn check_field_set_targets() -> i64 {
     j.push(mk_inst_const_i64(1, 3));
     j.push(mk_inst_field_set(2, 0, 0, 1));
     j.push(mk_inst_return(3, 0));
-    let r: String = vc_skip_reason(one_block(String::from("s"), two, ITY_PTR(), j));
-    if r != String::from("unsupported-opcode: FieldSet on a parameter that may alias another parameter") { return 22; }
+    if vc_skip_reason(one_block(String::from("s"), two, ITY_PTR(), j)).len() != 0 { return 22; }
     0
 }
 
@@ -133,16 +132,97 @@ fn check_field_set_on_call_result() -> i64 {
     i.push(mk_inst_field_set(3, 2, 0, 1));
     i.push(mk_inst_return(4, 2));
     let r: String = vc_skip_reason(one_block(String::from("s"), Vec::new(), ITY_PTR(), i));
-    if r != String::from("unsupported-opcode: FieldSet on a value that is neither an allocation nor a parameter") { return 26; }
+    if r != String::from("unsupported-opcode: FieldSet on a value that is neither an allocation, a parameter nor a merge of them") { return 26; }
     0
 }
 
+// A write through a merge reaches both objects it stands for, each under the
+// condition of the edge that supplies it, so the read of the first allocation
+// after it is `ite(edge, 7, 1)`.
 fn check_field_set_through_phi() -> i64 {
     let f: IrFunction = alias_fn();
     let m: IrBlock = f.blocks[3];
     m.insts[3] = mk_inst_field_set(23, 20, 0, 22);
-    let r: String = vc_skip_reason(f);
-    if r != String::from("unsupported-opcode: FieldSet through a merged value") { return 25; }
+    m.insts[4] = mk_inst_field_get(24, ITY_I64(), 1, 0);
+    m.insts[5] = mk_inst(25, IOP_EQ(), ITY_BOOL(), args2(24, 22));
+    if vc_skip_reason(f).len() != 0 { return 25; }
+    let all: String = query(vc_claims(f), 0);
+    if count_of(all, String::from("#x0000000000000007")) < 1 { return 27; }
+    if count_of(all, String::from("(ite ")) < 2 { return 28; }
+    0
+}
+
+// A pointer read out of a field of a parameter (the payload of an enum) is a
+// child object: its slots are symbols named by the path down to it.
+fn payload_fn(read_idx: i64) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_field_get(1, ITY_PTR(), 0, 1));
+    i.push(mk_inst_field_get(2, ITY_I64(), 1, read_idx));
+    i.push(mk_inst_field_get(3, ITY_PTR(), 0, 1));
+    i.push(mk_inst_field_get(4, ITY_I64(), 3, read_idx));
+    i.push(mk_inst(5, IOP_EQ(), ITY_BOOL(), args2(2, 4)));
+    i.push(mk_vow(6, IOP_VOW_ENS(), 5, 0));
+    i.push(mk_inst_return(7, 2));
+    one_block(String::from("payload"), ptr_param(), ITY_I64(), i)
+}
+
+fn check_payload_child_objects() -> i64 {
+    let f: IrFunction = payload_fn(0);
+    if vc_skip_reason(f).len() != 0 { return 130; }
+    // Two reads of the one slot are one object, so the equality is decided.
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 0 { return 131; }
+    if cs.model_names.len() != 1 { return 132; }
+    if cs.model_names[0] != String::from("p0c1f0s64") { return 133; }
+    if cs.model_paths[0] != String::from(".1") { return 134; }
+    if cs.model_params[0] != 0 || cs.model_slots[0] != 0 { return 135; }
+    // The parameter's own slot 0 and the child's slot 0 are two symbols.
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_field_get(1, ITY_PTR(), 0, 1));
+    i.push(mk_inst_field_get(2, ITY_I64(), 1, 0));
+    i.push(mk_inst_field_get(3, ITY_I64(), 0, 0));
+    i.push(mk_inst(4, IOP_EQ(), ITY_BOOL(), args2(2, 3)));
+    i.push(mk_vow(5, IOP_VOW_ENS(), 4, 0));
+    i.push(mk_inst_return(6, 2));
+    let both: VcClaims = vc_claims(one_block(String::from("both"), ptr_param(), ITY_I64(), i));
+    if both.model_names.len() != 2 { return 136; }
+    if both.model_names[0] != String::from("p0c1f0s64") || both.model_paths[0] != String::from(".1") { return 137; }
+    if both.model_names[1] != String::from("p0f0s64") || both.model_paths[1].len() != 0 { return 138; }
+    0
+}
+
+fn check_payload_gate_reasons() -> i64 {
+    // The base is an allocation: there is no parameter object to take a child of.
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_alloc(0, 16));
+    a.push(mk_inst_field_get(1, ITY_PTR(), 0, 1));
+    a.push(mk_inst_field_get(2, ITY_I64(), 1, 0));
+    a.push(mk_inst_return(3, 2));
+    let r: String = vc_skip_reason(one_block(String::from("built"), Vec::new(), ITY_I64(), a));
+    if r != String::from("unsupported-opcode: a pointer field is read from a value that is not a parameter or a field of one") { return 140; }
+    // The payload is a collection: its length is not a slot of an object.
+    let v: Vec<IrInst> = Vec::new();
+    v.push(mk_inst_arg(0, ITY_PTR(), 0));
+    v.push(mk_inst_field_get(1, ITY_PTR(), 0, 1));
+    v.push(mk_inst_call_extern(2, ITY_U64(), args1(1), String::from("__vow_vec_len")));
+    v.push(mk_inst_return(3, 2));
+    let r2: String = vc_skip_reason(one_block(String::from("vec"), ptr_param(), ITY_U64(), v));
+    if r2 != String::from("unsupported-opcode: a pointer read out of a field is used as a collection, a string or a value") { return 141; }
+    // A write to a parameter beside a payload read: the payload may be that parameter.
+    let w: Vec<IrInst> = Vec::new();
+    w.push(mk_inst_arg(0, ITY_PTR(), 0));
+    w.push(mk_inst_arg(1, ITY_PTR(), 1));
+    w.push(mk_inst_const_i64(2, 5));
+    w.push(mk_inst_field_set(3, 1, 0, 2));
+    w.push(mk_inst_field_get(4, ITY_PTR(), 0, 1));
+    w.push(mk_inst_field_get(5, ITY_I64(), 4, 0));
+    w.push(mk_inst_return(6, 5));
+    let two: Vec<i64> = Vec::new();
+    two.push(ITY_PTR());
+    two.push(ITY_PTR());
+    if vc_skip_reason(one_block(String::from("w"), two, ITY_I64(), w)).len() == 0 { return 142; }
     0
 }
 
@@ -151,7 +231,7 @@ fn check_unsupported_aggregate_shapes() -> i64 {
     n.push(mk_inst_arg(0, ITY_PTR(), 0));
     n.push(mk_inst_field_get(1, ITY_PTR(), 0, 0));
     n.push(mk_inst_return(2, 1));
-    if vc_skip_reason(one_block(String::from("nested"), ptr_param(), ITY_PTR(), n)) != String::from("unsupported-opcode: FieldGet[ptr]") { return 30; }
+    if vc_skip_reason(one_block(String::from("nested"), ptr_param(), ITY_PTR(), n)).len() != 0 { return 30; }
 
     let w: Vec<IrInst> = Vec::new();
     w.push(mk_inst_arg(0, ITY_PTR(), 0));
@@ -699,12 +779,77 @@ fn check_slot_read_at_two_sorts_is_ambiguous() -> i64 {
     0
 }
 
+// f(a, b): a.0 = 3, then ensures b.0 == 3. Two pointer parameters that are both
+// read or written are one object exactly when their identities are equal.
+fn alias_params_fn() -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_arg(1, ITY_PTR(), 1));
+    i.push(mk_inst_const_i64(2, 3));
+    i.push(mk_inst_field_set(3, 0, 0, 2));
+    i.push(mk_inst_field_get(4, ITY_I64(), 1, 0));
+    i.push(mk_inst(5, IOP_EQ(), ITY_BOOL(), args2(4, 2)));
+    i.push(mk_vow(6, IOP_VOW_ENS(), 5, 0));
+    i.push(mk_inst_return(7, 4));
+    let two: Vec<i64> = Vec::new();
+    two.push(ITY_PTR());
+    two.push(ITY_PTR());
+    one_block(String::from("f"), two, ITY_I64(), i)
+}
+
+fn check_alias_params_selected() -> i64 {
+    let f: IrFunction = alias_params_fn();
+    let ids: Vec<i64> = vc_agg_alias_params(f, vc_ty_table(f).len());
+    if ids.len() != 2 || ids[0] != 0 || ids[1] != 1 { return 300; }
+    // a function that writes only what it allocated needs no identity
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_arg(1, ITY_PTR(), 1));
+    i.push(mk_inst_alloc(2, 8));
+    i.push(mk_inst_const_i64(3, 3));
+    i.push(mk_inst_field_set(4, 2, 0, 3));
+    i.push(mk_inst_field_get(5, ITY_I64(), 0, 0));
+    i.push(mk_inst_field_get(6, ITY_I64(), 1, 0));
+    i.push(mk_inst_return(7, 5));
+    let two: Vec<i64> = Vec::new();
+    two.push(ITY_PTR());
+    two.push(ITY_PTR());
+    let g: IrFunction = one_block(String::from("g"), two, ITY_I64(), i);
+    if vc_agg_alias_params(g, vc_ty_table(g).len()).len() != 0 { return 301; }
+    // a lone parameter has nothing to alias
+    let k: Vec<IrInst> = Vec::new();
+    k.push(mk_inst_arg(0, ITY_PTR(), 0));
+    k.push(mk_inst_const_i64(1, 3));
+    k.push(mk_inst_field_set(2, 0, 0, 1));
+    k.push(mk_inst_return(3, 1));
+    let h: IrFunction = one_block(String::from("h"), ptr_param(), ITY_I64(), k);
+    if vc_agg_alias_params(h, vc_ty_table(h).len()).len() != 0 { return 302; }
+    0
+}
+
+fn check_alias_identities_decide_the_write() -> i64 {
+    let f: IrFunction = alias_params_fn();
+    if vc_skip_reason(f).len() != 0 { return 310; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.model_names.len() != 4 { return 311; }
+    if cs.model_names[0] != String::from("p0alias") || cs.model_names[1] != String::from("p1alias") { return 312; }
+    if cs.model_slots[0] != VC_ALIAS_SLOT() || cs.model_widths[0] != 8 || cs.model_tys[0] != ITY_U8() { return 313; }
+    let q: String = query(cs, 0);
+    if !q.contains(String::from("(declare-const p0alias (_ BitVec 8))")) { return 314; }
+    if !q.contains(String::from("(= p0alias p1alias)")) { return 315; }
+    // b's initial field is a's when they alias, and a's write reaches b only then
+    if !q.contains(String::from("(ite ")) { return 316; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_struct_gate_accepts();
     if r == 0 { r = check_param_read_accepted(); }
     if r == 0 { r = check_field_set_targets(); }
     if r == 0 { r = check_field_set_through_phi(); }
     if r == 0 { r = check_field_set_on_call_result(); }
+    if r == 0 { r = check_payload_child_objects(); }
+    if r == 0 { r = check_payload_gate_reasons(); }
     if r == 0 { r = check_unsupported_aggregate_shapes(); }
     if r == 0 { r = check_effects_and_unwrap_shape(); }
     if r == 0 { r = check_unwrap_claim(); }
@@ -725,5 +870,7 @@ fn main() -> i32 {
     if r == 0 { r = check_phi_read_follows_writes(); }
     if r == 0 { r = check_param_field_symbols_are_model_entries(); }
     if r == 0 { r = check_slot_read_at_two_sorts_is_ambiguous(); }
+    if r == 0 { r = check_alias_params_selected(); }
+    if r == 0 { r = check_alias_identities_decide_the_write(); }
     i64_to_i32_wrap(r)
 }

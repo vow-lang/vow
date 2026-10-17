@@ -70,6 +70,11 @@ fn vc_slice_push_children(st: Vec<i64>, ar: VcArena, t: i64, kind: i64) {
         if ar.c[t as u64] >= 0 { st.push(ar.c[t as u64]); }
     } else if kind == VC_T_EXT() {
         st.push(ar.a[t as u64]);
+    } else if vc_kind_is_binder(kind) {
+        st.push(ar.a[t as u64]);
+        st.push(ar.b[t as u64]);
+        if ar.c[t as u64] >= 0 { st.push(ar.c[t as u64]); }
+        if ar.aux[t as u64] >= 0 { st.push(ar.aux[t as u64]); }
     }
 }
 
@@ -104,6 +109,37 @@ fn vc_slicer_link(sx: VcSlicer, ar: VcArena, root: i64, owner: i64, defs: bool) 
         }
     }
     leaves
+}
+
+// The index of the first assumption of `cs` whose term holds a quantifier binder
+// (`vc_kind_is_binder`), looking through bound variables into their definitions;
+// -1 when none does. Claim `k`'s query holds that assumption exactly when
+// `assumed_lens[k]` is above the index. A term met under an earlier assumption
+// held no binder (the scan would have stopped), so it is not visited twice.
+fn vc_claims_first_binder(cs: VcClaims) -> i64 {
+    let ar: VcArena = cs.arena;
+    let seen: Vec<i64> = dom_fill(ar.kinds.len(), 0);
+    let st: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < cs.assumed.len() {
+        st.push(cs.assumed[i]);
+        while st.len() > 0 {
+            let t: i64 = st[st.len() - 1];
+            st.pop();
+            if seen[t as u64] == 0 {
+                seen[t as u64] = 1;
+                let kind: i64 = ar.kinds[t as u64];
+                if vc_kind_is_binder(kind) { return i as i64; }
+                if kind == VC_T_VAR() {
+                    if ar.named[t as u64] >= 0 { st.push(ar.named[t as u64]); }
+                } else {
+                    vc_slice_push_children(st, ar, t, kind);
+                }
+            }
+        }
+        i = i + 1;
+    }
+    -1
 }
 
 fn vc_slicer_new(cs: VcClaims) -> VcSlicer {
@@ -230,21 +266,7 @@ fn vc_slice_claim(sx: VcSlicer, cs: VcClaims, k: u64) -> VcSlice {
     sl
 }
 
-// The query of claim `k` restricted to `sl`: the shape of `vc_claim_script`
-// with the commands and assumptions of the cone only.
+// The cone's query uses the shared constructor for command assembly and tail.
 fn vc_claim_script_sliced(cs: VcClaims, k: u64, sl: VcSlice) -> SmtScript {
-    let hdr: SmtScript = cs.header;
-    let s: SmtScript = vc_script_new();
-    let mut i: u64 = 0;
-    while i < sl.cmds.len() {
-        let c: u64 = sl.cmds[i] as u64;
-        vc_script_push(s, hdr.kinds[c], hdr.names[c], hdr.vals[c], hdr.sorts[c], hdr.terms[c]);
-        i = i + 1;
-    }
-    let mut j: u64 = 0;
-    while j < sl.assumed.len() {
-        vc_script_assert(s, cs.assumed[sl.assumed[j] as u64]);
-        j = j + 1;
-    }
-    vc_claim_script_finish(s, cs, k)
+    vc_claim_script_selected(cs, k, sl.cmds, sl.assumed)
 }

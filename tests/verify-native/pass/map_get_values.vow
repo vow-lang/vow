@@ -1,0 +1,48 @@
+module MapGetValues
+
+fn bool_values(k: i64) -> HashMap<i64, bool> vow {
+  ensures: result.get(k).unwrap()
+} {
+  let m: HashMap<i64, bool> = HashMap::new();
+  m.insert(k, true);
+  m
+}
+
+fn bool_keys() -> HashMap<bool, i64> vow {
+  ensures: result.contains_key(true),
+  ensures: !result.contains_key(false),
+  ensures: result.get(true).unwrap() == 4
+} {
+  let m: HashMap<bool, i64> = HashMap::new();
+  m.insert(true, 4);
+  m
+}
+
+fn signed_narrow_key() -> HashMap<i8, i32> vow {
+  ensures: result.contains_key(-1),
+  ensures: result.get(-1).unwrap() == -70000
+} {
+  let m: HashMap<i8, i32> = HashMap::new();
+  m.insert(-1, -70000);
+  m
+}
+
+fn narrow_unsigned_value(v: u8) -> HashMap<u32, u8> vow {
+  ensures: result.get(4000000000).unwrap() == v
+} {
+  let m: HashMap<u32, u8> = HashMap::new();
+  m.insert(4000000000, v);
+  m
+}
+
+fn lookup(m: HashMap<i64, i64>, k: i64) -> i64 [panic] vow {
+  requires: m.contains_key(k),
+  ensures: result == m.get(k).unwrap()
+} {
+  m.get(k).unwrap()
+}
+
+fn main() -> i32 [io] {
+  print_u64(bool_values(1).len() + bool_keys().len() + signed_narrow_key().len() + narrow_unsigned_value(7).len());
+  0
+}

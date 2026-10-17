@@ -1,0 +1,25 @@
+// TEST: counterexample-fn "total"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: replay-skipped a Vec<String> field of a struct parameter is not rebuilt by replay
+// One pointer is pushed, so a length of two more than the parameter's is refuted.
+module VecPointerStoreCalleeBuiltStructWrong
+
+struct Bag { names: Vec<String> }
+struct Crate { items: Vec<String>, n: i64 }
+
+fn crate_new() -> Crate { Crate { items: Vec::new(), n: 0 } }
+
+fn total(a: Bag, s: String) -> u64 vow {
+  ensures: result == a.names.len() + 2
+} {
+  let c: Crate = crate_new();
+  c.items.push(s);
+  a.names.len() + c.items.len()
+}
+
+fn main() -> i32 [io] {
+  let a: Bag = Bag { names: Vec::new() };
+  print_u64(total(a, String::from("a")));
+  0
+}

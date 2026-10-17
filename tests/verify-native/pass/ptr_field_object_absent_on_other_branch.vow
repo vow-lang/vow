@@ -1,0 +1,27 @@
+// A `Vec` built and stored in one branch does not exist in the other: a read through a
+// handle there cannot name it, and the model must not look for its state.
+module PtrFieldObjectAbsentOnOtherBranch
+
+struct Holder { items: Vec<i64>, tag: i64 }
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn other_branch(c: bool, b: Bag) -> bool vow {
+  ensures: result
+} {
+  let h: Holder = Holder { items: Vec::new(), tag: 0 };
+  let n: u64 = if c {
+    let v: Vec<i64> = Vec::new();
+    v.push(1);
+    h.items = v;
+    0
+  } else {
+    b.items.len()
+  };
+  n == 0 || n == b.items.len()
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), tag: 1 };
+  if other_branch(true, b) { print_i64(1); }
+  0
+}

@@ -1,0 +1,20 @@
+// TEST: skip-reason unsupported-opcode
+module MapMergedByPhiSkipped
+
+fn pick(c: i64) -> u64 vow {
+  ensures: result == 1
+} {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let b: HashMap<i64, i64> = HashMap::new();
+  a.insert(1, 1);
+  b.insert(2, 2);
+  let m: HashMap<i64, i64> = {
+    if c > 0 { a } else { b }
+  };
+  m.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(pick(1));
+  0
+}

@@ -269,18 +269,104 @@ fn vc_classify_run(exit_code: i64, stdout: String, stderr: String, names: Vec<St
     vc_answer(VC_ANS_SAT(), model.values, model.highs, raw)
 }
 
-// Arguments of an interactive session: commands come from stdin.
-fn vc_solver_stdin_args() -> Vec<String> {
+// True when a query (or a session's header) is quantifier-free floating point:
+// its first command is the logic declaration `vc_logic_name` emits.
+fn vc_query_is_float(query: String) -> bool {
+    string_starts_with(query, String::from("(set-logic QF_BVFP)")) == 1
+        || string_starts_with(query, String::from("(set-logic QF_ABVFP)")) == 1
+}
+
+// Bitwuzla's default rewrite level (2) turns chains of `fp.add` and `fp.mul`
+// into forms the bit-blaster then searches slowly: refuting
+// `(a + b) + c == a + (b + c)` over `f64` takes 0.4 to 1.5 s at level 2 and
+// 0.08 to 0.2 s at level 1, and distributivity behaves alike. Over 32
+// generated `f32` and `f64` queries the two levels cost the same in total;
+// level 1 is slower by a few tenths of a second at most on queries that take
+// under a second either way, and level 0 is far slower on proofs. Only the
+// speed of the search depends on the level, never a verdict.
+//
+// Arguments of an interactive session whose first commands are `header`:
+// commands come from stdin.
+fn vc_solver_stdin_args(header: String) -> Vec<String> {
     let args: Vec<String> = Vec::new();
     args.push(String::from("--bv-output-format"));
     args.push(String::from("2"));
+    if vc_query_is_float(header) {
+        args.push(String::from("--rewrite-level"));
+        args.push(String::from("1"));
+    }
     args
 }
 
-fn vc_solver_args(file: String) -> Vec<String> {
-    let args: Vec<String> = vc_solver_stdin_args();
+fn vc_solver_args(query: String, file: String) -> Vec<String> {
+    let args: Vec<String> = vc_solver_stdin_args(query);
     args.push(file);
     args
+}
+
+// A standalone query in a child process, from `vc_solver_begin` to
+// `vc_solver_end` or `vc_solver_abandon`. `handle` is negative when no child
+// was started and `err` says why. `owned` is true when `dir` is a private
+// temporary directory the run removes.
+struct VcSolverRun {
+    handle: i64,
+    file: String,
+    dir: String,
+    owned: bool,
+    err: String,
+}
+
+fn vc_solver_no_run(err: String) -> VcSolverRun {
+    VcSolverRun { handle: -1, file: String::from(""), dir: String::from(""), owned: false, err: err }
+}
+
+// `process_poll_wait`'s answer for a child that is still running.
+fn vc_solver_running() -> i64 {
+    0 - 999999
+}
+
+// Writes `query` to `scratch` (a private temporary directory when `scratch` is
+// empty) and starts `bin` on it.
+fn vc_solver_begin(bin: String, query: String, scratch: String) -> VcSolverRun [io, read, write] {
+    let owned: bool = scratch.len() == 0;
+    let dir: String = {
+        if owned { mktemp_dir(String::from("vow-native")) } else { scratch }
+    };
+    if dir.len() == 0 {
+        return vc_solver_no_run(String::from("cannot create a temporary directory"));
+    }
+    let file: String = String::from(dir);
+    file.push_str(String::from("/query.smt2"));
+    if fs_write(file, query) != 0 {
+        fs_remove(file);
+        if owned { fs_remove_dir(dir); }
+        return vc_solver_no_run(String::from("cannot write the solver query"));
+    }
+    let handle: i64 = process_start(bin, vc_solver_args(query, file));
+    if handle < 0 {
+        fs_remove(file);
+        if owned { fs_remove_dir(dir); }
+        return vc_solver_no_run(String::from("failed to start the solver"));
+    }
+    VcSolverRun { handle: handle, file: file, dir: dir, owned: owned, err: String::from("") }
+}
+
+// Collects the output of a run that ended with `exit_code` (-2 is the runtime
+// watchdog's kill), evicts the child's process-table entry and removes its files.
+fn vc_solver_end(run: VcSolverRun, names: Vec<String>, widths: Vec<i64>, exit_code: i64) -> VcSolverAnswer [io] {
+    let stdout: String = process_stdout_for(run.handle);
+    let stderr: String = process_stderr_for(run.handle);
+    process_kill(run.handle);
+    fs_remove(run.file);
+    if run.owned { fs_remove_dir(run.dir); }
+    vc_classify_run(exit_code, stdout, stderr, names, widths)
+}
+
+// Kills a run whose answer nobody wants any more and removes its files.
+fn vc_solver_abandon(run: VcSolverRun) [io] {
+    process_kill(run.handle);
+    fs_remove(run.file);
+    if run.owned { fs_remove_dir(run.dir); }
 }
 
 // Runs `bin` on one self-contained query and returns its classified answer.
@@ -293,31 +379,10 @@ fn vc_solver_check(bin: String, query: String, names: Vec<String>, widths: Vec<i
     if budget_ms <= 0 {
         return vc_answer_plain(VC_ANS_TIMEOUT(), String::from("time budget exhausted"));
     }
-    let owned: bool = scratch.len() == 0;
-    let dir: String = {
-        if owned { mktemp_dir(String::from("vow-native")) } else { scratch }
-    };
-    if dir.len() == 0 {
-        return vc_answer_plain(VC_ANS_ERROR(), String::from("cannot create a temporary directory"));
+    let run: VcSolverRun = vc_solver_begin(bin, query, scratch);
+    if run.handle < 0 {
+        return vc_answer_plain(VC_ANS_ERROR(), run.err);
     }
-    let file: String = String::from(dir);
-    file.push_str(String::from("/query.smt2"));
-    if fs_write(file, query) != 0 {
-        fs_remove(file);
-        if owned { fs_remove_dir(dir); }
-        return vc_answer_plain(VC_ANS_ERROR(), String::from("cannot write the solver query"));
-    }
-    let handle: i64 = process_start(bin, vc_solver_args(file));
-    if handle < 0 {
-        fs_remove(file);
-        if owned { fs_remove_dir(dir); }
-        return vc_answer_plain(VC_ANS_ERROR(), String::from("failed to start the solver"));
-    }
-    let exit_code: i64 = process_wait_timeout(handle, budget_ms);
-    let stdout: String = process_stdout_for(handle);
-    let stderr: String = process_stderr_for(handle);
-    process_kill(handle);
-    fs_remove(file);
-    if owned { fs_remove_dir(dir); }
-    vc_classify_run(exit_code, stdout, stderr, names, widths)
+    let exit_code: i64 = process_wait_timeout(run.handle, budget_ms);
+    vc_solver_end(run, names, widths, exit_code)
 }

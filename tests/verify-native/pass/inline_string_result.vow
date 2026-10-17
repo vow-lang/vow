@@ -1,0 +1,16 @@
+module InlineStringResult
+
+fn greeting() -> String {
+    String::from("hi")
+}
+
+fn size() -> u64 vow {
+    ensures: result == 2
+} {
+    greeting().len()
+}
+
+fn main() -> i32 [io] {
+    print_i64(size() as i64);
+    0
+}

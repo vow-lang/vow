@@ -1,0 +1,23 @@
+// TEST: summary-expect skipped
+// TEST: summary-baseline skipped
+struct Inner { pos: i64, end: i64 }
+struct Outer { inner: Inner, tag: i64 }
+
+fn step(r: Inner, n: i64) -> i64 {
+    let p1: i64 = n & 255;
+    let p2: i64 = (n / 2) & 255;
+    let p3: i64 = (p1 + p2) & 255;
+    let p4: i64 = (p3 * 3) & 255;
+    let p5: i64 = (p4 + p1) & 255;
+    let p6: i64 = (p5 + p2) & 255;
+    r.pos = p6;
+    p6
+}
+
+fn run(o: Outer) -> i64 vow {
+    ensures: o.tag == o.tag
+} {
+    step(o.inner, 1) + step(o.inner, 2) + step(o.inner, 3) + step(o.inner, 4)
+}
+
+fn main() -> i32 { 0 }

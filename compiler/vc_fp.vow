@@ -10,8 +10,18 @@ use vc_term
 // `NaN == NaN` and every ordering with a NaN operand are false and `-0.0 == 0.0`
 // is true, and `!=` is the negation of `fp.eq`: true when an operand is a NaN.
 // SMT-LIB has one NaN per format, so the verifier has a single canonical NaN and
-// a NaN payload or sign is not distinguishable. Float `%` is not in the table:
-// the gate skips it as `float-rem-unsupported`.
+// a NaN payload or sign is not distinguishable: `fp.neg` of a NaN is that NaN,
+// while the sign flip of `-x` stays visible on `0.0` and the infinities. Float
+// `%` is not in the table: the gate skips it as `float-rem-unsupported`.
+//
+// A float crosses the 8-byte slot of a `Vec` element through the bit
+// reinterpretation opcodes of the lowerer (`F32ToBits`, `F64ToBits`, `BitsToF32`,
+// `BitsToF64`; an `f32` sits in the low 32 bits). SMT-LIB has `to_fp` from a
+// bit-vector but no way back, so the read side is `to_fp` of the slot (an `f32`
+// of its low 32 bits) and the write side is a fresh bit-vector constrained to
+// `to_fp` to the stored float, or the literal's own bits for a constant. Every
+// NaN pattern reads as the one SMT NaN, so a NaN's payload does not survive a
+// round trip, which is the single-NaN limit above and nothing more.
 
 fn vc_ty_is_float(ty: i64) -> bool {
     ty == ITY_F32() || ty == ITY_F64()
@@ -29,12 +39,14 @@ fn vc_fp_sort(ty: i64) -> i64 {
 fn vc_fp_op_ty(op: i64) -> i64 {
     if op == IOP_ADD_F32() || op == IOP_SUB_F32() || op == IOP_MUL_F32() || op == IOP_DIV_F32()
         || op == IOP_EQ_F32() || op == IOP_NE_F32() || op == IOP_LT_F32() || op == IOP_LE_F32()
-        || op == IOP_GT_F32() || op == IOP_GE_F32() || op == IOP_CONST_F32() {
+        || op == IOP_GT_F32() || op == IOP_GE_F32() || op == IOP_CONST_F32() || op == IOP_NEG_F32()
+        || op == IOP_F32_TO_BITS() || op == IOP_BITS_TO_F32() {
         return ITY_F32();
     }
     if op == IOP_ADD_F64() || op == IOP_SUB_F64() || op == IOP_MUL_F64() || op == IOP_DIV_F64()
         || op == IOP_EQ_F64() || op == IOP_NE_F64() || op == IOP_LT_F64() || op == IOP_LE_F64()
-        || op == IOP_GT_F64() || op == IOP_GE_F64() || op == IOP_CONST_F64() {
+        || op == IOP_GT_F64() || op == IOP_GE_F64() || op == IOP_CONST_F64() || op == IOP_NEG_F64()
+        || op == IOP_F64_TO_BITS() || op == IOP_BITS_TO_F64() {
         return ITY_F64();
     }
     -1
@@ -42,6 +54,19 @@ fn vc_fp_op_ty(op: i64) -> i64 {
 
 fn vc_fp_is_op(op: i64) -> bool {
     vc_fp_op_ty(op) >= 0
+}
+
+fn vc_fp_is_neg(op: i64) -> bool {
+    op == IOP_NEG_F32() || op == IOP_NEG_F64()
+}
+
+// A float stored into a `Vec` slot, and a float read back out of one.
+fn vc_fp_is_to_bits(op: i64) -> bool {
+    op == IOP_F32_TO_BITS() || op == IOP_F64_TO_BITS()
+}
+
+fn vc_fp_is_from_bits(op: i64) -> bool {
+    op == IOP_BITS_TO_F32() || op == IOP_BITS_TO_F64()
 }
 
 fn vc_fp_is_const(op: i64) -> bool {
@@ -96,17 +121,63 @@ fn vc_fp_cmp(ar: VcArena, op: i64, a: i64, b: i64) -> i64 {
     t
 }
 
+// The float of type `ty` held in the 8-byte slot `slot` (an `f32` in its low 32 bits).
+fn vc_fp_from_slot(ar: VcArena, ty: i64, slot: i64) -> i64 {
+    if ty == ITY_F32() {
+        return vc_tm_app1(ar, VC_OP_TOFP32(), vc_tm_ext(ar, VC_EXT_LOW(), 32, slot));
+    }
+    vc_tm_app1(ar, VC_OP_TOFP64(), slot)
+}
+
+// The slot of the float constant `x` (the `to_fp` of its bit pattern, or the variable a
+// definition of it is bound to), or -1 when `x` is not a constant. An `f32` pattern is
+// zero-extended, as the runtime stores it.
+fn vc_fp_const_slot(ar: VcArena, ty: i64, x: i64) -> i64 {
+    let op: i64 = { if ty == ITY_F32() { VC_OP_TOFP32() } else { VC_OP_TOFP64() } };
+    let d: i64 = vc_tm_def(ar, x);
+    if d < 0 || ar.aux[d as u64] != op { return -1; }
+    let pattern: i64 = ar.a[d as u64];
+    if !vc_is_bv(ar, pattern) { return -1; }
+    if ty == ITY_F32() { return vc_tm_ext(ar, VC_EXT_ZERO(), 32, pattern); }
+    pattern
+}
+
+// The slot a float is stored as: a constant's own bits, else `fresh`, a new bit-vector
+// of the type's width that the caller declares and constrains with `vc_fp_slot_fact`.
+fn vc_fp_slot_value(ar: VcArena, ty: i64, fresh: i64) -> i64 {
+    if ty == ITY_F32() { return vc_tm_ext(ar, VC_EXT_ZERO(), 32, fresh); }
+    fresh
+}
+
+// `to_fp(fresh) = x`: `fresh` is a bit pattern of the float `x`. It always has a
+// solution, so assuming it never makes a path infeasible.
+fn vc_fp_slot_fact(ar: VcArena, ty: i64, fresh: i64, x: i64) -> i64 {
+    let op: i64 = { if ty == ITY_F32() { VC_OP_TOFP32() } else { VC_OP_TOFP64() } };
+    vc_tm_app2(ar, VC_OP_EQ(), vc_tm_app1(ar, op, fresh), x)
+}
+
 // Whether a float instruction has the operand and result types the executor
 // models: every operand and the result of arithmetic share the opcode's float
-// type, a comparison reads two of them and yields Bool, a constant takes no
-// operand and carries the type's own data kind. `t0`/`t1` are the types of the
-// first two operands (-1 when absent).
+// type, a negation reads one operand of it and yields it, a comparison reads
+// two of them and yields Bool, a constant takes no operand and carries the
+// type's own data kind, a float stored in a slot reads a float and yields the
+// `i64` slot, and a read yields the float from an `i64` slot. `t0`/`t1` are the
+// types of the first two operands (-1 when absent).
 fn vc_fp_inst_ok(inst: IrInst, t0: i64, t1: i64) -> bool {
     let ft: i64 = vc_fp_op_ty(inst.op);
     let n: u64 = inst.args.len();
     if vc_fp_is_const(inst.op) {
         let dk: i64 = { if ft == ITY_F32() { IDATA_CONST_F32() } else { IDATA_CONST_F64() } };
         return inst.ty == ft && n == 0 && inst.dk == dk;
+    }
+    if vc_fp_is_neg(inst.op) {
+        return n == 1 && inst.ty == ft && t0 == ft;
+    }
+    if vc_fp_is_to_bits(inst.op) {
+        return n == 1 && inst.ty == ITY_I64() && t0 == ft;
+    }
+    if vc_fp_is_from_bits(inst.op) {
+        return n == 1 && inst.ty == ft && t0 == ITY_I64();
     }
     if vc_fp_is_arith(inst.op) {
         return n == 2 && inst.ty == ft && t0 == ft && t1 == ft;

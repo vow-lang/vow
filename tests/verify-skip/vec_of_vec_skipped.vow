@@ -10,7 +10,9 @@ module VecOfVecSkipped
 // The contract is what makes `store_grid` an actual verification target — a
 // contract-less function is never selected for verification nor emitted as a
 // callee, so without it this file would exercise nothing (the point of moving
-// these into tests/verify-skip/, which asserts status == "Skipped").
+// these into tests/verify-skip/, which asserts status == "Skipped"). The Skipped is the ESBMC
+// model's: the native backend stores the pushed object's address as a slot it never reads back
+// and proves the length (see tests/verify-native/pass/vec_of_vec_push.vow).
 fn store_grid(outer: Vec<Vec<i64>>) -> i64 vow {
   ensures: result >= 0
 } {

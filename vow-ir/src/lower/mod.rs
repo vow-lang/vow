@@ -493,6 +493,13 @@ fn checked_wide_vec_elem(ctx: &LowerCtx, expr: &Expr) -> Option<Ty> {
         .filter(|ty| matches!(ty, Ty::I128 | Ty::U128))
 }
 
+/// The float element type of a `Vec` access (index read or `for` loop), as resolved
+/// by the checker for that expression.
+fn checked_float_vec_elem(ctx: &LowerCtx, expr: &Expr) -> Option<Ty> {
+    checked_payload_ty(ctx, expr as *const Expr as usize)
+        .filter(|ty| matches!(ty, Ty::F32 | Ty::F64))
+}
+
 /// Reads a 128-bit `Vec` element: a bounds-checked element address, then the
 /// two-slot `WideSlot` load. Twin of `lctx_emit_wide_vec_elem_get`.
 fn emit_wide_vec_elem_get(
@@ -2048,6 +2055,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 UnOp::Not => ctx.emit(Opcode::Not, Ty::Bool, vec![val], InstData::None, span),
                 UnOp::Neg => {
                     let operand_ty = ctx.inst_ty(val);
+                    let float_neg = match operand_ty {
+                        Ty::F32 => Some(Opcode::NegF32),
+                        Ty::F64 => Some(Opcode::NegF64),
+                        _ => None,
+                    };
+                    if let Some(opcode) = float_neg {
+                        return ctx.emit(opcode, operand_ty, vec![val], InstData::None, span);
+                    }
                     let result_ty = if matches!(
                         operand_ty,
                         Ty::I8
@@ -2496,10 +2511,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     emit_wide_slot_store(ctx, slot, new_val, span);
                     return new_val;
                 }
+                let slot_val = vec_slot_value(ctx, new_val, span);
                 ctx.emit(
                     Opcode::Call,
                     Ty::Unit,
-                    vec![vec_ptr, idx_id, new_val],
+                    vec![vec_ptr, idx_id, slot_val],
                     InstData::CallExtern("__vow_vec_set_val".to_string()),
                     span,
                 );
@@ -2875,13 +2891,20 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             let elem_id = if let Some(wide_ty) = checked_wide_vec_elem(ctx, expr) {
                 emit_wide_vec_elem_get(ctx, iter_id, idx_phi, wide_ty, span)
             } else {
-                ctx.emit(
+                let raw_elem = ctx.emit(
                     Opcode::Call,
                     Ty::I64,
                     vec![iter_id, idx_phi],
                     InstData::CallExtern("__vow_vec_get_val".to_string()),
                     span,
-                )
+                );
+                if let Some(float_ty) = checked_float_vec_elem(ctx, expr) {
+                    float_from_vec_slot(ctx, raw_elem, float_ty, span)
+                } else if foreach_elem_is_bool(ctx, iter_id) {
+                    narrow_vec_bool_elem(ctx, raw_elem, span)
+                } else {
+                    raw_elem
+                }
             };
             project_vec_index_metadata(ctx, iter_id, elem_id);
             record_collection_foreach_element(ctx, iter_id, elem_id);
@@ -4164,10 +4187,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         );
                         return emit_wide_slot_store(ctx, slot, elem_id, span);
                     }
+                    let slot_val = vec_slot_value(ctx, elem_id, span);
                     ctx.emit(
                         Opcode::Call,
                         Ty::Unit,
-                        vec![recv_id, elem_id],
+                        vec![recv_id, slot_val],
                         InstData::CallExtern("__vow_vec_push_val".to_string()),
                         span,
                     )
@@ -4212,10 +4236,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 InstData::CallExtern("__vow_vec_get_val".to_string()),
                 span,
             );
-            let result = if let Some(ast_type) = elem_ast_type.as_ref() {
+            let result = if let Some(float_ty) = checked_float_vec_elem(ctx, expr) {
+                float_from_vec_slot(ctx, raw_result, float_ty, span)
+            } else if let Some(ast_type) = elem_ast_type.as_ref() {
                 let elem_ty =
                     lower_ty_with_linear(ast_type, &ctx.linear_owner_names, &ctx.type_aliases);
-                lower_narrow_literal(ctx, expr, raw_result, elem_ty)
+                if elem_ty == Ty::Bool {
+                    narrow_vec_bool_elem(ctx, raw_result, span)
+                } else {
+                    lower_narrow_literal(ctx, expr, raw_result, elem_ty)
+                }
             } else {
                 raw_result
             };
@@ -4706,6 +4736,64 @@ fn known_map_argument_ast_types(
     recv_id: InstId,
 ) -> (Option<AstType>, Option<AstType>) {
     declared_map(ctx, recv_id).map_or((None, None), |map| (map.key.cloned(), map.value.cloned()))
+}
+
+/// `__vow_vec_get_val` returns a `Vec<bool>` element as the runtime's 8-byte slot, typed
+/// `i64`. Comparing it with zero gives the read the `bool` type the program gave it, so
+/// every later use (branch, return, `!`, `&&`) sees a `bool`. Twin of
+/// `narrow_vec_bool_elem` in `compiler/lower.vow`.
+fn narrow_vec_bool_elem(ctx: &mut LowerCtx, raw: InstId, span: Span) -> InstId {
+    let zero = ctx.emit(
+        Opcode::ConstI64,
+        Ty::I64,
+        vec![],
+        InstData::ConstI64(0),
+        span,
+    );
+    ctx.emit(
+        Opcode::Ne,
+        Ty::Bool,
+        vec![raw, zero],
+        InstData::Integer(IntegerType::I64),
+        span,
+    )
+}
+
+/// True when the `for` loop iterates a `Vec` whose declared element type is `bool`.
+fn foreach_elem_is_bool(ctx: &LowerCtx, iter_id: InstId) -> bool {
+    let Some(iter_ty) = ctx.inst_declared_ast_types.get(&iter_id) else {
+        return false;
+    };
+    let AstType::Generic { name, args, .. } = resolve_type_alias(iter_ty, &ctx.type_aliases) else {
+        return false;
+    };
+    name == "Vec"
+        && args.first().is_some_and(|elem| {
+            lower_ty_with_linear(elem, &ctx.linear_owner_names, &ctx.type_aliases) == Ty::Bool
+        })
+}
+
+/// The `Vec` slot a float element is stored in: the runtime's slots are 8 raw bytes
+/// typed `i64`, so a float is reinterpreted bit for bit (an `f32` in the low 32 bits)
+/// and any other value is stored as it is. Twin of `lctx_vec_slot_value`.
+fn vec_slot_value(ctx: &mut LowerCtx, value: InstId, span: Span) -> InstId {
+    let opcode = match ctx.inst_ty(value) {
+        Ty::F32 => Opcode::F32ToBits,
+        Ty::F64 => Opcode::F64ToBits,
+        _ => return value,
+    };
+    ctx.emit(opcode, Ty::I64, vec![value], InstData::None, span)
+}
+
+/// Reads a float back out of the `i64` slot `__vow_vec_get_val` returned. Twin of
+/// `lctx_float_from_vec_slot`.
+fn float_from_vec_slot(ctx: &mut LowerCtx, raw: InstId, float_ty: Ty, span: Span) -> InstId {
+    let opcode = if float_ty == Ty::F32 {
+        Opcode::BitsToF32
+    } else {
+        Opcode::BitsToF64
+    };
+    ctx.emit(opcode, float_ty, vec![raw], InstData::None, span)
 }
 
 /// Record a `for` binding's declared type when the iterated `Vec`'s element is itself a
@@ -7243,6 +7331,35 @@ fn unsigned_max() -> u128 {
     }
 
     #[test]
+    fn float_negation_lowers_to_float_negate_opcode() {
+        let module = lower_source_to_module(
+            "module Neg\nfn n64(x: f64) -> f64 { -x }\nfn n32(x: f32) -> f32 { -x }\nfn lit() -> f64 { -1.5 }\nfn main() -> i32 [io] { 0 }\n",
+            "neg.vow",
+        );
+        for (idx, opcode, ty) in [
+            (0, Opcode::NegF64, Ty::F64),
+            (1, Opcode::NegF32, Ty::F32),
+            (2, Opcode::NegF64, Ty::F64),
+        ] {
+            let insts: Vec<_> = module.functions[idx]
+                .blocks
+                .iter()
+                .flat_map(|block| &block.insts)
+                .collect();
+            let neg = insts
+                .iter()
+                .find(|inst| inst.opcode == opcode)
+                .expect("float negate opcode");
+            assert_eq!(neg.ty, ty);
+            assert_eq!(neg.args.len(), 1);
+            assert!(
+                insts.iter().all(|inst| inst.opcode != Opcode::WrappingSub),
+                "float negation must not lower through integer subtraction"
+            );
+        }
+    }
+
+    #[test]
     fn wide_negation_of_non_marker_emits_no_dead_zero() {
         let module = lower_source_to_module(
             "module Neg\nfn d(x: i128) -> i128 { -x }\nfn main() -> i32 [io] { 0 }\n",
@@ -7427,6 +7544,34 @@ fn unsigned_max() -> u128 {
             .into_iter()
             .find(|func| func.name == name)
             .unwrap_or_else(|| panic!("function `{name}`"))
+    }
+
+    /// A `Vec<bool>` element read, by index or as a `for` binding, is the runtime's
+    /// slot compared with zero, so it is a `bool`; any other element type keeps its own
+    /// read. Twin of `compiler/tests/test_lower_vec_bool_reads.vow`.
+    #[test]
+    fn vec_bool_reads_are_compared_with_zero() {
+        let fixture = include_str!("../../../tests/fixtures/vec_bool_layout.vow");
+        let slot_tests = |name: &str| {
+            let func = lowered_function(fixture, name);
+            let insts = insts_of(&func);
+            let gets = insts
+                .iter()
+                .filter(|inst| inst.data == InstData::CallExtern("__vow_vec_get_val".to_string()))
+                .count();
+            let tests = insts
+                .iter()
+                .filter(|inst| {
+                    inst.opcode == Opcode::Ne
+                        && inst.ty == Ty::Bool
+                        && inst.data == InstData::Integer(IntegerType::I64)
+                })
+                .count();
+            (gets, tests)
+        };
+        assert_eq!(slot_tests("read_flag"), (1, 1));
+        assert_eq!(slot_tests("count_set"), (1, 1));
+        assert_eq!(slot_tests("read_byte"), (1, 0));
     }
 
     /// Twin of `compiler/tests/test_lower_phi_aggregate_metadata.vow`; both read

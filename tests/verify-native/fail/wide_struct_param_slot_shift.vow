@@ -1,0 +1,19 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// A 128-bit field of a parameter takes two slots, so the counterexample names
+// `s.1` (w) and `s.3` (b) and the replay must read `b` three slots on from `a`.
+module WideStructParamSlotShift
+
+struct S { a: i64, w: u128, b: i64 }
+
+fn f(s: S) -> i64 vow {
+  requires: s.w == 5u128,
+  ensures: result != 7
+} {
+  s.b
+}
+
+fn main() -> i32 {
+  0
+}

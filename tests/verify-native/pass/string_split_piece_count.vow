@@ -1,0 +1,33 @@
+// `string_split` returns at least one piece, at most one more than the bytes of the string,
+// and exactly one for an empty separator; two calls on equal strings give the same count.
+module StringSplitPieceCount
+
+fn at_least_one(s: String) -> u64 vow {
+  ensures: result >= 1
+} {
+  string_split(s, String::from(",")).len()
+}
+
+fn at_most_len_plus_one(s: String) -> u64 vow {
+  ensures: result <= s.len() + 1
+} {
+  string_split(s, String::from(",")).len()
+}
+
+fn empty_separator(s: String) -> u64 vow {
+  ensures: result == 1
+} {
+  string_split(s, String::from("")).len()
+}
+
+fn equal_strings(s: String, t: String) -> bool vow {
+  requires: s == t
+  ensures: result == true
+} {
+  string_split(s, String::from(",")).len() == string_split(t, String::from(",")).len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(at_least_one(String::from("a,b")));
+  0
+}

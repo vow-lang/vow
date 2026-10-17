@@ -1,0 +1,29 @@
+// TEST: category invariant
+// `a` and `b` may be one object, and the loop writes through `a`. When they are,
+// `ensures: b.v == 0` is false, but the run needs more iterations than the largest
+// unwinding bound. The cut's havoc of `a.v` must reach `b.v` under the same
+// identity test a write does: forgetting only `a.v` would "prove" the false claim.
+module LoopFieldWriteAliasedParamForgotten
+
+struct Counter { v: u64 }
+
+fn bump(a: Counter, b: Counter, n: u64) -> u64 vow {
+  requires: a.v == 0 && b.v == 0 && n > 100
+  ensures: b.v == 0
+} {
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n
+  } {
+    a.v = a.v + 1;
+    i = i + 1;
+  }
+  b.v
+}
+
+fn main() -> i32 [io] {
+  let a: Counter = Counter { v: 0 };
+  let b: Counter = Counter { v: 0 };
+  print_u64(bump(a, b, 101));
+  0
+}

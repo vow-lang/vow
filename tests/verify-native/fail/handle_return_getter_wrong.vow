@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "name_length"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: replay-skipped a String field is not rebuilt by replay
+module HandleReturnGetterWrong
+
+struct Person { name: String, tags: Vec<String> }
+
+fn name_of(p: Person) -> String {
+  p.name
+}
+
+fn name_length(p: Person) -> u64 vow {
+  ensures: result == p.name.len() + 1
+} {
+  name_of(p).len()
+}
+
+fn main() -> i32 [io] {
+  let p: Person = Person { name: String::from("ada"), tags: Vec::new() };
+  print_u64(name_length(p));
+  0
+}

@@ -225,7 +225,14 @@ fn decl_unprintable_enum(m: Module) -> String {
     while i < n {
         let item: i64 = m.items[i];
         if item >= 0 && item_kind(item) == ITEM_ENUM() && bad.contains_key(item_id(item)) {
-            return arena_str(a, edef_name_sid(a, item_id(item)));
+            let eid: i64 = item_id(item);
+            if ((eid * 3) as u64) < a.edef_data.len() {
+                let sid: i64 = edef_name_sid(a, eid);
+                if sid >= 0 && (sid as u64) < a.strs.len() {
+                    return arena_str(a, sid);
+                }
+            }
+            return String::from("<unnamed enum>");
         }
         i = i + 1u64;
     }

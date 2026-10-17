@@ -1,0 +1,25 @@
+// TEST: unknown-reason unwinding assertion
+// The loop writes the map and its invariant does not mention it, so the inductive cut,
+// which forgets the map at the top of the header, cannot prove the postcondition. It is
+// true, so unwinding finds no counterexample either, and the verdict is `unknown`.
+module MapLoopContentsNotInInvariant
+
+fn fill_one_key(n: u64) -> HashMap<i64, i64> vow {
+  requires: n > 0,
+  ensures: result.contains_key(7)
+} {
+  let m: HashMap<i64, i64> = HashMap::new();
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n
+  } {
+    m.insert(7, 1);
+    i = i + 1;
+  }
+  m
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill_one_key(2).len());
+  0
+}

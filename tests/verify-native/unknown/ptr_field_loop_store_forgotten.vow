@@ -1,0 +1,34 @@
+// TEST: category invariant
+// A pointer stored into a parameter's field in a loop, from iteration 100 on (past the
+// unwinding bound), so the false postcondition cannot be refuted by unrolling. The cut must
+// forget the object the field held on entry at the top of the header: if it kept it, the exit
+// state would still name `a` and the postcondition would be proven.
+module PtrFieldLoopStoreForgotten
+
+struct Holder { names: Vec<i64>, n: i64 }
+
+fn run(h: Holder, a: Vec<i64>, b: Vec<i64>, n: u64) vow {
+  requires: a.len() == 0,
+  requires: b.len() == 1,
+  ensures: h.names.len() == 0
+} {
+  h.names = a;
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n
+  } {
+    if i == 99 {
+      h.names = b;
+    }
+    i = i + 1;
+  }
+}
+
+fn main() -> i32 [io] {
+  let h: Holder = Holder { names: Vec::new(), n: 0 };
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  b.push(1);
+  run(h, a, b, 3);
+  0
+}

@@ -100,15 +100,15 @@ Exit code is non-zero on any bucket except known-gaps. A machine-readable
 ## Category coverage
 
 <!-- GENERATE:CORPUS_COUNTS:START -->
-All 7 categories are represented (158 programs):
+All 7 categories are represented (167 programs):
 
 | Category | Count |
 | --- | --- |
-| callee-blame | 53 |
-| model-drift | 29 |
-| bounds | 28 |
+| callee-blame | 55 |
+| model-drift | 34 |
+| bounds | 29 |
 | overflow | 19 |
-| unverifiable | 15 |
+| unverifiable | 16 |
 | caller-blame | 10 |
 | invariant | 4 |
 <!-- GENERATE:CORPUS_COUNTS:END -->
@@ -137,6 +137,12 @@ python3 scripts/verify_eval.py
 scripts/bootstrap.sh
 python3 scripts/verify_eval.py --verifier build/vowc --output-dir /tmp/verify-eval-self
 
+# The native backend (self-hosted vowc only): `--backend` reaches the verify, vacuity and
+# replay runs. A program the corpus labels incorrect only because ESBMC refutes it through
+# its capacity assertion (`esbmc-capacity-artifact`) is reported as an explained extra proof,
+# not a soundness regression. The expected status mismatches for `Skipped` are expected.
+python3 scripts/verify_eval.py --verifier build/vowc --backend native
+
 # Authoring aid — print actual outcomes for every program:
 python3 scripts/verify_eval.py --discover
 
@@ -157,7 +163,8 @@ soundness, blame, or exact `vow_id` regression in either verifier blocks PRs.
 
 [`scripts/verify_diff.py`](../scripts/verify_diff.py) (epic #1398, issue #1414)
 runs the same corpus (`tests/verify`, `tests/verify-fail`, `tests/verify-skip`,
-with the ground truth `verify_eval.py` reads) under
+with the ground truth `verify_eval.py` reads, and `tests/verify-native/{pass,fail,skip,unknown}`,
+whose truth is the directory) under
 `vowc verify --backend esbmc` and `vowc verify --backend native`, and classifies
 every fixture:
 
@@ -169,11 +176,63 @@ every fixture:
 | `soundness` | Native proves a program ESBMC refutes, or one the corpus labels incorrect. **Fails the script.** |
 | `harness` | A backend printed no parseable JSON, so the row says nothing about the verifiers. A backend that hangs (killed at its budget) or dies from a signal is not a `harness` row: it is inconclusive (`verify_status` `timeout` / `crashed`). |
 
+Backends that agree on the verdict but not on which functions they left
+unanalysed (the `VerificationSkipped` *warnings*, not the notes about uncontracted
+callers) did not do the same work: native skipping a function ESBMC analyses is
+`weaker`, native analysing a function ESBMC skips is `more_precise`, so such a row
+is never `match` and never enters the performance ratios
+(`verify-skip/wide_enum_payload_skipped`: ESBMC skips four functions, native proves
+three of them). The last direction needs a native verdict that cannot have stopped
+early (`proven` or `skipped`): native `verify` reports up to the first function that
+is not proven, so after a refutation the absence of a skip warning does not show
+that a later function was analysed.
+
 Native `verify_status` of `panicked`, `error` or `crashed` is `weaker` even when
 ESBMC is also inconclusive. File-level status is per module: native reports
 `Skipped` for a file when any one function is outside its subset, so a partly
 modelable file reads as `weaker` against an ESBMC `Verified` until the subset
 grows.
+
+### ESBMC model artefacts
+
+A fixture the native verifier proves and ESBMC refutes is a `soundness` row
+unless the fixture carries a written explanation, a `// TEST:` directive that
+`verify_eval.artifact_directives` parses (fail closed: a malformed or misspelled
+`esbmc-*` directive is an error). `verify_diff.py` and `verify_perf.py` classify
+through one function (`verify_diff.classify_outcomes`), and `verify_eval.py
+--backend native` reads the same directives, so the three harnesses agree.
+
+| Directive | Meaning |
+| --- | --- |
+| `// TEST: esbmc-capacity-artifact "<why>"` | ESBMC refutes only through its own `string`/`vec` capacity assertion. Needs the evidence of the run: every ESBMC counterexample is a capacity assertion. |
+| `// TEST: esbmc-model-artifact fn="<fn>" blame=<B> vow_id=<N> "<why>"` | One ESBMC counterexample comes from ESBMC's own model, not from the program (for example its nondeterministic `string_eq`). One directive per counterexample; the row is `more_precise` only when the corpus labels the fixture correct (`Verified`) and every ESBMC counterexample is declared, so any other ESBMC refutation of the file is still a `soundness` finding. |
+
+Add a directive only after the runtime differential
+(`scripts/verifier_runtime.py --backend native`) shows no false proof for the
+fixture, and write the reason as the explanation gate item 1 asks for. The
+fixture's own `main` exercises one input, so for a function with a wider domain
+also run the fixture's functions over many inputs that satisfy their `requires`
+in `--mode debug`, with a deliberately broken contract as a control that must
+abort.
+
+ESBMC's `verify` report names only the first function it refutes, although it
+verifies every function: its stderr lists each `FAILED` one. When a fixture
+has several, declare every one (peel the first off a copy of the file and
+re-run to read the next one's `fn`, `blame` and `vow_id`); the classifier needs
+only the one the report shows, but the others are the evidence that the whole
+file is explained and not just its first refutation. A refutation by ESBMC's own
+`string`/`vec` capacity assertion in a fixture that also has a model artefact is
+declared with `esbmc-model-artifact` and `blame=None vow_id=4294967293` (the
+unattributed property), because `esbmc-capacity-artifact` covers only fixtures
+whose every counterexample is a capacity assertion.
+
+`python3 scripts/verify_diff.py --corpus native --fail-on soundness` is the
+gate for the native corpus: `--corpus native` selects `tests/verify-native/*`
+only, and `--fail-on soundness` makes only `soundness` rows (not `weaker` ones,
+which have their own issues) fail the exit status. The `Native fixtures versus
+ESBMC` workflow (`.github/workflows/native-esbmc-diff.yml`) runs exactly that on every
+pull request that touches a fixture, so a new `verify-native/pass` fixture
+cannot land with a bare `soundness` row.
 
 The report is one JSON document (`schema_version`, `summary`, `rows[]` with both
 backends' verdict, `verify_status`, counterexamples and wall-clock seconds) on
@@ -222,10 +281,25 @@ calls `proven` or `failed` and native `unknown`, in a function the native
 `verify` refutes without any clause of its own failing (an abort, or a callee's
 precondition), is `more_precise`: the native report proves no clause of a
 function that can abort, where ESBMC judges the clause on the executions that
-continue past it. The two rows of the corpus left on the allow-list are
-`verify-fail/callee_ensures_wrong_function` (`verify` stops at the callee, so
-the caller is never refuted there) and `verify-fail/verify_jobs_ce_before_soft`
-(an unbounded loop without an `invariant`, which ESBMC's k-induction closes).
+continue past it. A fixture can also carry `// TEST: native-divergence "<why>"`
+(the reason is mandatory): a clause ESBMC calls `proven` and native `unknown` in
+that fixture is then `more_precise` when the corpus labels it `VerifyFailed`, and
+nothing else in it is excused (a skipped, errored or refuted clause keeps its class). Three `verify-fail` fixtures carry it:
+`callee_ensures_wrong_function` (`verify` stops at the callee, so the caller is never
+refuted there), and `float_enum_payload_wrong` and `string_substring_bytes_observed`
+(a `requires` clause is `proven` only when its whole function is, and the function's
+`ensures` fails; see `cli.md`, "Clause status"). The one row left is
+`verify-fail/verify_jobs_ce_before_soft` (an unbounded loop without an
+`invariant`, which ESBMC's k-induction closes; `cli.md`, "Verdict divergence from
+ESBMC", describes the symbolic-bound loop divergence).
+
+The signed `MIN / -1` rows are not excused by a directive: native refutes them, the
+runtime confirms it (`--replay-cex`), and the corpus programs that divided by a
+value constrained only by `y != 0` were corrected to state the true domain
+(`requires: x >= -9223372036854775807 || y != -1`), so both backends agree on every
+divide program of the corpus (ruling for #1688). The fixtures that pin the native
+refutation itself are `verify-native/fail/signed_div_min` and `i32_div_min`, labelled
+`VerifyFailed`.
 
 ## Performance gate: native verifier vs ESBMC
 
@@ -248,13 +322,21 @@ corpus drift and exits `2`):
   `gating: false` and never enter the ratios or the timeout criterion (times out
   by design).
 
-**Metrics.** Wall-clock is the process wall time. Peak RSS is the larger of the
-sampled sum over the whole process tree (driver plus solver children, 20 ms
-interval) and the kernel's `ru_maxrss` for the run. Linux seeds a child's
-`ru_maxrss` with the parent's high-water mark, so a kernel value at or below the
-harness's own peak is ignored. One discarded warm-up run per backend precedes
-the timed runs, and the timed runs alternate between backends so host drift hits
-both.
+**Metrics.** Wall-clock is the process wall time. Peak RSS is the largest of
+three readings (`scripts/peak_rss.py`): the sampled sum of resident sets over the
+whole process tree (driver plus solver children; sampled every 1 ms for the first
+250 ms, then every 20 ms), the largest kernel high-water mark (`VmHWM`) any
+sampled process reported (so a peak between two samples is still seen, and a run
+of a few milliseconds is caught by one late read), and the kernel's `ru_maxrss`
+for the reaped child when it is above the harness's own peak. Linux seeds a
+child's `ru_maxrss` with the parent's high-water mark, so a kernel value at or
+below that peak is not a measurement. When no reading saw the run, `ru_maxrss` is
+still an upper bound of the child's peak: it is used, labelled
+`ru_maxrss_upper_bound` in the row's `rss_sources`, for native (it can only raise
+the native/ESBMC ratio), and is a harness failure naming the fixture for ESBMC,
+whose peak is the denominator. A peak RSS of 0 never reaches a ratio. One
+discarded warm-up run per backend precedes the timed runs, and the timed runs
+alternate between backends so host drift hits both.
 
 **Gate.** A ratio is `native / esbmc` of the per-backend medians.
 
@@ -266,7 +348,8 @@ both.
 | Comparable rows | at least one |
 
 Only rows classed `match` by `verify_diff.py` (same verdict and counterexamples,
-so the same work) enter the ratios. `more_precise`, `weaker`, `soundness`,
+and the same set of skipped functions, so the same work) enter the ratios.
+`more_precise`, `weaker`, `soundness`,
 `harness`, a verdict that changes between runs of one backend (`unstable`) and
 rows where either backend timed out are listed with their reason and left out of
 the ratios. Verdict parity is gate item 1 and stays with `verify_diff.py`. The
@@ -304,12 +387,126 @@ full run measures hundreds of fixtures six times per backend and takes hours. It
 is an acceptance-gate tool, not a `full_test.sh` section: it is host-dependent
 and its thresholds only become meaningful once native covers the corpus.
 
+## Whole-compiler native verification
+
+[`scripts/verify_compiler.py`](../scripts/verify_compiler.py) (epic #1398, issue
+#1432) runs the native verifier over every source of the self-hosted compiler,
+the real-world workload, and holds it to three claims. The unit tests are
+`scripts/test_verify_compiler.py`.
+
+**Roots.** `compiler/main.vow` plus every top-level module of `compiler/` that
+`main.vow` does not reach through `use` (today `module_io.vow`, `span.vow` and
+the `test_*.vow` programs), so every compiler source, including the `vc_*.vow`
+verifier modules, is under a `vowc verify` run. `compiler/tests/` is not a root:
+those programs only re-load the modules above.
+
+**Verdicts.** Per function, from the driver's progress lines
+(`  <fn>: PROVEN|SKIPPED|UNKNOWN|TIMEOUT|FAILED|ERROR|PANICKED`) classified with
+the `scripts/verify_diff.py` classes, with ground truth `Verified` (the compiler
+is expected to satisfy its own contracts). A function native is `weaker` on, or
+refutes, fails the run unless it is a skip the next paragraph explains.
+
+**Skip list.** [`scripts/native_compiler_skips.toml`](../scripts/native_compiler_skips.toml)
+lists every function native still skips, with the closed-list reason code and the
+issue that tracks the gap. A native `Skipped` is accepted only for a listed
+function with the listed code; a skipped function that is not listed fails, and
+so does a listed function no root skips any more, so the list only shrinks.
+Delete the row in the commit that closes its issue.
+
+**Modes.**
+
+```bash
+# Native vs ESBMC: verdicts and the cost gate of scripts/verify_perf.py
+python3 scripts/verify_compiler.py --vowc build/vowc --output /tmp/verify-compiler.json
+# Native only, several binaries: identical outcomes required (bootstrap stages)
+python3 scripts/verify_compiler.py --native-only --vowc build/vowc --vowc build/vowc2
+```
+
+The comparison times `--backend esbmc` against `--backend native` per root with
+the cache off, median of `--runs` runs (default 5, one discarded warm-up), both at
+`--verify-jobs 1` unless overridden, and applies the `verify_perf.py` thresholds:
+geometric mean of native/ESBMC at most 1.0 on wall-clock and peak RSS, no root
+above 1.25, native timing out on no root where ESBMC finishes. A root where both
+backends finish within one second is reported but not gated (it measures process
+start-up).
+
+The cost ratios are **like for like**. A root's wall time and peak RSS cover only
+the functions both backends decide the same way (proven by both or refuted by
+both): a function native proves that ESBMC skips (the `write_*` functions of
+`module_io.vow`), one ESBMC proves that native skips, or one either side leaves
+undecided does work the other backend never does, so it is taken out of both
+sides. The driver's stderr is timestamped as it arrives. Each `Verifying <fn>...`
+line opens a block that ends at its last progress line; a function's time is the
+gap from the end of the previous block to the end of its own, and its memory the
+peak of the process tree in that gap. What precedes the first block (front end,
+worker start-up) and the function reported first stay in both sides. The native driver
+proves some functions before its first `Verifying` line, in waves (callee summaries, #1791),
+and prints `Wave <R>: proving <N> function(s)...` when a round starts and `Proof <fn>: <WORD>`
+as each proof is answered; these are not verdict lines. A proof is charged to its function,
+from the start of the round (or the previous proof) to its own line, in time and memory, and
+adds to the function's own block when the verdict is reported later. What runs between rounds
+stays common. A function proven only in a wave and given no verdict on either backend is a
+helper native proves for the summaries of its callers: it is listed under `counted` and its
+cost stays in native's side (it is not left out). A function ESBMC skips is left out with its
+proof like with its report. A function
+proven with reachable checked-arithmetic aborts prints only `<owner>: PROVEN
+(checked arithmetic can abort)` lines, so a block that reports nothing else is
+read as a proof of its `Verifying` function (with `--verify-jobs` above 1 the
+lines no longer follow their block and the old per-line reading applies). Each row of
+the report carries `cost_basis`: its `mode` (`whole-root` when both backends decide
+the same functions, `like-for-like` when some were left out, `unattributable` when
+they would have to be but `--verify-jobs` is above 1, which makes the gaps
+overlap, and the root is then not gated), the `compared` functions, the `left_out`
+ones with the reason and the time each backend spent on them, and the `whole_root`
+figures, which stay informational. A root with nothing in common is not gated
+(`no-common-functions`), so skipping everything cannot satisfy the gate: the
+verdict criteria still fail on an unlisted skip, and the left-out list shows what
+was dropped. `--no-perf-gate` keeps the cost in the report and out of the exit
+code; `--allow-esbmc-version` accepts an ESBMC other than the pinned 8.5 and marks
+the report provisional (as does `--runs` below 5).
+
+`--native-only` verifies once with each `--vowc` and requires the status, the
+per-function verdicts, the skipped set and the counterexamples to agree, so a
+native verdict never depends on which bootstrap stage compiled the verifier.
+
+**Bootstrap hook.** `scripts/bootstrap.sh --native-verify` runs the native mode
+over the Stage 1 binary (`build/vowc`, built by the Rust compiler) and the Stage 2
+binary (`build/vowc2`) after the fixed point and before the promotion, writing
+`build/native-verify.json`. It needs `bitwuzla` and no ESBMC, and is independent
+of `--no-verify`. `VOW_BOOTSTRAP_NATIVE_JOBS` sets its `--verify-jobs` (default 2).
+
+**CI.** [`compiler-native-verify.yml`](../.github/workflows/compiler-native-verify.yml)
+runs both on every push to `main` and nightly: `bootstrap.sh --no-verify
+--native-verify`, then the comparison with `--runs 1 --no-perf-gate` (shared runners
+are too noisy to gate a ratio on). The cost gate is enforced by running the command
+above on an idle host.
+
+Exit codes: `0` every criterion holds, `1` a criterion failed, `2` the harness
+could not run (missing `vowc`, `esbmc` or `bitwuzla`, a malformed skip list).
+
+**Status at `78f48c2a` (2026-10-14, ESBMC 8.5.0, single runs on a loaded host).**
+
+- Verdicts: native proves every function ESBMC proves except the 37 listed in the
+  skip list (tracked by #1676, #1677, #1678, #1679, all open); there is no
+  counterexample and no `weaker` function outside the list. Native proves
+  `note_vals_has_root` (ESBMC inconclusive) and `module_io.vow`'s `write_u8`
+  (ESBMC refutes it only through its vec capacity assertion).
+- Stages: Stage 1 and Stage 2 `vowc` give identical outcomes on every root
+  (`bootstrap.sh --native-verify`, 697 s at `--verify-jobs 2`).
+- Cost: peak RSS is 0.25x ESBMC (geometric mean; `main.vow` 0.11x), within the
+  gate. Wall-clock is not: the geometric mean is 1.38x and the worst root 2.11x,
+  because each `verify-worker` re-runs the whole frontend, roughly 8 s on
+  `compiler/main.vow`, once per verified function (#1683). That is a wall-clock
+  gap of the driver, not of the solver, and it is why the CI comparison does not
+  enforce the cost gate.
+
 ## Native oracles: runtime differential and Z3 cross-check
 
 Two CI-only checks hold `vowc verify --backend native` to a second opinion
 (epic #1398, issue #1431). Both run from
 [`native-oracle.yml`](../.github/workflows/native-oracle.yml) on every push to
-`main` and nightly, sharded four ways, over `tests/verify`, `tests/verify-fail`,
+`main`, nightly, and on pull requests that touch the verifier, replay harness,
+oracle scripts or fixtures, sharded four ways, over `tests/verify`, `tests/verify-fail`,
 `tests/verify-native/{pass,fail,unknown}`, `examples/` and two `gen_corpus.py`
 corpora (see [Generated verifier corpus](#generated-verifier-corpus)). The seeds
 are pinned on pushes (`1431` equivalence axis, `1473` verifier axis), the UTC
@@ -407,11 +604,14 @@ model had (`VEC_MODEL_CAP` = 128, also pinned) that a port of that model would b
 to an issue (`validate_known` rejects an entry without one); the generator
 stamps matching programs with `// TEST: known-control-gap #N` or
 `// TEST: known-soundness-gap #N`, which the runner reports and does not fail.
-Today the only entries are the controls that fill a `Vec` in a loop past the
-unrolling bound (#1645): native is `unknown` there, a completeness gap and not
-a false proof. `replay-skipped` for a `Vec` parameter points at #1649 (replay of Vec, aggregate, narrow and
-128-bit parameters; the missing counterexample values are #1613). Only a `known-control-gap` goes stale
-(a control that now verifies fails the run); a `known-soundness-gap` that stops reproducing
+There are no entries today: the controls that fill a `Vec` in a loop past the
+unrolling bound (#1645) verify through the loop cut. `REPLAY_SKIPS` is empty
+too: `--replay-cex` rebuilds `Vec`, `String`, aggregate, narrow, 128-bit and `f64`
+parameters (#1649), so no generated shape needs a `replay-skipped` line (an entry is
+`(shape, class) -> "why (#N)"`, rendered at the end of the file). A hand-written
+fixture keeps one for a linear struct result, which the replay does not
+consume (#1649), and for an `f32` parameter, which no source text denotes. Only a `known-control-gap` goes stale (a control that now
+verifies fails the run); a `known-soundness-gap` that stops reproducing
 is not detected. The runner does not apply `ulimit -v`: the native verifier worker carries its
 own address-space cap and the generated programs are small and bounded. A real
 soundness disagreement is a native verifier bug: file an issue with the saved

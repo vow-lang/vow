@@ -8,6 +8,7 @@ use vc_exec
 use vc_ops
 use vc_unroll
 use vc_native
+use vc_session
 use tests.builders
 
 fn args1(a: i64) -> Vec<i64> {
@@ -228,6 +229,25 @@ fn check_bool_operators() -> i64 {
     if !q.contains(String::from("(define-fun v3 () Bool (not v2))\n")) { return 71; }
     if !q.contains(String::from("(define-fun v5 () Bool (or v3 v4))\n")) { return 72; }
     if !q.contains(String::from("(define-fun v6 () Bool (and v5 v2))\n")) { return 73; }
+    0
+}
+
+// A Bool parameter is a Bool constant of the query and a model entry typed Bool.
+fn check_bool_param_is_a_bool_symbol() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_BOOL(), 0));
+    i.push(mk_inst(1, IOP_NOT(), ITY_BOOL(), args1(0)));
+    i.push(mk_vow(2, IOP_VOW_ENS(), 1, 0));
+    i.push(mk_inst_return(3, 0));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_BOOL());
+    let f: IrFunction = one_block(String::from("flag"), p, ITY_BOOL(), i);
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 74; }
+    if cs.model_names.len() != 1 || cs.model_tys[0] != ITY_BOOL() || cs.model_widths[0] != VC_SORT_BOOL() { return 75; }
+    let q: String = query(cs, 0);
+    if !q.contains(String::from("(declare-const p0 Bool)\n")) { return 76; }
+    if !q.contains(String::from("(define-fun v1 () Bool (not p0))\n")) { return 77; }
     0
 }
 
@@ -963,6 +983,111 @@ fn check_step_hypotheses_are_assumed() -> i64 {
     0
 }
 
+// Two checked additions of one site (the copies of an inlined operator): once the first is known
+// to abort, the second has nothing left to decide.
+fn check_known_site_is_not_decided_again() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_arg(1, ITY_I64(), 1));
+    i.push(mk_inst(2, IOP_CADD(), ITY_I64(), args2(0, 1)));
+    i.push(mk_inst(3, IOP_CADD(), ITY_I64(), args2(2, 1)));
+    i.push(mk_inst_return(4, 3));
+    let f: IrFunction = two_param_fn(ITY_I64(), i, ITY_I64());
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 2 { return 170; }
+    let fr: VcFrames = vc_frames_new();
+    let sites: Vec<ParsedArithSite> = Vec::new();
+    if vc_claim_site_known(f, fr, cs, 0, sites) { return 171; }
+    if vc_note_soft_sat(f, fr, cs, 0, sites) { return 172; }
+    if !vc_claim_site_known(f, fr, cs, 1, sites) { return 173; }
+    if sites.len() != 1 { return 174; }
+    0
+}
+
+// A function called from a frame, which calls another: a `requires` in frame 0 (function 9), then
+// a `requires` and an `ensures` in frame 1 (function 7, called from frame 0).
+fn nested_frames_function() -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_arg(1, ITY_I64(), 1));
+    i.push(mk_inst_const_i64(2, 0));
+    i.push(mk_inst(3, IOP_GT(), ITY_BOOL(), args2(1, 2)));
+    i.push(framed(mk_vow(4, IOP_VOW_REQ(), 3, 4), 0));
+    i.push(mk_inst(5, IOP_GT(), ITY_BOOL(), args2(0, 2)));
+    i.push(framed(mk_vow(6, IOP_VOW_REQ(), 5, 5), 1));
+    i.push(mk_inst(7, IOP_GE(), ITY_BOOL(), args2(0, 1)));
+    i.push(framed(mk_vow(8, IOP_VOW_ENS(), 7, 6), 1));
+    i.push(mk_inst_return(9, 0));
+    one_block(String::from("nested"), params2(), ITY_I64(), i)
+}
+
+fn nested_frames() -> VcFrames {
+    let fr: VcFrames = one_frame();
+    fr.func_ids.push(7);
+    fr.call_starts.push(20);
+    fr.call_lens.push(3);
+    fr.parents.push(0);
+    fr
+}
+
+fn trusted_pattern(trusted: Vec<i64>) -> String {
+    let fr: VcFrames = nested_frames();
+    fr.trusted = trusted;
+    let cs: VcClaims = vc_claims_mode(nested_frames_function(), fr, false);
+    let out: String = String::from("");
+    let mut k: u64 = 0;
+    while k < cs.kinds.len() {
+        out.push_str({ if vc_claim_trusted(fr, cs, k) { String::from("T") } else { String::from("-") } });
+        k = k + 1;
+    }
+    out
+}
+
+// A claim is skipped inside the body of a function proven on its own and in every function that
+// body calls, but a trusted function's own `requires` stays a claim of its caller.
+fn check_trusted_frames_skip_their_claims() -> i64 {
+    let cs: VcClaims = vc_claims_mode(nested_frames_function(), nested_frames(), false);
+    if cs.kinds.len() != 3 { return 180; }
+    if trusted_pattern(Vec::new()) != String::from("---") { return 181; }
+    let outer: Vec<i64> = Vec::new();
+    outer.push(9);
+    if trusted_pattern(outer) != String::from("-TT") { return 182; }
+    let inner: Vec<i64> = Vec::new();
+    inner.push(7);
+    if trusted_pattern(inner) != String::from("--T") { return 183; }
+    let other: Vec<i64> = Vec::new();
+    other.push(8);
+    if trusted_pattern(other) != String::from("---") { return 184; }
+    0
+}
+
+// The unwinding claim that ends a round is not asked once the round has found every abort the
+// inductive proof reaches: the proof closes the round either way. Any other claim, or a round
+// without such a proof, asks it.
+fn check_unwinding_claim_covered_by_proof() -> i64 {
+    let cs: VcClaims = vc_claims(vc_unroll(counted_loop(false, false), 1).f);
+    let u: u64 = first_of_kind(cs, VC_CLAIM_UNWIND());
+    if u >= cs.kinds.len() { return 190; }
+    let ss: VcSession = vc_session_new(false, -1);
+    ss.last_at = u as i64;
+    let site: ParsedArithSite = ParsedArithSite { cause: String::from("add"), owner: 7, ostart: 3, olen: 4 };
+    let cover: Vec<ParsedArithSite> = Vec::new();
+    cover.push(site);
+    let found: Vec<ParsedArithSite> = Vec::new();
+    if vc_unwinding_covered(ss, cs, u, found, cover) { return 192; }
+    found.push(site);
+    if !vc_unwinding_covered(ss, cs, u, found, cover) { return 193; }
+    if vc_unwinding_covered(ss, cs, u, found, Vec::new()) { return 194; }
+    ss.last_at = -1;
+    if vc_unwinding_covered(ss, cs, u, found, cover) { return 195; }
+    ss.last_at = u as i64 + 1;
+    if vc_unwinding_covered(ss, cs, u, found, cover) { return 196; }
+    let hard: VcClaims = vc_claims_mode(callee_clause_function(), one_frame(), false);
+    ss.last_at = 1;
+    if hard.kinds[1] == VC_CLAIM_UNWIND() || vc_unwinding_covered(ss, hard, 1, found, cover) { return 197; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_divide_with_requires();
     if r == 0 { r = check_rem_has_only_zero_claim(); }
@@ -973,6 +1098,7 @@ fn main() -> i32 {
     if r == 0 { r = check_division_in_requires_is_positional(); }
     if r == 0 { r = check_names_are_internal(); }
     if r == 0 { r = check_bool_operators(); }
+    if r == 0 { r = check_bool_param_is_a_bool_symbol(); }
     if r == 0 { r = check_constant_bool_logic_folds_away(); }
     if r == 0 { r = check_diamond_phi_is_ite(); }
     if r == 0 { r = check_early_return_claims_carry_path_condition(); }
@@ -987,6 +1113,9 @@ fn main() -> i32 {
     if r == 0 { r = check_checked_arith_is_a_soft_claim(); }
     if r == 0 { r = check_checked_div_claims(); }
     if r == 0 { r = check_checked_guard_is_assumed_later(); }
+    if r == 0 { r = check_known_site_is_not_decided_again(); }
+    if r == 0 { r = check_trusted_frames_skip_their_claims(); }
+    if r == 0 { r = check_unwinding_claim_covered_by_proof(); }
     if r == 0 { r = check_shift_claims(); }
     if r == 0 { r = check_casts(); }
     if r == 0 { r = check_constants_are_masked_to_their_width(); }

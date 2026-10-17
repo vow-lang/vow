@@ -1498,7 +1498,8 @@ echo ""
 # each fixture is asserted against its directory (pass/ -> Verified, fail/ ->
 # VerifyFailed with the `counterexample-*` directives, skip/ -> Skipped, never
 # Verified, unknown/ -> VerifyFailed with `verify_status: "unknown"`, no
-# counterexample and an `unwinding assertion:` message, never Verified; each
+# counterexample and an `unwinding assertion:` message (or the `// TEST: unknown-reason`
+# text), never Verified; each
 # fixture is also run with VOW_VERIFY_NO_SLICE=1 and VOW_VERIFY_NO_INCREMENTAL=1
 # and must report byte-identical JSON). The
 # wiring tier uses a fake Bitwuzla and always runs; the real-solver tier is
@@ -1555,17 +1556,20 @@ sys.exit(0 if skipped and all(': ' + sys.argv[2] + ': ' in m for m in skipped) e
         fi
     fi
     if [ "$native_dir" = "unknown" ]; then
-        # An open unwinding assertion is inconclusive: `unknown`, never a proof
-        # and never a counterexample.
+        # An open unwinding assertion (or, with `// TEST: unknown-reason <text>`,
+        # another named reason such as an opaque builtin result) is inconclusive:
+        # `unknown`, never a proof and never a counterexample.
+        native_unknown_reason=$(sed -n 's|^// TEST: unknown-reason \(.*\)$|\1|p' "$vow_file" | head -1)
+        [ -n "$native_unknown_reason" ] || native_unknown_reason="unwinding assertion"
         if ! python3 -c "
 import json, sys
 j = json.loads(sys.argv[1])
 ok = (j.get('verify_status') == 'unknown'
       and not (j.get('counterexamples') or [])
-      and 'unwinding assertion' in (j.get('verify_message') or ''))
+      and sys.argv[2] in (j.get('verify_message') or ''))
 sys.exit(0 if ok else 1)
-" "$native_json" 2>/dev/null; then
-            native_errors+=("expected verify_status unknown with an 'unwinding assertion' message and no counterexample")
+" "$native_json" "$native_unknown_reason" 2>/dev/null; then
+            native_errors+=("expected verify_status unknown with a '$native_unknown_reason' message and no counterexample")
         fi
     fi
     if [ "$native_dir" = "fail" ]; then
@@ -1668,6 +1672,42 @@ print(sum(1 for d in ds if d.get('error_code') == sys.argv[2]))
         fail "verify-native/${native_dir}/${name}" "$(IFS='; '; echo "${native_errors[*]}")"
     fi
 done
+# Callee summaries (#1791): tests/verify-native/summary/run.sh decides each fixture with the
+# inlining budget lowered so a proven callee is summarised, and with the default budget. A run
+# that prints fewer lines than there are fixtures (a crash, a missing binary) fails.
+if [ "$native_have_solver" -eq 0 ]; then
+    skip "verify-native/summary fixtures" "bitwuzla not on PATH"
+else
+    summary_want=$(find tests/verify-native/summary -maxdepth 1 -name '*.vow' | wc -l)
+    summary_got=0
+    while IFS= read -r summary_line; do
+        case "$summary_line" in
+            PASS\ *) pass "verify-native/${summary_line#PASS }"; summary_got=$((summary_got + 1)) ;;
+            FAIL\ *) fail "verify-native/${summary_line#FAIL }" "see tests/verify-native/summary/run.sh"; summary_got=$((summary_got + 1)) ;;
+        esac
+    done < <(bash tests/verify-native/summary/run.sh "$SELF" 2>/dev/null)
+    if [ "$summary_got" -ne "$summary_want" ]; then
+        fail "verify-native/summary" "run.sh reported $summary_got of $summary_want fixtures"
+    fi
+fi
+# Proven callees whose claims are not decided again (#1803): tests/verify-native/trust/run.sh decides
+# each fixture with the default size and with every caller waiting for its callees' proofs; both
+# must give the verdict and counterexamples the fixture names.
+if [ "$native_have_solver" -eq 0 ]; then
+    skip "verify-native/trust fixtures" "bitwuzla not on PATH"
+else
+    trust_want=$(find tests/verify-native/trust -maxdepth 1 -name '*.vow' | wc -l)
+    trust_got=0
+    while IFS= read -r trust_line; do
+        case "$trust_line" in
+            PASS\ *) pass "verify-native/${trust_line#PASS }"; trust_got=$((trust_got + 1)) ;;
+            FAIL\ *) fail "verify-native/${trust_line#FAIL }" "see tests/verify-native/trust/run.sh"; trust_got=$((trust_got + 1)) ;;
+        esac
+    done < <(bash tests/verify-native/trust/run.sh "$SELF" 2>/dev/null)
+    if [ "$trust_got" -ne "$trust_want" ]; then
+        fail "verify-native/trust" "run.sh reported $trust_got of $trust_want fixtures"
+    fi
+fi
 # Every code of the closed `Skipped` list is pinned by a skip/ fixture (or an
 # explicit exemption) and the list matches ADR-1430 section 4.
 skip_codes_log="$TMPDIR/verify-native-skip-codes.log"

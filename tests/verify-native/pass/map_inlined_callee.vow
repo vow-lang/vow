@@ -1,0 +1,36 @@
+module MapInlinedCallee
+
+fn has_after_insert(k: i64, probe: i64) -> bool vow {
+  ensures: result == (probe == k)
+} {
+  let m: HashMap<i64, i64> = HashMap::new();
+  m.insert(k, 1);
+  m.contains_key(probe)
+}
+
+fn size_after_two(a: i64, b: i64) -> u64 vow {
+  ensures: result == 1 || result == 2
+} {
+  let m: BTreeMap<i64, i64> = BTreeMap::new();
+  m.insert(a, 0);
+  m.insert(b, 0);
+  m.len()
+}
+
+fn caller(a: i64, b: i64) -> u64 vow {
+  requires: a != b,
+  ensures: result == 2
+} {
+  size_after_two(a, b)
+}
+
+fn caller_of_has(k: i64) -> bool vow {
+  ensures: result
+} {
+  has_after_insert(k, k)
+}
+
+fn main() -> i32 [io] {
+  print_u64(caller(1, 2));
+  0
+}

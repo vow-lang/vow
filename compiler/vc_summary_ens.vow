@@ -1,0 +1,506 @@
+module VcSummaryEns
+
+use ir
+use ir_dominance
+use vc_ops
+use vc_loops
+
+// The `ensures` clauses a summary assumes (#1791, ADR-2026-10-16-1800). The lowerer emits the
+// code of every clause at every `Return` of a function, between the value being returned and
+// the `Return`, with `result` bound to that value and the parameters read as the entry reads
+// them. So a clause is found by its `VowEnsures` instruction: the code that computes the
+// predicate is the instructions it depends on, which the lowerer gave the source range of the
+// clause (every instruction carries the range of the expression it came from, and a body
+// never lies inside a clause).
+//
+// `vc_ens_extract` copies that code out of one return site into the summary: the data closure
+// of the predicate, with a parameter read mapped to the summary's own and the returned value
+// mapped to the summary's unconstrained result, and the control flow between the clause's first
+// block and the block holding the `VowEnsures`, which becomes an assumption (`VC_INTERNAL_ASSUME`)
+// where it was a claim. It is fail-closed: a clause that reads any value that is neither a
+// parameter, the result nor code inside the clause (a local the body defined, a parameter the
+// body reassigned), that leaves its region, or whose shape is not the one above is not copied,
+// and a summary that does not assume a clause is still sound.
+
+struct VcEns {
+    ok: bool,
+    blocks: Vec<IrBlock>,
+    entry: i64,
+    exit_blk: IrBlock,
+}
+
+fn vc_ens_failed() -> VcEns {
+    VcEns { ok: false, blocks: Vec::new(), entry: -1, exit_blk: ir_block_new(-1) }
+}
+
+struct VcEnsCtx {
+    g: IrFunction,
+    rpo: Vec<i64>,
+    succ: Vec<i64>,
+    pred_off: Vec<i64>,
+    preds: Vec<i64>,
+    idom: Vec<i64>,
+    n_ids: u64,
+    id_to_idx: Vec<i64>,
+    defs: VcDefs,
+    up_head: Vec<i64>,
+    up_next: Vec<i64>,
+    up_id: Vec<i64>,
+}
+
+fn vc_ens_ctx(g: IrFunction) -> VcEnsCtx {
+    let n_ids: u64 = (dom_max_inst_id(g) + 1) as u64;
+    let nb: u64 = g.blocks.len();
+    let ids: Vec<i64> = dom_block_id_table(g);
+    let succ: Vec<i64> = dom_successors(g, ids);
+    let rpo: Vec<i64> = dom_rpo_numbers(nb, succ);
+    let off: Vec<i64> = dom_pred_offsets(nb, succ, rpo);
+    let preds: Vec<i64> = dom_pred_list(nb, succ, rpo, off);
+    let ctx: VcEnsCtx = VcEnsCtx {
+        g: g,
+        rpo: rpo,
+        succ: succ,
+        pred_off: off,
+        preds: preds,
+        idom: dom_idoms(nb, rpo, dom_rpo_order(rpo), off, preds),
+        n_ids: n_ids,
+        id_to_idx: ids,
+        defs: vc_def_table(g, rpo, n_ids),
+        up_head: dom_fill(n_ids, -1),
+        up_next: Vec::new(),
+        up_id: Vec::new(),
+    };
+    let mut bi: u64 = 0;
+    while bi < nb {
+        if rpo[bi] >= 0 {
+            let blk: IrBlock = g.blocks[bi];
+            let mut ii: u64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                if inst.op == IOP_UPSILON() && inst.id >= 0 && inst.dv >= 0 && (inst.dv as u64) < n_ids {
+                    let k: i64 = ctx.up_id.len() as i64;
+                    ctx.up_next.push(ctx.up_head[inst.dv as u64]);
+                    ctx.up_id.push(inst.id);
+                    ctx.up_head[inst.dv as u64] = k;
+                }
+                ii = ii + 1;
+            }
+        }
+        bi = bi + 1;
+    }
+    ctx
+}
+
+fn vc_ens_in_span(inst: IrInst, start: i64, len: i64) -> bool {
+    inst.olen > 0 && inst.ostart >= start && inst.ostart + inst.olen <= start + len
+}
+
+fn vc_ens_inst(ctx: VcEnsCtx, v: i64) -> IrInst {
+    let g: IrFunction = ctx.g;
+    let blk: IrBlock = g.blocks[ctx.defs.blk[v as u64] as u64];
+    blk.insts[ctx.defs.pos[v as u64] as u64]
+}
+
+// The value the `Return` reachable from block `bi` returns: -1 when it returns none, -2 when
+// the blocks after `bi` do not lead to exactly one `Return`.
+fn vc_ens_returned(ctx: VcEnsCtx, bi: u64) -> i64 {
+    let g: IrFunction = ctx.g;
+    let seen: Vec<i64> = dom_fill(g.blocks.len(), 0);
+    let stack: Vec<i64> = Vec::new();
+    stack.push(bi as i64);
+    seen[bi] = 1;
+    let mut found: i64 = -3;
+    while stack.len() > 0 {
+        let b: u64 = stack[stack.len() - 1] as u64;
+        stack.pop();
+        let blk: IrBlock = g.blocks[b];
+        let last: IrInst = blk.insts[blk.insts.len() - 1];
+        if last.op == IOP_RETURN() {
+            let v: i64 = { if last.args.len() > 0 { last.args[0] } else { -1 } };
+            if found != -3 && found != v { return -2; }
+            found = v;
+        }
+        let mut k: u64 = 0;
+        while k < 2 {
+            let s: i64 = ctx.succ[b * 2 + k];
+            if s >= 0 && seen[s as u64] == 0 {
+                seen[s as u64] = 1;
+                stack.push(s);
+            }
+            k = k + 1;
+        }
+    }
+    if found == -3 { return -2; }
+    found
+}
+
+// Marks in `incl` every value the stacked values depend on. False when one is neither a
+// parameter read, `rv`, nor code inside the clause `[start, start + len)`.
+fn vc_ens_close(ctx: VcEnsCtx, incl: Vec<i64>, stack: Vec<i64>, start: i64, len: i64, rv: i64) -> bool {
+    while stack.len() > 0 {
+        let v: i64 = stack[stack.len() - 1];
+        stack.pop();
+        if v < 0 || (v as u64) >= ctx.n_ids { return false; }
+        if incl[v as u64] == 0 && v != rv {
+            if ctx.defs.blk[v as u64] < 0 { return false; }
+            let inst: IrInst = vc_ens_inst(ctx, v);
+            if inst.op == IOP_GET_ARG() {
+                incl[v as u64] = 1;
+            } else {
+                if !vc_ens_in_span(inst, start, len) { return false; }
+                incl[v as u64] = 1;
+                let mut a: u64 = 0;
+                while a < inst.args.len() {
+                    stack.push(inst.args[a]);
+                    a = a + 1;
+                }
+                if inst.op == IOP_PHI() {
+                    let mut e: i64 = ctx.up_head[v as u64];
+                    while e >= 0 {
+                        stack.push(ctx.up_id[e as u64]);
+                        e = ctx.up_next[e as u64];
+                    }
+                }
+            }
+        }
+    }
+    true
+}
+
+// The nearest block that dominates `e` and every block holding a marked value: where the code
+// of the clause starts, its branches included.
+fn vc_ens_top(ctx: VcEnsCtx, incl: Vec<i64>, e: u64) -> u64 {
+    let mut top: i64 = e as i64;
+    let mut v: u64 = 0;
+    while v < ctx.n_ids {
+        if incl[v] == 1 && ctx.defs.blk[v] >= 0 && vc_ens_inst(ctx, v as i64).op != IOP_GET_ARG() {
+            top = dom_intersect(ctx.idom, ctx.rpo, top, ctx.defs.blk[v]);
+        }
+        v = v + 1;
+    }
+    top as u64
+}
+
+// Marks in `out` the blocks reachable from `from` along `succ`, or reaching `from` along the
+// predecessor lists when `back`.
+fn vc_ens_reach(ctx: VcEnsCtx, from: u64, back: bool, out: Vec<i64>) {
+    let stack: Vec<i64> = Vec::new();
+    stack.push(from as i64);
+    out[from] = 1;
+    while stack.len() > 0 {
+        let b: u64 = stack[stack.len() - 1] as u64;
+        stack.pop();
+        if back {
+            let mut pi: i64 = ctx.pred_off[b];
+            while pi < ctx.pred_off[b + 1] {
+                let p: i64 = ctx.preds[pi as u64];
+                if p >= 0 && out[p as u64] == 0 {
+                    out[p as u64] = 1;
+                    stack.push(p);
+                }
+                pi = pi + 1;
+            }
+        } else {
+            let mut k: u64 = 0;
+            while k < 2 {
+                let s: i64 = ctx.succ[b * 2 + k];
+                if s >= 0 && out[s as u64] == 0 {
+                    out[s as u64] = 1;
+                    stack.push(s);
+                }
+                k = k + 1;
+            }
+        }
+    }
+}
+
+fn vc_ens_is_branch(inst: IrInst) -> bool {
+    inst.op == IOP_BRANCH() && inst.dk == IDATA_BRANCH_TARGETS()
+}
+
+fn vc_ens_is_jump(inst: IrInst) -> bool {
+    inst.op == IOP_JUMP() && inst.dk == IDATA_JUMP_TARGET()
+}
+
+// The region of a clause: the blocks on a path from its first block to block `e`, which holds
+// the `VowEnsures`. `ok` is false for a shape the copy cannot take (a block that leaves the
+// region, a marked value defined outside it). A branch condition the closure has not reached
+// is stacked and `grown` set: the closure has to run again before the region is final.
+struct VcEnsRegion {
+    ok: bool,
+    grown: bool,
+    top: u64,
+    inside: Vec<i64>,
+}
+
+fn vc_ens_region(ctx: VcEnsCtx, incl: Vec<i64>, stack: Vec<i64>, e: u64, rv: i64) -> VcEnsRegion {
+    let g: IrFunction = ctx.g;
+    let nb: u64 = g.blocks.len();
+    let bad: VcEnsRegion = VcEnsRegion { ok: false, grown: false, top: e, inside: Vec::new() };
+    let top: u64 = vc_ens_top(ctx, incl, e);
+    let fwd: Vec<i64> = dom_fill(nb, 0);
+    let bwd: Vec<i64> = dom_fill(nb, 0);
+    vc_ens_reach(ctx, top, false, fwd);
+    vc_ens_reach(ctx, e, true, bwd);
+    let inside: Vec<i64> = dom_fill(nb, 0);
+    let mut b: u64 = 0;
+    while b < nb {
+        if fwd[b] == 1 && bwd[b] == 1 { inside[b] = 1; }
+        b = b + 1;
+    }
+    if inside[e] == 0 { return bad; }
+    let mut grown: bool = false;
+    b = 0;
+    while b < nb {
+        if inside[b] == 1 && b != e {
+            let blk: IrBlock = g.blocks[b];
+            let last: IrInst = blk.insts[blk.insts.len() - 1];
+            if vc_ens_is_branch(last) {
+                let s0: i64 = ctx.succ[b * 2];
+                let s1: i64 = ctx.succ[b * 2 + 1];
+                if s0 < 0 || s1 < 0 || inside[s0 as u64] == 0 || inside[s1 as u64] == 0 || last.args.len() != 1 { return bad; }
+                let cond: i64 = last.args[0];
+                if cond >= 0 && (cond as u64) < ctx.n_ids && incl[cond as u64] == 0 && cond != rv {
+                    stack.push(cond);
+                    grown = true;
+                }
+            } else if vc_ens_is_jump(last) {
+                let s0: i64 = ctx.succ[b * 2];
+                if s0 < 0 || inside[s0 as u64] == 0 { return bad; }
+            } else {
+                return bad;
+            }
+        }
+        b = b + 1;
+    }
+    let mut v: u64 = 0;
+    while v < ctx.n_ids {
+        if incl[v] == 1 && ctx.defs.blk[v] >= 0 && vc_ens_inst(ctx, v as i64).op != IOP_GET_ARG() {
+            if inside[ctx.defs.blk[v] as u64] == 0 { return bad; }
+        }
+        v = v + 1;
+    }
+    VcEnsRegion { ok: true, grown: grown, top: top, inside: inside }
+}
+
+// `v` as the copy names it, -1 (and `bad` set) for a value the copy does not define.
+fn vc_ens_map(vmap: Vec<i64>, bad: Vec<i64>, v: i64) -> i64 {
+    if v < 0 { return v; }
+    if (v as u64) >= vmap.len() || vmap[v as u64] < 0 {
+        bad[0] = 1;
+        return -1;
+    }
+    vmap[v as u64]
+}
+
+fn vc_ens_map_args(inst: IrInst, vmap: Vec<i64>, bad: Vec<i64>) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut a: u64 = 0;
+    while a < inst.args.len() {
+        out.push(vc_ens_map(vmap, bad, inst.args[a]));
+        a = a + 1;
+    }
+    out
+}
+
+fn vc_ens_block_id(ctx: VcEnsCtx, bmap: Vec<i64>, bad: Vec<i64>, id: i64) -> i64 {
+    let idx: i64 = dom_block_index(ctx.id_to_idx, id);
+    if idx < 0 || bmap[idx as u64] < 0 {
+        bad[0] = 1;
+        return id;
+    }
+    bmap[idx as u64]
+}
+
+// A copy of the clause whose `VowEnsures` is instruction `ii` of block `bi`: its blocks (new
+// ids from `next_blk`, values from `next_val`), the id of the first, and the last one, which
+// ends in the assumption and has no terminator. `arg_new[j]` is the summary's read of parameter
+// `j` and `res_id` its result (-1 for none).
+fn vc_ens_extract(ctx: VcEnsCtx, bi: u64, ii: u64, arg_new: Vec<i64>, res_id: i64, next_val: Vec<i64>, next_blk: Vec<i64>) -> VcEns {
+    let g: IrFunction = ctx.g;
+    let ens: IrInst = g.blocks[bi].insts[ii];
+    if ens.args.len() != 1 || ens.olen <= 0 { return vc_ens_failed(); }
+    let rv: i64 = vc_ens_returned(ctx, bi);
+    if rv == -2 { return vc_ens_failed(); }
+    let incl: Vec<i64> = dom_fill(ctx.n_ids, 0);
+    let stack: Vec<i64> = Vec::new();
+    stack.push(ens.args[0]);
+    if !vc_ens_close(ctx, incl, stack, ens.ostart, ens.olen, rv) { return vc_ens_failed(); }
+    let mut reg: VcEnsRegion = vc_ens_region(ctx, incl, stack, bi, rv);
+    let mut rounds: i64 = 0;
+    while reg.ok && reg.grown && rounds < 16 {
+        if !vc_ens_close(ctx, incl, stack, ens.ostart, ens.olen, rv) { return vc_ens_failed(); }
+        reg = vc_ens_region(ctx, incl, stack, bi, rv);
+        rounds = rounds + 1;
+    }
+    if !reg.ok || reg.grown { return vc_ens_failed(); }
+    let nb: u64 = g.blocks.len();
+    let vmap: Vec<i64> = dom_fill(ctx.n_ids, -1);
+    let mut v: u64 = 0;
+    while v < ctx.n_ids {
+        if incl[v] == 1 {
+            let d: IrInst = vc_ens_inst(ctx, v as i64);
+            if d.op == IOP_GET_ARG() {
+                if d.dv < 0 || (d.dv as u64) >= arg_new.len() { return vc_ens_failed(); }
+                vmap[v] = arg_new[d.dv as u64];
+            } else {
+                vmap[v] = next_val[0];
+                next_val[0] = next_val[0] + 1;
+            }
+        }
+        v = v + 1;
+    }
+    if rv >= 0 { vmap[rv as u64] = res_id; }
+    let bmap: Vec<i64> = dom_fill(nb, -1);
+    let mut b: u64 = 0;
+    while b < nb {
+        if reg.inside[b] == 1 {
+            bmap[b] = next_blk[0];
+            next_blk[0] = next_blk[0] + 1;
+        }
+        b = b + 1;
+    }
+    let bad: Vec<i64> = Vec::new();
+    bad.push(0);
+    let out: VcEns = VcEns { ok: true, blocks: Vec::new(), entry: bmap[reg.top], exit_blk: ir_block_new(bmap[bi]) };
+    b = 0;
+    while b < nb {
+        if reg.inside[b] == 1 {
+            let src: IrBlock = g.blocks[b];
+            let dst: IrBlock = { if b == bi { out.exit_blk } else { ir_block_new(bmap[b]) } };
+            let mut k: u64 = 0;
+            let mut done: bool = false;
+            while k < src.insts.len() && !done {
+                let inst: IrInst = src.insts[k];
+                if b == bi && k == ii {
+                    let pred: Vec<i64> = vc_ens_map_args(inst, vmap, bad);
+                    let assume: IrInst = ir_inst_new(next_val[0], IOP_VOW_REQ(), ITY_UNIT(), pred, IDATA_VOW_ID(), -1, 0, VC_INTERNAL_ASSUME());
+                    next_val[0] = next_val[0] + 1;
+                    assume.ostart = inst.ostart;
+                    assume.olen = inst.olen;
+                    dst.insts.push(assume);
+                    done = true;
+                } else if b != bi && vc_ens_is_branch(inst) {
+                    let br: IrInst = vc_clone_inst(inst, next_val[0], vc_ens_map_args(inst, vmap, bad), vc_ens_block_id(ctx, bmap, bad, inst.dv), vc_ens_block_id(ctx, bmap, bad, inst.dv2));
+                    next_val[0] = next_val[0] + 1;
+                    dst.insts.push(br);
+                } else if b != bi && vc_ens_is_jump(inst) {
+                    let jp: IrInst = vc_clone_inst(inst, next_val[0], Vec::new(), vc_ens_block_id(ctx, bmap, bad, inst.dv), inst.dv2);
+                    next_val[0] = next_val[0] + 1;
+                    dst.insts.push(jp);
+                } else if inst.id >= 0 && incl[inst.id as u64] == 1 && inst.op != IOP_GET_ARG() {
+                    let mut dv: i64 = inst.dv;
+                    if inst.op == IOP_UPSILON() { dv = vc_ens_map(vmap, bad, inst.dv); }
+                    let cp: IrInst = vc_clone_inst(inst, vmap[inst.id as u64], vc_ens_map_args(inst, vmap, bad), dv, inst.dv2);
+                    dst.insts.push(cp);
+                }
+                k = k + 1;
+            }
+            if b != bi { out.blocks.push(dst); }
+        }
+        b = b + 1;
+    }
+    out.blocks.push(out.exit_blk);
+    if bad[0] == 1 { return vc_ens_failed(); }
+    out
+}
+
+// Every reachable `VowEnsures` of the function, in reverse postorder: the source range of its
+// clause (what every copy of one clause shares; each return site has a vow id of its own),
+// block and instruction index.
+struct VcEnsSites {
+    starts: Vec<i64>,
+    lens: Vec<i64>,
+    blocks: Vec<i64>,
+    insts: Vec<i64>,
+}
+
+fn vc_ens_sites(ctx: VcEnsCtx) -> VcEnsSites {
+    let g: IrFunction = ctx.g;
+    let out: VcEnsSites = VcEnsSites { starts: Vec::new(), lens: Vec::new(), blocks: Vec::new(), insts: Vec::new() };
+    let order: Vec<i64> = dom_rpo_order(ctx.rpo);
+    let mut o: u64 = 0;
+    while o < order.len() {
+        let b: u64 = order[o] as u64;
+        let blk: IrBlock = g.blocks[b];
+        let mut k: u64 = 0;
+        while k < blk.insts.len() {
+            let inst: IrInst = blk.insts[k];
+            if inst.op == IOP_VOW_ENS() && inst.dk == IDATA_VOW_ID() {
+                out.starts.push(inst.ostart);
+                out.lens.push(inst.olen);
+                out.blocks.push(b as i64);
+                out.insts.push(k as i64);
+            }
+            k = k + 1;
+        }
+        o = o + 1;
+    }
+    out
+}
+
+// True when site `s` is the first of its vow id.
+fn vc_ens_first_site(sites: VcEnsSites, s: u64) -> bool {
+    let mut t: u64 = 0;
+    while t < s {
+        if vc_ens_same_clause(sites, t, s) { return false; }
+        t = t + 1;
+    }
+    true
+}
+
+fn vc_ens_same_clause(sites: VcEnsSites, a: u64, b: u64) -> bool {
+    sites.starts[a] == sites.starts[b] && sites.lens[a] == sites.lens[b]
+}
+
+fn vc_ens_same_inst(a: IrInst, b: IrInst) -> bool {
+    if a.id != b.id || a.op != b.op || a.ty != b.ty || a.dk != b.dk || a.dv != b.dv || a.dv2 != b.dv2 || a.ds != b.ds { return false; }
+    if a.ostart != b.ostart || a.olen != b.olen || a.args.len() != b.args.len() { return false; }
+    let mut k: u64 = 0;
+    while k < a.args.len() {
+        if a.args[k] != b.args[k] { return false; }
+        k = k + 1;
+    }
+    true
+}
+
+fn vc_ens_same(a: VcEns, b: VcEns) -> bool {
+    if a.entry != b.entry || a.blocks.len() != b.blocks.len() { return false; }
+    let mut i: u64 = 0;
+    while i < a.blocks.len() {
+        let x: IrBlock = a.blocks[i];
+        let y: IrBlock = b.blocks[i];
+        if x.id != y.id || x.insts.len() != y.insts.len() { return false; }
+        let mut k: u64 = 0;
+        while k < x.insts.len() {
+            if !vc_ens_same_inst(x.insts[k], y.insts[k]) { return false; }
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+// The copy of the clause whose first site is `first` for the summary. The lowerer emits the clause at every `Return`
+// and reads each name in the scope there, so a name a `let` of the body shadows reads another
+// value at a later return. The clause is therefore copied from every site and used only when
+// all copies are the same code, with the same parameters and constants.
+fn vc_ens_extract_clause(ctx: VcEnsCtx, sites: VcEnsSites, first: u64, arg_new: Vec<i64>, res_id: i64, next_val: Vec<i64>, next_blk: Vec<i64>) -> VcEns {
+    let base_val: i64 = next_val[0];
+    let base_blk: i64 = next_blk[0];
+    let c: VcEns = vc_ens_extract(ctx, sites.blocks[first] as u64, sites.insts[first] as u64, arg_new, res_id, next_val, next_blk);
+    if !c.ok { return c; }
+    let mut t: u64 = first + 1;
+    while t < sites.starts.len() {
+        if vc_ens_same_clause(sites, t, first) {
+            let tv: Vec<i64> = Vec::new();
+            tv.push(base_val);
+            let tb: Vec<i64> = Vec::new();
+            tb.push(base_blk);
+            let other: VcEns = vc_ens_extract(ctx, sites.blocks[t] as u64, sites.insts[t] as u64, arg_new, res_id, tv, tb);
+            if !other.ok || !vc_ens_same(c, other) { return vc_ens_failed(); }
+        }
+        t = t + 1;
+    }
+    c
+}

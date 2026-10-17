@@ -1,0 +1,40 @@
+module VecBoolElementReads
+
+// TEST: esbmc-capacity-artifact "ESBMC fails its own Vec capacity assertion on the push to a Vec parameter in push_true_reads_true; the postcondition holds for every Vec length"
+
+fn flag_at(v: Vec<bool>, i: u64) -> bool vow {
+  requires: i < v.len(),
+  ensures: result == v[i]
+} {
+  v[i]
+}
+
+fn first_or_false(v: Vec<bool>) -> bool vow {
+  ensures: v.len() == 0 && !result || v.len() > 0 && result == v[0]
+} {
+  if v.len() == 0 { return false; }
+  v[0]
+}
+
+fn push_true_reads_true(v: Vec<bool>) -> bool vow {
+  ensures: result
+} {
+  v.push(true);
+  v[v.len() - 1]
+}
+
+fn either(v: Vec<bool>) -> bool vow {
+  requires: v.len() >= 2,
+  ensures: result == (v[0] || v[1]),
+  ensures: !result || v[0] || v[1]
+} {
+  v[0] || v[1]
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<bool> = Vec::new();
+  v.push(true);
+  v.push(false);
+  if flag_at(v, 0) && first_or_false(v) && either(v) && push_true_reads_true(v) { print_i64(1); }
+  0
+}

@@ -86,6 +86,7 @@ the declaration. `vow decl` emits these declarations in `.vow.d` stubs.
 ```vow
 fn divide(x: i64, y: i64) -> i64 vow {
     requires: y != 0
+    requires: x >= -9223372036854775807 || y != -1
 } {
     x / y
 }
@@ -408,10 +409,13 @@ the verifier's 8-byte heap slot. `--backend native` models a 128-bit struct
 field or enum payload exactly, as one 128-bit term (it occupies two slots, and a
 narrow field declared after it lives in the shifted slot). A function that
 reads, writes, or pushes a `Vec<i128>` or `Vec<u128>` element is `Skipped`
-under both backends (an unsupported `Call extern` opcode under ESBMC,
-`unmodeled-builtin` under native); so is a call to `parse_i128` or
-`parse_u128`, whose `Option` result the verifier's 64-bit `Option` model cannot
-represent. Contracts over 128-bit parameters alone do verify.
+under ESBMC (an unsupported `Call extern` opcode); `--backend native` models the
+element of a parameter or local `Vec` exactly as one 128-bit value and skips one
+read through a struct field (`unsupported-opcode`). A call to `parse_i128` or
+`parse_u128` is `Skipped` under ESBMC, whose 64-bit `Option` model cannot represent the
+result (the native verifier gives the payload its 128 bits and models the call
+as an opaque total function of the string). Contracts over 128-bit parameters
+alone do verify.
 
 Runtime violation values are *not* one of those gaps: a scalar `i128`/`u128`
 binding captured by a `vow` block reports its full value in the runtime
@@ -530,7 +534,7 @@ declare reference-typed parameters.
 
 | Operator | Meaning    |
 |----------|------------|
-| `-`      | Negation (not allowed on unsigned types) |
+| `-`      | Negation (not allowed on unsigned types); on `f32`/`f64` an IEEE sign flip, so `-0.0` is negative zero |
 | `!`      | Logical NOT|
 | `?`      | Unwrap (propagate error), postfix |
 
@@ -617,7 +621,8 @@ match i64_to_u8_try(big) {
 ```
 
 These intrinsics are emitted by the compiler so the verifier sees their semantics
-directly in its model (the C model under ESBMC).
+directly in its model (the C model under ESBMC, exact bit-vector terms under the
+native verifier).
 
 For the `u8` target, the available narrowing source types are `i16`, `i32`,
 `i64`, `i128`, `u16`, `u32`, `u64`, and `u128`. Each source provides all three
@@ -1556,7 +1561,7 @@ state.
 
 Both are pure and deterministic across runs, platforms and compilers. `hash_u64` is the SplitMix64 output function applied to state `x` (`z = x + 0x9E3779B97F4A7C15; z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9; z = (z ^ (z >> 27)) * 0x94D049BB133111EB; z ^ (z >> 31)`, all arithmetic wrapping), so `hash_u64(0) == 0xE220A8397B1DCDAF`; it is a bijection on `u64`, which is also the function `HashMap` uses to place its keys. `hash_str` is 64-bit FNV-1a over the string's bytes (offset basis `0xCBF29CE484222325`, prime `0x100000001B3`), so `hash_str("") == 0xCBF29CE484222325` and `hash_str("a") == 0xAF63DC4C8601EC8C`. Combine hashes in Vow, e.g. `hash_u64(a ^ hash_u64(b))`.
 
-A hash is **not** an identity: distinct strings can collide. To key a `HashMap` by `String`, use `hash_str(s)` as the `u64` key and keep a side table (for example a `Vec<String>` indexed by interned id) that confirms the original string on every hit, resolving collisions explicitly. Hash values are unspecified for the verifier: a function that calls `hash_u64` or `hash_str` is reported as skipped rather than proven.
+A hash is **not** an identity: distinct strings can collide. To key a `HashMap` by `String`, use `hash_str(s)` as the `u64` key and keep a side table (for example a `Vec<String>` indexed by interned id) that confirms the original string on every hit, resolving collisions explicitly. The native verifier (`--backend native`) encodes `hash_u64` exactly, as the closed 64-bit term above, so a property of `hash_u64(x)` is proven or refuted for the runtime's value. The ESBMC backend, and `hash_str` under both backends (a fold over every byte of a string of unbounded length, with no closed form), have no model of the result: a function that calls one is reported as skipped rather than proven.
 
 #### Input
 

@@ -5,8 +5,10 @@ use vc_ops
 use verifier
 use vc_solver
 use vc_exec
+use vc_agg
 use vc_int
 use vc_fmt
+use vc_vecmodel
 
 // Maps a solver answer for one claim onto the `VerifyResult` the shared
 // counterexample reporting (`build_ce_from_result`) already consumes.
@@ -14,25 +16,32 @@ use vc_fmt
 // `raw_output` carries the "Violated property:" label so the description comes
 // from `parse_assert_label`.
 
-fn vc_source_param_name(f: IrFunction, k: i64) -> String {
-    if k >= 0 && k < f.param_names.len() as i64 {
-        return f.param_names[k as u64];
-    }
-    let out: String = String::from("p");
-    out.push_str(i64_to_string(k));
-    out
-}
-
 // Name of model entry `j` in a counterexample: the source name of a scalar
 // parameter, `<param>.<slot>` for a field of an aggregate one (`.0` is an enum's
 // tag), with `:bool` or `:<bits>` after it when the function reads that slot at
 // more than one sort. The IR carries no field names, so the slot stands in.
 fn vc_model_symbol_name(f: IrFunction, cs: VcClaims, j: u64) -> String {
     let base: String = vc_source_param_name(f, cs.model_params[j]);
+    if cs.model_slots[j] == VC_ALIAS_SLOT() {
+        let alias: String = String::from(base);
+        alias.push_str(String::from(".alias"));
+        return alias;
+    }
+    if cs.model_slots[j] == VC_SLOT_VEC_LEN() {
+        let named: String = String::from(base);
+        named.push_str(String::from(".len"));
+        return named;
+    }
+    if cs.model_slots[j] == VC_SLOT_ADDR() {
+        let named: String = String::from(base);
+        named.push_str(String::from(".addr"));
+        return named;
+    }
     if cs.model_slots[j] < 0 {
         return base;
     }
     let out: String = String::from(base);
+    out.push_str(cs.model_paths[j]);
     out.push_str(String::from("."));
     out.push_str(i64_to_string(cs.model_slots[j]));
     if cs.model_ambig[j] != 0 {
@@ -40,6 +49,40 @@ fn vc_model_symbol_name(f: IrFunction, cs: VcClaims, j: u64) -> String {
         out.push_str(vc_sort_suffix(cs.model_widths[j]));
     }
     out
+}
+
+// Index among the first `n` model entries of the identity of aggregate parameter
+// `p` (`<p>.alias`), or -1.
+fn vc_alias_entry(cs: VcClaims, n: u64, p: i64) -> i64 {
+    let mut e: u64 = 0;
+    while e < n {
+        if cs.model_slots[e] == VC_ALIAS_SLOT() && cs.model_params[e] == p { return e as i64; }
+        e = e + 1;
+    }
+    -1
+}
+
+// The entry whose value model entry `j` has in the counterexample. A field of an
+// aggregate parameter that is the same object as an earlier one (equal
+// identities) reads that parameter's field, so its own symbol, which the formula
+// ignores then, must not show a value of its own: the first such parameter's
+// entry for the same slot and width, else `j`. Only the first `n` entries of
+// `vals` are model entries; an enriched answer carries `Vec` elements behind them.
+fn vc_alias_value_source(cs: VcClaims, vals: Vec<i64>, n: u64, j: u64) -> u64 {
+    if cs.model_slots[j] < 0 || cs.model_paths[j].len() > 0 { return j; }
+    let me: i64 = vc_alias_entry(cs, n, cs.model_params[j]);
+    if me < 0 { return j; }
+    let mut best: u64 = j;
+    let mut i: u64 = 0;
+    while i < n {
+        let q: i64 = cs.model_params[i];
+        if cs.model_slots[i] == cs.model_slots[j] && cs.model_paths[i].len() == 0 && cs.model_widths[i] == cs.model_widths[j] && q < cs.model_params[best] {
+            let qe: i64 = vc_alias_entry(cs, n, q);
+            if qe >= 0 && vals[qe as u64] == vals[me as u64] { best = i; }
+        }
+        i = i + 1;
+    }
+    best
 }
 
 fn vc_violated_property_text(label: String) -> String {
@@ -74,12 +117,15 @@ fn vc_claim_result(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnswer) -> 
     if ans.verdict == VC_ANS_SAT() {
         let names: Vec<String> = Vec::new();
         let values: Vec<String> = Vec::new();
+        let n: u64 = vc_answer_regular_count(cs, k, ans);
         let mut j: u64 = 0;
-        while j < ans.values.len() {
+        while j < n {
             names.push(vc_model_symbol_name(f, cs, j));
-            values.push(vc_format_value(cs.model_tys[j], ans.values[j], ans.highs[j]));
+            let src: u64 = vc_alias_value_source(cs, ans.values, n, j);
+            values.push(vc_format_value(cs.model_tys[j], ans.values[src], ans.highs[src]));
             j = j + 1;
         }
+        vc_append_vec_answer_contents(f, cs, k, ans, names, values);
         let kind: i64 = cs.kinds[k];
         let mut raw: String = String::from("");
         if kind != VC_CLAIM_ENSURES() && kind != VC_CLAIM_CALLER_PRE() && kind != VC_CLAIM_CALLEE_POST() {
@@ -109,6 +155,18 @@ fn vc_claim_result(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnswer) -> 
         return vc_verify_result(VERIFY_NOT_FOUND(), -1, Vec::new(), Vec::new(), ans.raw);
     }
     vc_verify_result(VERIFY_ERROR(), -1, Vec::new(), Vec::new(), ans.raw)
+}
+
+// A counterexample depends on the value `parse_f64_bits` or a `parse_*` returns, or the
+// text `format_f64_bits`, `string_trim`, `string_to_upper` or `string_to_lower` returns,
+// which the model leaves unconstrained: it may not be a run, so the claim is neither
+// proven nor refuted.
+fn vc_opaque_hook_label() -> String { String::from("opaque builtin result") }
+
+fn vc_opaque_hook_reason() -> String {
+    let out: String = vc_opaque_hook_label();
+    out.push_str(String::from(": the counterexample depends on the result of parse_f64_bits, format_f64_bits, a parse_* builtin, string_trim, string_to_upper, string_to_lower, string_replace, string_split or string_join, which the native verifier models only as a total function of its operands"));
+    out
 }
 
 // The unwinding assertion could not be discharged at the largest bound: some
@@ -142,8 +200,42 @@ fn vc_inline_budget_reason(cap: i64) -> String {
     out
 }
 
+// A counterexample depends on the key set or length of a map the function did not
+// build (a parameter, or a map a loop cut forgot): the model keeps the two apart,
+// where a real map's length is its number of keys, so it may not be a run.
+fn vc_map_state_label() -> String { String::from("unconstrained map state") }
+
+fn vc_map_state_reason() -> String {
+    let out: String = vc_map_state_label();
+    out.push_str(String::from(": the counterexample depends on the keys or the length of a HashMap or BTreeMap the function did not build, which the native verifier does not relate"));
+    out
+}
+
+// A counterexample was found in a function whose call tree is decided with a summary standing
+// for a proven callee (`vc_summary`): the summary admits states and results the callee cannot
+// produce, so the counterexample may not be a run and nothing is claimed.
+fn vc_summary_label() -> String { String::from("callee summary") }
+
+fn vc_summary_reason() -> String {
+    let out: String = vc_summary_label();
+    out.push_str(String::from(": a counterexample found with a proven callee summarised by its contract, not by its body, which the verifier cannot tell from a run"));
+    out
+}
+
+fn vc_output_has_summary(raw: String) -> bool {
+    str_find_str(raw, vc_summary_label()) >= 0
+}
+
 fn vc_output_has_unwinding(raw: String) -> bool {
     str_find_str(raw, VC_LABEL_UNWIND()) >= 0
+}
+
+fn vc_output_has_opaque_hook(raw: String) -> bool {
+    str_find_str(raw, vc_opaque_hook_label()) >= 0
+}
+
+fn vc_output_has_map_state(raw: String) -> bool {
+    str_find_str(raw, vc_map_state_label()) >= 0
 }
 
 fn vc_output_has_inline_budget(raw: String) -> bool {

@@ -1,0 +1,42 @@
+module HashU64Exact
+
+// `hash_u64` is the SplitMix64 output function, encoded as a closed 64-bit term:
+// it needs no axiom, equal operands give equal results, and a literal operand is
+// folded to the runtime's value (the published first output of SplitMix64 seeded
+// with 0).
+fn bucket(key: u64, buckets: u64) -> u64 vow {
+  requires: buckets > 0
+  ensures: result < buckets
+} {
+  hash_u64(key) % buckets
+}
+
+fn same_operand_same_hash(a: u64, b: u64) -> bool vow {
+  requires: a == b
+  ensures: result == true
+} {
+  hash_u64(a) == hash_u64(b)
+}
+
+fn seed_zero() -> bool vow {
+  ensures: result == true
+} {
+  hash_u64(0u64) == 16294208416658607535u64
+}
+
+fn two_rounds_in_a_loop() -> bool vow {
+  ensures: result == true
+} {
+  let mut h: u64 = 1u64;
+  let mut i: u64 = 0u64;
+  while i < 2u64 {
+    h = hash_u64(h);
+    i = i + 1u64;
+  }
+  h == hash_u64(hash_u64(1u64))
+}
+
+fn main() -> i32 [io] {
+  print_u64(bucket(7u64, 16u64));
+  0
+}

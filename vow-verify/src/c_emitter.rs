@@ -892,6 +892,7 @@ enum ModelIssue<'a> {
     UnknownExtern(&'a str),
     NonScalarExtern(&'a str),
     StructuredTarget,
+    StructuredResult,
     NonModelableTarget(FuncId),
     InvalidCall,
 }
@@ -939,6 +940,12 @@ fn modelability_issue<'a>(
         | Opcode::MulF64
         | Opcode::DivF32
         | Opcode::DivF64
+        | Opcode::NegF32
+        | Opcode::NegF64
+        | Opcode::F32ToBits
+        | Opcode::F64ToBits
+        | Opcode::BitsToF32
+        | Opcode::BitsToF64
         | Opcode::EqF32
         | Opcode::EqF64
         | Opcode::NeF32
@@ -993,6 +1000,15 @@ fn modelability_issue<'a>(
                     &facts.option_vars,
                 ) {
                     Some(ModelIssue::StructuredTarget)
+                } else if is_structured_value_id(
+                    inst.id.0,
+                    &facts.vec_vars,
+                    &facts.string_vars,
+                    &facts.hashmap_vars,
+                    &facts.btreemap_vars,
+                    &facts.option_vars,
+                ) {
+                    Some(ModelIssue::StructuredResult)
                 } else if const_fns.contains_key(fid)
                     || module
                         .functions
@@ -1107,6 +1123,9 @@ fn first_unsupported_opcode(
                     }
                     ModelIssue::StructuredTarget => {
                         "Call target with a collection argument".to_string()
+                    }
+                    ModelIssue::StructuredResult => {
+                        "Call target with a collection result".to_string()
                     }
                     ModelIssue::NonModelableTarget(fid) => {
                         let target = module
@@ -1304,6 +1323,29 @@ fn emit_inst(
         Opcode::DivF32 | Opcode::DivF64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = v{} / v{};\n", id, a, b));
+        }
+
+        Opcode::NegF32 | Opcode::NegF64 => {
+            let a = inst.args[0].0;
+            out.push_str(&format!("  v{} = -v{};\n", id, a));
+        }
+
+        // A float entering or leaving a `Vec` slot is the same bit-pattern move a struct
+        // field store or load makes.
+        Opcode::F32ToBits | Opcode::F64ToBits | Opcode::BitsToF32 | Opcode::BitsToF64 => {
+            let a = inst.args[0].0;
+            let (float_ty, to_slot) = match inst.opcode {
+                Opcode::F32ToBits => (Ty::F32, true),
+                Opcode::F64ToBits => (Ty::F64, true),
+                Opcode::BitsToF32 => (Ty::F32, false),
+                _ => (Ty::F64, false),
+            };
+            let moved = if to_slot {
+                float_slot_encode(float_ty, &format!("v{a}"))
+            } else {
+                float_slot_decode(float_ty, &format!("v{a}"))
+            };
+            out.push_str(&format!("  v{id} = {moved};\n"));
         }
 
         // Integer comparisons
@@ -2874,6 +2916,8 @@ fn scan_float_slot_needs(funcs: &[&Function]) -> FloatSlotNeeds {
         for inst in func.blocks.iter().flat_map(|b| &b.insts) {
             match inst.opcode {
                 Opcode::FieldGet => needs.note(inst.ty),
+                Opcode::F32ToBits | Opcode::BitsToF32 => needs.note(Ty::F32),
+                Opcode::F64ToBits | Opcode::BitsToF64 => needs.note(Ty::F64),
                 Opcode::FieldSet => {
                     if let Some(val) = inst.args.get(1) {
                         let by_id = by_id.get_or_insert_with(|| build_inst_by_id(func));
@@ -4049,6 +4093,84 @@ mod tests {
         assert!(
             structured.contains("Call target with a collection argument"),
             "{structured}"
+        );
+    }
+
+    // A user function returns a collection as an `int64_t` handle, so a caller
+    // that treats the result as a String/Vec would assign `int64_t` to a
+    // collection type in the emitted C. Such calls must fail closed.
+    #[test]
+    fn collection_result_from_user_fn_is_not_modelable() {
+        fn call_result_module(use_as_string: bool) -> (Function, Module) {
+            let (mut callee, _) = one_block_func_module(
+                "callee",
+                Ty::Ptr,
+                vec![
+                    inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            );
+            callee.id = FuncId(1);
+            let user = if use_as_string {
+                inst(
+                    2,
+                    Opcode::Call,
+                    Ty::Bool,
+                    vec![1, 1],
+                    InstData::CallExtern("__vow_string_eq".into()),
+                )
+            } else {
+                inst(2, Opcode::WrappingAdd, Ty::I64, vec![1, 1], InstData::None)
+            };
+            let (caller, mut m) = one_block_func_module(
+                "caller",
+                Ty::I64,
+                vec![
+                    inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(
+                        1,
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![],
+                        InstData::CallTarget(FuncId(1)),
+                    ),
+                    user,
+                    inst(3, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            );
+            m.functions.push(callee);
+            (caller, m)
+        }
+
+        let (f, m) = call_result_module(true);
+        let facts = ModelFacts::new(&f);
+        assert_eq!(
+            modelability_issue(
+                &f.blocks[0].insts[1],
+                &facts,
+                &m,
+                &HashMap::new(),
+                &mut HashMap::new()
+            ),
+            Some(ModelIssue::StructuredResult)
+        );
+        let reason = non_modelable_reason(&f, &m, &HashMap::new()).expect("must be non-modelable");
+        assert!(
+            reason.contains("Call target with a collection result"),
+            "{reason}"
+        );
+
+        let (f, m) = call_result_module(false);
+        let facts = ModelFacts::new(&f);
+        assert_eq!(
+            modelability_issue(
+                &f.blocks[0].insts[1],
+                &facts,
+                &m,
+                &HashMap::new(),
+                &mut HashMap::new()
+            ),
+            None
         );
     }
 
@@ -5554,10 +5676,14 @@ mod tests {
                 inst(9, Opcode::DivF32, Ty::F32, vec![0, 1], InstData::None),
                 inst(10, Opcode::RemF32, Ty::F32, vec![0, 1], InstData::None),
                 inst(11, Opcode::RemF64, Ty::F64, vec![0, 1], InstData::None),
-                inst(12, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                inst(12, Opcode::NegF64, Ty::F64, vec![0], InstData::None),
+                inst(13, Opcode::NegF32, Ty::F32, vec![1], InstData::None),
+                inst(14, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(c.contains("v12 = -v0;"), "fneg64: {c}");
+        assert!(c.contains("v13 = -v1;"), "fneg32: {c}");
         assert!(c.contains("v0 + v1"), "fadd: {c}");
         assert!(c.contains("v0 - v1"), "fsub: {c}");
         assert!(c.contains("v0 * v1"), "fmul: {c}");
@@ -5613,6 +5739,46 @@ mod tests {
             assert!(
                 c.contains(&format!("__vow_{name}_from_slot(int64_t slot)")),
                 "{name} decode helper must be defined: {c}"
+            );
+            assert!(
+                !c.contains(&format!("__vow_{other}_")),
+                "{other} helpers unused: {c}"
+            );
+        }
+    }
+
+    #[test]
+    fn float_vec_slots_move_by_bit_pattern() {
+        for (ty, name, other, to_bits, from_bits) in [
+            (Ty::F64, "f64", "f32", Opcode::F64ToBits, Opcode::BitsToF64),
+            (Ty::F32, "f32", "f64", Opcode::F32ToBits, Opcode::BitsToF32),
+        ] {
+            let func = make_func(
+                "vec_slot_roundtrip",
+                vec![ty],
+                ty,
+                vec![
+                    inst(0, Opcode::GetArg, ty, vec![], InstData::ArgIndex(0)),
+                    inst(1, to_bits, Ty::I64, vec![0], InstData::None),
+                    inst(2, from_bits, ty, vec![1], InstData::None),
+                    inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            );
+            let (_, module) =
+                one_block_func_module("vec_slot_roundtrip", ty, func.blocks[0].insts.clone());
+            assert_eq!(non_modelable_reason(&func, &module, &HashMap::new()), None);
+            let c = emit_c_module(&[&func], &HashMap::new(), &VerifyLimits::default());
+            assert!(
+                c.contains(&format!("v1 = __vow_{name}_to_slot(v0);")),
+                "{name} slot write must encode by bits: {c}"
+            );
+            assert!(
+                c.contains(&format!("v2 = __vow_{name}_from_slot(v1);")),
+                "{name} slot read must decode by bits: {c}"
+            );
+            assert!(
+                c.contains(&format!("static inline int64_t __vow_{name}_to_slot(")),
+                "{name} encode helper must be defined: {c}"
             );
             assert!(
                 !c.contains(&format!("__vow_{other}_")),

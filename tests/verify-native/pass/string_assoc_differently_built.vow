@@ -1,0 +1,54 @@
+module StringAssocDifferentlyBuilt
+
+// TEST: esbmc-model-artifact fn="assoc" blame=Callee vow_id=0 "ESBMC models string_eq as a cached nondeterministic Bool, so it does not relate equal strings; the native model is exact"
+// TEST: esbmc-model-artifact fn="assoc_four" blame=Callee vow_id=0 "ESBMC models string_eq as a cached nondeterministic Bool, so it does not relate equal strings; the native model is exact"
+// TEST: esbmc-model-artifact fn="assoc_with_literals" blame=Callee vow_id=0 "ESBMC models string_eq as a cached nondeterministic Bool, so it does not relate equal strings; the native model is exact"
+
+// Two equal strings built from the same operands in a different order of appends are
+// decided by reading the differing byte through the builds (#1653), not by relating
+// two quantified definitions.
+fn assoc(a: String, b: String, c: String) -> bool vow {
+  ensures: result == true
+} {
+  let x: String = String::from(a);
+  x.push_str(b);
+  x.push_str(c);
+  let bc: String = String::from(b);
+  bc.push_str(c);
+  let y: String = String::from(a);
+  y.push_str(bc);
+  x.eq(y)
+}
+
+fn assoc_four(a: String, b: String, c: String, d: String) -> bool vow {
+  ensures: result == true
+} {
+  let x: String = String::from(a);
+  x.push_str(b);
+  x.push_str(c);
+  x.push_str(d);
+  let cd: String = String::from(c);
+  cd.push_str(d);
+  let bcd: String = String::from(b);
+  bcd.push_str(cd);
+  let y: String = String::from(a);
+  y.push_str(bcd);
+  x.eq(y)
+}
+
+fn assoc_with_literals(a: String, b: String) -> bool vow {
+  ensures: result == true
+} {
+  let x: String = String::from("<");
+  x.push_str(a);
+  x.push_str(b);
+  let ab: String = String::from(a);
+  ab.push_str(b);
+  let y: String = String::from("<");
+  y.push_str(ab);
+  x.eq(y)
+}
+
+fn main() -> i32 {
+  0
+}

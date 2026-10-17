@@ -1,0 +1,26 @@
+// A push on one branch to a `Vec` parameter, with the length of a `Vec` held in a field read on
+// the other branch and after the join: `out` may be that `Vec`, and its length only grows.
+module HeapParamBranchPushGrows
+
+// TEST: esbmc-model-artifact fn="grow" blame=None vow_id=4294967293 "ESBMC reads the Vec field b.items as a fresh Vec of nondeterministic length at each use, so the two reads of b.items.len() are unrelated values and the claim fails; it also fails its own Vec capacity assertion for a parameter already at its model limit. The native model reads one field as one value and keeps the aliasing a parameter may have with it; a debug-mode replay over sizes 0 to 300 with the parameter distinct from and aliasing the field satisfies every clause"
+// TEST: esbmc-model-artifact fn="grow" blame=Callee vow_id=0 "ESBMC reads the Vec field b.items as a fresh Vec of nondeterministic length at each use, so the two reads of b.items.len() are unrelated values and the claim fails; it also fails its own Vec capacity assertion for a parameter already at its model limit. The native model reads one field as one value and keeps the aliasing a parameter may have with it; a debug-mode replay over sizes 0 to 300 with the parameter distinct from and aliasing the field satisfies every clause"
+
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn grow(out: Vec<i64>, b: Bag, c: bool) -> bool vow {
+  ensures: result
+} {
+  let mut n: u64 = 0;
+  if c { n = b.items.len(); }
+  if c { out.push(1); }
+  let m: u64 = b.items.len();
+  m >= n
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), tag: 1 };
+  b.items.push(5);
+  let out: Vec<i64> = Vec::new();
+  if grow(out, b, true) { print_i64(1); }
+  0
+}

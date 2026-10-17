@@ -1,0 +1,23 @@
+module VecBoolLayout
+
+fn read_flag(v: Vec<bool>, i: u64) -> bool {
+    v[i]
+}
+
+fn count_set(v: Vec<bool>) -> u64 {
+    let mut n: u64 = 0;
+    for x in v {
+        if x {
+            n = n + 1;
+        }
+    }
+    n
+}
+
+fn read_byte(v: Vec<u8>) -> u8 {
+    v[0]
+}
+
+fn main() -> i32 {
+    0
+}

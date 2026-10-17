@@ -92,8 +92,71 @@ WATCHDOG_SLACK = 30
 
 CONTRACTS_RUNS_PER_FUNCTION = 3
 
+# Two directives (parsed by verify_eval.artifact_directives) explain a fixture ESBMC
+# refutes although the native verifier proves it. Without one such a row is a
+# soundness finding.
+#
+#   // TEST: esbmc-capacity-artifact "<why>"
+#       ESBMC refutes only through its own `string`/`vec` capacity assertion: the
+#       property holds for every length the runtime accepts. Needs the evidence of
+#       `capacity_only`: every ESBMC counterexample is a capacity assertion.
+#   // TEST: esbmc-model-artifact fn="<fn>" blame=<B> vow_id=<N> "<why>"
+#       One ESBMC counterexample comes from ESBMC's own model, not from the
+#       program (for example a spurious `string_eq` result). It names the
+#       counterexample, so any other ESBMC refutation of the file stays a
+#       finding, and it only applies where the corpus labels the fixture correct.
+
+# `// TEST: native-divergence "<why>"` marks a fixture whose `contracts --verify`
+# report lists a clause the native verifier leaves `unknown` where ESBMC says
+# `proven`, for a reason the docs name (a `requires` is `proven` only when its
+# whole function is; a function's clause is `unknown` once a callee's clause
+# refutes the call tree). The reason is mandatory and only that one clause shape
+# is excused, and only in a fixture the corpus labels `VerifyFailed`: any other
+# disagreement in the fixture keeps its class, and so does a `Verified` fixture.
+NATIVE_DIVERGENCE = re.compile(
+    r'^//\s*TEST:\s*native-divergence\s+"([^"]+)"\s*$', re.MULTILINE
+)
+
 FN_DECL = re.compile(r"^\s*(?:pub\s+)?fn\s", re.MULTILINE)
 MAIN_DECL = re.compile(r"^\s*fn\s+main\s*\(", re.MULTILINE)
+
+
+SKIPPED_FN = re.compile(r"^skipped verification of `([^`]+)`")
+
+
+def skipped_functions(result):
+    """Functions a `vowc verify` result reports as not analysed (warnings only).
+
+    A `VerificationSkipped` note (an uncontracted caller the verifier could not
+    model) is not a function the backend declined to analyse and differs between
+    backends by design, so only the warnings count.
+    """
+    found = set()
+    for d in (result or {}).get("diagnostics") or []:
+        if d.get("error_code") != "VerificationSkipped":
+            continue
+        if d.get("severity") != "warning":
+            continue
+        m = SKIPPED_FN.match(d.get("message") or "")
+        if m:
+            found.add(m.group(1))
+    return frozenset(found)
+
+
+def native_divergence(path):
+    """The reason of the fixture's `native-divergence` directive, or None."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            m = NATIVE_DIVERGENCE.search(fh.read())
+    except OSError:
+        return None
+    return m.group(1) if m else None
+
+
+def capacity_only(result):
+    """True when every ESBMC counterexample is its own model-capacity assertion."""
+    cexes = (result or {}).get("counterexamples") or []
+    return bool(cexes) and all("capacity" in (c.get("violation") or "") for c in cexes)
 
 
 def verdict_of(result):
@@ -141,15 +204,109 @@ def classify(
     esbmc_keys=frozenset(),
     native_keys=frozenset(),
     native_status=None,
+    capacity_reason=None,
+    esbmc_capacity_only=False,
+    model_artifacts=None,
+    esbmc_skipped=frozenset(),
+    native_skipped=frozenset(),
 ):
     """Classify one fixture from the two verdicts and the corpus ground truth.
 
     `truth` is the corpus-expected status (Verified / VerifyFailed / Skipped);
-    a known soundness gap counts as VerifyFailed.
+    a known soundness gap counts as VerifyFailed. `capacity_reason` is the text
+    of the fixture's `esbmc-capacity-artifact` directive and
+    `esbmc_capacity_only` says every ESBMC counterexample is its own capacity
+    assertion: together they turn "native proves what ESBMC refutes" into an
+    explained extra proof instead of a soundness finding. `model_artifacts`
+    maps the `(fn, blame, vow_id)` of ESBMC counterexamples declared to be
+    ESBMC model artefacts to their reason: it does the same when the corpus
+    labels the fixture `Verified` and every ESBMC counterexample is declared.
+    `esbmc_skipped` and `native_skipped` are the functions each backend left
+    unanalysed (`skipped_functions`): backends that agree on the verdict but not
+    on which functions they analysed did not do the same work.
     """
+    cls, detail = classify_verdicts(
+        truth,
+        esbmc,
+        native,
+        esbmc_keys,
+        native_keys,
+        native_status,
+        capacity_reason,
+        esbmc_capacity_only,
+        model_artifacts or {},
+    )
+    if cls == MATCH:
+        return compare_footprint(esbmc_skipped, native_skipped, detail, native)
+    return cls, detail
+
+
+def compare_footprint(esbmc_skipped, native_skipped, detail, native):
+    """(class, detail) of two backends that agree on the verdict of a fixture.
+
+    A skip warning is positive evidence that a backend declined a function, but
+    the absence of one is not evidence that it analysed it: the native `verify`
+    reports up to the first function that is not proven, so after a refutation
+    or an inconclusive result the later functions were never reached. Native
+    analysing what ESBMC skips therefore needs a native verdict that cannot have
+    stopped early (`proven`, or `skipped`, which does not stop the run).
+    """
+    native_only = sorted(native_skipped - esbmc_skipped)
+    if native_only:
+        return (
+            WEAKER,
+            f"native skips {native_only} that ESBMC analyses",
+        )
+    esbmc_only = sorted(esbmc_skipped - native_skipped)
+    if esbmc_only and native in (PROVEN, SKIPPED):
+        return (
+            MORE_PRECISE,
+            f"native analyses {esbmc_only} that ESBMC skips",
+        )
+    return MATCH, detail
+
+
+def classify_verdicts(
+    truth,
+    esbmc,
+    native,
+    esbmc_keys,
+    native_keys,
+    native_status,
+    capacity_reason,
+    esbmc_capacity_only,
+    model_artifacts,
+):
+    """`classify` before the per-function footprint is compared."""
     if ERROR in (esbmc, native):
         who = [n for n, v in (("esbmc", esbmc), ("native", native)) if v == ERROR]
         return HARNESS, f"no usable verify result from {', '.join(who)}"
+
+    if (
+        native == PROVEN
+        and esbmc == REFUTED
+        and capacity_reason
+        and esbmc_capacity_only
+    ):
+        return (
+            MORE_PRECISE,
+            f"ESBMC refutes only through its model capacity ({capacity_reason}); "
+            "native proves the property for every length",
+        )
+
+    if (
+        native == PROVEN
+        and esbmc == REFUTED
+        and truth == "Verified"
+        and esbmc_keys
+        and esbmc_keys <= set(model_artifacts)
+    ):
+        reasons = "; ".join(model_artifacts[k] for k in sorted(esbmc_keys, key=repr))
+        return (
+            MORE_PRECISE,
+            f"ESBMC refutes only through its own model ({reasons}); native proves "
+            "the property",
+        )
 
     if native == PROVEN and esbmc != PROVEN and truth == "VerifyFailed":
         return (
@@ -267,6 +424,38 @@ def run_backend(vowc, backend, path, timeout, max_fns, command="verify"):
     return None, elapsed
 
 
+NATIVE_DIR_EXPECT = {
+    "pass": "Verified",
+    "fail": "VerifyFailed",
+    "skip": "Skipped",
+    "unknown": None,
+}
+
+
+def collect_native(filter_name):
+    """Yield (group, Expect) for tests/verify-native/{pass,fail,skip,unknown}.
+
+    The directory is the ground truth (`unknown` has none), as in full_test.sh.
+    """
+    for sub, status in NATIVE_DIR_EXPECT.items():
+        directory = os.path.join(REPO_ROOT, "tests", "verify-native", sub)
+        if not os.path.isdir(directory):
+            continue
+        for fname in sorted(os.listdir(directory)):
+            if not fname.endswith(".vow"):
+                continue
+            exp = verify_eval.parse_directives(os.path.join(directory, fname), status)
+            if filter_name and filter_name not in exp.name:
+                continue
+            yield f"verify-native/{sub}", exp
+
+
+def collect(filter_name):
+    """The differential corpus: tests/verify*, then tests/verify-native/*."""
+    yield from verify_eval.collect(filter_name)
+    yield from collect_native(filter_name)
+
+
 def clause_table(result):
     """(function, kind, vow_id) -> clause row of one `contracts --verify` result."""
     table = {}
@@ -301,9 +490,22 @@ def aborting_functions(verify_result, native_table):
     return refuted - failed
 
 
-def classify_clause(truth, key, esbmc, native, esbmc_table, aborting=frozenset()):
-    """Class and detail for one clause present in both `contracts` reports."""
+def classify_clause(
+    truth, key, esbmc, native, esbmc_table, aborting=frozenset(), divergence=None
+):
+    """Class and detail for one clause present in both `contracts` reports.
+
+    `divergence` is the text of the fixture's `native-divergence` directive: it
+    turns a clause ESBMC proves and native leaves `unknown` into an explained
+    divergence instead of a weaker row.
+    """
     e, n = esbmc["status"], native["status"]
+    if divergence and truth == "VerifyFailed" and e == "proven" and n == "unknown":
+        return (
+            MORE_PRECISE,
+            f"documented native divergence ({divergence}); ESBMC reports the "
+            "clause proven",
+        )
     if n == "unknown" and e in ("proven", "failed") and key[0] in aborting:
         return (
             MORE_PRECISE,
@@ -341,7 +543,9 @@ def classify_clause(truth, key, esbmc, native, esbmc_table, aborting=frozenset()
     return classify(truth, ev, nv, native_status=n if n == "error" else None)
 
 
-def compare_contracts(truth, esbmc_result, native_result, aborting=frozenset()):
+def compare_contracts(
+    truth, esbmc_result, native_result, aborting=frozenset(), divergence=None
+):
     """(class, detail) of two `contracts --verify` reports of one fixture."""
     if esbmc_result is None or native_result is None:
         return HARNESS, "no usable contracts result"
@@ -358,13 +562,22 @@ def compare_contracts(truth, esbmc_result, native_result, aborting=frozenset()):
     worst, detail = MATCH, None
     for key in sorted(etable, key=repr):
         e, n = etable[key], ntable[key]
-        cls, why = classify_clause(truth, key, e, n, etable, aborting)
+        cls, why = classify_clause(truth, key, e, n, etable, aborting, divergence)
         if cls == MATCH and e["trivially_satisfiable"] != n["trivially_satisfiable"]:
-            cls = WEAKER
-            why = (
-                f"`{key[0]}` {key[1]} trivially_satisfiable differs "
-                f"(esbmc: {e['trivially_satisfiable']}, native: {n['trivially_satisfiable']})"
-            )
+            if n["trivially_satisfiable"]:
+                # `true` is a proof (the probe was proven): native shows the
+                # clause weak where ESBMC's probe was not conclusive.
+                cls = MORE_PRECISE
+                why = (
+                    f"`{key[0]}` {key[1]} native proves the trivial-body probe "
+                    "ESBMC does not"
+                )
+            else:
+                cls = WEAKER
+                why = (
+                    f"`{key[0]}` {key[1]} trivially_satisfiable differs "
+                    f"(esbmc: {e['trivially_satisfiable']}, native: {n['trivially_satisfiable']})"
+                )
         if SEVERITY[cls] > SEVERITY[worst]:
             worst, detail = cls, f"`{key[0]}` {key[1]} #{key[2]}: {why}"
     return worst, detail
@@ -446,13 +659,54 @@ def diff_clauses(vowc, timeout, sub, exp, command, truth, max_fns):
         verify_result, _ = run_backend(vowc, "native", exp.path, timeout, max_fns)
         aborting = aborting_functions(verify_result, clause_table(results["native"]))
         row["class"], row["detail"] = compare_contracts(
-            truth, results["esbmc"], results["native"], aborting
+            truth,
+            results["esbmc"],
+            results["native"],
+            aborting,
+            native_divergence(exp.path),
         )
     else:
         row["class"], row["detail"] = classify_test(
             truth, results["esbmc"], results["native"]
         )
     return row
+
+
+def summarise(result):
+    """What `classify_outcomes` needs from one backend's `vowc verify` result."""
+    result = result or {}
+    cexes = verify_eval.actual_cex(result)
+    return {
+        "verdict": verdict_of(result),
+        "keys": cex_keys(cexes),
+        "verify_status": result.get("verify_status"),
+        "capacity_only": capacity_only(result),
+        "skipped": skipped_functions(result),
+        "counterexamples": cexes,
+    }
+
+
+def classify_outcomes(truth, path, esbmc, native):
+    """(class, detail) of one fixture from the two `summarise` outcomes.
+
+    The single place a `verify` row is classified: verify_diff and verify_perf
+    both call it, so they cannot disagree on a row, nor on what an
+    `esbmc-*-artifact` directive explains.
+    """
+    artifacts = verify_eval.artifact_directives(path)
+    return classify(
+        truth,
+        esbmc["verdict"],
+        native["verdict"],
+        esbmc["keys"],
+        native["keys"],
+        native["verify_status"],
+        artifacts.capacity,
+        esbmc["capacity_only"],
+        artifacts.model,
+        esbmc["skipped"],
+        native["skipped"],
+    )
 
 
 def diff_fixture(vowc, timeout, sub, exp, command="verify"):
@@ -468,28 +722,16 @@ def diff_fixture(vowc, timeout, sub, exp, command="verify"):
     results = {}
     for backend in BACKENDS:
         result, seconds = run_backend(vowc, backend, exp.path, timeout, max_fns)
-        result = result or {}
-        cexes = verify_eval.actual_cex(result)
-        results[backend] = {
-            "verdict": verdict_of(result),
-            "keys": cex_keys(cexes),
-            "verify_status": result.get("verify_status"),
-        }
+        results[backend] = summarise(result)
         row[backend] = {
             "verdict": results[backend]["verdict"],
             "seconds": round(seconds, 3),
-            "status": result.get("status"),
-            "verify_status": result.get("verify_status"),
-            "counterexamples": cexes,
+            "status": (result or {}).get("status"),
+            "verify_status": results[backend]["verify_status"],
+            "counterexamples": results[backend]["counterexamples"],
         }
-    esbmc, native = results["esbmc"], results["native"]
-    row["class"], row["detail"] = classify(
-        truth,
-        esbmc["verdict"],
-        native["verdict"],
-        esbmc["keys"],
-        native["keys"],
-        native["verify_status"],
+    row["class"], row["detail"] = classify_outcomes(
+        truth, exp.path, results["esbmc"], results["native"]
     )
     return row
 
@@ -507,9 +749,9 @@ def build_report(vowc, rows, command="verify"):
     }
 
 
-def exit_code(report):
+def exit_code(report, failing=FAILING_CLASSES):
     summary = report["summary"]
-    if any(summary[c] for c in FAILING_CLASSES):
+    if any(summary[c] for c in failing):
         return 1
     if summary[HARNESS]:
         return 2
@@ -557,6 +799,20 @@ def main(argv=None):
         "--filter", default=None, help="only fixtures whose name contains this"
     )
     ap.add_argument(
+        "--corpus",
+        choices=("all", "native"),
+        default="all",
+        help="`all` (default) is tests/verify* plus tests/verify-native/*; "
+        "`native` is tests/verify-native/* only",
+    )
+    ap.add_argument(
+        "--fail-on",
+        choices=("weaker", "soundness"),
+        default="weaker",
+        help="rows that make the exit status 1: `weaker` (default) is weaker and "
+        "soundness rows, `soundness` is soundness rows only",
+    )
+    ap.add_argument(
         "--output", default=None, help="write the JSON report here instead of stdout"
     )
     ap.add_argument(
@@ -592,7 +848,11 @@ def main(argv=None):
     try:
         fixtures = [
             (sub, exp)
-            for sub, exp in verify_eval.collect(args.filter)
+            for sub, exp in (
+                collect_native(args.filter)
+                if args.corpus == "native"
+                else collect(args.filter)
+            )
             if not exp.skip_reason and (args.command != "test" or has_main(exp.path))
         ]
         if not fixtures:
@@ -617,7 +877,8 @@ def main(argv=None):
     else:
         sys.stdout.write(text)
     print_summary(report, sys.stderr)
-    return exit_code(report)
+    failing = (SOUNDNESS,) if args.fail_on == "soundness" else FAILING_CLASSES
+    return exit_code(report, failing)
 
 
 if __name__ == "__main__":

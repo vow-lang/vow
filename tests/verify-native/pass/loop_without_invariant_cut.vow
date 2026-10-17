@@ -1,0 +1,39 @@
+// The two loops of `decl_unprintable_enum`'s shape, with no `invariant`: a `HashMap` used as a
+// set, filled by one loop and queried by another, then a call whose `requires` holds under a
+// guard. No claim depends on how many trips either loop takes, so it holds in an arbitrary state
+// at the top of each header, which is all the cut with the clause `true` assumes: proven for
+// every length, where bounded unwinding alone could only end `unknown`.
+module LoopWithoutInvariantCut
+
+fn nonneg(v: i64) -> i64 vow {
+  requires: v >= 0
+} {
+  v
+}
+
+fn first_marked(items: Vec<i64>, marks: Vec<i64>) -> i64 vow {
+  ensures: result >= -1
+} {
+  let bad: HashMap<i64, i64> = HashMap::new();
+  let mut bi: u64 = 0u64;
+  while bi < marks.len() {
+    bad.insert(marks[bi], 1);
+    bi = bi + 1u64;
+  }
+  let mut i: u64 = 0u64;
+  while i < items.len() {
+    let item: i64 = items[i];
+    if item >= 0 && bad.contains_key(item) {
+      return nonneg(item);
+    }
+    i = i + 1u64;
+  }
+  -1
+}
+
+fn main() -> i32 [io] {
+  let items: Vec<i64> = Vec::new();
+  let marks: Vec<i64> = Vec::new();
+  print_i64(first_marked(items, marks));
+  0
+}

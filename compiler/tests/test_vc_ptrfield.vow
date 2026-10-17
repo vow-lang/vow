@@ -1,0 +1,279 @@
+module TestVcPtrField
+
+use ir
+use ir_dominance
+use vc_ops
+use vc_ptrfield
+use tests.builders
+
+fn one(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn two(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v.push(b);
+    v
+}
+
+fn vec_new(id: i64) -> IrInst {
+    mk_inst_call_extern(id, ITY_PTR(), Vec::new(), String::from("__vow_vec_new"))
+}
+
+fn push_call(id: i64, recv: i64, val: i64) -> IrInst {
+    mk_inst_call_extern(id, ITY_UNIT(), two(recv, val), String::from("__vow_vec_push_val"))
+}
+
+fn one_block(insts: Vec<IrInst>) -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(1, String::from("f"), Vec::new(), ITY_UNIT(), blocks)
+}
+
+fn count_op(f: IrFunction, op: i64) -> i64 {
+    let mut n: i64 = 0;
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let blk: IrBlock = f.blocks[b];
+        let mut i: u64 = 0;
+        while i < blk.insts.len() {
+            if blk.insts[i].op == op { n = n + 1; }
+            i = i + 1;
+        }
+        b = b + 1;
+    }
+    n
+}
+
+fn find_call(f: IrFunction, id: i64) -> IrInst {
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let blk: IrBlock = f.blocks[b];
+        let mut i: u64 = 0;
+        while i < blk.insts.len() {
+            if blk.insts[i].id == id { return blk.insts[i]; }
+            i = i + 1;
+        }
+        b = b + 1;
+    }
+    mk_inst_const_i64(0 - 1, 0)
+}
+
+// `b = Block { insts: Vec::new() }; b.insts.push(x)`: the one store of slot 0 dominates the
+// read, so the push is on the stored Vec and the read is dropped.
+fn check_single_store() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_alloc(1, 16));
+    insts.push(vec_new(2));
+    insts.push(mk_inst_field_set(3, 1, 0, 2));
+    insts.push(mk_inst_const_i64(4, 9));
+    insts.push(mk_inst_field_get(5, ITY_I64(), 1, 0));
+    insts.push(push_call(6, 5, 4));
+    insts.push(mk_inst(7, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let f: IrFunction = one_block(insts);
+    let g: IrFunction = vc_resolve_ptr_fields(f);
+    if count_op(g, IOP_FIELD_GET()) != 0 { return 1; }
+    let p: IrInst = find_call(g, 6);
+    if p.args.len() != 2 || p.args[0] != 2 || p.args[1] != 4 { return 2; }
+    if count_op(f, IOP_FIELD_GET()) != 1 { return 3; }
+    0
+}
+
+// Two stores of the same slot: the read has no single value, so nothing changes.
+fn check_two_stores() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_alloc(1, 16));
+    insts.push(vec_new(2));
+    insts.push(mk_inst_field_set(3, 1, 0, 2));
+    insts.push(vec_new(8));
+    insts.push(mk_inst_field_set(9, 1, 0, 8));
+    insts.push(mk_inst_const_i64(4, 9));
+    insts.push(mk_inst_field_get(5, ITY_I64(), 1, 0));
+    insts.push(push_call(6, 5, 4));
+    insts.push(mk_inst(7, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let f: IrFunction = one_block(insts);
+    let g: IrFunction = vc_resolve_ptr_fields(f);
+    if count_op(g, IOP_FIELD_GET()) != 1 { return 1; }
+    if find_call(g, 6).args[0] != 5 { return 2; }
+    0
+}
+
+// A store after the read does not dominate it.
+fn check_store_after_read() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_alloc(1, 16));
+    insts.push(vec_new(2));
+    insts.push(mk_inst_const_i64(4, 9));
+    insts.push(mk_inst_field_get(5, ITY_I64(), 1, 0));
+    insts.push(push_call(6, 5, 4));
+    insts.push(mk_inst_field_set(3, 1, 0, 2));
+    insts.push(mk_inst(7, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let g: IrFunction = vc_resolve_ptr_fields(one_block(insts));
+    if count_op(g, IOP_FIELD_GET()) != 1 { return 1; }
+    0
+}
+
+// A read of a parameter's field is never resolved: another parameter may be the same
+// object, so its store of the slot is not the only one.
+fn check_parameter_field() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(1, ITY_PTR(), 0));
+    insts.push(vec_new(2));
+    insts.push(mk_inst_field_set(3, 1, 0, 2));
+    insts.push(mk_inst_const_i64(4, 9));
+    insts.push(mk_inst_field_get(5, ITY_I64(), 1, 0));
+    insts.push(push_call(6, 5, 4));
+    insts.push(mk_inst(7, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let g: IrFunction = vc_resolve_ptr_fields(one_block(insts));
+    if count_op(g, IOP_FIELD_GET()) != 1 { return 1; }
+    0
+}
+
+// A read with a use that is not an object operand keeps its instruction, and only the
+// object operand is replaced.
+fn check_other_use_kept() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_alloc(1, 16));
+    insts.push(vec_new(2));
+    insts.push(mk_inst_field_set(3, 1, 0, 2));
+    insts.push(mk_inst_field_get(5, ITY_I64(), 1, 0));
+    insts.push(mk_inst_call_extern(6, ITY_U64(), one(5), String::from("__vow_vec_len")));
+    insts.push(mk_inst(8, IOP_WADD(), ITY_I64(), two(5, 5)));
+    insts.push(mk_inst(7, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let g: IrFunction = vc_resolve_ptr_fields(one_block(insts));
+    if count_op(g, IOP_FIELD_GET()) != 1 { return 1; }
+    if find_call(g, 6).args[0] != 2 { return 2; }
+    if find_call(g, 8).args[0] != 5 { return 3; }
+    0
+}
+
+// A store through a pointer the function loaded may name an allocation that was stored
+// into a field itself: the read is left alone then, and resolved when it did not escape.
+fn check_escape() -> i64 {
+    let holder: Vec<IrInst> = Vec::new();
+    holder.push(mk_inst_arg(10, ITY_PTR(), 0));
+    holder.push(mk_inst_alloc(1, 16));
+    holder.push(vec_new(2));
+    holder.push(mk_inst_field_set(3, 1, 0, 2));
+    holder.push(mk_inst_field_set(11, 10, 1, 1));
+    holder.push(mk_inst_field_get(12, ITY_PTR(), 10, 1));
+    holder.push(vec_new(13));
+    holder.push(mk_inst_field_set(14, 12, 0, 13));
+    holder.push(mk_inst_const_i64(4, 9));
+    holder.push(mk_inst_field_get(5, ITY_I64(), 1, 0));
+    holder.push(push_call(6, 5, 4));
+    holder.push(mk_inst(7, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let f: IrFunction = one_block(holder);
+    let g: IrFunction = vc_resolve_ptr_fields(f);
+    if count_op(g, IOP_FIELD_GET()) != count_op(f, IOP_FIELD_GET()) { return 1; }
+
+    let plain: Vec<IrInst> = Vec::new();
+    plain.push(mk_inst_arg(10, ITY_PTR(), 0));
+    plain.push(mk_inst_alloc(1, 16));
+    plain.push(vec_new(2));
+    plain.push(mk_inst_field_set(3, 1, 0, 2));
+    plain.push(mk_inst_field_get(12, ITY_PTR(), 10, 1));
+    plain.push(vec_new(13));
+    plain.push(mk_inst_field_set(14, 12, 0, 13));
+    plain.push(mk_inst_const_i64(4, 9));
+    plain.push(mk_inst_field_get(5, ITY_I64(), 1, 0));
+    plain.push(push_call(6, 5, 4));
+    plain.push(mk_inst(7, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let h: IrFunction = vc_resolve_ptr_fields(one_block(plain));
+    if find_call(h, 6).args[0] != 2 { return 2; }
+    0
+}
+
+// The store in the entry block dominates a read in a block it jumps to; a store in one
+// arm of a branch does not dominate the join that reads it.
+fn check_across_blocks() -> i64 {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_alloc(1, 16));
+    e.push(vec_new(2));
+    e.push(mk_inst_field_set(3, 1, 0, 2));
+    e.push(mk_inst_jump(4, 1));
+    let r: Vec<IrInst> = Vec::new();
+    r.push(mk_inst_const_i64(5, 9));
+    r.push(mk_inst_field_get(6, ITY_I64(), 1, 0));
+    r.push(push_call(7, 6, 5));
+    r.push(mk_inst(8, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, r));
+    let g: IrFunction = vc_resolve_ptr_fields(mk_function(1, String::from("f"), Vec::new(), ITY_UNIT(), blocks));
+    if count_op(g, IOP_FIELD_GET()) != 0 { return 1; }
+    if find_call(g, 7).args[0] != 2 { return 2; }
+
+    let c: Vec<IrInst> = Vec::new();
+    c.push(mk_inst_alloc(1, 16));
+    c.push(vec_new(2));
+    c.push(mk_inst_const_bool(3, 1));
+    c.push(mk_inst_branch(4, 3, 1, 2));
+    let t: Vec<IrInst> = Vec::new();
+    t.push(mk_inst_field_set(5, 1, 0, 2));
+    t.push(mk_inst_jump(6, 2));
+    let j: Vec<IrInst> = Vec::new();
+    j.push(mk_inst_const_i64(7, 9));
+    j.push(mk_inst_field_get(8, ITY_I64(), 1, 0));
+    j.push(push_call(9, 8, 7));
+    j.push(mk_inst(10, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let bl: Vec<IrBlock> = Vec::new();
+    bl.push(mk_block(0, c));
+    bl.push(mk_block(1, t));
+    bl.push(mk_block(2, j));
+    let h: IrFunction = vc_resolve_ptr_fields(mk_function(1, String::from("f"), Vec::new(), ITY_UNIT(), bl));
+    if count_op(h, IOP_FIELD_GET()) != 1 { return 3; }
+    0
+}
+
+// An allocation pushed into a collection may be reached by a pointer read out of it: a store
+// through a pointer the function loaded then counts as a second store, and a store whose
+// receiver the rule cannot place (a Phi no `Upsilon` feeds here) is never ignored.
+fn check_collection_escape_and_unplaced() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(10, ITY_PTR(), 0));
+    insts.push(mk_inst_alloc(1, 16));
+    insts.push(vec_new(2));
+    insts.push(mk_inst_field_set(3, 1, 0, 2));
+    insts.push(vec_new(20));
+    insts.push(push_call(21, 20, 1));
+    insts.push(mk_inst_field_get(12, ITY_PTR(), 10, 1));
+    insts.push(vec_new(13));
+    insts.push(mk_inst_field_set(14, 12, 0, 13));
+    insts.push(mk_inst_const_i64(4, 9));
+    insts.push(mk_inst_field_get(5, ITY_I64(), 1, 0));
+    insts.push(push_call(6, 5, 4));
+    insts.push(mk_inst(7, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let f: IrFunction = one_block(insts);
+    if count_op(vc_resolve_ptr_fields(f), IOP_FIELD_GET()) != count_op(f, IOP_FIELD_GET()) { return 1; }
+
+    let un: Vec<IrInst> = Vec::new();
+    un.push(mk_inst_alloc(1, 16));
+    un.push(vec_new(2));
+    un.push(mk_inst_field_set(3, 1, 0, 2));
+    un.push(vec_new(13));
+    un.push(mk_inst_phi(15, ITY_PTR()));
+    un.push(mk_inst_field_set(14, 15, 0, 13));
+    un.push(mk_inst_const_i64(4, 9));
+    un.push(mk_inst_field_get(5, ITY_I64(), 1, 0));
+    un.push(push_call(6, 5, 4));
+    un.push(mk_inst(7, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let g: IrFunction = one_block(un);
+    if count_op(vc_resolve_ptr_fields(g), IOP_FIELD_GET()) != 1 { return 2; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_single_store();
+    if r == 0 { r = check_two_stores() + 10; if r == 10 { r = 0; } }
+    if r == 0 { r = check_store_after_read() + 20; if r == 20 { r = 0; } }
+    if r == 0 { r = check_parameter_field() + 30; if r == 30 { r = 0; } }
+    if r == 0 { r = check_other_use_kept() + 40; if r == 40 { r = 0; } }
+    if r == 0 { r = check_escape() + 50; if r == 50 { r = 0; } }
+    if r == 0 { r = check_across_blocks() + 60; if r == 60 { r = 0; } }
+    if r == 0 { r = check_collection_escape_and_unplaced() + 70; if r == 70 { r = 0; } }
+    i64_to_i32_wrap(r)
+}

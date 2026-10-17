@@ -1,0 +1,16 @@
+// TEST: exit 134
+// A store-effect list that ends inside a record is a malformed `IrFunction`: the encoder
+// aborts, as it does on a value that has no encoding, instead of reading past the list.
+module Main
+
+use ir
+use module_io
+
+fn main() -> i32 {
+    let f: IrFunction = ir_function_new(1, String::from("f"), ITY_UNIT(), 0, String::from("t.vow"));
+    f.rsum_store_effects.push(7);
+    f.rsum_store_effects.push(RSUM_KIND_ALIAS_OF());
+    let out: Vec<i64> = Vec::new();
+    write_region_summary(out, f);
+    0
+}

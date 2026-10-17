@@ -1,0 +1,24 @@
+// A `Vec` parameter that is pushed onto may be the very `Vec` a field holds: the length
+// read through the field afterwards is the old one or one more, never less.
+module HeapParamPushThenFieldLen
+
+// TEST: esbmc-model-artifact fn="push_one" blame=None vow_id=4294967293 "ESBMC reads the Vec field b.items as a fresh Vec of nondeterministic length at each use, so the reads of b.items.len() before and after the push are unrelated values and the claim fails; it also fails its own Vec capacity assertion for a parameter already at its model limit. The native model reads one field as one value and keeps the aliasing a parameter may have with it; a debug-mode replay over sizes 0 to 300 with the parameter distinct from and aliasing the field satisfies every clause"
+// TEST: esbmc-model-artifact fn="push_one" blame=Callee vow_id=0 "ESBMC reads the Vec field b.items as a fresh Vec of nondeterministic length at each use, so the reads of b.items.len() before and after the push are unrelated values and the claim fails; it also fails its own Vec capacity assertion for a parameter already at its model limit. The native model reads one field as one value and keeps the aliasing a parameter may have with it; a debug-mode replay over sizes 0 to 300 with the parameter distinct from and aliasing the field satisfies every clause"
+
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn push_one(out: Vec<i64>, b: Bag) -> bool vow {
+  ensures: result
+} {
+  let before: u64 = b.items.len();
+  out.push(1);
+  let after: u64 = b.items.len();
+  after == before || after == before + 1
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), tag: 1 };
+  let out: Vec<i64> = Vec::new();
+  if push_one(out, b) { print_i64(1); }
+  0
+}

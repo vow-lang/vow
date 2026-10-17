@@ -40,6 +40,7 @@ FULL_TEST_WORKFLOW = WORKFLOWS / "full-test.yml"
 PROMOTED_FIXTURES_WORKFLOW = WORKFLOWS / "promoted-fixtures.yml"
 RELEASE_WORKFLOW = WORKFLOWS / "release.yml"
 NATIVE_ORACLE_WORKFLOW = WORKFLOWS / "native-oracle.yml"
+COMPILER_NATIVE_WORKFLOW = WORKFLOWS / "compiler-native-verify.yml"
 INSTALL_ESBMC_ACTION = (
     REPO_ROOT / ".github" / "actions" / "install-esbmc" / "action.yml"
 )
@@ -523,6 +524,41 @@ class NativeOracleWorkflowTest(unittest.TestCase):
             with self.subTest(cron=cron):
                 self.assertTrue(cron.endswith("* * *"), "expected a daily cron")
 
+    def test_runs_on_pull_requests_that_touch_the_oracle_inputs(self) -> None:
+        # A new fixture is only checked for an undocumented replay gap by this
+        # workflow, so it has to run before the merge, not only after it.
+        workflow_header = header(self.text)
+
+        self.assertRegex(
+            workflow_header, r"pull_request:\s*\n\s*branches:\s*\[main\]\s*\n\s*paths:"
+        )
+        for path in (
+            "compiler/vc_*.vow",
+            "compiler/replay*",
+            "tests/verify*/**",
+            "scripts/verifier_runtime.py",
+            "scripts/verify_*.py",
+            ".github/workflows/native-oracle.yml",
+        ):
+            with self.subTest(path=path):
+                self.assertIn(f'- "{path}"', workflow_header)
+
+    def test_classifier_reads_the_pull_request_range(self) -> None:
+        changes = job_blocks(self.text)["changes"]
+
+        self.assertIn("github.event.pull_request.base.sha", changes)
+        self.assertIn("github.event.pull_request.head.sha", changes)
+        self.assertIn("needs.changes.outputs.code == 'true'", self.text)
+
+    def test_only_pull_request_runs_are_cancelled_by_a_newer_push(self) -> None:
+        workflow_header = header(self.text)
+
+        self.assertRegex(
+            workflow_header,
+            r"cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}",
+        )
+        self.assertIn("github.run_id", workflow_header)
+
     def test_keeps_read_only_repository_permissions(self) -> None:
         workflow_header = header(self.text)
 
@@ -588,6 +624,108 @@ class NativeOracleWorkflowTest(unittest.TestCase):
     def test_is_sharded(self) -> None:
         self.assertRegex(self.oracles, r'shard: \["0/4", "1/4", "2/4", "3/4"\]')
         self.assertIn("fail-fast: false", self.oracles)
+
+    def test_cron_does_not_collide_with_the_other_scheduled_workflows(self) -> None:
+        schedules = {}
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            for cron in crons(path.read_text(encoding="utf-8")):
+                schedules.setdefault(cron, []).append(path.name)
+
+        collisions = {c: names for c, names in schedules.items() if len(names) > 1}
+        self.assertEqual({}, collisions)
+
+
+class NativeEsbmcDiffWorkflowTest(unittest.TestCase):
+    """The native-corpus ESBMC differential (#1729) stays wired and blocking."""
+
+    def setUp(self) -> None:
+        self.text = (WORKFLOWS / "native-esbmc-diff.yml").read_text(encoding="utf-8")
+        self.job = job_blocks(self.text)["differential"]
+
+    def test_runs_on_pull_requests_that_touch_a_fixture(self) -> None:
+        workflow_header = header(self.text)
+
+        self.assertRegex(
+            workflow_header, r"pull_request:\s*\n\s*branches:\s*\[main\]\s*\n\s*paths:"
+        )
+        self.assertRegex(workflow_header, r"push:\s*\n\s*branches:\s*\[main\]")
+        self.assertIn('- "tests/verify*/**"', workflow_header)
+        self.assertIn('- "compiler/vc_*.vow"', workflow_header)
+
+    def test_fails_only_on_soundness_rows_over_the_native_corpus(self) -> None:
+        self.assertIn("scripts/verify_diff.py", self.job)
+        self.assertIn("--corpus native", self.job)
+        self.assertIn("--fail-on soundness", self.job)
+
+    def test_installs_esbmc_and_bitwuzla_before_it_builds(self) -> None:
+        for step in (
+            "uses: ./.github/actions/install-esbmc",
+            "uses: ./.github/actions/install-bitwuzla",
+        ):
+            with self.subTest(step=step):
+                self.assertIn(step, self.job)
+                self.assertLess(
+                    self.job.index(step), self.job.index("scripts/bootstrap.sh")
+                )
+
+    def test_failures_are_blocking_and_permissions_read_only(self) -> None:
+        self.assertNotIn("continue-on-error", self.text)
+        self.assertNotIn("|| true", self.text)
+        self.assertRegex(header(self.text), r"permissions:\s*\n\s*contents:\s*read")
+
+
+class CompilerNativeVerifyWorkflowTest(unittest.TestCase):
+    """The whole-compiler native verification (#1432) stays wired and blocking."""
+
+    def setUp(self) -> None:
+        self.text = COMPILER_NATIVE_WORKFLOW.read_text(encoding="utf-8")
+        self.compiler = job_blocks(self.text)["compiler"]
+
+    def test_runs_on_push_to_main_nightly_and_on_demand(self) -> None:
+        workflow_header = header(self.text)
+
+        self.assertRegex(workflow_header, r"push:\s*\n\s*branches:\s*\[main\]")
+        self.assertIn("workflow_dispatch:", workflow_header)
+        self.assertTrue(crons(self.text), "expected a scheduled run")
+
+    def test_is_off_the_pull_request_path(self) -> None:
+        self.assertNotIn("pull_request", header(self.text))
+
+    def test_keeps_read_only_repository_permissions(self) -> None:
+        workflow_header = header(self.text)
+
+        self.assertRegex(workflow_header, r"permissions:\s*\n\s*contents:\s*read")
+        self.assertNotRegex(workflow_header, r"contents:\s*write")
+
+    def test_gated_on_the_docs_only_classifier(self) -> None:
+        self.assertIn("scripts/ci_docs_only.py", job_blocks(self.text)["changes"])
+        self.assertIn("needs.changes.outputs.code == 'true'", self.text)
+
+    def test_installs_both_solvers_from_the_pinned_actions(self) -> None:
+        self.assertIn("uses: ./.github/actions/install-esbmc", self.compiler)
+        self.assertIn("uses: ./.github/actions/install-bitwuzla", self.compiler)
+
+    def test_bootstraps_with_the_native_pass_before_the_comparison(self) -> None:
+        self.assertIn("scripts/bootstrap.sh --no-verify --native-verify", self.compiler)
+        self.assertLess(
+            self.compiler.index("scripts/bootstrap.sh"),
+            self.compiler.index("scripts/verify_compiler.py"),
+        )
+
+    def test_the_comparison_runs_even_when_the_stage_check_failed(self) -> None:
+        step = self.compiler[self.compiler.index("Native versus ESBMC") :]
+        self.assertIn("if: ${{ !cancelled() }}", step.split("run:")[0])
+
+    def test_the_cost_gate_is_not_enforced_on_shared_runners(self) -> None:
+        self.assertIn("--no-perf-gate", self.compiler)
+
+    def test_failures_are_blocking(self) -> None:
+        self.assertNotIn("continue-on-error", self.text)
+        self.assertNotIn("|| true", self.text)
+
+    def test_both_reports_are_uploaded(self) -> None:
+        self.assertIn("compiler-compare.json", self.compiler)
+        self.assertIn("build/native-verify.json", self.compiler)
 
     def test_cron_does_not_collide_with_the_other_scheduled_workflows(self) -> None:
         schedules = {}

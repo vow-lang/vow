@@ -1,0 +1,82 @@
+module TestLowerVecBoolReads
+
+use frontend
+use clif
+use ir
+
+// Twin of vec_bool_reads_are_compared_with_zero in vow-ir/src/lower/mod.rs: a
+// Vec<bool> element read is the runtime's 8-byte slot typed i64, and the lowerer
+// compares it with zero so every later use sees a bool, for an index read and a
+// `for` binding alike. Any other element type is left alone.
+
+fn lower_layout() -> IrModule [io, read] {
+    let lowered: LoweredFrontend = frontend_lower_path_with_root(
+        String::from("tests/fixtures/vec_bool_layout.vow"), String::from("")
+    );
+    lowered.ir_mod
+}
+
+fn insts_of(m: IrModule, name: String) -> Vec<IrInst> {
+    let out: Vec<IrInst> = Vec::new();
+    let mut fi: u64 = 0;
+    while fi < m.functions.len() {
+        let function: IrFunction = m.functions[fi];
+        if function.name == name {
+            let mut bi: u64 = 0;
+            while bi < function.blocks.len() {
+                let block: IrBlock = function.blocks[bi];
+                let mut ii: u64 = 0;
+                while ii < block.insts.len() {
+                    out.push(block.insts[ii]);
+                    ii = ii + 1;
+                }
+                bi = bi + 1;
+            }
+        }
+        fi = fi + 1;
+    }
+    out
+}
+
+fn count_gets(insts: Vec<IrInst>) -> i64 {
+    let mut n: i64 = 0;
+    let mut i: u64 = 0;
+    while i < insts.len() {
+        if insts[i].op == IOP_CALL() && insts[i].dk == IDATA_CALL_EXTERN() && insts[i].ds == String::from("__vow_vec_get_val") {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    n
+}
+
+// Number of `Ne` instructions typed bool that compare an i64 operand with an
+// i64 constant zero.
+fn count_slot_tests(insts: Vec<IrInst>) -> i64 {
+    let mut n: i64 = 0;
+    let mut i: u64 = 0;
+    while i < insts.len() {
+        if insts[i].op == IOP_NE() && insts[i].ty == ITY_BOOL() && insts[i].dk == IDATA_INTEGER() && insts[i].dv == ITY_I64() {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    n
+}
+
+fn main() -> i32 [io, read] {
+    let m: IrModule = lower_layout();
+
+    let read_flag: Vec<IrInst> = insts_of(m, String::from("read_flag"));
+    if count_gets(read_flag) != 1 { return 1; }
+    if count_slot_tests(read_flag) != 1 { return 2; }
+
+    let count_set: Vec<IrInst> = insts_of(m, String::from("count_set"));
+    if count_gets(count_set) != 1 { return 3; }
+    if count_slot_tests(count_set) != 1 { return 4; }
+
+    let read_byte: Vec<IrInst> = insts_of(m, String::from("read_byte"));
+    if count_gets(read_byte) != 1 { return 5; }
+    if count_slot_tests(read_byte) != 0 { return 6; }
+    0
+}

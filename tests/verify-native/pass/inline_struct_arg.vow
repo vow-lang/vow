@@ -1,0 +1,19 @@
+module InlineStructArg
+
+struct P { lo: i64, hi: i64 }
+
+fn width(p: P) -> i64 {
+    p.hi - p.lo
+}
+
+fn clamp_width(p: P) -> i64 vow {
+    ensures: result >= 0
+} {
+    let w: i64 = width(p);
+    if w < 0 { 0 } else { w }
+}
+
+fn main() -> i32 [io] {
+    print_i64(clamp_width(P { lo: 1, hi: 4 }));
+    0
+}

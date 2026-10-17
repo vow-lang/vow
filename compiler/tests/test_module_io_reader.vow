@@ -1,0 +1,58 @@
+module TestModuleIoReader
+
+use ir
+use module_io
+
+// `reader_need` states that a reader never sits past the end of its buffer: a
+// position beyond it is a truncation, not an out-of-bounds read.
+
+fn main() -> i32 {
+    let buf: Vec<i64> = Vec::new();
+    buf.push(7);
+    buf.push(9);
+
+    let ok: ModuleReader = reader_new(buf);
+    if reader_read_u8(ok) != 7 { return 1; }
+    if reader_read_u8(ok) != 9 { return 2; }
+    if ok.err_kind != DEC_OK() { return 3; }
+    if reader_read_u8(ok) != 0 { return 4; }
+    if ok.err_kind != DEC_TRUNCATED() { return 5; }
+
+    let past: ModuleReader = reader_new(buf);
+    past.pos = 5;
+    if reader_read_u8(past) != 0 { return 6; }
+    if past.err_kind != DEC_TRUNCATED() { return 7; }
+    if past.err_offset != 5 { return 8; }
+
+    // The readers read the low 8 bits of an element, so a value outside 0..=255 can neither
+    // go negative nor widen the integer a multi-byte read builds.
+    let wide: Vec<i64> = Vec::new();
+    wide.push(259);
+    wide.push(0 - 1);
+    wide.push(256);
+    wide.push(511);
+    wide.push(0 - 256);
+    wide.push(1);
+    wide.push(2);
+    wide.push(3);
+    let w: ModuleReader = reader_new(wide);
+    if reader_read_u8(w) != 3 { return 9; }
+    if reader_read_u8(w) != 255 { return 10; }
+    if reader_read_u16_le(w) != 255 * 256 { return 11; }
+    if reader_read_u32_le(w) != 1 * 256 + 2 * 65536 + 3 * 16777216 { return 12; }
+    if w.err_kind != DEC_OK() { return 13; }
+
+    // `module_decode` rejects such an element up front: an error at its index, never another
+    // byte's value.
+    let bad: Vec<i64> = Vec::new();
+    bad.push(86);
+    bad.push(77);
+    bad.push(259);
+    let d: ModuleDecode = module_decode(bad);
+    if d.err_kind != DEC_INVALID_KIND() || d.err_offset != 2 || d.err_value != 259 { return 14; }
+    let neg: Vec<i64> = Vec::new();
+    neg.push(0 - 1);
+    let e: ModuleDecode = module_decode(neg);
+    if e.err_kind != DEC_INVALID_KIND() || e.err_offset != 0 || e.err_value != 0 - 1 { return 15; }
+    0
+}

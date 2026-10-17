@@ -1,0 +1,44 @@
+module TestVcTask
+
+use verifier
+use vc_task
+
+// The parent is the field after the state, found after the last `)` because the
+// command name between the parentheses may hold anything.
+fn check_stat_ppid() -> i64 {
+    if vc_task_stat_ppid(String::from("123 (vowc) S 456 123 123 0 -1 4194304 1 2 3")) != 456 { return 1; }
+    if vc_task_stat_ppid(String::from("9 (a) b) S 77 9 9")) != 77 { return 2; }
+    if vc_task_stat_ppid(String::from("9 (x y (z)) R 1 9 9")) != 1 { return 3; }
+    if vc_task_stat_ppid(String::from("9 (vowc) S 5")) != 5 { return 4; }
+    0
+}
+
+fn check_stat_ppid_rejects_damage() -> i64 {
+    if vc_task_stat_ppid(String::from("")) != -1 { return 1; }
+    if vc_task_stat_ppid(String::from("no parentheses here 1 2")) != -1 { return 2; }
+    if vc_task_stat_ppid(String::from("9 (vowc)")) != -1 { return 3; }
+    if vc_task_stat_ppid(String::from("9 (vowc) S")) != -1 { return 4; }
+    if vc_task_stat_ppid(String::from("9 (vowc) S x 1")) != -1 { return 5; }
+    if vc_task_stat_ppid(String::from("9 (vowc)   ")) != -1 { return 6; }
+    0
+}
+
+// Where `/proc` exists the live parent is reported, so a worker whose parent
+// stays alive is never reported orphaned, and a pid that is not this worker's
+// parent is.
+fn check_parent_gone() -> i64 [read] {
+    if fs_exists(String::from("/proc/self/stat")) != 1 { return 0; }
+    let parent: i64 = vc_task_parent_pid();
+    if parent <= 0 { return 1; }
+    if vc_task_parent_gone(parent) { return 2; }
+    if !vc_task_parent_gone(parent + 1) { return 3; }
+    if vc_task_parent_gone(-1) { return 4; }
+    0
+}
+
+fn main() -> i32 [io, read] {
+    let mut r: i64 = check_stat_ppid();
+    if r == 0 { r = check_stat_ppid_rejects_damage(); }
+    if r == 0 { r = check_parent_gone(); }
+    i64_to_i32_wrap(r)
+}

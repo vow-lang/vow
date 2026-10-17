@@ -1,0 +1,49 @@
+// TEST: contract-exit 0
+// TEST: contract-status weak64 ensures proven
+// TEST: contract-trivial weak64 true
+// TEST: contract-status weak32 ensures proven
+// TEST: contract-trivial weak32 true
+// TEST: contract-status pinned64 ensures proven
+// TEST: contract-trivial pinned64 false
+// TEST: contract-status pinned32 ensures proven
+// TEST: contract-trivial pinned32 false
+// A body that returned `+0.0` satisfies `result <= 2.0`, so that clause is
+// `trivially_satisfiable`; `result >= 1.0` and `result == x + x` are false of
+// the default, so those are not. An f32 has no literal, so its weak clause is
+// one a finite zero satisfies (`result - result == result - result`).
+module WeakFloatTrivial
+
+fn weak64(x: f64) -> f64 vow {
+  requires: x >= 0.0,
+  requires: x <= 1.0,
+  ensures: result <= 2.0
+} {
+  x + 0.25
+}
+
+fn weak32(x: f32) -> f32 vow {
+  requires: x - x == x - x,
+  ensures: result - result == result - result
+} {
+  x - x
+}
+
+fn pinned64(x: f64) -> f64 vow {
+  requires: x >= 1.0,
+  requires: x <= 2.0,
+  ensures: result >= 1.0
+} {
+  x + 0.0
+}
+
+fn pinned32(x: f32) -> f32 vow {
+  requires: x - x == x - x,
+  ensures: result == x + x
+} {
+  x + x
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

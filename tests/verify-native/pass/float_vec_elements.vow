@@ -1,0 +1,95 @@
+// TEST: category float
+// A float stored in a `Vec` slot is read back as the same float: the slot is a plain
+// 64-bit element (an `f32` in its low 32 bits) and a float crosses it through
+// `to_fp`, so a push, an indexed write, a read and a `for` binding agree on the
+// value. `x == x` rules out the NaN, whose payload the single-NaN model drops.
+module FloatVecElements
+
+fn count(x: f64) -> u64 vow {
+  ensures: result == 1u64
+} {
+  let v: Vec<f64> = Vec::new();
+  v.push(x);
+  v.len()
+}
+
+fn round_trip(x: f64) -> f64 vow {
+  requires: x == x,
+  ensures: result == x
+} {
+  let v: Vec<f64> = Vec::new();
+  v.push(x);
+  v[0]
+}
+
+fn round_trip32(x: f32) -> f32 vow {
+  requires: x == x,
+  ensures: result == x
+} {
+  let v: Vec<f32> = Vec::new();
+  v.push(x);
+  v[0]
+}
+
+fn overwrite(x: f64, y: f64) -> f64 vow {
+  requires: y == y,
+  ensures: result == y
+} {
+  let v: Vec<f64> = Vec::new();
+  v.push(x);
+  v[0] = y;
+  v[0]
+}
+
+fn literal_round_trip() -> bool vow {
+  ensures: result
+} {
+  let v: Vec<f64> = Vec::new();
+  v.push(2.5);
+  v[0] == 2.5
+}
+
+fn two_elements(x: f64, y: f64) -> bool vow {
+  requires: x == x && y == y,
+  ensures: result
+} {
+  let v: Vec<f64> = Vec::new();
+  v.push(x);
+  v.push(y);
+  v[0] == x && v[1] == y
+}
+
+fn parameter_element(v: Vec<f64>) -> f64 vow {
+  requires: v.len() > 0 && v[0] == v[0],
+  ensures: result == v[0]
+} {
+  v[0]
+}
+
+fn for_binding_reads_each(x: f64, y: f64) -> f64 vow {
+  requires: x - x == 0.0 && y - y == 0.0,
+  ensures: result == x + y
+} {
+  let v: Vec<f64> = Vec::new();
+  v.push(x);
+  v.push(y);
+  let mut acc: f64 = 0.0;
+  for e in v {
+    acc = acc + e;
+  }
+  acc
+}
+
+fn overwrite_keeps_neighbour(v: Vec<f64>, y: f64) -> bool vow {
+  requires: v.len() > 1 && v[0] == v[0],
+  ensures: result
+} {
+  let before: f64 = v[0];
+  v[1] = y;
+  v[0] == before
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

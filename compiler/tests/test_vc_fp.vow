@@ -82,10 +82,11 @@ fn check_terms_and_symbols() -> i64 {
     vc_script_assert(s, vc_tm_app2(ar, VC_OP_FPLE(), a, b));
     vc_script_assert(s, vc_tm_app2(ar, VC_OP_FPGT(), a, b));
     vc_script_assert(s, vc_tm_app2(ar, VC_OP_FPGE(), a, b));
+    vc_script_assert(s, vc_tm_app1(ar, VC_OP_FPNEG(), a));
     let want: String = String::from("(assert (fp.add RNE a b))\n(assert (fp.sub RNE a b))\n");
     want.push_str(String::from("(assert (fp.mul RNE a b))\n(assert (fp.div RNE a b))\n"));
     want.push_str(String::from("(assert (fp.eq a b))\n(assert (fp.lt a b))\n(assert (fp.leq a b))\n"));
-    want.push_str(String::from("(assert (fp.gt a b))\n(assert (fp.geq a b))\n"));
+    want.push_str(String::from("(assert (fp.gt a b))\n(assert (fp.geq a b))\n(assert (fp.neg a))\n"));
     if vc_smt_render(ar, s) != want { return 1; }
     if vc_sort_text(VC_SORT_F32()) != String::from("(_ FloatingPoint 8 24)") { return 2; }
     if vc_sort_text(VC_SORT_F64()) != String::from("(_ FloatingPoint 11 53)") { return 3; }
@@ -131,6 +132,9 @@ fn check_op_tables() -> i64 {
     if vc_fp_op_ty(IOP_REM_F32()) >= 0 || vc_fp_op_ty(IOP_REM_F64()) >= 0 { return 33; }
     if vc_fp_op_ty(IOP_WADD()) >= 0 { return 34; }
     if vc_fp_arith_smt(IOP_DIV_F64()) != VC_OP_FPDIV() { return 35; }
+    if vc_fp_op_ty(IOP_NEG_F32()) != ITY_F32() || vc_fp_op_ty(IOP_NEG_F64()) != ITY_F64() { return 41; }
+    if !vc_fp_is_neg(IOP_NEG_F64()) || vc_fp_is_neg(IOP_SUB_F64()) { return 42; }
+    if vc_fp_arith_smt(IOP_NEG_F64()) >= 0 || vc_fp_cmp_smt(IOP_NEG_F32()) >= 0 { return 43; }
     if vc_fp_arith_smt(IOP_EQ_F64()) >= 0 { return 36; }
     if vc_fp_cmp_smt(IOP_NE_F32()) != VC_OP_FPEQ() { return 37; }
     if !vc_fp_is_ne(IOP_NE_F64()) || vc_fp_is_ne(IOP_EQ_F64()) { return 38; }
@@ -187,6 +191,128 @@ fn check_gate() -> i64 {
     0
 }
 
+// negate(x) ensures result == x for the negation of a negation, over `ty`.
+fn negate_twice(ty: i64, neg: i64, eq: i64) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ty, 0));
+    i.push(mk_inst(1, neg, ty, args1(0)));
+    i.push(mk_inst(2, neg, ty, args1(1)));
+    i.push(mk_inst(3, eq, ITY_BOOL(), args2(2, 0)));
+    i.push(mk_vow(4, IOP_VOW_ENS(), 3, 0));
+    i.push(mk_inst_return(5, 2));
+    let p: Vec<i64> = Vec::new();
+    p.push(ty);
+    one_block(String::from("negate_twice"), p, ty, i)
+}
+
+fn check_negation() -> i64 {
+    if vc_skip_reason(negate_twice(ITY_F64(), IOP_NEG_F64(), IOP_EQ_F64())).len() != 0 { return 120; }
+    if vc_skip_reason(negate_twice(ITY_F32(), IOP_NEG_F32(), IOP_EQ_F32())).len() != 0 { return 121; }
+    // an `f32` negate on an `f64` operand
+    if !vc_skip_reason(negate_twice(ITY_F64(), IOP_NEG_F32(), IOP_EQ_F64())).contains(String::from("unsupported-opcode: ")) { return 122; }
+    // a negate with two operands is not a float operation
+    let two: Vec<IrInst> = Vec::new();
+    two.push(mk_const_f64(0, 0));
+    two.push(mk_inst(1, IOP_NEG_F64(), ITY_F64(), args2(0, 0)));
+    two.push(mk_inst_return(2, 1));
+    if vc_skip_reason(one_block(String::from("two"), Vec::new(), ITY_F64(), two)).len() == 0 { return 123; }
+    let q: String = query(vc_claims(negate_twice(ITY_F64(), IOP_NEG_F64(), IOP_EQ_F64())), 0);
+    if !q.contains(String::from("(define-fun v1 () (_ FloatingPoint 11 53) (fp.neg p0))\n")) { return 124; }
+    if !q.contains(String::from("(define-fun v2 () (_ FloatingPoint 11 53) (fp.neg v1))\n")) { return 125; }
+    0
+}
+
+// x stored into a `Vec` slot and read back: ensures the read equals `x`, over the
+// float type `ty` with the slot opcodes `to_bits` and `from_bits`.
+fn slot_round_trip(ty: i64, to_bits: i64, from_bits: i64, eq: i64) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ty, 0));
+    i.push(mk_inst(1, to_bits, ITY_I64(), args1(0)));
+    i.push(mk_inst(2, from_bits, ty, args1(1)));
+    i.push(mk_inst(3, eq, ITY_BOOL(), args2(2, 0)));
+    i.push(mk_vow(4, IOP_VOW_ENS(), 3, 0));
+    i.push(mk_inst_return(5, 2));
+    let p: Vec<i64> = Vec::new();
+    p.push(ty);
+    one_block(String::from("slot_round_trip"), p, ty, i)
+}
+
+// The constant `bits` stored into a slot, then read back.
+fn const_slot_round_trip(bits: i64) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_const_f64(0, bits));
+    i.push(mk_inst(1, IOP_F64_TO_BITS(), ITY_I64(), args1(0)));
+    i.push(mk_inst(2, IOP_BITS_TO_F64(), ITY_F64(), args1(1)));
+    i.push(mk_inst(3, IOP_EQ_F64(), ITY_BOOL(), args2(2, 0)));
+    i.push(mk_vow(4, IOP_VOW_ENS(), 3, 0));
+    i.push(mk_inst_return(5, 2));
+    one_block(String::from("const_slot"), Vec::new(), ITY_F64(), i)
+}
+
+fn check_float_slots() -> i64 {
+    if vc_fp_op_ty(IOP_F32_TO_BITS()) != ITY_F32() || vc_fp_op_ty(IOP_BITS_TO_F32()) != ITY_F32() { return 130; }
+    if vc_fp_op_ty(IOP_F64_TO_BITS()) != ITY_F64() || vc_fp_op_ty(IOP_BITS_TO_F64()) != ITY_F64() { return 131; }
+    if !vc_fp_is_to_bits(IOP_F64_TO_BITS()) || vc_fp_is_to_bits(IOP_BITS_TO_F64()) { return 132; }
+    if !vc_fp_is_from_bits(IOP_BITS_TO_F32()) || vc_fp_is_from_bits(IOP_F32_TO_BITS()) { return 133; }
+    if vc_fp_arith_smt(IOP_F64_TO_BITS()) >= 0 || vc_fp_cmp_smt(IOP_BITS_TO_F64()) >= 0 { return 134; }
+    if vc_skip_reason(slot_round_trip(ITY_F64(), IOP_F64_TO_BITS(), IOP_BITS_TO_F64(), IOP_EQ_F64())).len() != 0 { return 135; }
+    if vc_skip_reason(slot_round_trip(ITY_F32(), IOP_F32_TO_BITS(), IOP_BITS_TO_F32(), IOP_EQ_F32())).len() != 0 { return 136; }
+    // a store of an `f32` through the `f64` opcode, and a read that yields the other float
+    if !vc_skip_reason(slot_round_trip(ITY_F32(), IOP_F64_TO_BITS(), IOP_BITS_TO_F32(), IOP_EQ_F32())).contains(String::from("unsupported-opcode: ")) { return 137; }
+    if !vc_skip_reason(slot_round_trip(ITY_F64(), IOP_F64_TO_BITS(), IOP_BITS_TO_F32(), IOP_EQ_F64())).contains(String::from("unsupported-opcode: ")) { return 138; }
+    // a store whose slot is not an i64, and a read of a float
+    let bad: Vec<IrInst> = Vec::new();
+    bad.push(mk_inst_arg(0, ITY_F64(), 0));
+    bad.push(mk_inst(1, IOP_F64_TO_BITS(), ITY_U64(), args1(0)));
+    bad.push(mk_inst_return(2, 0));
+    let pb: Vec<i64> = Vec::new();
+    pb.push(ITY_F64());
+    if vc_skip_reason(one_block(String::from("bad_slot"), pb, ITY_F64(), bad)).len() == 0 { return 139; }
+    let from_float: Vec<IrInst> = Vec::new();
+    from_float.push(mk_inst_arg(0, ITY_F64(), 0));
+    from_float.push(mk_inst(1, IOP_BITS_TO_F64(), ITY_F64(), args1(0)));
+    from_float.push(mk_inst_return(2, 1));
+    let pf: Vec<i64> = Vec::new();
+    pf.push(ITY_F64());
+    if vc_skip_reason(one_block(String::from("from_float"), pf, ITY_F64(), from_float)).len() == 0 { return 140; }
+    0
+}
+
+fn check_float_slot_terms() -> i64 {
+    let q: String = query(vc_claims(slot_round_trip(ITY_F64(), IOP_F64_TO_BITS(), IOP_BITS_TO_F64(), IOP_EQ_F64())), 0);
+    if !q.contains(String::from("(set-logic QF_BVFP)\n")) { return 150; }
+    if !q.contains(String::from("(declare-const j0 (_ BitVec 64))\n")) { return 151; }
+    if !q.contains(String::from("(assert (= ((_ to_fp 11 53) j0) p0))\n")) { return 152; }
+    if !q.contains(String::from("(define-fun v2 () (_ FloatingPoint 11 53) ((_ to_fp 11 53) j0))\n")) { return 153; }
+    let q32: String = query(vc_claims(slot_round_trip(ITY_F32(), IOP_F32_TO_BITS(), IOP_BITS_TO_F32(), IOP_EQ_F32())), 0);
+    if !q32.contains(String::from("(declare-const j0 (_ BitVec 32))\n")) { return 154; }
+    if !q32.contains(String::from("(assert (= ((_ to_fp 8 24) j0) p0))\n")) { return 155; }
+    // a constant is stored as its own bits: no fresh pattern, nothing assumed about one
+    let qc: String = query(vc_claims(const_slot_round_trip(4612811918334230528)), 0);
+    if qc.contains(String::from("declare-const j")) { return 156; }
+    if qc.contains(String::from("(assert (= ")) { return 157; }
+    0
+}
+
+fn check_float_slot_helpers() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let k64: i64 = vc_fp_const(ar, ITY_F64(), 4612811918334230528);
+    if vc_fp_const_slot(ar, ITY_F64(), k64) != vc_tm_bv(ar, 64, 4612811918334230528, 0) { return 160; }
+    let k32: i64 = vc_fp_const(ar, ITY_F32(), 1075838976);
+    if vc_fp_const_slot(ar, ITY_F32(), k32) != vc_tm_bv(ar, 64, 1075838976, 0) { return 161; }
+    // not a constant of that format: a variable, an operation, the other width
+    let x: i64 = vc_tm_var(ar, String::from("x"));
+    if vc_fp_const_slot(ar, ITY_F64(), x) >= 0 { return 162; }
+    if vc_fp_const_slot(ar, ITY_F64(), vc_tm_app1(ar, VC_OP_FPNEG(), k64)) >= 0 { return 163; }
+    if vc_fp_const_slot(ar, ITY_F32(), k64) >= 0 || vc_fp_const_slot(ar, ITY_F64(), k32) >= 0 { return 164; }
+    // reading the slot of a constant gives the constant back
+    if vc_fp_from_slot(ar, ITY_F64(), vc_tm_bv(ar, 64, 4612811918334230528, 0)) != k64 { return 165; }
+    if vc_fp_from_slot(ar, ITY_F32(), vc_tm_bv(ar, 64, 1075838976, 0)) != k32 { return 166; }
+    // only the low 32 bits of a slot are an f32
+    if vc_fp_from_slot(ar, ITY_F32(), vc_tm_bv(ar, 64, 1075838976 + 4294967296, 0)) != k32 { return 167; }
+    0
+}
+
 fn check_query_shape() -> i64 {
     let cs: VcClaims = vc_claims(add_commutes(ITY_F64(), IOP_ADD_F64(), IOP_EQ_F64()));
     if cs.kinds.len() != 1 || cs.kinds[0] != VC_CLAIM_ENSURES() { return 70; }
@@ -216,11 +342,13 @@ fn check_logic_selection() -> i64 {
     p.push(ITY_F64());
     let cs: VcClaims = vc_claims(one_block(String::from("unused"), p, ITY_I64(), i));
     let s: SmtScript = vc_script_new();
-    vc_script_set_logic(s, vc_logic_name(false, true));
+    vc_script_set_logic(s, vc_logic_name(false, true, false));
     if vc_smt_render(cs.arena, cs.header) != String::from("(set-logic QF_BVFP)\n(set-option :produce-models true)\n(declare-const p0 (_ BitVec 64))\n(declare-const p1 (_ FloatingPoint 11 53))\n") { return 80; }
-    if vc_logic_name(false, false) != String::from("QF_BV") { return 81; }
-    if vc_logic_name(true, false) != String::from("QF_ABV") { return 82; }
-    if vc_logic_name(true, true) != String::from("QF_ABVFP") { return 83; }
+    if vc_logic_name(false, false, false) != String::from("QF_BV") { return 81; }
+    if vc_logic_name(true, false, false) != String::from("QF_ABV") { return 82; }
+    if vc_logic_name(true, true, false) != String::from("QF_ABVFP") { return 83; }
+    if vc_logic_name(true, false, true) != String::from("ABV") { return 84; }
+    if vc_logic_name(true, true, true) != String::from("ABVFP") { return 85; }
     0
 }
 
@@ -287,6 +415,10 @@ fn main() -> i32 {
     if r == 0 { r = check_op_tables(); }
     if r == 0 { r = check_not_equal_is_negated_fp_eq(); }
     if r == 0 { r = check_gate(); }
+    if r == 0 { r = check_negation(); }
+    if r == 0 { r = check_float_slots(); }
+    if r == 0 { r = check_float_slot_terms(); }
+    if r == 0 { r = check_float_slot_helpers(); }
     if r == 0 { r = check_query_shape(); }
     if r == 0 { r = check_logic_selection(); }
     if r == 0 { r = check_parse_models(); }

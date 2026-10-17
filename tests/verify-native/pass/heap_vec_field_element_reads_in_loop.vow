@@ -1,0 +1,30 @@
+module HeapVecFieldElementReadsInLoop
+
+// TEST: esbmc-model-artifact fn="sum_nonneg" blame=None vow_id=4294967293 "ESBMC reads the Vec field b.items as a fresh Vec of nondeterministic length at each use, so the loop bound i < b.items.len() does not bound b.items[i] and it reports an out-of-bounds read; the native model reads one field as one value"
+
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn sum_nonneg(b: Bag) -> i64 vow {
+  ensures: result >= 0
+} {
+  let mut total: i64 = 0;
+  let mut i: u64 = 0;
+  while i < b.items.len() vow {
+    invariant: i <= b.items.len(),
+    invariant: total >= 0
+  } {
+    let x: i64 = b.items[i];
+    if x > 0 && total < 1000000 {
+      total = total + x % 1000;
+    }
+    i = i + 1;
+  }
+  total
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), tag: 1 };
+  b.items.push(5);
+  print_i64(sum_nonneg(b));
+  0
+}

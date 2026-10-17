@@ -1,0 +1,11 @@
+// TEST: error-code UnexpectedToken
+// TEST: error-count 2
+module ParamKeyword
+
+fn f(a: i64, module: i64) -> i64 {
+    a
+}
+
+fn main() -> i32 {
+    0
+}

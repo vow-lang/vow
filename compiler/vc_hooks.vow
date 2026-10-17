@@ -1,0 +1,284 @@
+module VcHooks
+
+use vc_ops
+use vc_term
+use vc_smt
+use vc_agg
+use vc_vec
+use vc_str
+use vc_strops
+
+// The float-text hooks `parse_f64_bits(s) -> u64` and `format_f64_bits(bits) -> String`
+// in the native verifier (ADR-2026-10-08-1422, #1646 addendum). Both are total
+// functions of their operand: the `u64` side is an exact 64-bit vector (no cast,
+// no `Float`), the `String` side is a function of the string's contents, and the
+// text conversion itself is not encoded (no decimal grammar, no round trip, no NaN
+// payload), so a result is an unconstrained constant apart from the two facts
+// every total function has. Equal operands give equal results (Ackermann
+// axioms against every earlier call, built on the exact `vc_str_eq`, global because
+// they hold on every path), and a formatted string keeps the runtime's length
+// invariant. A hook term is a fresh declared constant listed in `vv.hk_vars`; a
+// counterexample whose query reaches one is checked for independence of it
+// (`vc_native`).
+
+// The result of parsing the string `(arr, len)`: the earlier call's term when the
+// operand terms are the same, else a fresh 64-bit constant equal to the result of
+// every earlier parse of an equal string.
+fn vc_hook_parse(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, arr: i64, len: i64) -> i64 {
+    let n: u64 = vv.pk_res.len();
+    let mut i: u64 = 0;
+    while i < n {
+        if vv.pk_arr[i] == arr && vv.pk_len[i] == len { return vv.pk_res[i]; }
+        i = i + 1;
+    }
+    let r: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("hkp")), 64);
+    i = 0;
+    while i < n {
+        let same: i64 = vc_str_eq(vv, ar, hdr, assumed, arr, len, vv.pk_arr[i], vv.pk_len[i]);
+        if !vc_tm_is_false(ar, same) {
+            vc_str_axiom(ar, assumed, vc_tm_implies(ar, same, vc_tm_app2(ar, VC_OP_EQ(), r, vv.pk_res[i])));
+        }
+        i = i + 1;
+    }
+    vv.pk_arr.push(arr);
+    vv.pk_len.push(len);
+    vv.pk_res.push(r);
+    vv.hk_vars.push(r);
+    r
+}
+
+// The index in `fk_*` of the string `format_f64_bits(bits)` returns: the earlier
+// call's when the bits term is the same, else a fresh array and length whose
+// string equals that of every earlier call on equal bits. The length is below
+// `VOW_CAP_VALUE_MASK` like any runtime string's.
+fn vc_hook_format(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, bits: i64) -> u64 {
+    let n: u64 = vv.fk_bits.len();
+    let mut i: u64 = 0;
+    while i < n {
+        if vv.fk_bits[i] == bits { return i; }
+        i = i + 1;
+    }
+    let arr: i64 = vc_str_fresh_array(vv, ar, hdr, String::from("hkf"));
+    let len: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("hkl")), 64);
+    vc_str_axiom(ar, assumed, vc_tm_app2(ar, VC_OP_BVULT(), len, vc_vec_len_mask(ar)));
+    i = 0;
+    while i < n {
+        let guard: i64 = vc_tm_app2(ar, VC_OP_EQ(), bits, vv.fk_bits[i]);
+        if !vc_tm_is_false(ar, guard) {
+            let same: i64 = vc_str_eq(vv, ar, hdr, assumed, arr, len, vv.fk_arr[i], vv.fk_len[i]);
+            vc_str_axiom(ar, assumed, vc_tm_implies(ar, guard, same));
+        }
+        i = i + 1;
+    }
+    vv.fk_bits.push(bits);
+    vv.fk_arr.push(arr);
+    vv.fk_len.push(len);
+    vv.hk_vars.push(arr);
+    vv.hk_vars.push(len);
+    n
+}
+
+// The opaque total functions of #1654 (`parse_*`, `string_trim`, `string_to_upper`,
+// `string_to_lower`): like `parse_f64_bits`, their result is a function of the operand's
+// contents that the model does not encode (Unicode `trim`, the digit grammar, full case
+// mapping), so it is a fresh constant and a counterexample that depends on it is re-checked
+// (`vc_hook_recheck`) and ends `unknown`, never a failure. Calls of one function on the same
+// operand terms share a result; equal operand strings give equal results (the same Ackermann
+// axioms, built on the exact `vc_str_eq`). Facts true of every run are kept: a `parse_<ty>`
+// payload has the width of `ty`, a result length is below `VOW_CAP_VALUE_MASK`, `string_trim`
+// never grows a string and a case map keeps an empty string empty.
+
+// The index in `ox_*` of the earlier call of function `fid` on the string `(arr, len)`, or -1.
+fn vc_hook_opaque_find(vv: VcVec, fid: i64, arr: i64, len: i64) -> i64 {
+    let mut i: u64 = 0;
+    while i < vv.ox_fn.len() {
+        if vv.ox_fn[i] == fid && vv.ox_arr[i] == arr && vv.ox_len[i] == len { return i as i64; }
+        i = i + 1;
+    }
+    -1
+}
+
+// The earlier calls of function `fid` whose operand may equal `(arr, len)` without being the same
+// term: their indices on `idx` and, on `guards`, the Bool term "the two operands are equal" that
+// guards an Ackermann axiom (a call whose guard is statically false is left out).
+fn vc_hook_opaque_peers(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, fid: i64, arr: i64, len: i64, idx: Vec<u64>, guards: Vec<i64>) {
+    let n: u64 = vv.ox_fn.len();
+    let mut i: u64 = 0;
+    while i < n {
+        if vv.ox_fn[i] == fid {
+            let same: i64 = vc_str_eq(vv, ar, hdr, assumed, arr, len, vv.ox_arr[i], vv.ox_len[i]);
+            if !vc_tm_is_false(ar, same) {
+                idx.push(i);
+                guards.push(same);
+            }
+        }
+        i = i + 1;
+    }
+}
+
+fn vc_hook_opaque_record(vv: VcVec, fid: i64, arr: i64, len: i64, r0: i64, r1: i64) {
+    vc_hook_opaque_record_n(vv, fid, arr, len, -1, -1, -1, -1, r0, r1);
+}
+
+fn vc_hook_opaque_record_n(vv: VcVec, fid: i64, arr: i64, len: i64, arr2: i64, len2: i64, arr3: i64, len3: i64, r0: i64, r1: i64) {
+    vv.ox_fn.push(fid);
+    vv.ox_arr.push(arr);
+    vv.ox_len.push(len);
+    vv.ox_arr2.push(arr2);
+    vv.ox_len2.push(len2);
+    vv.ox_arr3.push(arr3);
+    vv.ox_len3.push(len3);
+    vv.ox_r0.push(r0);
+    vv.ox_r1.push(r1);
+}
+
+// `parse_<ty>(s)` for a `bits`-bit `ty`: the Some flag and the payload of the `Option` pushed on
+// `out`. `fid` tells the parse functions apart (`vc_str_parse_key`).
+fn vc_hook_parse_opt(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, fid: i64, bits: i64, arr: i64, len: i64, out: Vec<i64>) {
+    let known: i64 = vc_hook_opaque_find(vv, fid, arr, len);
+    if known >= 0 {
+        out.push(vv.ox_r0[known as u64]);
+        out.push(vv.ox_r1[known as u64]);
+        return;
+    }
+    let some: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("hks")), VC_SORT_BOOL());
+    let payload: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("hkv")), bits);
+    let peers: Vec<u64> = Vec::new();
+    let guards: Vec<i64> = Vec::new();
+    vc_hook_opaque_peers(vv, ar, hdr, assumed, fid, arr, len, peers, guards);
+    let mut k: u64 = 0;
+    while k < peers.len() {
+        let i: u64 = peers[k];
+        let agree: i64 = vc_tm_and(ar, vc_tm_app2(ar, VC_OP_EQ(), some, vv.ox_r0[i]),
+            vc_tm_implies(ar, some, vc_tm_app2(ar, VC_OP_EQ(), payload, vv.ox_r1[i])));
+        vc_str_axiom(ar, assumed, vc_tm_implies(ar, guards[k], agree));
+        k = k + 1;
+    }
+    vc_hook_opaque_record(vv, fid, arr, len, some, payload);
+    vv.hk_vars.push(some);
+    vv.hk_vars.push(payload);
+    out.push(some);
+    out.push(payload);
+}
+
+// The text `string_trim`, `string_to_upper` or `string_to_lower` (`fid`, the kind) returns for
+// `(arr, len)`, as the `(array, length)` pushed on `out`.
+fn vc_hook_text_fn(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, fid: i64, arr: i64, len: i64, out: Vec<i64>) {
+    let known: i64 = vc_hook_opaque_find(vv, fid, arr, len);
+    if known >= 0 {
+        out.push(vv.ox_r0[known as u64]);
+        out.push(vv.ox_r1[known as u64]);
+        return;
+    }
+    let ra: i64 = vc_str_fresh_array(vv, ar, hdr, String::from("hkt"));
+    let rl: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("hkn")), 64);
+    vc_str_axiom(ar, assumed, vc_tm_app2(ar, VC_OP_BVULT(), rl, vc_vec_len_mask(ar)));
+    if fid == VC_STR_TRIM() {
+        vc_str_axiom(ar, assumed, vc_tm_app2(ar, VC_OP_BVULE(), rl, len));
+    } else {
+        let empty: i64 = vc_tm_app2(ar, VC_OP_EQ(), len, vc_str_zero(ar));
+        vc_str_axiom(ar, assumed, vc_tm_implies(ar, empty, vc_tm_app2(ar, VC_OP_EQ(), rl, vc_str_zero(ar))));
+    }
+    let peers: Vec<u64> = Vec::new();
+    let guards: Vec<i64> = Vec::new();
+    vc_hook_opaque_peers(vv, ar, hdr, assumed, fid, arr, len, peers, guards);
+    let mut k: u64 = 0;
+    while k < peers.len() {
+        let i: u64 = peers[k];
+        vc_str_axiom(ar, assumed, vc_tm_implies(ar, guards[k], vc_str_eq(vv, ar, hdr, assumed, ra, rl, vv.ox_r0[i], vv.ox_r1[i])));
+        k = k + 1;
+    }
+    vc_hook_opaque_record(vv, fid, arr, len, ra, rl);
+    vv.hk_vars.push(ra);
+    vv.hk_vars.push(rl);
+    out.push(ra);
+    out.push(rl);
+}
+
+// `string_replace(s, from, to)` and `string_split(s, sep)`, opaque total functions of their
+// operand strings like the text functions above: the result of `replace` is a fresh text, and
+// that of `split` a fresh `(array, length)` of a `Vec<String>` whose elements are addresses
+// of strings the model does not hold, so a read of one is a read of unconstrained memory.
+// Calls on the same operand terms share a result and equal operand strings give equal
+// results (a result length for `split`: the pieces of two calls are distinct objects), under
+// the same Ackermann axioms. Facts true of every run are kept: a length is below
+// `VOW_CAP_VALUE_MASK`, and `split` returns at least one piece, at most one more than the
+// bytes of `s`, and exactly one for an empty separator. A counterexample that needs the value
+// is `unknown` (`vc_hook_recheck`). `n` is the number of operand strings (2 or 3).
+
+// The index in `ox_*` of the earlier call of `fid` on exactly these operand terms, or -1.
+fn vc_hook_multi_find(vv: VcVec, fid: i64, ops: Vec<i64>) -> i64 {
+    let mut i: u64 = 0;
+    while i < vv.ox_fn.len() {
+        if vv.ox_fn[i] == fid && vv.ox_arr[i] == ops[0] && vv.ox_len[i] == ops[1] && vv.ox_arr2[i] == ops[2] && vv.ox_len2[i] == ops[3]
+            && (ops.len() < 6 || (vv.ox_arr3[i] == ops[4] && vv.ox_len3[i] == ops[5])) { return i as i64; }
+        i = i + 1;
+    }
+    -1
+}
+
+// The Bool term "the operand strings `ops` equal those of the earlier call `i`".
+fn vc_hook_multi_same(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, i: u64, ops: Vec<i64>) -> i64 {
+    let mut same: i64 = vc_str_eq(vv, ar, hdr, assumed, ops[0], ops[1], vv.ox_arr[i], vv.ox_len[i]);
+    same = vc_tm_and(ar, same, vc_str_eq(vv, ar, hdr, assumed, ops[2], ops[3], vv.ox_arr2[i], vv.ox_len2[i]));
+    if ops.len() >= 6 {
+        same = vc_tm_and(ar, same, vc_str_eq(vv, ar, hdr, assumed, ops[4], ops[5], vv.ox_arr3[i], vv.ox_len3[i]));
+    }
+    same
+}
+
+// `ops` is `(arr, len)` per operand; the result `(array, length)` is pushed on `out`.
+fn vc_hook_multi_text_fn(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, fid: i64, ops: Vec<i64>, out: Vec<i64>) {
+    let known: i64 = vc_hook_multi_find(vv, fid, ops);
+    if known >= 0 {
+        out.push(vv.ox_r0[known as u64]);
+        out.push(vv.ox_r1[known as u64]);
+        return;
+    }
+    let ra: i64 = vc_str_fresh_array(vv, ar, hdr, String::from("hkm"));
+    let rl: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("hkq")), 64);
+    vc_str_axiom(ar, assumed, vc_tm_app2(ar, VC_OP_BVULT(), rl, vc_vec_len_mask(ar)));
+    if fid == VC_STR_SPLIT() {
+        let one: i64 = vc_tm_bv(ar, 64, 1, 0);
+        vc_str_axiom(ar, assumed, vc_tm_app2(ar, VC_OP_BVUGE(), rl, one));
+        vc_str_axiom(ar, assumed, vc_tm_app2(ar, VC_OP_BVULE(), rl, vc_tm_app2(ar, VC_OP_BVADD(), ops[1], one)));
+        let no_sep: i64 = vc_tm_app2(ar, VC_OP_EQ(), ops[3], vc_str_zero(ar));
+        vc_str_axiom(ar, assumed, vc_tm_implies(ar, no_sep, vc_tm_app2(ar, VC_OP_EQ(), rl, one)));
+    }
+    let mut i: u64 = 0;
+    while i < vv.ox_fn.len() {
+        if vv.ox_fn[i] == fid {
+            let same: i64 = vc_hook_multi_same(vv, ar, hdr, assumed, i, ops);
+            if !vc_tm_is_false(ar, same) {
+                let agree: i64 = { if fid == VC_STR_SPLIT() { vc_tm_app2(ar, VC_OP_EQ(), rl, vv.ox_r1[i]) } else { vc_str_eq(vv, ar, hdr, assumed, ra, rl, vv.ox_r0[i], vv.ox_r1[i]) } };
+                vc_str_axiom(ar, assumed, vc_tm_implies(ar, same, agree));
+            }
+        }
+        i = i + 1;
+    }
+    if ops.len() >= 6 {
+        vc_hook_opaque_record_n(vv, fid, ops[0], ops[1], ops[2], ops[3], ops[4], ops[5], ra, rl);
+    } else {
+        vc_hook_opaque_record_n(vv, fid, ops[0], ops[1], ops[2], ops[3], -1, -1, ra, rl);
+    }
+    vv.hk_vars.push(ra);
+    vv.hk_vars.push(rl);
+    out.push(ra);
+    out.push(rl);
+}
+
+// `string_join(parts, sep)`: a fresh text whose length is below `VOW_CAP_VALUE_MASK`, empty for
+// no parts. The runtime reads the contents of every part, which the model does not hold for an
+// object the function stored (`vc_ptr_store_detail`), so two calls on the same terms need not
+// agree and no congruence is stated.
+fn vc_hook_join(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, parts_len: i64, out: Vec<i64>) {
+    let ra: i64 = vc_str_fresh_array(vv, ar, hdr, String::from("hkj"));
+    let rl: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("hkk")), 64);
+    vc_str_axiom(ar, assumed, vc_tm_app2(ar, VC_OP_BVULT(), rl, vc_vec_len_mask(ar)));
+    let none: i64 = vc_tm_app2(ar, VC_OP_EQ(), parts_len, vc_str_zero(ar));
+    vc_str_axiom(ar, assumed, vc_tm_implies(ar, none, vc_tm_app2(ar, VC_OP_EQ(), rl, vc_str_zero(ar))));
+    vv.hk_vars.push(ra);
+    vv.hk_vars.push(rl);
+    out.push(ra);
+    out.push(rl);
+}

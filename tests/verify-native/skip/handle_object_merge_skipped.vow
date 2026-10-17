@@ -1,0 +1,20 @@
+// TEST: skip-reason unsupported-opcode
+// A merge of a handle (an element loaded out of a `Vec`) with an object the function built has
+// no model: the Phi would take an address on one edge and an object on the other, so the
+// function stays `Skipped` rather than treat one as the other.
+module HandleObjectMergeSkipped
+
+fn pick(v: Vec<String>, c: bool) -> u64 vow {
+  requires: v.len() >= 1
+  ensures: result == result
+} {
+  let s: String = if c { v[0] } else { String::from("x") };
+  s.len()
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<String> = Vec::new();
+  v.push(String::from("a"));
+  print_u64(pick(v, true));
+  0
+}

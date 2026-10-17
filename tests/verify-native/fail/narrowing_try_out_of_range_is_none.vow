@@ -1,0 +1,22 @@
+// TEST: counterexample-fn "narrow_or_minus_one"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures result == x"
+// An operand outside `i8` makes `i64_to_i8_try` return `None`, so the function yields
+// `-1`, not the operand: the claim that it is the identity is refuted by every
+// operand outside `i8` (the solver picks `x = 255`).
+module NarrowingTryOutOfRangeIsNone
+
+fn narrow_or_minus_one(x: i64) -> i64 vow {
+  ensures: result == x
+} {
+  match i64_to_i8_try(x) {
+    Option::Some(b) => { b as i64 },
+    Option::None => { -1 },
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(narrow_or_minus_one(128));
+  0
+}

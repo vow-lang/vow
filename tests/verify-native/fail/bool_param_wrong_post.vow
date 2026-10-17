@@ -1,0 +1,16 @@
+// TEST: counterexample-fn "pick"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value flag false
+module BoolParamWrongPost
+
+fn pick(flag: bool, a: i64, b: i64) -> i64 vow {
+  ensures: result == a
+} {
+  if flag { a } else { b + 1 }
+}
+
+fn main() -> i32 [io] {
+  print_i64(pick(true, 3, 4));
+  0
+}

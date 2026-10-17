@@ -1,0 +1,234 @@
+module VcInductAgg
+
+use ir
+use ir_dominance
+use vc_ops
+use vc_loops
+use vc_agg_shape
+
+// The struct slots each loop writes, for the inductive loop cut (`vc_induct`). The
+// aggregate model keeps a slot as a flow-sensitive term, not a header Phi, so a cut
+// that left a written slot alone would let the proof assume the value the loop was
+// entered with at the top of every iteration. The cut therefore havocs, at the top
+// of the header proper of every loop whose body (nested loops included) writes it,
+// each `(object, slot, type)` triple a `FieldSet` of that loop stores to.
+//
+// The object is a root of the written pointer: a parameter or an allocation, found
+// through the Phis a write may go through (a write through a merge reaches each
+// object it may stand for). A root born inside the loop is fresh each iteration (no
+// header pointer Phi carries it across the back edge, see `vc_induct_ptr_phi`) and
+// is left alone; every other root is havoced at that loop's header. A write the
+// model cannot attribute to roots (a target that is none of the three, a value of
+// unit type, a `WideSlot` element address) makes the function not cut.
+//
+// A pointer written into a field is the address of the object it names (`vc_overlay`), a
+// 64-bit slot like any other that a later read of the field returns, so it is havoced as one
+// (type `i64`): the loop may have stored a different object in it.
+
+// `obj[j]`, `slot[j]` and `ty[j]` are the parallel lists of loop `j`: the id of a
+// root value, the slot index and the IR type of the value written.
+struct VcFieldHavocs {
+    ok: bool,
+    obj: Vec<Vec<i64>>,
+    slot: Vec<Vec<i64>>,
+    ty: Vec<Vec<i64>>,
+}
+
+fn vc_fh_has(h: VcFieldHavocs, j: i64, o: i64, s: i64, t: i64) -> bool {
+    let objs: Vec<i64> = h.obj[j as u64];
+    let slots: Vec<i64> = h.slot[j as u64];
+    let tys: Vec<i64> = h.ty[j as u64];
+    let mut k: u64 = 0;
+    while k < objs.len() {
+        if objs[k] == o && slots[k] == s && tys[k] == t {
+            return true;
+        }
+        k = k + 1;
+    }
+    false
+}
+
+// The Upsilons feeding each Phi, as linked lists headed per Phi id: `head[phi]` is
+// an index into `next`/`val`, -1 at the end.
+struct VcPhiSources {
+    head: Vec<i64>,
+    next: Vec<i64>,
+    val: Vec<i64>,
+}
+
+fn vc_fh_phi_sources(f: IrFunction, rpo: Vec<i64>, n_ids: u64) -> VcPhiSources {
+    let src: VcPhiSources = VcPhiSources { head: dom_fill(n_ids, -1), next: Vec::new(), val: Vec::new() };
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        if rpo[b] >= 0 {
+            let blk: IrBlock = f.blocks[b];
+            let mut i: u64 = 0;
+            while i < blk.insts.len() {
+                let inst: IrInst = blk.insts[i];
+                if inst.op == IOP_UPSILON() && inst.dv >= 0 && (inst.dv as u64) < n_ids && inst.args.len() == 1 {
+                    let k: i64 = src.val.len() as i64;
+                    src.next.push(src.head[inst.dv as u64]);
+                    src.val.push(inst.args[0]);
+                    src.head[inst.dv as u64] = k;
+                }
+                i = i + 1;
+            }
+        }
+        b = b + 1;
+    }
+    src
+}
+
+// True when `x` is in `v`.
+fn vc_ids_has(v: Vec<i64>, x: i64) -> bool {
+    let mut i: u64 = 0;
+    while i < v.len() {
+        if v[i] == x { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// The values `t` may be looking through Phis: its non-Phi sources, in discovery order. `seen`
+// is scratch of the id space, restamped with `stamp` for this walk. A value that is not an id
+// of the function is returned as is, for the caller to refuse.
+fn vc_fh_leaves(t: i64, src: VcPhiSources, def_op: Vec<i64>, seen: Vec<i64>, stamp: i64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    if t < 0 || (t as u64) >= def_op.len() || def_op[t as u64] != IOP_PHI() {
+        out.push(t);
+        return out;
+    }
+    let stack: Vec<i64> = Vec::new();
+    stack.push(t);
+    while stack.len() > 0 {
+        let v: i64 = stack[stack.len() - 1];
+        stack.pop();
+        if v < 0 || (v as u64) >= def_op.len() {
+            out.push(v);
+        } else if seen[v as u64] != stamp {
+            seen[v as u64] = stamp;
+            if def_op[v as u64] == IOP_PHI() {
+                let mut e: i64 = src.head[v as u64];
+                while e >= 0 {
+                    stack.push(src.val[e as u64]);
+                    e = src.next[e as u64];
+                }
+            } else {
+                out.push(v);
+            }
+        }
+    }
+    out
+}
+
+// The roots (parameters and allocations) the pointer `t` may stand for, in
+// discovery order; `ok` is false when some value it reaches is none of a pointer
+// parameter, an allocation or a Phi.
+struct VcRoots {
+    ok: bool,
+    ids: Vec<i64>,
+}
+
+fn vc_fh_roots(t: i64, src: VcPhiSources, def_op: Vec<i64>, tys: Vec<i64>, seen: Vec<i64>, stamp: i64) -> VcRoots {
+    let out: VcRoots = VcRoots { ok: false, ids: Vec::new() };
+    let stack: Vec<i64> = Vec::new();
+    stack.push(t);
+    while stack.len() > 0 {
+        let v: i64 = stack[stack.len() - 1];
+        stack.pop();
+        if v < 0 || (v as u64) >= def_op.len() {
+            return out;
+        }
+        if seen[v as u64] != stamp {
+            seen[v as u64] = stamp;
+            let op: i64 = def_op[v as u64];
+            if op == IOP_REGION_ALLOC() || (op == IOP_GET_ARG() && tys[v as u64] == ITY_PTR()) {
+                out.ids.push(v);
+            } else if op == IOP_PHI() {
+                let mut e: i64 = src.head[v as u64];
+                while e >= 0 {
+                    stack.push(src.val[e as u64]);
+                    e = src.next[e as u64];
+                }
+            } else {
+                return out;
+            }
+        }
+    }
+    out.ok = true;
+    out
+}
+
+// Records `(root, slot, ty)` for each root, on every loop of the chain of block `b` the root is not
+// born in; false when a root has no defining block.
+fn vc_fh_record(h: VcFieldHavocs, li: VcLoopInfo, defs: VcDefs, b: u64, roots: Vec<i64>, slot: i64, ty: i64) -> bool {
+    let mut r: u64 = 0;
+    while r < roots.len() {
+        let db: i64 = defs.blk[roots[r] as u64];
+        if db < 0 {
+            return false;
+        }
+        let mut c: i64 = 0;
+        while c < vc_chain_len(li, b) {
+            let j: i64 = vc_chain_at(li, b, c);
+            if !vc_in_loop(li, db as u64, j) && !vc_fh_has(h, j, roots[r], slot, ty) {
+                h.obj[j as u64].push(roots[r]);
+                h.slot[j as u64].push(slot);
+                h.ty[j as u64].push(ty);
+            }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    true
+}
+
+// `tys` is the type of every value (`vc_ty_table`), `n_ids` the size of the id space.
+fn vc_induct_field_havocs(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, n_ids: u64, tys: Vec<i64>) -> VcFieldHavocs {
+    let h: VcFieldHavocs = VcFieldHavocs { ok: false, obj: Vec::new(), slot: Vec::new(), ty: Vec::new() };
+    let mut j: i64 = 0;
+    while j < li.n_loops {
+        let o: Vec<i64> = Vec::new();
+        h.obj.push(o);
+        let s: Vec<i64> = Vec::new();
+        h.slot.push(s);
+        let t: Vec<i64> = Vec::new();
+        h.ty.push(t);
+        j = j + 1;
+    }
+    let def_op: Vec<i64> = vc_agg_def_ops(f, n_ids);
+    let src: VcPhiSources = vc_fh_phi_sources(f, rpo, n_ids);
+    let defs: VcDefs = vc_def_table(f, rpo, n_ids);
+    let seen: Vec<i64> = dom_fill(n_ids, -1);
+    let mut stamp: i64 = 0;
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        if rpo[b] >= 0 && vc_chain_len(li, b) > 0 {
+            let blk: IrBlock = f.blocks[b];
+            let mut i: u64 = 0;
+            while i < blk.insts.len() {
+                let inst: IrInst = blk.insts[i];
+                if inst.op == IOP_FIELD_SET() {
+                    if (inst.dk != IDATA_FIELD() && inst.dk != IDATA_WIDE_SLOT()) || inst.args.len() != 2 {
+                        return h;
+                    }
+                    let val: i64 = inst.args[1];
+                    if val < 0 || (val as u64) >= tys.len() || tys[val as u64] < 0 || tys[val as u64] == ITY_UNIT() {
+                        return h;
+                    }
+                    let mut slot_ty: i64 = tys[val as u64];
+                    if slot_ty == ITY_PTR() { slot_ty = ITY_I64(); }
+                    stamp = stamp + 1;
+                    let r: VcRoots = vc_fh_roots(inst.args[0], src, def_op, tys, seen, stamp);
+                    if !r.ok || !vc_fh_record(h, li, defs, b, r.ids, inst.dv, slot_ty) {
+                        return h;
+                    }
+                }
+                i = i + 1;
+            }
+        }
+        b = b + 1;
+    }
+    h.ok = true;
+    h
+}

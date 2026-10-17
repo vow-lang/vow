@@ -133,6 +133,8 @@ scripts/bootstrap.sh --skip-cargo         # skip cargo build if already built
 
 This builds `./target/release/vow` (stage 0), then uses it to compile and verify the self-hosted compiler, producing `build/vowc`. The Rust compiler (`./target/release/vow`) is only needed for this bootstrap step.
 
+`scripts/bootstrap.sh --native-verify` adds a native pass: the Stage 1 and Stage 2 `vowc` each verify all of `compiler/*.vow` with `--backend native` and must agree. Every function native still skips is listed, with its tracking issue, in `scripts/native_compiler_skips.toml` (a new skip, or a stale entry, fails). `scripts/verify_compiler.py` is the same check plus a native-vs-ESBMC comparison; see `docs/verifier-eval.md`.
+
 ### "Green locally" checklist claims must be pinned to the PR's final head SHA
 
 `.github/workflows/bootstrap.yml` only runs on push to `main` and nightly — it never runs on pull
@@ -241,7 +243,7 @@ arena inference read) is derived from the entry's documented return type, not st
 `arena_routing: heap_fresh` only records (and the generator validates) that the symbol has an
 `_in_arena` variant in `arena_routes`. Every op returning a `String`, `Vec` or `Option` must declare
 `arena_routing` (`heap_fresh` exactly when its symbol is a route; otherwise `none` plus a free-text
-`arena_routing_reason` saying why the heap result has no arena variant; the ADR above lists today's two),
+`arena_routing_reason` saying why the heap result has no arena variant; the ADR above lists today's one, `stdin_read_line`),
 and `--check` fails on any disagreement. `i64_to_string`,
 `string_matches_literal_at` (its literal operand lowers specially) and the narrowing intrinsics stay
 hand-written.
@@ -270,7 +272,9 @@ per-parameter/return types matching `params`/`return` (`String`/`Vec<...>` both 
 `verifier_model` (`known`/`unmodeled`; `main()` rejects an entry without one, and an effectful entry
 marked `known`), the `arena_routing` (`none`/`heap_fresh`; `main()` rejects a heap-returning entry without
 one) and `c_model` (`unmodeled`/`base`/`base_and_arena`; `main()` rejects a pure entry without one)
-fields, when present, must be in their closed sets; an `Option<T>` return type
+fields, when present, must be in their closed sets; a pure `unmodeled` entry must carry a non-empty
+free-text `verifier_skip_reason` (which semantics the native verifier does not model; `main()` rejects
+its absence, and its presence on any other entry); an `Option<T>` return type
 needs a `T` the generator can tag; and any field name not in the recognized set (required or optional)
 is rejected outright, so a misspelled field can never silently defeat its own check. All
 violations across all entries are collected and reported together, not just the first. `main()` never

@@ -1,0 +1,18 @@
+// The 128-bit same-width sign changes (`i128_to_u128_sat`, `u128_to_i128_sat`) clamp
+// on one side only, and have no `_try`. Native-only: ESBMC's C model does not
+// model them and skips these functions.
+module NarrowingSignChange128
+
+fn sat_wide_sign_change(x: i128) -> u128 vow {
+  ensures: (x < 0 && result == 0) || (x >= 0 && result as i128 == x)
+} {
+  i128_to_u128_sat(x)
+}
+
+fn sat_wide_unsigned_to_signed(x: u128) -> i128 vow {
+  ensures: result >= 0
+} {
+  u128_to_i128_sat(x)
+}
+
+fn main() -> i32 { 0 }

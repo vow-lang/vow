@@ -1,0 +1,24 @@
+// TEST: counterexample-fn "chosen"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The struct stored is the one the branch chose, so `a` is 101 only on one path.
+module PtrFieldPhiStoredWrong
+
+struct Inner { a: i64, b: i64 }
+struct Holder { inner: Inner, tag: i64 }
+
+fn chosen(c: bool) -> bool vow {
+  ensures: result
+} {
+  let x: Inner = Inner { a: 1, b: 10 };
+  let y: Inner = Inner { a: 2, b: 20 };
+  let pick: Inner = if c { x } else { y };
+  let h: Holder = Holder { inner: pick, tag: 0 };
+  pick.a = pick.a + 100;
+  h.inner.a == 101
+}
+
+fn main() -> i32 [io] {
+  if chosen(true) { print_i64(1); }
+  0
+}

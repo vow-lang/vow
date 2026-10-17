@@ -125,6 +125,12 @@ fn opcode_name(op: i64) -> String {
     if op == IOP_LE_F64() { return String::from("LeF64"); }
     if op == IOP_GT_F64() { return String::from("GtF64"); }
     if op == IOP_GE_F64() { return String::from("GeF64"); }
+    if op == IOP_NEG_F32() { return String::from("NegF32"); }
+    if op == IOP_NEG_F64() { return String::from("NegF64"); }
+    if op == IOP_F32_TO_BITS() { return String::from("F32ToBits"); }
+    if op == IOP_F64_TO_BITS() { return String::from("F64ToBits"); }
+    if op == IOP_BITS_TO_F32() { return String::from("BitsToF32"); }
+    if op == IOP_BITS_TO_F64() { return String::from("BitsToF64"); }
     if op == IOP_NOT() { return String::from("Not"); }
     if op == IOP_AND() { return String::from("And"); }
     if op == IOP_OR() { return String::from("Or"); }

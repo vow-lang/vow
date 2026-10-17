@@ -1,0 +1,163 @@
+module VcStrdeep
+
+use vc_term
+use vc_vec
+
+// Ground reads of a built `String` (#1653, an addendum to ADR-2026-10-08-1422 rule 3).
+// The byte of index `idx` of an array that `vc_str_append` built is a nested `ite`
+// over the append: below the left operand's length it is the left operand's byte,
+// else the right operand's byte at `idx - |left|`. Unfolded per site, the read has
+// no quantifier, so a solver decides the equality of two differently built strings
+// (`(a + b) + c` against `a + (b + c)`) by case analysis instead of by instantiating
+// the quantified definitions of two unrelated arrays.
+//
+// Two choices make the unfolded read cheap to compare:
+// - an offset is a canonical sum (`vc_str_off_add`: the atoms sorted by term id, the
+//   constants folded), so both nestings reach the same leaf with the same index term;
+// - a branch condition is absolute (`idx <u off + |left|`), not `idx - off <u |left|`,
+//   so the solver compares lengths without reasoning about a subtraction.
+//
+// Reads past a built string's length are never observable: every range operation is
+// guarded by its length and a byte read past it is a hard claim. The unfolded read
+// returns some deterministic byte there, which the (unchanged) defining axioms of
+// the built array leave free, so it is consistent with them. The unfolding is an
+// encoding choice, never a bound: over `VC_STR_EXPAND_BUDGET` nodes a read is the
+// plain `select` of the array, which those axioms define exactly.
+
+fn VC_STR_EXPAND_BUDGET() -> i64 { 512 }
+
+fn vc_str_byte_mask(ar: VcArena) -> i64 {
+    vc_tm_bv(ar, 64, 255, 0)
+}
+
+// Byte `idx` of the string held in array `arr`.
+fn vc_str_byte(ar: VcArena, arr: i64, idx: i64) -> i64 {
+    vc_tm_app2(ar, VC_OP_BVAND(), vc_tm_app2(ar, VC_OP_SELECT(), arr, idx), vc_str_byte_mask(ar))
+}
+
+// The operands `(sa, sl, ta, tl)` of the append that built array `r`, as the offset
+// of its entry in `app_ops`; -1 when `r` was not built by an append.
+fn vc_str_app_find(vv: VcVec, r: i64) -> i64 {
+    if r < 0 || r >= vv.app_at.len() as i64 { return -1; }
+    vv.app_at[r as u64]
+}
+
+fn vc_str_app_register(vv: VcVec, r: i64, sa: i64, sl: i64, ta: i64, tl: i64) {
+    while vv.app_at.len() as i64 <= r {
+        vv.app_at.push(-1);
+    }
+    vv.app_at[r as u64] = vv.app_ops.len() as i64;
+    vv.app_ops.push(sa);
+    vv.app_ops.push(sl);
+    vv.app_ops.push(ta);
+    vv.app_ops.push(tl);
+}
+
+fn vc_str_off_is_add(ar: VcArena, t: i64) -> bool {
+    ar.kinds[t as u64] == VC_T_APP() && ar.aux[t as u64] == VC_OP_BVADD()
+}
+
+// The atoms of the sum `t` (looking through the variables the executor bound to a
+// composite) into `atoms`, and its constants folded into `konst[0]`.
+fn vc_str_off_collect(ar: VcArena, t: i64, atoms: Vec<i64>, konst: Vec<i64>) {
+    let mut u: i64 = t;
+    if ar.kinds[t as u64] == VC_T_VAR() && ar.named[t as u64] >= 0 { u = ar.named[t as u64]; }
+    if vc_str_off_is_add(ar, u) {
+        vc_str_off_collect(ar, ar.a[u as u64], atoms, konst);
+        vc_str_off_collect(ar, ar.b[u as u64], atoms, konst);
+        return;
+    }
+    if vc_is_bv(ar, u) && ar.a[u as u64] == 64 {
+        konst[0] = vc_tm_app2(ar, VC_OP_BVADD(), konst[0], u);
+        return;
+    }
+    if ar.kinds[t as u64] != VC_T_VAR() && ar.named[t as u64] >= 0 {
+        atoms.push(ar.named[t as u64]);
+        return;
+    }
+    atoms.push(t);
+}
+
+fn vc_str_off_sort(atoms: Vec<i64>) {
+    let mut i: u64 = 1;
+    while i < atoms.len() {
+        let x: i64 = atoms[i];
+        let mut j: u64 = i;
+        while j > 0 && atoms[j - 1] > x {
+            atoms[j] = atoms[j - 1];
+            j = j - 1;
+        }
+        atoms[j] = x;
+        i = i + 1;
+    }
+}
+
+// The offset of nothing.
+fn vc_str_off_empty(ar: VcArena) -> i64 {
+    vc_tm_bv(ar, 64, 0, 0)
+}
+
+// `off + len` as the canonical sum: bit-vector addition is associative and
+// commutative modulo 2^64, so sorting its atoms and folding its constants keeps the
+// value and makes every nesting of the same operands one term.
+fn vc_str_off_add(ar: VcArena, off: i64, len: i64) -> i64 {
+    let atoms: Vec<i64> = Vec::new();
+    let konst: Vec<i64> = Vec::new();
+    konst.push(vc_str_off_empty(ar));
+    vc_str_off_collect(ar, off, atoms, konst);
+    vc_str_off_collect(ar, len, atoms, konst);
+    if atoms.len() == 0 { return konst[0]; }
+    vc_str_off_sort(atoms);
+    let mut acc: i64 = atoms[0];
+    let mut i: u64 = 1;
+    while i < atoms.len() {
+        acc = vc_tm_app2(ar, VC_OP_BVADD(), acc, atoms[i]);
+        i = i + 1;
+    }
+    vc_tm_app2(ar, VC_OP_BVADD(), acc, konst[0])
+}
+
+// Nodes of the unfolded read of `arr`, saturating at `cap`.
+fn vc_str_weight(vv: VcVec, arr: i64, cap: i64) -> i64 {
+    let e: i64 = vc_str_app_find(vv, arr);
+    if e < 0 { return 1; }
+    let wl: i64 = vc_str_weight(vv, vv.app_ops[e as u64], cap);
+    if wl >= cap { return cap; }
+    let wr: i64 = vc_str_weight(vv, vv.app_ops[(e + 2) as u64], cap);
+    if 1 + wl + wr >= cap { return cap; }
+    1 + wl + wr
+}
+
+fn vc_str_leaf_byte(ar: VcArena, arr: i64, base: i64, off: i64) -> i64 {
+    vc_str_byte(ar, arr, vc_tm_app2(ar, VC_OP_BVSUB(), base, off))
+}
+
+// Byte `base - off` of the string held in `arr`; `memo_k` holds the `(arr, off)`
+// pairs already read at this `base` and `memo_v` their terms, so a build that shares
+// a sub-build stays a DAG.
+fn vc_str_read(vv: VcVec, ar: VcArena, memo_k: Vec<i64>, memo_v: Vec<i64>, arr: i64, base: i64, off: i64) -> i64 {
+    let e: i64 = vc_str_app_find(vv, arr);
+    if e < 0 { return vc_str_leaf_byte(ar, arr, base, off); }
+    let mut i: u64 = 0;
+    while i < memo_v.len() {
+        if memo_k[2 * i] == arr && memo_k[2 * i + 1] == off { return memo_v[i]; }
+        i = i + 1;
+    }
+    let cut: i64 = vc_str_off_add(ar, off, vv.app_ops[(e + 1) as u64]);
+    let lo: i64 = vc_str_read(vv, ar, memo_k, memo_v, vv.app_ops[e as u64], base, off);
+    let hi: i64 = vc_str_read(vv, ar, memo_k, memo_v, vv.app_ops[(e + 2) as u64], base, cut);
+    let r: i64 = vc_tm_app3(ar, VC_OP_ITE(), vc_tm_app2(ar, VC_OP_BVULT(), base, cut), lo, hi);
+    memo_k.push(arr);
+    memo_k.push(off);
+    memo_v.push(r);
+    r
+}
+
+// Byte `idx` of the string held in `arr`, read through the appends that built it
+// when that stays within `VC_STR_EXPAND_BUDGET`, else as `vc_str_byte` reads it.
+fn vc_str_ground_byte(vv: VcVec, ar: VcArena, arr: i64, idx: i64) -> i64 {
+    if vc_str_app_find(vv, arr) < 0 || vc_str_weight(vv, arr, VC_STR_EXPAND_BUDGET() + 1) > VC_STR_EXPAND_BUDGET() {
+        return vc_str_byte(ar, arr, idx);
+    }
+    vc_str_read(vv, ar, Vec::new(), Vec::new(), arr, idx, vc_str_off_empty(ar))
+}

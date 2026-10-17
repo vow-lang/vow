@@ -1,0 +1,16 @@
+// TEST: counterexample-fn "join_empty"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+module StringJoinNoPartsWrong
+
+fn join_empty() -> u64 vow {
+  ensures: result == 1
+} {
+  let parts: Vec<String> = Vec::new();
+  string_join(parts, String::from(",")).len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(join_empty());
+  0
+}

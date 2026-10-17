@@ -1,0 +1,26 @@
+// TEST: counterexample-fn "size"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: replay-skipped a struct holding a struct is not rebuilt by replay
+// The handle a callee returns is the object the argument named, so its length is the field's
+// length and never one more.
+module HeapHandleReturnedAsObjectWrong
+
+struct Bag { items: Vec<i64> }
+struct Outer { bag: Bag }
+
+fn pass_through(b: Bag) -> Bag {
+  b
+}
+
+fn size(o: Outer) -> u64 vow {
+  ensures: result == o.bag.items.len() + 1
+} {
+  pass_through(o.bag).items.len()
+}
+
+fn main() -> i32 [io] {
+  let o: Outer = Outer { bag: Bag { items: Vec::new() } };
+  print_u64(size(o));
+  0
+}

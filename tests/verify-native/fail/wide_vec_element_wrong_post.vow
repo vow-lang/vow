@@ -1,0 +1,22 @@
+// TEST: counterexample-fn "second"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value v.len 2
+// A wide element is one 128-bit value: the high limb decides the sign, so a
+// non-negative result is refuted by an element below zero.
+module WideVecElementWrongPost
+
+fn second(v: Vec<i128>) -> i128 vow {
+  requires: v.len() > 1,
+  ensures: result >= 0
+} {
+  v[1]
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i128> = Vec::new();
+  v.push(1);
+  v.push(2);
+  print_i64(i128_to_i32_wrap(second(v)) as i64);
+  0
+}

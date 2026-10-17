@@ -70,8 +70,11 @@ implementation of QF_BV/QF_ABV, which is what a cross-check needs.
    sharded four ways, builds `build/vowc` with `bootstrap.sh --no-verify`
    (neither oracle needs ESBMC) and sweeps the fixture corpora plus a
    `gen_corpus.py` corpus. The seed is pinned on pushes and date-derived on the
-   nightly, and is echoed. It is off the pull-request path for the same reason
-   `bootstrap.yml` is.
+   nightly, and is echoed. It was first kept off the pull-request path like
+   `bootstrap.yml`; amended 2026-10-14: it also runs on pull requests that touch
+   the verifier, replay harness, oracle scripts or fixtures (`paths:` filter,
+   docs-only classifier, same pinned seeds), because a shard takes minutes and a
+   new fixture's undocumented replay gap otherwise surfaces only on `main`.
 
 ## Consequences
 

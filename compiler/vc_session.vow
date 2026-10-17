@@ -16,17 +16,61 @@ use vc_solver
 // on its own: a session answer is `VC_ANS_NONE` unless the reply is
 // well-formed, and the caller re-decides anything but `unsat` (and a soft
 // `sat`) with a standalone query, so counterexample models never come from it.
+//
+// A session never asks a claim whose prefix holds a quantifier binder (the `String`
+// model's `VC_T_QEQ`, `VC_T_QLT`, `VC_T_QDIFF`; `binder_at` is the index of the first
+// such assumption, -1 for none). Bitwuzla decides a scoped check under a quantifier
+// far slower than the same query asked once (hundreds of milliseconds against a few
+// for a `String` append), the session's `sat` on a hard claim is discarded for the
+// standalone query anyway, and its `unsat` is as cheap standalone. Those claims go
+// straight to the standalone path.
+//
+// The last claim of a round that needs a solver (`last_at`, -1 for none) is the
+// one claim a session cannot help afterwards: nothing follows it to reuse what the
+// solver learnt, and a `sat` on a hard claim is thrown away for the standalone
+// query. On a query it rewrites as it is asserted an incremental solver can need
+// about twice what a fresh one does (0.17 s against 0.09 s for the digit formatter
+// of `int_to_string`), yet on another (64-bit division, where it reuses the
+// circuits of the claims before) it answers sooner. That claim is therefore
+// hedged rather than predicted: the session gets `vc_session_hedge_window_ms`,
+// and a reply that has not come by then is left outstanding while the caller asks
+// a fresh process the same query (`vc_session_ask_hedged`, `vc_session_collect`).
 
 struct VcSession {
     handle: i64,
     live: bool,
     sent_hdr: u64,
     sent_assumed: u64,
+    binder_at: i64,
+    last_at: i64,
+    pending: Vec<String>,
 }
 
 // `live` false makes every ask `VC_ANS_NONE` without starting a process.
-fn vc_session_new(live: bool) -> VcSession {
-    VcSession { handle: -1, live: live, sent_hdr: 0, sent_assumed: 0 }
+fn vc_session_new(live: bool, binder_at: i64) -> VcSession {
+    VcSession { handle: -1, live: live, sent_hdr: 0, sent_assumed: 0, binder_at: binder_at, last_at: -1, pending: Vec::new() }
+}
+
+// A reply that has not arrived yet (see `vc_session_ask_hedged`).
+fn VC_SESSION_PENDING() -> i64 { 8 }
+
+// How long the session may take over the last claim that needs a solver before a
+// fresh process is asked the same query alongside it: a few times what starting
+// one costs, so a claim the session settles at once never pays for a second
+// process.
+fn vc_session_hedge_window_ms() -> i64 {
+    10
+}
+
+// True when claim `k` is the one the session hedges: the last claim of its round
+// that needs a solver (`last_at`, -1 for none), which the session may ask.
+fn vc_session_hedges(ss: VcSession, cs: VcClaims, k: u64) -> bool {
+    ss.live && ss.last_at == k as i64 && vc_session_admits(ss.binder_at, cs, k)
+}
+
+// True when claim `k`'s query is free of quantifier binders, so a session may ask it.
+fn vc_session_admits(binder_at: i64, cs: VcClaims, k: u64) -> bool {
+    binder_at < 0 || cs.assumed_lens[k] <= binder_at
 }
 
 fn vc_session_probe_sentinel() -> String {
@@ -38,23 +82,6 @@ fn vc_session_sentinel(k: u64) -> String {
     let out: String = String::from("\"vow-");
     out.push_str(i64_to_string(k as i64));
     out.push_str(String::from("\""));
-    out
-}
-
-// The commands claim `k` needs that a session which already sent the first
-// `sent_hdr` header commands and `sent_assumed` assumptions has not: the
-// header up to `header_lens[k]`, then the assumptions up to `assumed_lens[k]`.
-// A definition is only ever used by a later command, so each assertion sees
-// every definition it names.
-fn vc_session_delta(cs: VcClaims, sent_hdr: u64, sent_assumed: u64, k: u64) -> String {
-    let out: String = vc_smt_render_cmds(cs.arena, cs.header, sent_hdr, cs.header_lens[k] as u64);
-    let na: u64 = cs.assumed_lens[k] as u64;
-    let mut i: u64 = sent_assumed;
-    while i < na {
-        vc_smt_push_assert(out, cs.arena, cs.assumed[i]);
-        out.push_str(String::from("\n"));
-        i = i + 1;
-    }
     out
 }
 
@@ -111,10 +138,10 @@ fn vc_session_read_until(handle: i64, sentinel: String, deadline_us: i64, limit:
 // scope round trip. A solver without `push`/`pop` or `echo` support prints an
 // error and exits, which shows as end of file here.
 fn vc_session_start(ss: VcSession, bin: String, cs: VcClaims, k: u64, deadline_us: i64) -> bool [io] {
-    let handle: i64 = process_start_piped(bin, vc_solver_stdin_args());
+    let hello: String = vc_claim_header_text(cs, k);
+    let handle: i64 = process_start_piped(bin, vc_solver_stdin_args(hello));
     if handle < 0 { return false; }
     ss.handle = handle;
-    let hello: String = vc_smt_render_cmds(cs.arena, cs.header, 0, cs.header_lens[k] as u64);
     hello.push_str(String::from("(push 1)\n(pop 1)\n(echo "));
     hello.push_str(vc_session_probe_sentinel());
     hello.push_str(String::from(")\n"));
@@ -125,29 +152,87 @@ fn vc_session_start(ss: VcSession, bin: String, cs: VcClaims, k: u64, deadline_u
     true
 }
 
+// Sends claim `k`'s question, starting the process first when there is none (its
+// handshake is read until `deadline_us`). False when the session cannot be used;
+// it is then closed.
+fn vc_session_send(ss: VcSession, bin: String, cs: VcClaims, k: u64, deadline_us: i64) -> bool [io] {
+    if ss.handle < 0 {
+        if !vc_session_start(ss, bin, cs, k, deadline_us) {
+            vc_session_close(ss);
+            return false;
+        }
+    }
+    let query: String = vc_claim_context_delta(cs, k, ss.sent_hdr, ss.sent_assumed);
+    query.push_str(vc_session_frame(cs, k));
+    if process_write_stdin(ss.handle, query) != 0 {
+        vc_session_close(ss);
+        return false;
+    }
+    ss.sent_hdr = cs.header_lens[k] as u64;
+    ss.sent_assumed = cs.assumed_lens[k] as u64;
+    ss.pending = Vec::new();
+    true
+}
+
+// Reads claim `k`'s reply into `ss.pending` until `deadline_us`. The verdict once
+// the sentinel has arrived in a well-formed reply; `VC_SESSION_PENDING` when the
+// reply is incomplete and the solver is alive, in which case a later call
+// continues where this one stopped (`process_read_line` keeps a partial line);
+// `VC_ANS_NONE` for anything else (end of file, a stray line), which closes the
+// session.
+fn vc_session_collect(ss: VcSession, k: u64, deadline_us: i64) -> i64 [io] {
+    let sentinel: String = vc_session_sentinel(k);
+    let pend: Vec<String> = ss.pending;
+    while pend.len() < 3 {
+        let left_ms: i64 = (deadline_us - time_micros()) / 1000;
+        if left_ms <= 0 { return VC_SESSION_PENDING(); }
+        let raw: String = process_read_line(ss.handle, left_ms);
+        let status: i64 = process_read_status(ss.handle);
+        if status == 2 { return VC_SESSION_PENDING(); }
+        if status != 0 {
+            vc_session_close(ss);
+            return VC_ANS_NONE();
+        }
+        let line: String = str_trim(raw);
+        pend.push(line);
+        if line == sentinel {
+            let verdict: i64 = vc_session_classify(pend, k);
+            if verdict == VC_ANS_NONE() { vc_session_close(ss); }
+            return verdict;
+        }
+    }
+    vc_session_close(ss);
+    VC_ANS_NONE()
+}
+
 // Asks claim `k` of `cs`, waiting at most `wait_ms`. `VC_ANS_SAT`, `UNSAT` or
 // `UNKNOWN` only from a well-formed reply; every failure (no process, write
 // error, end of file, timeout, a stray line) is `VC_ANS_NONE` and kills the
 // session, so no later ask can read a stale reply. `bin` is the solver path.
 fn vc_session_ask(ss: VcSession, bin: String, cs: VcClaims, k: u64, wait_ms: i64) -> i64 [io] {
     if !ss.live || wait_ms <= 0 { return VC_ANS_NONE(); }
+    if !vc_session_admits(ss.binder_at, cs, k) { return VC_ANS_NONE(); }
     let deadline_us: i64 = time_micros() + wait_ms * 1000;
-    if ss.handle < 0 {
-        if !vc_session_start(ss, bin, cs, k, deadline_us) {
-            vc_session_close(ss);
-            return VC_ANS_NONE();
-        }
-    }
-    let query: String = vc_session_delta(cs, ss.sent_hdr, ss.sent_assumed, k);
-    query.push_str(vc_session_frame(cs, k));
-    if process_write_stdin(ss.handle, query) != 0 {
+    if !vc_session_send(ss, bin, cs, k, deadline_us) { return VC_ANS_NONE(); }
+    let verdict: i64 = vc_session_collect(ss, k, deadline_us);
+    if verdict == VC_SESSION_PENDING() {
         vc_session_close(ss);
         return VC_ANS_NONE();
     }
-    ss.sent_hdr = cs.header_lens[k] as u64;
-    ss.sent_assumed = cs.assumed_lens[k] as u64;
-    let lines: Vec<String> = vc_session_read_until(ss.handle, vc_session_sentinel(k), deadline_us, 3);
-    let verdict: i64 = vc_session_classify(lines, k);
-    if verdict == VC_ANS_NONE() { vc_session_close(ss); }
     verdict
+}
+
+// `vc_session_ask` for the hedged claim: the reply is waited for `window_ms` only
+// (the process start and its handshake may take up to `wait_ms`), and one that
+// has not arrived by then is `VC_SESSION_PENDING` with the session left alive and
+// the question outstanding. The caller either keeps collecting it with
+// `vc_session_collect` or closes the session.
+fn vc_session_ask_hedged(ss: VcSession, bin: String, cs: VcClaims, k: u64, wait_ms: i64, window_ms: i64) -> i64 [io] {
+    if !ss.live || wait_ms <= 0 { return VC_ANS_NONE(); }
+    if !vc_session_admits(ss.binder_at, cs, k) { return VC_ANS_NONE(); }
+    let deadline_us: i64 = time_micros() + wait_ms * 1000;
+    if !vc_session_send(ss, bin, cs, k, deadline_us) { return VC_ANS_NONE(); }
+    let mut until_us: i64 = time_micros() + window_ms * 1000;
+    if until_us > deadline_us { until_us = deadline_us; }
+    vc_session_collect(ss, k, until_us)
 }

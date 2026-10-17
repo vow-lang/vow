@@ -5,11 +5,14 @@ import io
 import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
+import peak_rss
 import verify_perf as vp
 
 
@@ -33,6 +36,62 @@ def row(
         "esbmc": {"timed_out": esbmc_timeout},
         "native": {"timed_out": native_timeout},
     }
+
+
+class ResolvePeakTest(unittest.TestCase):
+    def test_largest_sampled_reading_wins_over_a_floor_level_maxrss(self):
+        self.assertEqual(
+            (9000, peak_rss.SAMPLED), peak_rss.resolve_peak(9000, 7000, 40_000, 40_000)
+        )
+
+    def test_single_process_high_water_mark_covers_a_peak_between_samples(self):
+        self.assertEqual(
+            (8000, peak_rss.SAMPLED), peak_rss.resolve_peak(5000, 8000, 30_000, 40_000)
+        )
+
+    def test_maxrss_above_the_floor_is_a_measurement(self):
+        self.assertEqual(
+            (50_000, peak_rss.RU_MAXRSS), peak_rss.resolve_peak(0, 0, 50_000, 40_000)
+        )
+
+    def test_maxrss_at_or_below_the_floor_is_not_a_measurement(self):
+        self.assertEqual(0, peak_rss.trusted_maxrss(40_000, 40_000))
+        self.assertEqual(0, peak_rss.trusted_maxrss(1_000, 40_000))
+        self.assertEqual(40_001, peak_rss.trusted_maxrss(40_001, 40_000))
+
+    def test_unsampled_run_is_a_labelled_upper_bound_never_zero(self):
+        self.assertEqual(
+            (30_000, peak_rss.UPPER_BOUND), peak_rss.resolve_peak(0, 0, 30_000, 40_000)
+        )
+
+    def test_no_reading_at_all_is_an_error(self):
+        with self.assertRaisesRegex(ValueError, "no peak RSS reading"):
+            peak_rss.resolve_peak(0, 0, 0, 40_000)
+
+
+class TreeSamplerTest(unittest.TestCase):
+    def test_reads_rss_and_high_water_mark_of_a_live_process(self):
+        rss, hwm = peak_rss.read_rss_hwm(os.getpid())
+        self.assertGreater(rss, 0)
+        self.assertGreaterEqual(hwm, rss)
+
+    def test_gone_process_reads_as_none(self):
+        self.assertIsNone(peak_rss.read_rss_hwm(2**22 + 12345))
+
+    def test_tree_sum_includes_a_descendant(self):
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            start_new_session=True,
+        )
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        solo = peak_rss.read_rss_hwm(os.getpid())[0]
+        deadline = time.monotonic() + 10
+        tree = single = 0
+        while time.monotonic() < deadline and tree <= solo:
+            tree, single = peak_rss.sample_tree(os.getpid())
+        self.assertGreater(tree, solo)
+        self.assertGreater(single, 0)
 
 
 class StatisticsTest(unittest.TestCase):
@@ -194,7 +253,7 @@ class CorpusTest(unittest.TestCase):
         for want in (
             "verify/float_arithmetic",
             "verify-fail/float_enum_payload_wrong",
-            "verify-native/skip/float_negation_skipped",
+            "verify-native/pass/float_negation",
             "verify-native/pass/float_rounding",
             "verify-native/pass/float_nan_comparisons",
             "verify-native/fail/float_nan_escapes_clamp",
@@ -208,9 +267,7 @@ class CorpusTest(unittest.TestCase):
         self.assertEqual(
             "VerifyFailed", by_name["verify-native/fail/add_wrong_post"].truth
         )
-        self.assertEqual(
-            "Skipped", by_name["verify-native/skip/float_negation_skipped"].truth
-        )
+        self.assertEqual("Verified", by_name["verify-native/pass/float_negation"].truth)
         self.assertEqual("Verified", by_name["verify-native/pass/float_f32"].truth)
         self.assertEqual(
             "VerifyFailed", by_name["verify-native/fail/float_f32_precision"].truth
@@ -279,6 +336,36 @@ class RunOnceTest(unittest.TestCase):
         self.assertFalse(got["timed_out"])
         self.assertGreater(got["wall_s"], 0)
 
+    def test_stderr_is_returned_only_when_asked_for(self):
+        body = "import sys\nsys.stderr.write('  f: PROVEN\\n')\nprint('{}')\n"
+        self.assertIsNone(self.run_stub(body)["stderr"])
+        got = vp.run_once(self.stub(body), "native", "x.vow", 1, None, 20.0, True)
+        self.assertEqual("  f: PROVEN\n", got["stderr"])
+
+    def test_timeline_stamps_stderr_lines_and_samples_the_tree(self):
+        body = (
+            "import sys, time\n"
+            "sys.stderr.write('  a: PROVEN\\n'); sys.stderr.flush()\n"
+            "time.sleep(0.3)\n"
+            "sys.stderr.write('  b: PROVEN\\n'); sys.stderr.flush()\n"
+            "print('{}')\n"
+        )
+        got = vp.run_once(
+            self.stub(body), "native", "x.vow", 1, None, 20.0, timeline=True
+        )
+        self.assertEqual("  a: PROVEN\n  b: PROVEN\n", got["stderr"])
+        (ta, la), (tb, lb) = got["events"]
+        self.assertEqual(("  a: PROVEN\n", "  b: PROVEN\n"), (la, lb))
+        self.assertGreaterEqual(tb - ta, 0.25)
+        self.assertLessEqual(tb, got["wall_s"] + 0.05)
+        self.assertTrue(got["rss_series"])
+        self.assertTrue(all(kb > 0 for _, kb in got["rss_series"]))
+
+    def test_timeline_is_absent_unless_asked_for(self):
+        got = self.run_stub("print('{}')\n")
+        self.assertNotIn("events", got)
+        self.assertNotIn("rss_series", got)
+
     def test_cache_written_while_measuring_invalidates_the_sample(self):
         with self.assertRaisesRegex(ValueError, "cache was used while measuring"):
             self.run_stub(
@@ -305,15 +392,19 @@ class RunOnceTest(unittest.TestCase):
         )
         self.assertGreaterEqual(got["peak_rss_kb"], 50 * 1024)
 
-    def test_maxrss_at_or_below_the_harness_peak_is_not_trusted(self):
-        with mock.patch.object(
-            vp.resource,
-            "getrusage",
-            return_value=mock.Mock(ru_maxrss=40_000),
-        ):
-            self.assertEqual(0, vp.trusted_maxrss(40_000))
-            self.assertEqual(0, vp.trusted_maxrss(1_000))
-            self.assertEqual(40_001, vp.trusted_maxrss(40_001))
+    def test_run_shorter_than_one_sample_still_reports_a_positive_peak(self):
+        got = self.run_stub('print(\'{"status": "Verified"}\')\n')
+        self.assertGreater(got["peak_rss_kb"], 0)
+        self.assertIn(
+            got["rss_source"],
+            (peak_rss.SAMPLED, peak_rss.RU_MAXRSS, peak_rss.UPPER_BOUND),
+        )
+
+    def test_run_that_exits_before_any_sample_falls_back_to_ru_maxrss(self):
+        with mock.patch.object(peak_rss, "sample_tree", return_value=(0, 0)):
+            got = self.run_stub("print('{}')\n")
+        self.assertGreater(got["peak_rss_kb"], 0)
+        self.assertIn(got["rss_source"], (peak_rss.RU_MAXRSS, peak_rss.UPPER_BOUND))
 
     def test_watchdog_kills_a_hung_run(self):
         got = self.run_stub("import time\ntime.sleep(60)\n", watchdog_s=0.5)
@@ -346,15 +437,27 @@ def sample(
     timed_out=False,
     verify_status=None,
     cex=None,
+    skipped=(),
+    rss_source=peak_rss.SAMPLED,
 ):
     result = {"status": verdict_status}
     if verify_status:
         result["verify_status"] = verify_status
     if cex:
         result["counterexamples"] = cex
+    if skipped:
+        result["diagnostics"] = [
+            {
+                "error_code": "VerificationSkipped",
+                "severity": "warning",
+                "message": f"skipped verification of `{fn}`: not modelable",
+            }
+            for fn in skipped
+        ]
     return {
         "wall_s": wall,
         "peak_rss_kb": rss,
+        "rss_source": rss_source,
         "timed_out": timed_out,
         "result": result,
     }
@@ -435,6 +538,92 @@ class FixtureTest(unittest.TestCase):
         self.assertEqual("weaker", got["class"])
         self.assertFalse(got["comparable"])
         self.assertIsNone(got["ratio_wall"])
+
+    def test_different_skipped_functions_are_not_like_for_like(self):
+        esbmc = [sample("Skipped", skipped=("low", "second", "call_ret"))] * 6
+        native = [sample("Skipped", skipped=("call_ret",))] * 6
+        got, _ = self.measure(
+            {"esbmc": self.feed(*esbmc), "native": self.feed(*native)}
+        )
+        self.assertEqual("more_precise", got["class"])
+        self.assertFalse(got["comparable"])
+        self.assertEqual("more_precise", got["excluded"])
+        self.assertIn("low", got["detail"])
+        self.assertIsNone(got["ratio_wall"])
+
+    def test_same_skipped_functions_stay_comparable(self):
+        both = [sample("Skipped", skipped=("call_ret",))] * 6
+        got, _ = self.measure({"esbmc": self.feed(*both), "native": self.feed(*both)})
+        self.assertEqual("match", got["class"])
+        self.assertTrue(got["comparable"])
+
+    def test_row_class_is_the_verify_diff_class(self):
+        cases = [
+            ("Verified", "Verified", (), ()),
+            ("Skipped", "Skipped", ("a", "b"), ("a",)),
+            ("Skipped", "Skipped", ("a",), ("a", "b")),
+            ("Verified", "Skipped", (), ("a",)),
+        ]
+        for e_status, n_status, e_skip, n_skip in cases:
+            with self.subTest(case=(e_status, n_status, e_skip, n_skip)):
+                got, _ = self.measure(
+                    {
+                        "esbmc": self.feed(*[sample(e_status, skipped=e_skip)] * 6),
+                        "native": self.feed(*[sample(n_status, skipped=n_skip)] * 6),
+                    }
+                )
+                diff = vp.verify_diff
+                want, _ = diff.classify_outcomes(
+                    self.FX.truth,
+                    self.FX.path,
+                    diff.summarise(sample(e_status, skipped=e_skip)["result"]),
+                    diff.summarise(sample(n_status, skipped=n_skip)["result"]),
+                )
+                self.assertEqual(want, got["class"])
+
+    def test_artifact_directives_are_honoured_like_verify_diff_does(self):
+        cex = [
+            {"function": "f", "blame": "Callee", "vow_id": 2, "violation": "ensures"}
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "m.vow")
+            with open(path, "w") as fh:
+                fh.write(
+                    '// TEST: esbmc-model-artifact fn="f" blame=Callee vow_id=2 "why"\n'
+                )
+            fx = vp.Fixture("verify-native/pass", "m", path, "Verified")
+            got, _ = self.measure(
+                {
+                    "esbmc": self.feed(*[sample("VerifyFailed", cex=cex)] * 6),
+                    "native": self.feed(*[sample()] * 6),
+                },
+                fx=fx,
+            )
+        self.assertEqual("more_precise", got["class"])
+        self.assertFalse(got["comparable"])
+
+    def test_unmeasured_native_runs_are_labelled_but_still_compared(self):
+        ub = [sample(rss_source=peak_rss.UPPER_BOUND)] * 6
+        got, _ = self.measure(
+            {"esbmc": self.feed(*[sample()] * 6), "native": self.feed(*ub)}
+        )
+        self.assertEqual({peak_rss.UPPER_BOUND: 5}, got["native"]["rss_sources"])
+        self.assertTrue(got["comparable"])
+        self.assertEqual(1.0, got["ratio_rss"])
+
+    def test_unmeasured_esbmc_runs_fail_naming_the_fixture(self):
+        ub = [sample(rss_source=peak_rss.UPPER_BOUND)] * 6
+        with self.assertRaisesRegex(ValueError, "verify/x.*esbmc"):
+            self.measure(
+                {"esbmc": self.feed(*ub), "native": self.feed(*[sample()] * 6)}
+            )
+
+    def test_zero_reading_names_the_fixture(self):
+        zero = [sample(rss=0)] * 6
+        with self.assertRaisesRegex(ValueError, "verify/x: cannot form a ratio"):
+            self.measure(
+                {"esbmc": self.feed(*[sample()] * 6), "native": self.feed(*zero)}
+            )
 
     def test_timeout_needs_a_strict_majority_of_runs(self):
         slow = sample("VerifyFailed", timed_out=True, verify_status="timeout")

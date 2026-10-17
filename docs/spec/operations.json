@@ -388,7 +388,7 @@
       "return": "u64",
       "doc_signature": "fn(x: u64) -> u64",
       "effects": "[]",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -398,7 +398,7 @@
       "return": "u64",
       "doc_signature": "fn(s: String) -> u64",
       "effects": "[]",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -510,8 +510,7 @@
       "return": "ptr",
       "doc_signature": "fn() -> String",
       "effects": "[io]",
-      "arena_routing": "none",
-      "arena_routing_reason": "Allocates in the root arena and has no _in_arena variant, so each call retains its result until exit; tracked in issue 1639.",
+      "arena_routing": "heap_fresh",
       "verifier_model": "unmodeled"
     },
     {
@@ -531,7 +530,7 @@
       "doc_signature": "fn(data: Vec<u8>) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -542,7 +541,7 @@
       "doc_signature": "fn(s: String) -> Vec<u8>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -553,7 +552,7 @@
       "doc_signature": "fn(s: String) -> Option<i64>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base_and_arena"
     },
     {
@@ -564,7 +563,7 @@
       "doc_signature": "fn(s: String) -> Option<i8>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base"
     },
     {
@@ -575,7 +574,7 @@
       "doc_signature": "fn(s: String) -> Option<i16>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base"
     },
     {
@@ -586,7 +585,7 @@
       "doc_signature": "fn(s: String) -> Option<i32>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base"
     },
     {
@@ -597,7 +596,7 @@
       "doc_signature": "fn(s: String) -> Option<i128>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -608,7 +607,7 @@
       "doc_signature": "fn(s: String) -> Option<u8>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base"
     },
     {
@@ -619,7 +618,7 @@
       "doc_signature": "fn(s: String) -> Option<u16>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base"
     },
     {
@@ -630,7 +629,7 @@
       "doc_signature": "fn(s: String) -> Option<u32>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base"
     },
     {
@@ -641,7 +640,7 @@
       "doc_signature": "fn(s: String) -> Option<u128>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -651,7 +650,7 @@
       "return": "u64",
       "doc_signature": "fn(s: String) -> u64",
       "effects": "[]",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -662,7 +661,7 @@
       "doc_signature": "fn(bits: u64) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -673,7 +672,7 @@
       "doc_signature": "fn(v: i64) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base_and_arena"
     },
     {
@@ -684,7 +683,7 @@
       "doc_signature": "fn(v: u64) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base_and_arena"
     },
     {
@@ -695,7 +694,7 @@
       "doc_signature": "fn(v: i128) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -706,7 +705,7 @@
       "doc_signature": "fn(v: u128) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -717,7 +716,7 @@
       "doc_signature": "fn(s: String, start: u64, len: u64) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base_and_arena"
     },
     {
@@ -728,7 +727,7 @@
       "doc_signature": "fn(s: String, delim: String) -> Vec<String>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -738,7 +737,7 @@
       "return": "i64",
       "doc_signature": "fn(s: String, prefix: String) -> i64",
       "effects": "[]",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -748,7 +747,7 @@
       "return": "i64",
       "doc_signature": "fn(s: String, suffix: String) -> i64",
       "effects": "[]",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -759,7 +758,7 @@
       "doc_signature": "fn(s: String) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base_and_arena"
     },
     {
@@ -770,7 +769,7 @@
       "doc_signature": "fn(s: String) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base_and_arena"
     },
     {
@@ -781,7 +780,7 @@
       "doc_signature": "fn(s: String) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "base_and_arena"
     },
     {
@@ -792,7 +791,7 @@
       "doc_signature": "fn(s: String, from: String, to: String) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -803,7 +802,7 @@
       "doc_signature": "fn(parts: Vec<String>, sep: String) -> String",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     },
     {
@@ -814,7 +813,7 @@
       "doc_signature": "fn(v: Vec<i64>) -> Vec<i64>",
       "effects": "[]",
       "arena_routing": "heap_fresh",
-      "verifier_model": "unmodeled",
+      "verifier_model": "known",
       "c_model": "unmodeled"
     }
   ],
@@ -902,7 +901,8 @@
     "__vow_string_to_upper",
     "__vow_string_to_lower",
     "__vow_string_replace",
-    "__vow_string_join"
+    "__vow_string_join",
+    "__vow_proc_sample"
   ],
   "excluded": [
     {
@@ -924,7 +924,7 @@
     {
       "contains": "_to_",
       "suffixes": ["_try", "_wrap", "_sat"],
-      "reason": "Narrowing-conversion families (<source>_to_<target>_{try,wrap,sat}) return narrow integer types the catalogue token vocabulary cannot express yet; they stay in the hand-written conversion tables, and their _try runtime symbols are the arena_routes entries."
+      "reason": "Narrowing-conversion families (<source>_to_<target>_{try,wrap,sat}) return narrow integer types the catalogue token vocabulary cannot express yet; they stay in the hand-written conversion tables, and their _try runtime symbols are the arena_routes entries. The native verifier models the whole family by parsing the runtime symbol (compiler/vc_narrow.vow, ADR-2026-10-08-1422 addendum for #1679 and #1690), so no per-member verifier_model is recorded here."
     },
     {
       "names": ["add_sat_u8", "sub_sat_u8", "mul_sat_u8"],

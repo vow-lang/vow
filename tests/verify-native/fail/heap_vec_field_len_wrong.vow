@@ -1,0 +1,20 @@
+// TEST: replay-skipped field 0 is a Vec, which the replay harness cannot build
+// TEST: counterexample-fn "count"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The Vec in `b.items` has the length it has: one more than it is refuted.
+module HeapVecFieldLenWrong
+
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn count(b: Bag) -> u64 vow {
+  ensures: result == b.items.len() + 1
+} {
+  b.items.len()
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), tag: 1 };
+  print_u64(count(b));
+  0
+}

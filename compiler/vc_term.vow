@@ -8,8 +8,18 @@ use ir_dominance
 // text is produced by `vc_smt`, which maps the operator codes below to
 // symbols.
 //
+// A `VC_T_QEQ` node is the one binder of the language: for every index `i`
+// below the bit-vector `n` (its `aux`), the low byte of `a[i]` equals the low
+// byte of `b[i + k]` (`a` and `b` are its first two children, `k` its third). It
+// has no operator code, is never simplified and its bound variable is not a
+// term, so a rule or a traversal never sees a binder; `vc_smt` prints it as a
+// `forall` over a reserved name. Only `vc_str` builds one, and only inside an
+// assumption, never in a goal.
+//
 // A sort code is the bit-vector width (8, 16, 32, 64, 128), or 0 for Bool, or
-// `VC_SORT_ARRAY64` for an array from 64-bit indices to 64-bit elements, or
+// `VC_SORT_ARRAY64` for an array from 64-bit indices to 64-bit elements,
+// `VC_SORT_ARRAY128` for one from 128-bit indices (a handle and an element
+// index, joined by `VC_OP_CONCAT`) to 64-bit elements, or
 // `VC_SORT_F32`/`VC_SORT_F64` for the IEEE-754 `FloatingPoint` sorts. A float
 // constant is the `to_fp` application of its bit pattern (a bit-vector
 // constant), so the simplifier never folds a float operation.
@@ -21,6 +31,7 @@ use ir_dominance
 
 fn VC_SORT_BOOL() -> i64 { 0 }
 fn VC_SORT_ARRAY64() -> i64 { 1000 }
+fn VC_SORT_ARRAY128() -> i64 { 1128 }
 fn VC_SORT_F32() -> i64 { 1032 }
 fn VC_SORT_F64() -> i64 { 1064 }
 
@@ -29,6 +40,15 @@ fn VC_T_BV() -> i64 { 1 }
 fn VC_T_BOOL() -> i64 { 2 }
 fn VC_T_APP() -> i64 { 3 }
 fn VC_T_EXT() -> i64 { 4 }
+fn VC_T_QEQ() -> i64 { 5 }
+fn VC_T_QLT() -> i64 { 6 }
+fn VC_T_QDIFF() -> i64 { 7 }
+fn VC_T_QFOLD() -> i64 { 8 }
+fn VC_T_QHEX() -> i64 { 9 }
+fn VC_T_QUNHEX() -> i64 { 10 }
+fn VC_T_HEXPAIR() -> i64 { 11 }
+fn VC_T_HEXVAL() -> i64 { 12 }
+fn VC_T_QSORT() -> i64 { 13 }
 
 fn VC_EXT_ZERO() -> i64 { 0 }
 fn VC_EXT_SIGN() -> i64 { 1 }
@@ -80,6 +100,10 @@ fn VC_OP_FPGT() -> i64 { 42 }
 fn VC_OP_FPGE() -> i64 { 43 }
 fn VC_OP_TOFP32() -> i64 { 44 }
 fn VC_OP_TOFP64() -> i64 { 45 }
+fn VC_OP_FPNEG() -> i64 { 46 }
+fn VC_OP_CONCAT() -> i64 { 47 }
+// The array whose every element is the operand: `((as const (Array ..)) x)`.
+fn VC_OP_CONSTARR() -> i64 { 48 }
 
 // `hashes` caches each term's node hash; `slots` is an open-addressing table
 // (power-of-two length, linear probing, -1 empty) over the interned term ids, so
@@ -254,11 +278,19 @@ fn vc_tm_is_false(ar: VcArena, t: i64) -> bool {
 // a bit-vector constant carries. Operators on 128-bit constants fold only by
 // width-independent rules.
 
+// The kinds `vc_smt` prints from a template (`vc_qbind`) instead of an operator: the binders
+// of the `String` model (`vc_str`, `vc_strsearch`, `vc_strfold`) and the two hex-pair macros
+// of `hex_decode`. Their children are terms (`a`, `b`, `c`, `aux`, each -1 when unused).
+fn vc_kind_is_binder(kind: i64) -> bool {
+    kind == VC_T_QEQ() || kind == VC_T_QLT() || kind == VC_T_QDIFF()
+        || (kind >= VC_T_QFOLD() && kind <= VC_T_HEXVAL()) || kind == VC_T_QSORT()
+}
+
 // True for variables and constants: terms that are printed as they are and
 // never named.
 fn vc_tm_is_leaf(ar: VcArena, t: i64) -> bool {
     let kind: i64 = ar.kinds[t as u64];
-    kind != VC_T_APP() && kind != VC_T_EXT()
+    kind != VC_T_APP() && kind != VC_T_EXT() && !vc_kind_is_binder(kind)
 }
 
 // The variable already standing for `t`, `t` itself when it is a leaf, or -1
@@ -487,6 +519,78 @@ fn vc_simp_sub_quotient(ar: VcArena, x: i64, y: i64) -> i64 {
     vc_simp_quotient_rem(ar, x, ar.b[m as u64], ar.a[m as u64])
 }
 
+// The comparison `x op y` read as `v <= q` or, when `negated`, `v > q`, with
+// `q` the operand that may be a quotient; `ok` is false for the other four
+// comparisons and for every non-comparison.
+struct VcQuotCmp {
+    ok: bool,
+    v: i64,
+    q: i64,
+    negated: bool,
+    signed: bool,
+}
+
+fn vc_quot_cmp(op: i64, x: i64, y: i64) -> VcQuotCmp {
+    let signed: bool = op == VC_OP_BVSLE() || op == VC_OP_BVSGE() || op == VC_OP_BVSGT() || op == VC_OP_BVSLT();
+    if op == VC_OP_BVSLE() || op == VC_OP_BVULE() {
+        return VcQuotCmp { ok: true, v: x, q: y, negated: false, signed: signed };
+    }
+    if op == VC_OP_BVSGE() || op == VC_OP_BVUGE() {
+        return VcQuotCmp { ok: true, v: y, q: x, negated: false, signed: signed };
+    }
+    if op == VC_OP_BVSGT() || op == VC_OP_BVUGT() {
+        return VcQuotCmp { ok: true, v: x, q: y, negated: true, signed: signed };
+    }
+    if op == VC_OP_BVSLT() || op == VC_OP_BVULT() {
+        return VcQuotCmp { ok: true, v: y, q: x, negated: true, signed: signed };
+    }
+    VcQuotCmp { ok: false, v: -1, q: -1, negated: false, signed: signed }
+}
+
+// `v <= c / d` and `v > c / d`, for a constant `c` (non-negative when signed)
+// and a variable `v`, is a multiplication-overflow test: for `d > 0`,
+// `v <= floor(c / d)` holds iff the exact product `v * d` is at most `c`, which
+// is `not umulo(v, d) and v * d <= c` unsigned, and for signed values
+// `smulo(v, d) ? v < 0 : v * d <= c` (an overflowing product has the sign of
+// `v`). This is the `v <= MAX / d` guard against a wrapping multiply; the
+// solver cannot decide a query that mixes that division with the product
+// itself at 64 bits. The rewrite is an `ite` on `d > 0` whose else branch is
+// the original comparison, so a zero or negative divisor keeps its SMT-LIB
+// meaning. A constant `v` or a variable dividend is not the pattern and is left
+// to the solver.
+fn vc_simp_cmp_quotient(ar: VcArena, op: i64, x: i64, y: i64) -> i64 {
+    let shape: VcQuotCmp = vc_quot_cmp(op, x, y);
+    if !shape.ok { return -1; }
+    let v: i64 = shape.v;
+    let signed: bool = shape.signed;
+    if vc_is_bv(ar, v) { return -1; }
+    let n: i64 = vc_tm_def(ar, shape.q);
+    if n < 0 { return -1; }
+    let dop: i64 = { if signed { VC_OP_BVSDIV() } else { VC_OP_BVUDIV() } };
+    if ar.aux[n as u64] != dop { return -1; }
+    let c: i64 = ar.a[n as u64];
+    let d: i64 = ar.b[n as u64];
+    if !vc_is_bv(ar, c) || vc_is_bv(ar, d) { return -1; }
+    let w: i64 = ar.a[c as u64];
+    if w > 64 || (signed && vc_bvfold_sext(w, ar.aux[c as u64]) < 0) { return -1; }
+    let zero: i64 = vc_tm_bv(ar, w, 0, 0);
+    let prod: i64 = vc_tm_app2(ar, VC_OP_BVMUL(), v, d);
+    let gt: i64 = { if signed { VC_OP_BVSGT() } else { VC_OP_BVUGT() } };
+    let le: i64 = { if signed { VC_OP_BVSLE() } else { VC_OP_BVULE() } };
+    let pos: i64 = vc_tm_app2(ar, gt, d, zero);
+    let fits: i64 = vc_tm_app2(ar, le, prod, c);
+    let mulo: i64 = vc_tm_app2(ar, { if signed { VC_OP_BVSMULO() } else { VC_OP_BVUMULO() } }, v, d);
+    let mut inner: i64 = 0;
+    if signed {
+        inner = vc_tm_app3(ar, VC_OP_ITE(), mulo, vc_tm_app2(ar, VC_OP_BVSLT(), v, zero), fits);
+    } else {
+        inner = vc_tm_and(ar, vc_tm_app1(ar, VC_OP_NOT(), mulo), fits);
+    }
+    if shape.negated { inner = vc_tm_app1(ar, VC_OP_NOT(), inner); }
+    let original: i64 = vc_arena_intern(ar, VC_T_APP(), x, y, -1, op);
+    vc_tm_app3(ar, VC_OP_ITE(), pos, inner, original)
+}
+
 fn vc_simp_and(ar: VcArena, x: i64, y: i64) -> i64 {
     if vc_tm_is_true(ar, x) { return y; }
     if vc_tm_is_true(ar, y) { return x; }
@@ -520,6 +624,7 @@ fn vc_tm_app2(ar: VcArena, op: i64, x: i64, y: i64) -> i64 {
     }
     if r < 0 { r = vc_simp_identity(ar, op, x, y); }
     if r < 0 && op == VC_OP_BVSUB() { r = vc_simp_sub_quotient(ar, x, y); }
+    if r < 0 { r = vc_simp_cmp_quotient(ar, op, x, y); }
     if r >= 0 { return r; }
     vc_arena_intern(ar, VC_T_APP(), x, y, -1, op)
 }
@@ -576,4 +681,56 @@ fn vc_tm_ext(ar: VcArena, kind: i64, amount: i64, x: i64) -> i64 {
         if r >= 0 { return r; }
     }
     vc_arena_intern(ar, VC_T_EXT(), x, amount, -1, kind)
+}
+
+// `forall i < n. low8(a[i]) == low8(b[i + k])`: the `String` byte-range equality
+// (`vc_str`). Not interned through the simplifier on purpose.
+fn vc_tm_qeq(ar: VcArena, a: i64, b: i64, k: i64, n: i64) -> i64 {
+    vc_arena_intern(ar, VC_T_QEQ(), a, b, k, n)
+}
+
+// `forall i <= l. a[i] < b` (unsigned): every slot of the Skolem array `a` up to `l` is below
+// the bound `b`. Like `vc_tm_qeq`, built only inside an assumption.
+fn vc_tm_qlt(ar: VcArena, a: i64, b: i64, l: i64) -> i64 {
+    vc_arena_intern(ar, VC_T_QLT(), a, b, -1, l)
+}
+
+// `out` is the sorted permutation of `src` over the first `len` slots, through the witness array
+// `pq` (see `vc_qb_sort`). Like the other binders, built only inside an assumption.
+fn vc_tm_qsort(ar: VcArena, out: i64, src: i64, pq: i64, len: i64) -> i64 {
+    vc_arena_intern(ar, VC_T_QSORT(), out, src, pq, len)
+}
+
+// `forall i <= l. low8(a[c[i]]) != low8(b[i + c[i]])`: at every start `i` up to `l` the Skolem
+// array `c` names a position of the needle `a` that differs from the haystack `b` there.
+fn vc_tm_qdiff(ar: VcArena, a: i64, b: i64, c: i64, l: i64) -> i64 {
+    vc_arena_intern(ar, VC_T_QDIFF(), a, b, c, l)
+}
+
+// `forall i < n. h[i + 1] == (h[i] xor low8(s[i])) * FNV_PRIME`: the prefix array `h` of the FNV-1a
+// fold over the first `n` bytes of `s` (`vc_strfold`). Built only inside an assumption.
+fn vc_tm_qfold(ar: VcArena, h: i64, s: i64, n: i64) -> i64 {
+    vc_arena_intern(ar, VC_T_QFOLD(), h, s, -1, n)
+}
+
+// `forall i < n. r[2i] == hexdigit(low8(v[i]) >> 4) and r[2i + 1] == hexdigit(low8(v[i]) & 15)`:
+// the text `hex_encode` produces for the first `n` elements of `v`.
+fn vc_tm_qhex(ar: VcArena, r: i64, v: i64, n: i64) -> i64 {
+    vc_arena_intern(ar, VC_T_QHEX(), r, v, -1, n)
+}
+
+// `forall i < m. hexpair(s, i) and r[i] == hexval(s, i)`: every pair of the first `2m` bytes of `s`
+// is one the runtime's `hex_decode` accepts, and `r` holds the bytes they decode to.
+fn vc_tm_qunhex(ar: VcArena, r: i64, s: i64, m: i64) -> i64 {
+    vc_arena_intern(ar, VC_T_QUNHEX(), r, s, -1, m)
+}
+
+// Bool: the pair of bytes `s[2i]`, `s[2i + 1]` is accepted by `hex_decode`.
+fn vc_tm_hexpair(ar: VcArena, s: i64, i: i64) -> i64 {
+    vc_arena_intern(ar, VC_T_HEXPAIR(), s, i, -1, -1)
+}
+
+// 64-bit: the byte that pair decodes to (meaningful when `vc_tm_hexpair` holds).
+fn vc_tm_hexval(ar: VcArena, s: i64, i: i64) -> i64 {
+    vc_arena_intern(ar, VC_T_HEXVAL(), s, i, -1, -1)
 }

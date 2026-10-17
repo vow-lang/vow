@@ -1,0 +1,19 @@
+// TEST: counterexample-fn "not_a"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value s.len 1
+// TEST: counterexample-value s[0] 97
+// The counterexample needs the solver to invert one step of the fold: the only one-byte string
+// whose FNV-1a hash is that of "a" is "a" (byte 97), found through the step binder.
+module HashStrOneByteNotA
+
+fn not_a(s: String) -> bool vow {
+  requires: s.len() == 1
+  ensures: result == true
+} {
+  hash_str(s) != 12638187200555641996u64
+}
+
+fn main() -> i32 [io] {
+  if not_a(String::from("b")) { 0 } else { 1 }
+}

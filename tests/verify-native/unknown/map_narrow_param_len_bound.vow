@@ -1,0 +1,17 @@
+// TEST: unknown-reason unconstrained map state
+module MapNarrowParamLenBound
+
+// True for every real map (a `u8` key has 256 values), but the native verifier does
+// not know the key type of a parameter map that no 64-bit operand shows, so a length
+// above 256 is a state it cannot rule out and a failure at one is not reported.
+fn len_at_most_domain(m: HashMap<u8, i64>) -> u64 vow {
+  ensures: result <= 256
+} {
+  m.len()
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<u8, i64> = HashMap::new();
+  print_u64(len_at_most_domain(m));
+  0
+}

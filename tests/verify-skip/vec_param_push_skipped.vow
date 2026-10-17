@@ -6,7 +6,9 @@ module VecParamPushSkipped
 // scan (they are only used as a store value / receiver), so the push used to
 // emit an `int64_t` store of a Vec handle and the proof was bogus. The
 // Ptr-typed value operand now makes the function non-modelable, so it is
-// Skipped.
+// Skipped. The Skipped is the ESBMC model's: the native backend stores the address of `row`
+// as a slot it never reads back and proves the length (see
+// tests/verify-native/pass/vec_pointer_push_param.vow).
 fn add_row(grid: Vec<Vec<i64>>, row: Vec<i64>) -> i64 vow {
   ensures: result >= 0
 } {

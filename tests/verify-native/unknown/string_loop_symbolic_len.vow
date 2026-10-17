@@ -1,0 +1,23 @@
+// TEST: category invariant
+// The loop bound is a parameter: no finite unrolling covers every `n`, so the
+// unwinding assertion stays open and the result is unknown, never proven. The loop
+// has no invariant, so the cut havocs the string's length with the clause `true` and
+// the postcondition about the length is not provable there either.
+module StringLoopSymbolicLen
+
+fn fill(n: u64) -> String vow {
+  ensures: result.len() == n
+} {
+  let s: String = String::new();
+  let mut i: u64 = 0;
+  while i < n {
+    s.push_byte(65u8);
+    i = i + 1;
+  }
+  s
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill(3).len());
+  0
+}

@@ -1,0 +1,26 @@
+// TEST: counterexample-fn "first_marked"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// The cut with the clause `true` only ever proves: a postcondition that a run violates is still
+// refuted by the bounded rounds, with the counterexample of a real run.
+module LoopWithoutInvariantCutWrong
+
+fn first_marked(items: Vec<i64>) -> i64 vow {
+  ensures: result >= 0
+} {
+  let mut i: u64 = 0u64;
+  while i < items.len() {
+    let item: i64 = items[i];
+    if item >= 0 {
+      return item;
+    }
+    i = i + 1u64;
+  }
+  -1
+}
+
+fn main() -> i32 [io] {
+  let items: Vec<i64> = Vec::new();
+  print_i64(first_marked(items));
+  0
+}

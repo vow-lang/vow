@@ -6,36 +6,27 @@ use vc_cache
 use vc_native
 use vc_cex
 
-// Per-function worker subprocesses for the native verifier. The parent never
-// runs the solver pipeline itself: each verify target goes to a `vowc
-// verify-worker` child of the same binary, started with an address-space cap in
-// its own process group. A worker that exhausts memory, crashes or overruns the
-// deadline therefore costs one function's verdict, never the compiler. The
-// group is killed as a whole, so a solver child cannot outlive its worker.
-//
-// The worker prints one `VerifyResult` in the wire format below; the parent
-// decodes it and reuses the ordinary reporting. Anything that is not a clean
-// decoded result is classified here and never counts as proof.
+// Worker subprocesses of the native verifier: the wire format a worker answers
+// in, and how a worker that did not answer cleanly is classified. The pool that
+// starts them is `vc_pool`; the queue they share is `vc_queue`. The parent never
+// runs the solver pipeline itself, so a worker that exhausts memory, crashes or
+// overruns the deadline costs the verdict of the task it was on, never the
+// compiler. Anything that is not a clean decoded result is classified here and
+// never counts as proof.
 
 fn VC_WORKER_MEM_KB() -> i64 { 4194304 }
 
 // Mirrors `PROC_SIGNAL_BASE` in vow-runtime: a signal death is reported as base - signal.
 fn VC_PROC_SIGNAL_BASE() -> i64 { -1000 }
 
-fn VC_ST_NEXT() -> u64 { 0 }
-fn VC_ST_LIMIT() -> u64 { 1 }
-fn VC_ST_RUNNING() -> u64 { 2 }
-
-fn VC_TASK_PENDING() -> i64 { 0 }
-fn VC_TASK_RUNNING() -> i64 { 1 }
-fn VC_TASK_DONE() -> i64 { 2 }
-fn VC_TASK_CANCELLED() -> i64 { 3 }
-
 // What a pool task asks its worker to decide: the function's own contract, or
 // one of the two weak-contract probes of `contracts` (see `vc_probe`).
 fn VC_TASK_KIND_VERIFY() -> i64 { 0 }
 fn VC_TASK_KIND_VACUITY() -> i64 { 1 }
 fn VC_TASK_KIND_TRIVIAL() -> i64 { 2 }
+// The proof of a callee that summaries may stand for (`vc_summary`): every claim of the
+// function is decided, as for a function with a contract.
+fn VC_TASK_KIND_PROOF() -> i64 { 3 }
 
 // Path the workers are started from: this binary, as invoked.
 fn vc_worker_exe(argv0: String) -> String [read] {
@@ -301,237 +292,4 @@ fn vc_worker_result(exit_code: i64, stdout: String, stderr: String) -> VcOutcome
         return vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), memory_limit_reason()));
     }
     vc_bare_outcome(vc_plain_result(VERIFY_PANICKED(), vc_panic_detail(exit_code, stderr)))
-}
-
-// ---------------------------------------------------------------------------
-// Pool: runs the tasks in order, at most `jobs` at a time
-// ---------------------------------------------------------------------------
-
-// `state` holds the counters at the VC_ST_* indices. `clauses` makes every
-// verify task decide all claims of its function and report per-clause verdicts.
-// `halt` is the `verify` early stop: nothing above the first task that did not
-// prove is started or kept, which is wrong for a report that spans functions
-// (`contracts`, `test`), so those clear it. `kinds` is per task and
-// `module_root` is the explicit module root the parent lowered with, if any.
-// `cache` is the result cache every worker of the pool shares (off by default).
-struct VcPool {
-    exe: String,
-    path: String,
-    budget_ms: i64,
-    mem_kb: i64,
-    jobs: i64,
-    fn_idx: Vec<i64>,
-    fn_names: Vec<String>,
-    phase: Vec<i64>,
-    handles: Vec<i64>,
-    started: Vec<i64>,
-    scratch: Vec<String>,
-    results: Vec<VcOutcome>,
-    state: Vec<i64>,
-    clauses: bool,
-    cache: VcCache,
-    halt: bool,
-    kinds: Vec<i64>,
-    module_root: String,
-}
-
-fn vc_pool_new(exe: String, path: String, fn_idx: Vec<i64>, fn_names: Vec<String>, jobs: i64, budget_ms: i64) -> VcPool [read] {
-    let phase: Vec<i64> = Vec::new();
-    let handles: Vec<i64> = Vec::new();
-    let started: Vec<i64> = Vec::new();
-    let scratch: Vec<String> = Vec::new();
-    let results: Vec<VcOutcome> = Vec::new();
-    let kinds: Vec<i64> = Vec::new();
-    let mut k: u64 = 0;
-    while k < fn_idx.len() {
-        kinds.push(VC_TASK_KIND_VERIFY());
-        phase.push(VC_TASK_PENDING());
-        handles.push(-1);
-        started.push(0);
-        scratch.push(String::from(""));
-        results.push(vc_bare_outcome(vc_plain_result(VERIFY_ERROR(), String::from("not run"))));
-        k = k + 1;
-    }
-    let state: Vec<i64> = Vec::new();
-    state.push(0);
-    state.push(fn_idx.len() as i64);
-    state.push(0);
-    VcPool {
-        exe: exe,
-        path: path,
-        budget_ms: budget_ms,
-        mem_kb: vc_worker_mem_kb(),
-        jobs: jobs,
-        fn_idx: fn_idx,
-        fn_names: fn_names,
-        phase: phase,
-        handles: handles,
-        started: started,
-        scratch: scratch,
-        results: results,
-        state: state,
-        clauses: false,
-        cache: vc_cache_off(),
-        halt: true,
-        kinds: kinds,
-        module_root: String::from(""),
-    }
-}
-
-fn vc_worker_argv(p: VcPool, k: u64) -> Vec<String> {
-    let a: Vec<String> = Vec::new();
-    a.push(String::from("verify-worker"));
-    a.push(p.path);
-    a.push(String::from("--worker-index"));
-    a.push(i64_to_string(p.fn_idx[k]));
-    a.push(String::from("--worker-name"));
-    a.push(p.fn_names[k]);
-    a.push(String::from("--worker-budget-ms"));
-    a.push(i64_to_string(p.budget_ms));
-    if p.scratch[k].len() > 0 {
-        a.push(String::from("--worker-scratch"));
-        a.push(p.scratch[k]);
-    }
-    let kind: i64 = p.kinds[k];
-    if kind == VC_TASK_KIND_VERIFY() {
-        if p.clauses { a.push(String::from("--worker-clauses")); }
-    } else {
-        a.push(String::from("--worker-probe"));
-        if kind == VC_TASK_KIND_VACUITY() {
-            a.push(String::from("vacuity"));
-        } else {
-            a.push(String::from("trivial"));
-        }
-    }
-    if p.module_root.len() > 0 {
-        a.push(String::from("--worker-module-root"));
-        a.push(p.module_root);
-    }
-    if vc_cache_on(p.cache) {
-        a.push(String::from("--worker-cache-dir"));
-        a.push(p.cache.dir);
-        a.push(String::from("--worker-solver-id"));
-        a.push(p.cache.solver_id);
-    }
-    a
-}
-
-// Removes task `k`'s scratch directory. Only called once its process group is
-// dead, so nothing is still writing into it.
-fn vc_pool_release(p: VcPool, k: u64) [io] {
-    if p.scratch[k].len() > 0 {
-        fs_remove_dir_all(p.scratch[k]);
-        p.scratch[k] = String::from("");
-    }
-}
-
-// Stops running task `k` (its whole process group) and drops its scratch dir.
-fn vc_pool_cancel(p: VcPool, k: u64) [io] {
-    process_kill(p.handles[k]);
-    vc_pool_release(p, k);
-    p.handles[k] = -1;
-    p.phase[k] = VC_TASK_CANCELLED();
-    p.state[VC_ST_RUNNING()] = p.state[VC_ST_RUNNING()] - 1;
-}
-
-fn vc_pool_finish(p: VcPool, k: u64, oc: VcOutcome) [io] {
-    vc_pool_release(p, k);
-    p.results[k] = oc;
-    p.phase[k] = VC_TASK_DONE();
-    p.handles[k] = -1;
-    p.state[VC_ST_RUNNING()] = p.state[VC_ST_RUNNING()] - 1;
-    // Nothing above a task that did not prove is ever reported, so stop
-    // starting those and stop the ones already running.
-    if p.halt && oc.result.status != VERIFY_PROVEN() && (k as i64) < p.state[VC_ST_LIMIT()] {
-        p.state[VC_ST_LIMIT()] = k as i64;
-        let mut j: u64 = k + 1;
-        while j < p.phase.len() {
-            if p.phase[j] == VC_TASK_RUNNING() {
-                vc_pool_cancel(p, j);
-            }
-            j = j + 1;
-        }
-    }
-}
-
-fn vc_pool_launch(p: VcPool) [io] {
-    while p.state[VC_ST_NEXT()] < p.state[VC_ST_LIMIT()] && p.state[VC_ST_RUNNING()] < p.jobs {
-        let k: u64 = p.state[VC_ST_NEXT()] as u64;
-        p.state[VC_ST_NEXT()] = p.state[VC_ST_NEXT()] + 1;
-        p.scratch[k] = mktemp_dir(String::from("vow-native"));
-        p.state[VC_ST_RUNNING()] = p.state[VC_ST_RUNNING()] + 1;
-        if p.scratch[k].len() == 0 {
-            vc_pool_finish(p, k, vc_bare_outcome(vc_plain_result(VERIFY_ERROR(), String::from("cannot create a temporary directory"))));
-            continue;
-        }
-        let h: i64 = process_start_capped(p.exe, vc_worker_argv(p, k), p.mem_kb);
-        if h < 0 {
-            vc_pool_finish(p, k, vc_bare_outcome(vc_plain_result(VERIFY_PANICKED(), String::from("cannot start the verification worker"))));
-        } else {
-            p.handles[k] = h;
-            p.phase[k] = VC_TASK_RUNNING();
-            p.started[k] = time_micros();
-        }
-    }
-}
-
-// Reaps task `k` once its worker has exited and kills the group of any that
-// overran `--timeout`. The parent's deadline is the whole budget from launch;
-// the worker's own budget (frontend excluded) only bounds an orphan.
-fn vc_pool_poll_one(p: VcPool, k: u64, wait_ms: i64) -> bool [io] {
-    let h: i64 = p.handles[k];
-    let rc: i64 = process_poll_wait(h, wait_ms);
-    if rc != proc_still_running() {
-        let out: String = process_stdout_for(h);
-        let err: String = process_stderr_for(h);
-        process_kill(h);
-        vc_pool_finish(p, k, vc_worker_result(rc, out, err));
-        return true;
-    }
-    if p.budget_ms > 0 && (time_micros() - p.started[k]) / 1000 >= p.budget_ms {
-        process_kill(h);
-        vc_pool_finish(p, k, vc_bare_outcome(vc_plain_result(VERIFY_TIMEOUT(), String::from(""))));
-        return true;
-    }
-    false
-}
-
-// One scheduling pass: start what fits, then reap what finished. Blocks for at
-// most ~10 ms when nothing finished.
-fn vc_pool_step(p: VcPool) [io] {
-    vc_pool_launch(p);
-    let mut progressed: bool = false;
-    let mut first_running: i64 = -1;
-    let mut k: u64 = 0;
-    while k < p.phase.len() {
-        if p.phase[k] == VC_TASK_RUNNING() {
-            if first_running < 0 { first_running = k as i64; }
-            if vc_pool_poll_one(p, k, 0) { progressed = true; }
-        }
-        k = k + 1;
-    }
-    if !progressed && first_running >= 0 && p.phase[first_running as u64] == VC_TASK_RUNNING() {
-        vc_pool_poll_one(p, first_running as u64, 10);
-    }
-}
-
-fn vc_pool_ready(p: VcPool, k: u64) -> bool {
-    p.phase[k] == VC_TASK_DONE()
-}
-
-// True once no task is running and none is left to start below the halt limit.
-fn vc_pool_settled(p: VcPool) -> bool {
-    p.state[VC_ST_NEXT()] >= p.state[VC_ST_LIMIT()] && p.state[VC_ST_RUNNING()] == 0
-}
-
-// Stops every worker still running. Safe to call more than once.
-fn vc_pool_abort(p: VcPool) [io] {
-    let mut k: u64 = 0;
-    while k < p.phase.len() {
-        if p.phase[k] == VC_TASK_RUNNING() {
-            vc_pool_cancel(p, k);
-        }
-        k = k + 1;
-    }
-    p.state[VC_ST_LIMIT()] = 0;
 }

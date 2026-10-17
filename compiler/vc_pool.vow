@@ -1,0 +1,497 @@
+module VcPool
+
+use ir
+use verifier
+use vc_cache
+use vc_native
+use vc_cex
+use vc_worker
+use vc_queue
+use vc_irwire
+use vc_summary
+
+// The parent's side of native verification: a pool of `vowc verify-worker`
+// sessions over a shared task queue (`vc_queue`). A session takes the lowered
+// module (the parent's, see `vc_irwire`) once and then decides tasks one after
+// another, so the frontend is paid once, by the parent, not per session or per
+// function. The isolation of D11 is kept per task: a session runs under an
+// address-space cap in its own process group, the group is killed when the task
+// it is on overruns the `--timeout` budget, and a session that dies on a task
+// costs that task's verdict (`timeout`, `unknown` for memory, `panicked`
+// otherwise) and nothing else: the tasks it never reached stay on the queue for
+// another session.
+//
+// A session that runs out of memory after finishing earlier tasks may only have
+// been squeezed by what they left behind, so its task is retried once in a
+// fresh session, which is exactly what the one-process-per-function pool ran.
+
+fn VC_ST_LIMIT() -> u64 { 0 }
+fn VC_ST_LIVE() -> u64 { 1 }
+fn VC_ST_IDLE_DEATHS() -> u64 { 2 }
+
+fn VC_TASK_PENDING() -> i64 { 0 }
+fn VC_TASK_RUNNING() -> i64 { 1 }
+fn VC_TASK_DONE() -> i64 { 2 }
+fn VC_TASK_CANCELLED() -> i64 { 3 }
+
+// Sessions that die before taking any task: two in a row mean the program or the
+// worker is broken, not unlucky.
+fn VC_POOL_IDLE_DEATH_LIMIT() -> i64 { 2 }
+
+// `state` holds the counters at the VC_ST_* indices; sessions are the parallel
+// `s_*` vectors, never reused (a session's id is its index). `root` has one
+// element, the queue directory ("" until the first step creates it). `clauses`
+// makes every verify task decide all claims of its function and report
+// per-clause verdicts. `halt` is the `verify` early stop: nothing above the
+// first task that did not prove is started or kept, which is wrong for a report
+// that spans functions (`contracts`, `test`), so those clear it. `kinds` is per
+// task and `module_root` is the explicit module root the parent lowered with, if
+// any. `cache` is the result cache every worker of the pool shares (off by
+// default). `summaries` are the ids of the functions callee summaries may stand for in
+// every task of the pool (`vc_summary`). `attempts[k]` counts the retries of task k. `shared` has the module the
+// tasks index into once `vc_pool_share_module` has been given it, and `ir` one
+// element, the path of its encoding under the queue ("" until the queue is laid
+// out): a worker told that path decodes the module instead of lowering the
+// program itself.
+struct VcPool {
+    exe: String,
+    path: String,
+    budget_ms: i64,
+    mem_kb: i64,
+    jobs: i64,
+    fn_idx: Vec<i64>,
+    fn_names: Vec<String>,
+    kinds: Vec<i64>,
+    phase: Vec<i64>,
+    started: Vec<i64>,
+    attempts: Vec<i64>,
+    results: Vec<VcOutcome>,
+    state: Vec<i64>,
+    root: Vec<String>,
+    s_handle: Vec<i64>,
+    s_cur: Vec<i64>,
+    s_done: Vec<i64>,
+    s_begun: Vec<i64>,
+    clauses: bool,
+    cache: VcCache,
+    halt: bool,
+    module_root: String,
+    shared: Vec<IrModule>,
+    ir: Vec<String>,
+    summaries: Vec<i64>,
+}
+
+fn vc_pool_root(p: VcPool) -> String {
+    let r: Vec<String> = p.root;
+    r[0]
+}
+
+// The path workers decode the module from, or "".
+fn vc_pool_ir(p: VcPool) -> String {
+    let r: Vec<String> = p.ir;
+    r[0]
+}
+
+fn vc_pool_new(exe: String, path: String, fn_idx: Vec<i64>, fn_names: Vec<String>, jobs: i64, budget_ms: i64) -> VcPool [read] {
+    let kinds: Vec<i64> = Vec::new();
+    let phase: Vec<i64> = Vec::new();
+    let started: Vec<i64> = Vec::new();
+    let attempts: Vec<i64> = Vec::new();
+    let results: Vec<VcOutcome> = Vec::new();
+    let mut k: u64 = 0;
+    while k < fn_idx.len() {
+        kinds.push(VC_TASK_KIND_VERIFY());
+        phase.push(VC_TASK_PENDING());
+        started.push(0);
+        attempts.push(0);
+        results.push(vc_bare_outcome(vc_plain_result(VERIFY_ERROR(), String::from("not run"))));
+        k = k + 1;
+    }
+    let state: Vec<i64> = Vec::new();
+    state.push(fn_idx.len() as i64);
+    state.push(0);
+    state.push(0);
+    let root: Vec<String> = Vec::new();
+    root.push(String::from(""));
+    let ir: Vec<String> = Vec::new();
+    ir.push(String::from(""));
+    VcPool {
+        exe: exe,
+        path: path,
+        budget_ms: budget_ms,
+        mem_kb: vc_worker_mem_kb(),
+        jobs: jobs,
+        fn_idx: fn_idx,
+        fn_names: fn_names,
+        kinds: kinds,
+        phase: phase,
+        started: started,
+        attempts: attempts,
+        results: results,
+        state: state,
+        root: root,
+        s_handle: Vec::new(),
+        s_cur: Vec::new(),
+        s_done: Vec::new(),
+        s_begun: Vec::new(),
+        clauses: false,
+        cache: vc_cache_off(),
+        halt: true,
+        module_root: String::from(""),
+        shared: Vec::new(),
+        ir: ir,
+        summaries: Vec::new(),
+    }
+}
+
+// Makes `m`, the module the tasks' function indices refer to, what every worker
+// decides against: it is encoded under the queue once, when the queue is laid out
+// (`vc_pool_prepare`). Left unshared, or when the file cannot be written, a worker
+// lowers the program itself, which decides the same tasks.
+fn vc_pool_share_module(p: VcPool, m: IrModule) {
+    if p.shared.len() == 0 { p.shared.push(m); }
+}
+
+fn vc_worker_argv(p: VcPool, w: i64) -> Vec<String> {
+    let a: Vec<String> = Vec::new();
+    a.push(String::from("verify-worker"));
+    a.push(p.path);
+    a.push(String::from("--worker-session"));
+    a.push(vc_pool_root(p));
+    a.push(String::from("--worker-id"));
+    a.push(i64_to_string(w));
+    a.push(String::from("--worker-budget-ms"));
+    a.push(i64_to_string(p.budget_ms));
+    if p.clauses { a.push(String::from("--worker-clauses")); }
+    if p.module_root.len() > 0 {
+        a.push(String::from("--worker-module-root"));
+        a.push(p.module_root);
+    }
+    let ir: String = vc_pool_ir(p);
+    if ir.len() > 0 {
+        a.push(String::from("--worker-ir"));
+        a.push(ir);
+    }
+    if p.summaries.len() > 0 {
+        a.push(String::from("--worker-summaries"));
+        a.push(vc_ids_text(p.summaries));
+    }
+    if vc_cache_on(p.cache) {
+        a.push(String::from("--worker-cache-dir"));
+        a.push(p.cache.dir);
+        a.push(String::from("--worker-solver-id"));
+        a.push(p.cache.solver_id);
+    }
+    a
+}
+
+// ---------------------------------------------------------------------------
+// Tasks and sessions
+// ---------------------------------------------------------------------------
+
+// Records the outcome of task k. Under `halt`, a task that did not prove ends
+// the run above it: those tasks leave the queue and the sessions on them stop.
+fn vc_pool_finish(p: VcPool, k: u64, oc: VcOutcome) [io, read] {
+    p.results[k] = oc;
+    p.phase[k] = VC_TASK_DONE();
+    if p.halt && oc.result.status != VERIFY_PROVEN() && (k as i64) < p.state[VC_ST_LIMIT()] {
+        p.state[VC_ST_LIMIT()] = k as i64;
+        let mut j: u64 = k + 1;
+        while j < p.phase.len() {
+            if vc_pool_root(p).len() > 0 { vc_q_withdraw(vc_pool_root(p), j as i64); }
+            j = j + 1;
+        }
+        let mut s: u64 = 0;
+        while s < p.s_handle.len() {
+            if p.s_handle[s] >= 0 && p.s_cur[s] > k as i64 { vc_pool_drop(p, s); }
+            s = s + 1;
+        }
+    }
+}
+
+// Ends session `s`: its whole process group is killed and its directory goes.
+// The task it was on, if unanswered, is cancelled.
+fn vc_pool_drop(p: VcPool, s: u64) [io, read] {
+    if p.s_handle[s] < 0 { return; }
+    process_kill(p.s_handle[s]);
+    fs_remove_dir_all(vc_q_session_dir(vc_pool_root(p), s as i64));
+    p.s_handle[s] = -1;
+    p.state[VC_ST_LIVE()] = p.state[VC_ST_LIVE()] - 1;
+    let k: i64 = p.s_cur[s];
+    p.s_cur[s] = -1;
+    if k >= 0 && p.phase[k as u64] == VC_TASK_RUNNING() {
+        p.phase[k as u64] = VC_TASK_CANCELLED();
+    }
+}
+
+// Task k became the session's current task: its clock starts now. A task above
+// a halt is not wanted any more, and its session goes with it.
+fn vc_pool_begin(p: VcPool, s: u64, k: i64) [io, read] {
+    p.phase[k as u64] = VC_TASK_RUNNING();
+    p.started[k as u64] = time_micros();
+    p.s_cur[s] = k;
+    p.s_begun[s] = p.s_begun[s] + 1;
+    p.state[VC_ST_IDLE_DEATHS()] = 0;
+    if k >= p.state[VC_ST_LIMIT()] { vc_pool_drop(p, s); }
+}
+
+fn vc_pool_decode_result(p: VcPool, k: i64) -> VcOutcome [read] {
+    match vc_wire_decode(vc_q_read_result(vc_pool_root(p), k)) {
+        Option::Some(oc) => { oc },
+        Option::None => {
+            vc_bare_outcome(vc_plain_result(VERIFY_PANICKED(), String::from("verification worker produced no result")))
+        },
+    }
+}
+
+// Takes over what session `s` has done since the last look. Each task it has
+// claimed starts here (its clock too, if this is the first look at it), and each
+// one it has answered finishes. A task can start and finish between two looks,
+// so claims are taken in task order and an answer is never missed. True when
+// something moved.
+fn vc_pool_harvest(p: VcPool, s: u64) -> bool [io, read] {
+    let root: String = vc_pool_root(p);
+    let claims: Vec<i64> = vc_q_claims(root, s as i64);
+    let mut moved: bool = false;
+    let mut i: u64 = 0;
+    while i < claims.len() && p.s_handle[s] >= 0 {
+        let k: i64 = claims[i];
+        i = i + 1;
+        if k >= p.phase.len() as i64 { continue; }
+        if p.phase[k as u64] == VC_TASK_PENDING() {
+            vc_pool_begin(p, s, k);
+            moved = true;
+            if p.s_handle[s] < 0 { break; }
+        }
+        if p.phase[k as u64] == VC_TASK_RUNNING() && vc_q_has_result(root, k) {
+            if p.s_cur[s] == k { p.s_cur[s] = -1; }
+            p.s_done[s] = p.s_done[s] + 1;
+            vc_q_ack(root, s as i64, k);
+            vc_pool_finish(p, k as u64, vc_pool_decode_result(p, k));
+            moved = true;
+        } else if p.phase[k as u64] != VC_TASK_RUNNING() {
+            vc_q_ack(root, s as i64, k);
+        }
+    }
+    moved
+}
+
+// Every task still waiting below the halt limit is given the failure `oc`.
+fn vc_pool_fail_pending(p: VcPool, oc: VcOutcome) [io, read] {
+    let mut k: u64 = 0;
+    while k < p.phase.len() {
+        if (k as i64) < p.state[VC_ST_LIMIT()] && p.phase[k] == VC_TASK_PENDING() {
+            vc_pool_finish(p, k, oc);
+        }
+        k = k + 1;
+    }
+}
+
+// A session that exited with code `rc`. Whatever it answered is taken first;
+// the task it was on without an answer is classified from how it died.
+fn vc_pool_exited(p: VcPool, s: u64, rc: i64) [io, read, write] {
+    let h: i64 = p.s_handle[s];
+    let err: String = process_stderr_for(h);
+    process_kill(h);
+    while vc_pool_harvest(p, s) {}
+    let cur: i64 = p.s_cur[s];
+    let part: String = vc_task_stderr(err);
+    if cur >= 0 && p.phase[cur as u64] == VC_TASK_RUNNING() {
+        let k: u64 = cur as u64;
+        p.s_cur[s] = -1;
+        let squeezed: bool = rc != 0 && p.s_done[s] > 0 && p.attempts[k] == 0 && cur < p.state[VC_ST_LIMIT()] && vc_worker_ran_out_of_memory(rc, part);
+        if squeezed && vc_q_requeue(vc_pool_root(p), cur) {
+            p.attempts[k] = 1;
+            p.phase[k] = VC_TASK_PENDING();
+        } else {
+            vc_pool_finish(p, k, vc_worker_result(rc, String::from(""), part));
+        }
+    } else if rc != 0 && p.s_begun[s] == 0 {
+        p.state[VC_ST_IDLE_DEATHS()] = p.state[VC_ST_IDLE_DEATHS()] + 1;
+        if p.state[VC_ST_IDLE_DEATHS()] >= VC_POOL_IDLE_DEATH_LIMIT() {
+            vc_pool_fail_pending(p, vc_bare_outcome(vc_plain_result(VERIFY_PANICKED(), vc_panic_detail(rc, err))));
+        }
+    }
+    vc_pool_drop(p, s);
+}
+
+// One look at session `s`: harvest, enforce the deadline of its current task,
+// reap it if it exited. True when something moved. Waits at most `wait_ms` for
+// an exit.
+fn vc_pool_poll_session(p: VcPool, s: u64, wait_ms: i64) -> bool [io, read, write] {
+    let mut moved: bool = false;
+    while p.s_handle[s] >= 0 && vc_pool_harvest(p, s) { moved = true; }
+    if p.s_handle[s] < 0 { return true; }
+    let h: i64 = p.s_handle[s];
+    let rc: i64 = process_poll_wait(h, wait_ms);
+    if rc != proc_still_running() {
+        vc_pool_exited(p, s, rc);
+        return true;
+    }
+    let cur: i64 = p.s_cur[s];
+    if cur >= 0 && p.budget_ms > 0 && (time_micros() - p.started[cur as u64]) / 1000 >= p.budget_ms {
+        if vc_q_has_result(vc_pool_root(p), cur) { return true; }
+        p.s_cur[s] = -1;
+        vc_pool_drop(p, s);
+        vc_pool_finish(p, cur as u64, vc_bare_outcome(vc_plain_result(VERIFY_TIMEOUT(), String::from(""))));
+        return true;
+    }
+    moved
+}
+
+// ---------------------------------------------------------------------------
+// Launching
+// ---------------------------------------------------------------------------
+
+// Creates the queue on first use. When the directory cannot be built every
+// task fails.
+fn vc_pool_prepare(p: VcPool) [io, read, write] {
+    if vc_pool_root(p).len() > 0 || p.phase.len() == 0 || p.state[VC_ST_LIMIT()] == 0 { return; }
+    let root: String = mktemp_dir(String::from("vow-native"));
+    if root.len() == 0 {
+        vc_pool_fail_pending(p, vc_bare_outcome(vc_plain_result(VERIFY_ERROR(), String::from("cannot create a temporary directory"))));
+        return;
+    }
+    let tasks: VcQTasks = VcQTasks { idx: p.fn_idx, names: p.fn_names, kinds: p.kinds };
+    if !vc_q_init(root, tasks) {
+        fs_remove_dir_all(root);
+        vc_pool_fail_pending(p, vc_bare_outcome(vc_plain_result(VERIFY_ERROR(), String::from("cannot create the verification queue"))));
+        return;
+    }
+    p.root[0] = root;
+    let shared: Vec<IrModule> = p.shared;
+    if shared.len() > 0 {
+        let file: String = vc_q_join(root, String::from("ir"));
+        if fs_write(file, vc_irw_encode(shared[0])) == 0 { p.ir[0] = file; }
+    }
+}
+
+// Tasks below the halt limit that no session has taken off the queue.
+fn vc_pool_unclaimed(p: VcPool) -> i64 [read] {
+    let mut n: i64 = 0;
+    let mut k: u64 = 0;
+    while k < p.phase.len() {
+        if (k as i64) < p.state[VC_ST_LIMIT()] && p.phase[k] == VC_TASK_PENDING() && vc_q_is_unclaimed(vc_pool_root(p), k as i64) { n = n + 1; }
+        k = k + 1;
+    }
+    n
+}
+
+// Retries waiting for a fresh worker.
+fn vc_pool_retries(p: VcPool) -> i64 [read] {
+    let mut n: i64 = 0;
+    let mut k: u64 = 0;
+    while k < p.phase.len() {
+        if (k as i64) < p.state[VC_ST_LIMIT()] && p.phase[k] == VC_TASK_PENDING() && vc_q_is_retry(vc_pool_root(p), k as i64) { n = n + 1; }
+        k = k + 1;
+    }
+    n
+}
+
+// Live sessions that have not taken a task yet: any of them can still take a
+// retry, since a session looks for one before it takes anything else.
+fn vc_pool_fresh_sessions(p: VcPool) -> i64 {
+    let mut n: i64 = 0;
+    let mut s: u64 = 0;
+    while s < p.s_handle.len() {
+        if p.s_handle[s] >= 0 && p.s_begun[s] == 0 { n = n + 1; }
+        s = s + 1;
+    }
+    n
+}
+
+fn vc_pool_launch_one(p: VcPool) [io, read] {
+    let w: i64 = p.s_handle.len() as i64;
+    p.s_handle.push(-1);
+    p.s_cur.push(-1);
+    p.s_done.push(0);
+    p.s_begun.push(0);
+    if fs_mkdir(vc_q_session_dir(vc_pool_root(p), w)) != 0 {
+        vc_pool_fail_pending(p, vc_bare_outcome(vc_plain_result(VERIFY_ERROR(), String::from("cannot create a temporary directory"))));
+        return;
+    }
+    let h: i64 = process_start_capped(p.exe, vc_worker_argv(p, w), p.mem_kb);
+    if h < 0 {
+        fs_remove_dir_all(vc_q_session_dir(vc_pool_root(p), w));
+        vc_pool_fail_pending(p, vc_bare_outcome(vc_plain_result(VERIFY_PANICKED(), String::from("cannot start the verification worker"))));
+        return;
+    }
+    p.s_handle[w as u64] = h;
+    p.state[VC_ST_LIVE()] = p.state[VC_ST_LIVE()] + 1;
+}
+
+// Sessions are started while there are fewer than `jobs` of them and more
+// unclaimed tasks than sessions to take them: a session costs one frontend, so
+// the pool never grows past the work that is left. A retry needs a session that
+// has taken nothing before, so one more is started for it unless a fresh one is
+// already on its way.
+fn vc_pool_launch(p: VcPool) [io, read, write] {
+    vc_pool_prepare(p);
+    if vc_pool_root(p).len() == 0 { return; }
+    while p.state[VC_ST_LIVE()] < p.jobs && p.state[VC_ST_IDLE_DEATHS()] < VC_POOL_IDLE_DEATH_LIMIT() {
+        let waiting: i64 = vc_pool_unclaimed(p);
+        if waiting == 0 { break; }
+        if waiting <= p.state[VC_ST_LIVE()] && vc_pool_retries(p) <= vc_pool_fresh_sessions(p) { break; }
+        vc_pool_launch_one(p);
+    }
+}
+
+// A task that is neither answered, nor on the queue, nor on a live session is
+// lost; it must not stall the run.
+fn vc_pool_fail_lost(p: VcPool) [io, read] {
+    if p.state[VC_ST_LIVE()] > 0 || vc_pool_root(p).len() == 0 { return; }
+    if p.state[VC_ST_IDLE_DEATHS()] >= VC_POOL_IDLE_DEATH_LIMIT() { return; }
+    if vc_pool_unclaimed(p) > 0 { return; }
+    vc_pool_fail_pending(p, vc_bare_outcome(vc_plain_result(VERIFY_PANICKED(), String::from("verification worker lost the task"))));
+}
+
+// One scheduling pass: start what fits, then look at every session. Blocks for
+// at most ~10 ms when nothing moved.
+fn vc_pool_step(p: VcPool) [io, read, write] {
+    vc_pool_launch(p);
+    let mut progressed: bool = false;
+    let mut first: i64 = -1;
+    let mut s: u64 = 0;
+    while s < p.s_handle.len() {
+        if p.s_handle[s] >= 0 {
+            if first < 0 { first = s as i64; }
+            if vc_pool_poll_session(p, s, 0) { progressed = true; }
+        }
+        s = s + 1;
+    }
+    if !progressed && first >= 0 && p.s_handle[first as u64] >= 0 {
+        vc_pool_poll_session(p, first as u64, 10);
+    }
+    vc_pool_fail_lost(p);
+}
+
+fn vc_pool_ready(p: VcPool, k: u64) -> bool {
+    p.phase[k] == VC_TASK_DONE()
+}
+
+// True once no task below the halt limit is waiting or running. A session that
+// is only winding down does not hold the pool up; `vc_pool_abort` ends it.
+fn vc_pool_settled(p: VcPool) -> bool {
+    let mut k: u64 = 0;
+    while k < p.phase.len() {
+        if (k as i64) < p.state[VC_ST_LIMIT()] && (p.phase[k] == VC_TASK_PENDING() || p.phase[k] == VC_TASK_RUNNING()) { return false; }
+        k = k + 1;
+    }
+    true
+}
+
+// Stops every session still running and removes the queue. Safe to call more
+// than once.
+fn vc_pool_abort(p: VcPool) [io, read] {
+    let mut s: u64 = 0;
+    while s < p.s_handle.len() {
+        vc_pool_drop(p, s);
+        s = s + 1;
+    }
+    p.state[VC_ST_LIMIT()] = 0;
+    if vc_pool_root(p).len() > 0 {
+        fs_remove_dir_all(vc_pool_root(p));
+        p.root[0] = String::from("");
+        p.ir[0] = String::from("");
+    }
+}

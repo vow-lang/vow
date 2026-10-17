@@ -1,0 +1,11 @@
+// TEST: error-code UnexpectedToken
+// TEST: error-count 3
+module StructFieldTypeKeyword
+
+struct Holder {
+    n: where,
+}
+
+fn main() -> i32 {
+    0
+}

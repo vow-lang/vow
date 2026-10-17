@@ -162,6 +162,110 @@ class ParseDirectivesBlameCasingTest(unittest.TestCase):
                     self.parse(directive)
 
 
+class ParseArtifactDirectivesTest(unittest.TestCase):
+    def parse(self, *lines, name="a.vow", sub="verify-native/pass"):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tests" / sub / name
+            path.parent.mkdir(parents=True)
+            path.write_text("".join(f"// TEST: {x}\n" for x in lines), encoding="utf-8")
+            return verify_eval.parse_directives(
+                str(path), "Verified"
+            ), verify_eval.artifact_directives(str(path))
+
+    def test_capacity_and_model_directives_are_read(self):
+        exp, standalone = self.parse(
+            'esbmc-capacity-artifact "string capacity"',
+            'esbmc-model-artifact fn="f" blame=Callee vow_id=2 "spurious ensures"',
+        )
+        for arts in (exp.artifacts, standalone):
+            self.assertEqual("string capacity", arts.capacity)
+            self.assertEqual({("f", "Callee", 2): "spurious ensures"}, arts.model)
+
+    def test_no_directive_means_no_artifact(self):
+        exp, standalone = self.parse("category bounds")
+        self.assertIsNone(exp.artifacts.capacity)
+        self.assertEqual({}, standalone.model)
+
+    def test_malformed_model_directive_fails_closed(self):
+        for body in (
+            'esbmc-model-artifact "just a reason"',
+            'esbmc-model-artifact fn="f" vow_id=2 "no blame"',
+            'esbmc-model-artifact fn="f" blame=Callee vow_id=x "bad id"',
+            'esbmc-model-artifact fn="f" blame=Callee vow_id=2',
+            "esbmc-capacity-artifact no quotes",
+            'esbmc-model-artefact fn="f" blame=Callee vow_id=2 "typo"',
+        ):
+            with self.subTest(body=body):
+                with self.assertRaisesRegex(ValueError, "malformed esbmc artifact"):
+                    self.parse(body)
+
+    def test_lowercase_blame_in_a_model_directive_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "unknown counterexample blame"):
+            self.parse('esbmc-model-artifact fn="f" blame=callee vow_id=2 "x"')
+
+    def test_skip_reason_directive_is_not_a_malformed_skip(self):
+        exp, _ = self.parse("skip-reason unsupported-opcode", sub="verify-native/skip")
+        self.assertIsNone(exp.skip_reason)
+
+    def test_every_native_fixture_parses(self):
+        root = Path(verify_eval.REPO_ROOT) / "tests" / "verify-native"
+        for sub in ("pass", "fail", "skip", "unknown"):
+            for path in sorted((root / sub).glob("*.vow")):
+                with self.subTest(fixture=f"{sub}/{path.name}"):
+                    verify_eval.parse_directives(str(path), None)
+
+
+class ClassifyArtifactTest(unittest.TestCase):
+    def exp(self, capacity):
+        exp = verify_eval.Expect("tests/verify-fail/c.vow", "VerifyFailed")
+        exp.cex = [{"fn": "f", "blame": "None", "vow_id": 1}]
+        exp.artifacts.capacity = capacity
+        return exp
+
+    def test_native_proof_of_a_capacity_artifact_fixture_is_explained(self):
+        verdict, detail = verify_eval.classify(
+            self.exp("string capacity"), {"status": "Verified"}, "/unused", "native"
+        )
+        self.assertEqual(verify_eval.ARTIFACT, verdict)
+        self.assertIn("string capacity", detail)
+
+    def test_the_default_backend_still_flags_the_proof(self):
+        verdict, _ = verify_eval.classify(
+            self.exp("string capacity"), {"status": "Verified"}, "/unused"
+        )
+        self.assertEqual(verify_eval.SOUNDNESS, verdict)
+
+    def test_without_the_directive_native_is_a_soundness_regression(self):
+        verdict, _ = verify_eval.classify(
+            self.exp(None), {"status": "Verified"}, "/unused", "native"
+        )
+        self.assertEqual(verify_eval.SOUNDNESS, verdict)
+
+
+class BackendFlagTest(unittest.TestCase):
+    def test_backend_is_forwarded_only_when_requested(self):
+        self.assertEqual([], verify_eval.backend_args(None))
+        self.assertEqual(["--backend", "native"], verify_eval.backend_args("native"))
+
+    def test_backend_reaches_the_verify_vacuity_and_replay_runs(self):
+        exp = verify_eval.Expect("tests/verify/x.vow", "Verified")
+        calls = []
+
+        def fake(verifier, args):
+            calls.append(args)
+            return {"status": "Verified", "summary": {}, "counterexamples": []}
+
+        exp.replay_expect = "confirmed"
+        with mock.patch.object(verify_eval, "run_json", side_effect=fake):
+            verify_eval.vacuity_check("/v", exp.path, "native")
+            verify_eval.check_replay("/v", exp, "native")
+        self.assertEqual(2, len(calls))
+        for args in calls:
+            self.assertEqual(
+                ["--backend", "native"], args[args.index("--backend") :][:2]
+            )
+
+
 class CorpusCountsDocsTest(unittest.TestCase):
     def test_docs_counts_match_the_corpus(self):
         self.assertEqual(0, verify_eval.sync_docs(check=True))

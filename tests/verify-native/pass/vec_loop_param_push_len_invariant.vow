@@ -1,0 +1,25 @@
+// TEST: category invariant
+// The loop pushes onto a Vec parameter, whose state exists before the loop
+// begins rather than being created by it: the havoc at the header must fall
+// back to the parameter's own length.
+module VecLoopParamPushLenInvariant
+
+fn extend(v: Vec<i64>, n: u64) vow {
+  requires: v.len() == 0,
+  ensures: v.len() == n
+} {
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n && v.len() == i
+  } {
+    v.push(1);
+    i = i + 1;
+  }
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  extend(v, 3);
+  print_u64(v.len());
+  0
+}

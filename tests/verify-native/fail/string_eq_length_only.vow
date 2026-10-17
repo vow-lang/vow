@@ -1,0 +1,18 @@
+// TEST: counterexample-fn "same_length_is_eq"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// Equal lengths do not make equal strings: `string_eq` compares every byte, it
+// is not a length-prefix shortcut.
+module StringEqLengthOnly
+
+fn same_length_is_eq(a: String, b: String) -> bool vow {
+  requires: a.len() == b.len()
+  ensures: result == true
+} {
+  a.eq(b)
+}
+
+fn main() -> i32 [io] {
+  if same_length_is_eq(String::from("a"), String::from("a")) { print_u64(1); }
+  0
+}

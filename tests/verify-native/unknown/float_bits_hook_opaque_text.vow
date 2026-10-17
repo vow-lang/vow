@@ -1,0 +1,17 @@
+// TEST: category float
+// TEST: unknown-reason opaque builtin result
+// The text `format_f64_bits` returns is a fresh string the model constrains only
+// by the runtime's representation invariant, so a claim about its length cannot
+// be refuted: the real text of 0.0 is "0" and a counterexample with another
+// length is not a run.
+module FloatBitsHookOpaqueText
+
+fn text_len(bits: u64) -> u64 vow {
+  ensures: result != 0u64
+} {
+  format_f64_bits(bits).len()
+}
+
+fn main() -> i32 [io] {
+  0
+}

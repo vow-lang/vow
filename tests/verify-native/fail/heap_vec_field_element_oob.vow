@@ -1,0 +1,24 @@
+// TEST: replay-skipped field 0 is a Vec, which the replay harness cannot build
+// TEST: counterexample-fn "first_op"
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-blame None
+// TEST: counterexample-violation "index out of bounds"
+// Nothing says the Vec in `b.insts` has an element, so reading element 0 is refuted.
+module HeapVecFieldElementOob
+
+struct Inst { op: i64 }
+struct Block { insts: Vec<Inst> }
+
+fn first_op(b: Block) -> i64 vow {
+  ensures: result == result
+} {
+  let first: Inst = b.insts[0];
+  first.op
+}
+
+fn main() -> i32 [io] {
+  let b: Block = Block { insts: Vec::new() };
+  b.insts.push(Inst { op: 7 });
+  print_i64(first_op(b));
+  0
+}

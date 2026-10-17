@@ -3,7 +3,9 @@
 
 import io
 import json
+import os
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -85,6 +87,265 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(vd.MORE_PRECISE, refuted({K}, {K, OTHER}))
 
 
+class CapacityArtifactTest(unittest.TestCase):
+    """ESBMC refuting only through its own model capacity (#1426)."""
+
+    def cls(self, truth, esbmc, native, reason, only):
+        return vd.classify(
+            truth,
+            esbmc,
+            native,
+            frozenset(),
+            frozenset(),
+            None,
+            reason,
+            only,
+        )
+
+    def test_documented_capacity_refutation_is_an_explained_extra_proof(self):
+        cls, detail = self.cls(
+            "VerifyFailed", vd.REFUTED, vd.PROVEN, "push_str cap", True
+        )
+        self.assertEqual(vd.MORE_PRECISE, cls)
+        self.assertIn("model capacity", detail)
+        self.assertIn("push_str cap", detail)
+
+    def test_without_the_directive_the_row_stays_a_soundness_finding(self):
+        self.assertEqual(
+            vd.SOUNDNESS, self.cls("VerifyFailed", vd.REFUTED, vd.PROVEN, None, True)[0]
+        )
+
+    def test_a_directive_does_not_excuse_a_refutation_that_is_not_a_capacity_one(self):
+        self.assertEqual(
+            vd.SOUNDNESS,
+            self.cls("VerifyFailed", vd.REFUTED, vd.PROVEN, "why", False)[0],
+        )
+
+    def test_the_directive_excuses_only_a_native_proof(self):
+        self.assertEqual(
+            vd.WEAKER, self.cls("VerifyFailed", vd.REFUTED, vd.SKIPPED, "why", True)[0]
+        )
+        self.assertEqual(
+            vd.MATCH, self.cls("VerifyFailed", vd.REFUTED, vd.REFUTED, "why", True)[0]
+        )
+
+    def test_capacity_only_needs_every_counterexample_to_be_a_capacity_assertion(self):
+        cap = {"violation": "string exceeded the verifier's internal capacity limit"}
+        other = {"violation": "index out of bounds"}
+        self.assertTrue(vd.capacity_only({"counterexamples": [cap]}))
+        self.assertTrue(vd.capacity_only({"counterexamples": [cap, cap]}))
+        self.assertFalse(vd.capacity_only({"counterexamples": [cap, other]}))
+        self.assertFalse(vd.capacity_only({"counterexamples": []}))
+        self.assertFalse(vd.capacity_only(None))
+
+    def test_directive_parsing(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            path = d + "/f.vow"
+            with open(path, "w") as fh:
+                fh.write(
+                    '// TEST: category x\n// TEST: esbmc-capacity-artifact "a cap"\n'
+                )
+            self.assertEqual("a cap", vd.verify_eval.artifact_directives(path).capacity)
+            with open(path, "w") as fh:
+                fh.write("// TEST: category x\n")
+            self.assertIsNone(vd.verify_eval.artifact_directives(path).capacity)
+            with open(path, "w") as fh:
+                fh.write("// TEST: esbmc-capacity-artifact\n")
+            with self.assertRaisesRegex(ValueError, "malformed esbmc artifact"):
+                vd.verify_eval.artifact_directives(path).capacity
+
+
+def skip_diag(fn, severity="warning", code="VerificationSkipped"):
+    return {
+        "error_code": code,
+        "severity": severity,
+        "message": f"skipped verification of `{fn}`: not modelable",
+    }
+
+
+class ModelArtifactTest(unittest.TestCase):
+    KEY = ("eq_transitive", "Callee", 2)
+
+    def cls(self, truth, esbmc_keys, artifacts, esbmc=vd.REFUTED, native=vd.PROVEN):
+        return vd.classify(
+            truth,
+            esbmc,
+            native,
+            frozenset(esbmc_keys),
+            frozenset(),
+            None,
+            None,
+            False,
+            artifacts,
+        )
+
+    def test_declared_model_counterexample_is_an_explained_extra_proof(self):
+        cls, detail = self.cls("Verified", [self.KEY], {self.KEY: "spurious string_eq"})
+        self.assertEqual(vd.MORE_PRECISE, cls)
+        self.assertIn("spurious string_eq", detail)
+
+    def test_an_undeclared_counterexample_stays_a_soundness_finding(self):
+        other = ("other_fn", "Callee", 0)
+        cls, _ = self.cls(
+            "Verified", [self.KEY, other], {self.KEY: "spurious string_eq"}
+        )
+        self.assertEqual(vd.SOUNDNESS, cls)
+
+    def test_no_counterexample_key_is_never_excused(self):
+        cls, _ = self.cls("Verified", [], {self.KEY: "x"})
+        self.assertEqual(vd.SOUNDNESS, cls)
+
+    def test_the_directive_does_not_override_a_corpus_label_of_incorrect(self):
+        cls, _ = self.cls("VerifyFailed", [self.KEY], {self.KEY: "x"})
+        self.assertEqual(vd.SOUNDNESS, cls)
+
+    def test_the_directive_excuses_only_a_native_proof(self):
+        cls, _ = self.cls("Verified", [self.KEY], {self.KEY: "x"}, native=vd.SKIPPED)
+        self.assertEqual(vd.WEAKER, cls)
+
+
+class FootprintTest(unittest.TestCase):
+    def cls(self, esbmc_skipped, native_skipped, verdict=vd.SKIPPED):
+        return vd.classify(
+            "Skipped",
+            verdict,
+            verdict,
+            esbmc_skipped=frozenset(esbmc_skipped),
+            native_skipped=frozenset(native_skipped),
+        )
+
+    def test_same_skipped_functions_match(self):
+        self.assertEqual(vd.MATCH, self.cls({"a", "b"}, {"a", "b"})[0])
+
+    def test_native_analysing_what_esbmc_skips_is_more_precise_not_a_match(self):
+        cls, detail = self.cls({"a", "b", "c"}, {"c"})
+        self.assertEqual(vd.MORE_PRECISE, cls)
+        self.assertIn("['a', 'b']", detail)
+
+    def test_native_skipping_what_esbmc_analyses_is_weaker(self):
+        cls, detail = self.cls({"c"}, {"b", "c"})
+        self.assertEqual(vd.WEAKER, cls)
+        self.assertIn("['b']", detail)
+
+    def test_weaker_wins_when_both_sides_differ(self):
+        self.assertEqual(vd.WEAKER, self.cls({"a"}, {"b"})[0])
+
+    def test_native_that_stopped_at_a_refutation_did_not_analyse_later_functions(self):
+        keys = frozenset({("f", "Callee", 1)})
+        cls, _ = vd.classify(
+            "VerifyFailed",
+            vd.REFUTED,
+            vd.REFUTED,
+            keys,
+            keys,
+            esbmc_skipped=frozenset({"g"}),
+        )
+        self.assertEqual(vd.MATCH, cls)
+
+    def test_native_skipping_a_function_is_weaker_even_after_a_refutation(self):
+        keys = frozenset({("f", "Callee", 1)})
+        cls, _ = vd.classify(
+            "VerifyFailed",
+            vd.REFUTED,
+            vd.REFUTED,
+            keys,
+            keys,
+            native_skipped=frozenset({"g"}),
+        )
+        self.assertEqual(vd.WEAKER, cls)
+
+    def test_inconclusive_native_did_not_analyse_later_functions_either(self):
+        cls, _ = vd.classify(
+            "Skipped",
+            vd.INCONCLUSIVE,
+            vd.INCONCLUSIVE,
+            esbmc_skipped=frozenset({"g"}),
+        )
+        self.assertEqual(vd.MATCH, cls)
+
+    def test_skipped_functions_reads_warnings_only(self):
+        result = {
+            "diagnostics": [
+                skip_diag("low"),
+                skip_diag("main", severity="note"),
+                skip_diag("other", code="ArithOverflowReachable"),
+                {"error_code": "VerificationSkipped", "severity": "warning"},
+            ]
+        }
+        self.assertEqual(frozenset({"low"}), vd.skipped_functions(result))
+        self.assertEqual(frozenset(), vd.skipped_functions(None))
+
+
+class ClassifyOutcomesTest(unittest.TestCase):
+    def write(self, tmp, text):
+        path = os.path.join(tmp, "f.vow")
+        with open(path, "w") as fh:
+            fh.write(text)
+        return path
+
+    def outcome(self, status, *diags, cexes=()):
+        return vd.summarise(
+            {
+                "status": status,
+                "diagnostics": list(diags),
+                "counterexamples": list(cexes),
+            }
+        )
+
+    def test_wide_enum_payload_shape_is_not_a_match(self):
+        esbmc = self.outcome(
+            "Skipped", *[skip_diag(f) for f in ("low", "second", "ok", "call_ret")]
+        )
+        native = self.outcome("Skipped", skip_diag("call_ret"))
+        cls, _ = vd.classify_outcomes("Skipped", "/nonexistent.vow", esbmc, native)
+        self.assertEqual(vd.MORE_PRECISE, cls)
+
+    def test_directives_of_the_fixture_are_honoured(self):
+        cex = {"function": "f", "blame": "Callee", "vow_id": 2, "violation": "ensures"}
+        esbmc = self.outcome("VerifyFailed", cexes=[cex])
+        native = self.outcome("Verified")
+        with tempfile.TemporaryDirectory() as tmp:
+            bare = self.write(tmp, "// TEST: category x\n")
+            self.assertEqual(
+                vd.SOUNDNESS, vd.classify_outcomes("Verified", bare, esbmc, native)[0]
+            )
+            marked = self.write(
+                tmp,
+                '// TEST: esbmc-model-artifact fn="f" blame=Callee vow_id=2 "why"\n',
+            )
+            self.assertEqual(
+                vd.MORE_PRECISE,
+                vd.classify_outcomes("Verified", marked, esbmc, native)[0],
+            )
+
+
+class NativeCorpusTest(unittest.TestCase):
+    def test_native_directories_are_collected_with_their_truth(self):
+        truths = {}
+        for group, exp in vd.collect_native(None):
+            truths.setdefault(group, set()).add(exp.expected_status)
+        self.assertEqual(
+            {
+                "verify-native/pass": {"Verified"},
+                "verify-native/fail": {"VerifyFailed"},
+                "verify-native/skip": {"Skipped"},
+                "verify-native/unknown": {None},
+            },
+            truths,
+        )
+
+    def test_collect_covers_the_eval_corpus_and_the_native_one(self):
+        groups = {group for group, _ in vd.collect(None)}
+        self.assertTrue({"verify", "verify-fail", "verify-skip"} <= groups)
+        self.assertIn("verify-native/pass", groups)
+
+    def test_filter_applies_to_the_native_fixtures(self):
+        names = [exp.name for _, exp in vd.collect_native("string_eq_exact")]
+        self.assertEqual(["string_eq_exact"], names)
+
+
 class VerdictTest(unittest.TestCase):
     def test_status_mapping(self):
         self.assertEqual(vd.PROVEN, vd.verdict_of({"status": "Verified"}))
@@ -138,6 +399,15 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(1, code(vd.WEAKER, vd.HARNESS))
         self.assertEqual(1, code(vd.SOUNDNESS, vd.HARNESS))
         self.assertEqual(2, code(vd.MATCH, vd.HARNESS))
+
+    def test_soundness_only_gate_lets_weaker_rows_pass(self):
+        def code(*classes):
+            report = vd.build_report("vowc", [fake_row(c) for c in classes])
+            return vd.exit_code(report, (vd.SOUNDNESS,))
+
+        self.assertEqual(0, code(vd.MATCH, vd.WEAKER))
+        self.assertEqual(1, code(vd.WEAKER, vd.SOUNDNESS))
+        self.assertEqual(2, code(vd.WEAKER, vd.HARNESS))
 
     def test_summary_counts(self):
         report = vd.build_report("vowc", [fake_row(vd.MATCH), fake_row(vd.WEAKER)])
@@ -292,11 +562,11 @@ class ContractsTest(unittest.TestCase):
         n = report(clause("f", "ensures", 1, "vacuous"))
         self.assertEqual(vd.WEAKER, self.cmp(e, n))
 
-    def test_trivial_flag_must_agree(self):
+    def test_trivial_flag_native_false_is_weaker_native_true_is_more_precise(self):
         e = report(clause("f", "ensures", 1, "proven", True))
         n = report(clause("f", "ensures", 1, "proven", False))
         self.assertEqual(vd.WEAKER, self.cmp(e, n))
-        self.assertEqual(vd.WEAKER, self.cmp(n, e))
+        self.assertEqual(vd.MORE_PRECISE, self.cmp(n, e))
 
     def test_native_error_where_esbmc_is_inconclusive_is_weaker(self):
         e = report(clause("f", "ensures", 1, "unknown"))
@@ -314,6 +584,71 @@ class ContractsTest(unittest.TestCase):
         self.assertEqual(
             vd.MORE_PRECISE, vd.compare_contracts("VerifyFailed", e, n, {"f"})[0]
         )
+
+    def test_native_divergence_directive_excuses_a_proven_clause_left_unknown(self):
+        e = report(
+            clause("f", "requires", 0, "proven"),
+            clause("f", "ensures", 1, "failed"),
+        )
+        n = report(
+            clause("f", "requires", 0, "unknown"),
+            clause("f", "ensures", 1, "failed"),
+        )
+        self.assertEqual(vd.WEAKER, vd.compare_contracts("VerifyFailed", e, n)[0])
+        cls, detail = vd.compare_contracts(
+            "VerifyFailed", e, n, divergence="requires is proven with its function"
+        )
+        self.assertEqual(vd.MORE_PRECISE, cls)
+        self.assertIn("requires is proven with its function", detail)
+
+    def test_native_divergence_directive_does_not_excuse_a_verified_fixture(self):
+        e = report(clause("f", "ensures", 1, "proven"))
+        n = report(clause("f", "ensures", 1, "unknown"))
+        self.assertEqual(
+            vd.WEAKER,
+            vd.compare_contracts("Verified", e, n, divergence="documented")[0],
+        )
+
+    def test_native_divergence_directive_excuses_nothing_else(self):
+        why = "documented"
+        skipped = report(clause("f", "ensures", 1, "skipped"))
+        proven = report(clause("f", "ensures", 1, "proven"))
+        self.assertEqual(
+            vd.WEAKER,
+            vd.compare_contracts("Verified", proven, skipped, divergence=why)[0],
+        )
+        errored = report(clause("f", "ensures", 1, "error"))
+        self.assertEqual(
+            vd.WEAKER,
+            vd.compare_contracts("Verified", proven, errored, divergence=why)[0],
+        )
+        unproven = report(clause("f", "ensures", 1, "unknown"))
+        failed = report(clause("f", "ensures", 1, "failed"))
+        self.assertEqual(
+            vd.SOUNDNESS,
+            vd.compare_contracts("VerifyFailed", failed, proven, divergence=why)[0],
+        )
+        self.assertEqual(
+            vd.MATCH,
+            vd.compare_contracts("Verified", proven, proven, divergence=why)[0],
+        )
+        self.assertEqual(
+            vd.MATCH,
+            vd.compare_contracts("Verified", unproven, unproven, divergence=why)[0],
+        )
+
+    def test_native_divergence_directive_parsing(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            path = d + "/f.vow"
+            with open(path, "w") as fh:
+                fh.write('// TEST: category x\n// TEST: native-divergence "a why"\n')
+            self.assertEqual("a why", vd.native_divergence(path))
+            with open(path, "w") as fh:
+                fh.write("// TEST: native-divergence\n")
+            self.assertIsNone(vd.native_divergence(path))
+            self.assertIsNone(vd.native_divergence(d + "/missing.vow"))
 
     def test_aborting_functions_are_refuted_without_a_failed_clause(self):
         table = vd.clause_table(
@@ -438,9 +773,7 @@ class MainTest(unittest.TestCase):
         out = io.StringIO()
         with (
             mock.patch.object(vd, "preflight", return_value=[]),
-            mock.patch.object(
-                vd.verify_eval, "collect", return_value=[("verify", exp)]
-            ),
+            mock.patch.object(vd, "collect", return_value=[("verify", exp)]),
             mock.patch.object(vd, "function_count", return_value=1),
             mock.patch.object(
                 vd,
@@ -469,10 +802,51 @@ class MainTest(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual(1, json.loads(out)["summary"]["match"])
 
+    def test_fail_on_soundness_ignores_weaker_rows(self):
+        weaker = {"esbmc": {"status": "Verified"}, "native": {"status": "Skipped"}}
+        self.assertEqual(1, self.run_main([], weaker)[0])
+        self.assertEqual(0, self.run_main(["--fail-on", "soundness"], weaker)[0])
+
+    def test_fail_on_soundness_still_fails_a_soundness_row(self):
+        code, out = self.run_main(
+            ["--fail-on", "soundness"],
+            {
+                "esbmc": {
+                    "status": "VerifyFailed",
+                    "counterexamples": [
+                        {"function": "f", "blame": "Callee", "vow_id": 0}
+                    ],
+                },
+                "native": {"status": "Verified"},
+            },
+        )
+        self.assertEqual(vd.SOUNDNESS, json.loads(out)["rows"][0]["class"])
+        self.assertEqual(1, code)
+
+    def test_corpus_native_collects_only_the_native_fixtures(self):
+        exp = vd.verify_eval.Expect("tests/verify-native/pass/x.vow", "Verified")
+        proven = {"status": "Verified"}
+        with (
+            mock.patch.object(vd, "preflight", return_value=[]),
+            mock.patch.object(vd, "collect", side_effect=AssertionError("all")),
+            mock.patch.object(
+                vd, "collect_native", return_value=[("verify-native/pass", exp)]
+            ),
+            mock.patch.object(vd, "function_count", return_value=1),
+            mock.patch.object(
+                vd,
+                "run_backend",
+                side_effect=lambda v, b, p, t, n, c="verify": (proven, 0.0),
+            ),
+            mock.patch.object(sys, "stdout", io.StringIO()),
+            mock.patch.object(sys, "stderr", io.StringIO()),
+        ):
+            self.assertEqual(0, vd.main(["--corpus", "native"]))
+
     def test_empty_selection_is_a_harness_failure(self):
         with (
             mock.patch.object(vd, "preflight", return_value=[]),
-            mock.patch.object(vd.verify_eval, "collect", return_value=[]),
+            mock.patch.object(vd, "collect", return_value=[]),
             mock.patch.object(sys, "stderr", io.StringIO()),
         ):
             self.assertEqual(2, vd.main(["--filter", "typo"]))
@@ -481,9 +855,7 @@ class MainTest(unittest.TestCase):
         exp = vd.verify_eval.Expect("tests/verify/x.vow", "Verified")
         with (
             mock.patch.object(vd, "preflight", return_value=[]),
-            mock.patch.object(
-                vd.verify_eval, "collect", return_value=[("verify", exp)]
-            ),
+            mock.patch.object(vd, "collect", return_value=[("verify", exp)]),
             mock.patch.object(vd, "run_backend", side_effect=PermissionError("denied")),
             mock.patch.object(sys, "stderr", io.StringIO()),
         ):

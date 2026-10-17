@@ -1,0 +1,17 @@
+// A `Vec` pushed into a `Vec`: the slot holds the inner object's address, which nothing in the
+// function looks at again, so the length of the outer `Vec` is exact.
+module VecOfVecPush
+
+fn nest() -> u64 vow {
+  ensures: result == 1
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let inner: Vec<i64> = Vec::new();
+  outer.push(inner);
+  outer.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(nest());
+  0
+}

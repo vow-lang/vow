@@ -1,7 +1,9 @@
 // TEST: category caller-blame
 module WhereDivide
 
-fn safe_div(x: i64, y: i64 where y != 0) -> i64 {
+fn safe_div(x: i64, y: i64 where y != 0) -> i64 vow {
+  requires: x >= -9223372036854775807 || y != -1
+} {
   x / y
 }
 

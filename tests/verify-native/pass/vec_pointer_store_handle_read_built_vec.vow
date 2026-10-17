@@ -1,0 +1,22 @@
+// A pointer stored into a `Vec` the function built, in a function that also reads memory
+// through a handle (`a.names.len()` reads the `Vec` a field of the parameter holds): no
+// handle loaded from the parameter can name the `Vec` the function built, and no pointer
+// read out of memory is used as an object, so nothing the function can observe depends on
+// the slot.
+module VecPointerStoreHandleReadBuiltVec
+
+struct Bag { names: Vec<String> }
+
+fn total(a: Bag, s: String) -> u64 vow {
+  ensures: result == a.names.len() + 1
+} {
+  let out: Vec<String> = Vec::new();
+  out.push(s);
+  a.names.len() + out.len()
+}
+
+fn main() -> i32 [io] {
+  let a: Bag = Bag { names: Vec::new() };
+  print_u64(total(a, String::from("a")));
+  0
+}

@@ -1,0 +1,20 @@
+// TEST: counterexample-fn "suffix_byte"
+// TEST: counterexample-vow-id 2
+// TEST: counterexample-blame Callee
+// The appended bytes sit after the receiver's own length, not at index `j`.
+module StringAppendWrongByte
+
+fn suffix_byte(a: String, b: String, j: u64) -> bool vow {
+  requires: a.len() > 0
+  requires: j < b.len()
+  ensures: result == true
+} {
+  let c: String = String::from(a);
+  c.push_str(b);
+  c.byte_at(j) == b.byte_at(j)
+}
+
+fn main() -> i32 [io] {
+  if suffix_byte(String::from("a"), String::from("b"), 0) { print_u64(1); }
+  0
+}

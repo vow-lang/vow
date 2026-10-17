@@ -1,0 +1,24 @@
+// A handle read out of a parameter's field is not an object the function allocates: storing a
+// fresh `Vec` in a field between two reads of the parameter's `Vec` does not change either.
+module PtrFieldLoadedHandleIsNotFresh
+
+struct Holder { items: Vec<i64>, tag: i64 }
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn two_reads(b: Bag) -> bool vow {
+  ensures: result
+} {
+  let before: u64 = b.items.len();
+  let h: Holder = Holder { items: Vec::new(), tag: 0 };
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  h.items = v;
+  let after: u64 = b.items.len();
+  before == after && h.items.len() == 1
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), tag: 1 };
+  if two_reads(b) { print_i64(1); }
+  0
+}

@@ -1,0 +1,30 @@
+// TEST: category invariant
+// `p` is `a` or `b` and the loop writes through it. When `pick` is false the loop
+// adds `n` to `b.v`, so `ensures: b.v == 0` is false, but the run needs more
+// iterations than the largest unwinding bound. The cut must forget the field of
+// every root a Phi merges: forgetting only `a.v` would "prove" the false claim.
+module LoopFieldWritePhiRootForgotten
+
+struct Counter { v: u64 }
+
+fn bump(a: Counter, b: Counter, pick: bool, n: u64) -> u64 vow {
+  requires: a.v == 0 && b.v == 0 && n > 100
+  ensures: b.v == 0
+} {
+  let p: Counter = if pick { a } else { b };
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n
+  } {
+    p.v = p.v + 1;
+    i = i + 1;
+  }
+  b.v
+}
+
+fn main() -> i32 [io] {
+  let a: Counter = Counter { v: 0 };
+  let b: Counter = Counter { v: 0 };
+  print_u64(bump(a, b, false, 101));
+  0
+}

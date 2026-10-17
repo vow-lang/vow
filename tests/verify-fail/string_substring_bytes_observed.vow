@@ -1,4 +1,5 @@
 // TEST: category callee-blame
+// TEST: native-divergence "native defines a requires clause proven only when its whole function is, and this function's ensures fails (cli.md, Clause status)"
 // TEST: counterexample-fn "first_byte_is_a"
 // TEST: counterexample-blame Callee
 // TEST: counterexample-vow-id 1

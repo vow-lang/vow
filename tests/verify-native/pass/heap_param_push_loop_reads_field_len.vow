@@ -1,0 +1,30 @@
+// A loop that pushes onto a `Vec` parameter while its bound is the length of a `Vec` held in a
+// field: `out` may be that `Vec`, and the invariant `i <= b.items.len()` is still inductive.
+module HeapParamPushLoopReadsFieldLen
+
+// TEST: esbmc-model-artifact fn="copy_all" blame=None vow_id=4294967293 "ESBMC reads the Vec field b.items as a fresh Vec of nondeterministic length at each use, so the reads of b.items in the loop test, body and postcondition are unrelated values and the claim fails; it also fails its own Vec capacity assertion for a parameter already at its model limit. The native model reads one field as one value and keeps the aliasing a parameter may have with it; a debug-mode replay over sizes 0 to 300 satisfies every clause (aliasing the parameter makes the loop diverge, so the postcondition holds vacuously there)"
+// TEST: esbmc-model-artifact fn="copy_all" blame=Callee vow_id=0 "ESBMC reads the Vec field b.items as a fresh Vec of nondeterministic length at each use, so the reads of b.items in the loop test, body and postcondition are unrelated values and the claim fails; it also fails its own Vec capacity assertion for a parameter already at its model limit. The native model reads one field as one value and keeps the aliasing a parameter may have with it; a debug-mode replay over sizes 0 to 300 satisfies every clause (aliasing the parameter makes the loop diverge, so the postcondition holds vacuously there)"
+// TEST: esbmc-model-artifact fn="copy_all" blame=Callee vow_id=1 "ESBMC reads the Vec field b.items as a fresh Vec of nondeterministic length at each use, so the reads of b.items in the loop test, body and postcondition are unrelated values and the claim fails; it also fails its own Vec capacity assertion for a parameter already at its model limit. The native model reads one field as one value and keeps the aliasing a parameter may have with it; a debug-mode replay over sizes 0 to 300 satisfies every clause (aliasing the parameter makes the loop diverge, so the postcondition holds vacuously there)"
+
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn copy_all(out: Vec<i64>, b: Bag) -> u64 vow {
+  ensures: result == b.items.len()
+} {
+  let mut i: u64 = 0;
+  while i < b.items.len() vow {
+    invariant: i <= b.items.len()
+  } {
+    out.push(b.items[i]);
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), tag: 1 };
+  b.items.push(5);
+  let out: Vec<i64> = Vec::new();
+  print_u64(copy_all(out, b));
+  0
+}

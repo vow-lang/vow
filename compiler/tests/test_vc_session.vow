@@ -6,6 +6,8 @@ use vc_smt
 use vc_exec
 use vc_solver
 use vc_session
+use vc_native
+use vc_slice
 use tests.builders
 
 fn args1(a: i64) -> Vec<i64> {
@@ -84,7 +86,7 @@ fn check_first_delta_is_the_standalone_prefix() -> i64 {
     let mut k: u64 = 0;
     while k < 2 {
         let want: String = vc_smt_render(cs.arena, vc_claim_script(cs, k));
-        let got: String = vc_session_delta(cs, 0, 0, k);
+        let got: String = vc_claim_context_delta(cs, k, 0, 0);
         got.push_str(tail_of(cs, k));
         if got != want { return 2 + k as i64; }
         k = k + 1;
@@ -97,9 +99,9 @@ fn check_first_delta_is_the_standalone_prefix() -> i64 {
 // what the first lacks.
 fn check_later_delta_is_the_remainder() -> i64 {
     let cs: VcClaims = two_claims();
-    let d0: String = vc_session_delta(cs, 0, 0, 0);
-    let d1: String = vc_session_delta(cs, cs.header_lens[0] as u64, cs.assumed_lens[0] as u64, 1);
-    let whole: String = vc_session_delta(cs, 0, 0, 1);
+    let d0: String = vc_claim_context_delta(cs, 0, 0, 0);
+    let d1: String = vc_claim_context_delta(cs, 1, cs.header_lens[0] as u64, cs.assumed_lens[0] as u64);
+    let whole: String = vc_claim_context_delta(cs, 1, 0, 0);
     if count_of(d0, String::from("\n")) + count_of(d1, String::from("\n")) != count_of(whole, String::from("\n")) { return 1; }
     if d1.len() == 0 { return 2; }
     if d1.contains(String::from("(set-logic")) { return 3; }
@@ -110,7 +112,7 @@ fn check_later_delta_is_the_remainder() -> i64 {
 
 fn check_repeated_ask_sends_no_delta() -> i64 {
     let cs: VcClaims = two_claims();
-    let d: String = vc_session_delta(cs, cs.header_lens[1] as u64, cs.assumed_lens[1] as u64, 1);
+    let d: String = vc_claim_context_delta(cs, 1, cs.header_lens[1] as u64, cs.assumed_lens[1] as u64);
     if d != String::from("") { return 1; }
     0
 }
@@ -148,7 +150,7 @@ fn check_classify_accepts_only_the_exact_reply() -> i64 {
 
 fn check_disabled_session_never_starts() -> i64 [io] {
     let cs: VcClaims = two_claims();
-    let ss: VcSession = vc_session_new(false);
+    let ss: VcSession = vc_session_new(false, -1);
     if vc_session_ask(ss, String::from("/nonexistent/bitwuzla"), cs, 0, 1000) != VC_ANS_NONE() { return 1; }
     if ss.handle >= 0 { return 2; }
     vc_session_close(ss);
@@ -158,10 +160,95 @@ fn check_disabled_session_never_starts() -> i64 [io] {
 
 fn check_missing_solver_kills_the_session() -> i64 [io] {
     let cs: VcClaims = two_claims();
-    let ss: VcSession = vc_session_new(true);
+    let ss: VcSession = vc_session_new(true, -1);
     if vc_session_ask(ss, String::from("/nonexistent/bitwuzla"), cs, 0, 1000) != VC_ANS_NONE() { return 1; }
     if ss.live { return 2; }
     if vc_session_ask(ss, String::from("/nonexistent/bitwuzla"), cs, 1, 1000) != VC_ANS_NONE() { return 3; }
+    0
+}
+
+// `two_claims` with a quantified assumption (`or e (forall i < n. x[i] == y[i])`)
+// that claim 1's prefix holds and claim 0's does not.
+fn binder_claims() -> VcClaims {
+    let cs: VcClaims = two_claims();
+    let ar: VcArena = cs.arena;
+    let q: i64 = vc_tm_qeq(ar, vc_tm_var(ar, String::from("x")), vc_tm_var(ar, String::from("y")), vc_tm_bv(ar, 64, 0, 0), vc_tm_var(ar, String::from("n")));
+    cs.assumed.push(vc_tm_or(ar, vc_tm_var(ar, String::from("e")), q));
+    cs.assumed_lens[1] = cs.assumed.len() as i64;
+    cs
+}
+
+fn check_first_binder_is_the_first_quantified_assumption() -> i64 {
+    let plain: VcClaims = two_claims();
+    if vc_claims_first_binder(plain) != -1 { return 1; }
+    let cs: VcClaims = binder_claims();
+    if vc_claims_first_binder(cs) != cs.assumed.len() as i64 - 1 { return 2; }
+    let at: i64 = vc_claims_first_binder(cs);
+    if !vc_session_admits(at, cs, 0) { return 3; }
+    if vc_session_admits(at, cs, 1) { return 4; }
+    if !vc_session_admits(-1, cs, 1) { return 5; }
+    0
+}
+
+// A claim behind a binder is never asked of the session: no process is started and
+// the session stays usable for the claims before it.
+fn check_session_skips_claims_behind_a_binder() -> i64 [io] {
+    let cs: VcClaims = binder_claims();
+    let at: i64 = vc_claims_first_binder(cs);
+    let ss: VcSession = vc_session_new(true, at);
+    if vc_session_ask(ss, String::from("/nonexistent/bitwuzla"), cs, 1, 1000) != VC_ANS_NONE() { return 1; }
+    if !ss.live { return 2; }
+    if ss.handle >= 0 { return 3; }
+    if vc_session_ask(ss, String::from("/nonexistent/bitwuzla"), cs, 0, 1000) != VC_ANS_NONE() { return 4; }
+    if ss.live { return 5; }
+    0
+}
+
+// The last claim that needs a solver is the one a session hedges, and only a
+// live session that may ask it does.
+fn check_the_last_solver_claim_is_the_hedged_one() -> i64 {
+    let cs: VcClaims = two_claims();
+    if vc_claims_last_solver(vc_frames_new(), cs) != 1 { return 1; }
+    let ss: VcSession = vc_session_new(true, -1);
+    if vc_session_hedges(ss, cs, 1) { return 2; }
+    ss.last_at = vc_claims_last_solver(vc_frames_new(), cs);
+    if !vc_session_hedges(ss, cs, 1) { return 3; }
+    if vc_session_hedges(ss, cs, 0) { return 4; }
+    let dead: VcSession = vc_session_new(false, -1);
+    dead.last_at = 1;
+    if vc_session_hedges(dead, cs, 1) { return 5; }
+    0
+}
+
+// A claim behind a quantifier binder is never asked of the session, so it is
+// never the hedged one either.
+fn check_a_claim_behind_a_binder_is_not_hedged() -> i64 {
+    let cs: VcClaims = binder_claims();
+    let ss: VcSession = vc_session_new(true, vc_claims_first_binder(cs));
+    ss.last_at = vc_claims_last_solver(vc_frames_new(), cs);
+    if ss.last_at != 1 { return 1; }
+    if vc_session_hedges(ss, cs, 1) { return 2; }
+    0
+}
+
+fn check_hedged_ask_without_a_solver_answers_nothing() -> i64 [io] {
+    let cs: VcClaims = two_claims();
+    let ss: VcSession = vc_session_new(true, -1);
+    ss.last_at = 1;
+    if vc_session_ask_hedged(ss, String::from("/nonexistent/bitwuzla"), cs, 1, 1000, 10) != VC_ANS_NONE() { return 1; }
+    if ss.live { return 2; }
+    if vc_session_ask_hedged(ss, String::from("/nonexistent/bitwuzla"), cs, 1, 1000, 10) != VC_ANS_NONE() { return 3; }
+    let off: VcSession = vc_session_new(true, -1);
+    if vc_session_ask_hedged(off, String::from("/nonexistent/bitwuzla"), cs, 1, 0, 10) != VC_ANS_NONE() { return 4; }
+    0
+}
+
+// The pending marker is not one of the solver's verdicts.
+fn check_pending_is_not_a_verdict() -> i64 {
+    let p: i64 = VC_SESSION_PENDING();
+    if p == VC_ANS_SAT() || p == VC_ANS_UNSAT() || p == VC_ANS_UNKNOWN() { return 1; }
+    if p == VC_ANS_ERROR() || p == VC_ANS_TIMEOUT() || p == VC_ANS_NOT_FOUND() { return 2; }
+    if p == VC_ANS_MEMORY() || p == VC_ANS_NONE() { return 3; }
     0
 }
 
@@ -173,5 +260,11 @@ fn main() -> i32 [io] {
     if r == 0 { r = check_classify_accepts_only_the_exact_reply(); }
     if r == 0 { r = check_disabled_session_never_starts(); }
     if r == 0 { r = check_missing_solver_kills_the_session(); }
+    if r == 0 { r = check_first_binder_is_the_first_quantified_assumption(); }
+    if r == 0 { r = check_session_skips_claims_behind_a_binder(); }
+    if r == 0 { r = check_the_last_solver_claim_is_the_hedged_one(); }
+    if r == 0 { r = check_a_claim_behind_a_binder_is_not_hedged(); }
+    if r == 0 { r = check_hedged_ask_without_a_solver_answers_nothing(); }
+    if r == 0 { r = check_pending_is_not_a_verdict(); }
     i64_to_i32_wrap(r)
 }

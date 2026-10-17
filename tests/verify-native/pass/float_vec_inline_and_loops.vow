@@ -1,0 +1,68 @@
+// TEST: category float
+// A float `Vec` built in a counted loop, filled by an inlined callee and read in a
+// second loop: the stored bit patterns are the unrolled iterations' own, so each
+// element reads back as the float that was pushed.
+module FloatVecInlineAndLoops
+
+fn push_twice(v: Vec<f64>, x: f64) -> () {
+  v.push(x);
+  v.push(x);
+}
+
+fn inlined_fill(x: f64) -> bool vow {
+  requires: x == x,
+  ensures: result
+} {
+  let v: Vec<f64> = Vec::new();
+  push_twice(v, x);
+  v.len() == 2u64 && v[0] == x && v[1] == x
+}
+
+fn counted_fill(x: f64) -> bool vow {
+  requires: x == x,
+  ensures: result
+} {
+  let v: Vec<f64> = Vec::new();
+  let mut i: u64 = 0;
+  while i < 3 {
+    v.push(x);
+    i = i + 1;
+  }
+  v[0] == x && v[1] == x && v[2] == x
+}
+
+fn counted_read(x: f64) -> bool vow {
+  requires: x - x == 0.0,
+  ensures: result
+} {
+  let v: Vec<f64> = Vec::new();
+  v.push(x);
+  v.push(x + x);
+  let mut acc: f64 = 0.0;
+  let mut i: u64 = 0;
+  while i < 2 {
+    acc = acc + v[i];
+    i = i + 1;
+  }
+  acc == x + (x + x)
+}
+
+fn rewrite_in_loop(x: f64, y: f64) -> bool vow {
+  requires: x == x && y == y,
+  ensures: result
+} {
+  let v: Vec<f64> = Vec::new();
+  v.push(x);
+  v.push(x);
+  let mut i: u64 = 0;
+  while i < 2 {
+    v[i] = y;
+    i = i + 1;
+  }
+  v[0] == y && v[1] == y
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

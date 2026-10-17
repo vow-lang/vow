@@ -1,6 +1,7 @@
 module VcSmt
 
 use vc_term
+use vc_qbind
 
 // SMT-LIB command list and its writer. This is the only module that prints
 // SMT text: the symbolic executor builds `SmtScript`s and `vc_smt_render`
@@ -134,17 +135,21 @@ fn vc_op_symbol(op: i64) -> String {
     if op == VC_OP_ITE() { return String::from("ite"); }
     if op == VC_OP_SELECT() { return String::from("select"); }
     if op == VC_OP_STORE() { return String::from("store"); }
+    if op == VC_OP_CONCAT() { return String::from("concat"); }
+    if op == VC_OP_CONSTARR() { return String::from("(as const (Array (_ BitVec 64) (_ BitVec 64)))"); }
     vc_fp_op_symbol(op)
 }
 
 // Float operators. The rounding mode is part of the symbol: IEEE round to
-// nearest, ties to even is the only mode the language has (`fp.add RNE a b`).
+// nearest, ties to even is the only mode the language has (`fp.add RNE a b`);
+// `fp.neg` flips the sign and rounds nothing.
 // `to_fp` reads a bit-vector as an IEEE-754 interchange pattern.
 fn vc_fp_op_symbol(op: i64) -> String {
     if op == VC_OP_FPADD() { return String::from("fp.add RNE"); }
     if op == VC_OP_FPSUB() { return String::from("fp.sub RNE"); }
     if op == VC_OP_FPMUL() { return String::from("fp.mul RNE"); }
     if op == VC_OP_FPDIV() { return String::from("fp.div RNE"); }
+    if op == VC_OP_FPNEG() { return String::from("fp.neg"); }
     if op == VC_OP_FPEQ() { return String::from("fp.eq"); }
     if op == VC_OP_FPLT() { return String::from("fp.lt"); }
     if op == VC_OP_FPLE() { return String::from("fp.leq"); }
@@ -167,6 +172,9 @@ fn vc_sort_text(sort: i64) -> String {
     }
     if sort == VC_SORT_ARRAY64() {
         return String::from("(Array (_ BitVec 64) (_ BitVec 64))");
+    }
+    if sort == VC_SORT_ARRAY128() {
+        return String::from("(Array (_ BitVec 128) (_ BitVec 64))");
     }
     let out: String = String::from("(_ BitVec ");
     out.push_str(i64_to_string(sort));
@@ -221,11 +229,105 @@ fn vc_ext_prefix(kind: i64, amount: i64) -> String {
     out
 }
 
+// `(bvadd vq_i off)`.
+fn vc_qeq_shifted(off: String) -> String {
+    let out: String = String::from("(bvadd ");
+    out.push_str(vc_qb_i());
+    out.push_str(String::from(" "));
+    out.push_str(off);
+    out.push_str(String::from(")"));
+    out
+}
+
+// `(forall ((vq_i (_ BitVec 64))) (=> (bvult vq_i n) (= low8(a[vq_i]) low8(b[vq_i + k]))))`.
+fn vc_qeq_text(ar: VcArena, t: i64) -> String {
+    let i: String = vc_qb_i();
+    let shifted: String = vc_qeq_shifted(vc_term_text(ar, ar.c[t as u64]));
+    let out: String = String::from("(forall ((");
+    out.push_str(i);
+    out.push_str(String::from(" (_ BitVec 64))) (=> (bvult "));
+    out.push_str(i);
+    out.push_str(String::from(" "));
+    out.push_str(vc_term_text(ar, ar.aux[t as u64]));
+    out.push_str(String::from(") (= "));
+    out.push_str(vc_qb_byte(vc_term_text(ar, ar.a[t as u64]), i));
+    out.push_str(String::from(" "));
+    out.push_str(vc_qb_byte(vc_term_text(ar, ar.b[t as u64]), shifted));
+    out.push_str(String::from(")))"));
+    out
+}
+
+// `(forall ((vq_i (_ BitVec 64))) (=> (bvule vq_i l) <body>))`.
+fn vc_bound_text(ar: VcArena, t: i64, body: String) -> String {
+    let out: String = String::from("(forall ((");
+    out.push_str(vc_qb_i());
+    out.push_str(String::from(" (_ BitVec 64))) (=> (bvule "));
+    out.push_str(vc_qb_i());
+    out.push_str(String::from(" "));
+    out.push_str(vc_term_text(ar, ar.aux[t as u64]));
+    out.push_str(String::from(") "));
+    out.push_str(body);
+    out.push_str(String::from("))"));
+    out
+}
+
+// `forall i <= l. a[i] < b`.
+fn vc_qlt_text(ar: VcArena, t: i64) -> String {
+    let body: String = String::from("(bvult ");
+    body.push_str(vc_qb_select(vc_term_text(ar, ar.a[t as u64]), vc_qb_i()));
+    body.push_str(String::from(" "));
+    body.push_str(vc_term_text(ar, ar.b[t as u64]));
+    body.push_str(String::from(")"));
+    vc_bound_text(ar, t, body)
+}
+
+// `forall i <= l. low8(a[c[i]]) != low8(b[i + c[i]])`.
+fn vc_qdiff_text(ar: VcArena, t: i64) -> String {
+    let pick: String = vc_qb_select(vc_term_text(ar, ar.c[t as u64]), vc_qb_i());
+    let shifted: String = vc_qeq_shifted(pick);
+    let body: String = String::from("(distinct ");
+    body.push_str(vc_qb_byte(vc_term_text(ar, ar.a[t as u64]), pick));
+    body.push_str(String::from(" "));
+    body.push_str(vc_qb_byte(vc_term_text(ar, ar.b[t as u64]), shifted));
+    body.push_str(String::from(")"));
+    vc_bound_text(ar, t, body)
+}
+
+// The string-function binders of `vc_qbind`: the operands are rendered here, the template is its.
+fn vc_string_fn_text(ar: VcArena, t: i64, kind: i64) -> String {
+    let a: String = vc_term_text(ar, ar.a[t as u64]);
+    let b: String = vc_term_text(ar, ar.b[t as u64]);
+    if kind == VC_T_HEXPAIR() { return vc_qb_hexpair(a, b); }
+    if kind == VC_T_HEXVAL() { return vc_qb_hexval(a, b); }
+    let n: String = vc_term_text(ar, ar.aux[t as u64]);
+    if kind == VC_T_QFOLD() { return vc_qb_fold(a, b, n); }
+    if kind == VC_T_QHEX() { return vc_qb_hex_encode(a, b, n); }
+    vc_qb_hex_decode(a, b, n)
+}
+
 fn vc_term_text(ar: VcArena, t: i64) -> String {
     let kind: i64 = ar.kinds[t as u64];
     let aux: i64 = ar.aux[t as u64];
     if kind == VC_T_VAR() {
         return String::from(ar.strs[aux as u64]);
+    }
+    if kind == VC_T_QSORT() {
+        let o: String = vc_term_text(ar, ar.a[t as u64]);
+        let src: String = vc_term_text(ar, ar.b[t as u64]);
+        let pq: String = vc_term_text(ar, ar.c[t as u64]);
+        return vc_qb_sort(o, src, pq, vc_term_text(ar, ar.aux[t as u64]));
+    }
+    if kind == VC_T_QEQ() {
+        return vc_qeq_text(ar, t);
+    }
+    if kind == VC_T_QLT() {
+        return vc_qlt_text(ar, t);
+    }
+    if kind == VC_T_QDIFF() {
+        return vc_qdiff_text(ar, t);
+    }
+    if kind >= VC_T_QFOLD() && kind <= VC_T_HEXVAL() {
+        return vc_string_fn_text(ar, t, kind);
     }
     if kind == VC_T_BV() {
         return vc_bv_literal(ar.a[t as u64], aux, ar.b[t as u64]);

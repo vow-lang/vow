@@ -1,0 +1,25 @@
+module HeapVecFieldTwoReadsAgree
+
+// TEST: esbmc-model-artifact fn="same_len" blame=Callee vow_id=0 "ESBMC reads the Vec field b.items as a fresh Vec of nondeterministic length at each use, so two reads of b.items.len() can differ (its counterexample has first = 1 and second = 0); the native model reads one field as one value"
+
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn same_len(b: Bag) -> bool vow {
+  ensures: result
+} {
+  let first: u64 = b.items.len();
+  let second: u64 = b.items.len();
+  first == second
+}
+
+fn len_bound(b: Bag) -> bool vow {
+  ensures: result
+} {
+  b.items.len() as i64 >= 0
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), tag: 1 };
+  if same_len(b) && len_bound(b) { print_i64(1); }
+  0
+}

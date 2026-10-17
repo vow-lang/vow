@@ -1,0 +1,39 @@
+module TestVcCexElem
+
+use vc_cex_elem
+
+fn check_elem_text() -> i64 {
+    if vc_cex_elem_text(String::from("i64"), 18446744073709551609u64) != String::from("-7") { return 1; }
+    if vc_cex_elem_text(String::from("i64"), 9223372036854775807u64) != String::from("9223372036854775807") { return 2; }
+    if vc_cex_elem_text(String::from("u64"), 18446744073709551609u64) != String::from("18446744073709551609") { return 3; }
+    // A narrow element is the slot's low bits: the model's high bits are arbitrary.
+    if vc_cex_elem_text(String::from("i32"), 4294967291u64) != String::from("-5") { return 4; }
+    if vc_cex_elem_text(String::from("i32"), 18446744069414584315u64) != String::from("-5") { return 5; }
+    if vc_cex_elem_text(String::from("i32"), 2147483647u64) != String::from("2147483647") { return 6; }
+    if vc_cex_elem_text(String::from("i8"), 128u64) != String::from("-128") { return 7; }
+    if vc_cex_elem_text(String::from("u8"), 353u64) != String::from("97") { return 8; }
+    if vc_cex_elem_text(String::from("u8"), 18446744073709551457u64) != String::from("97") { return 9; }
+    if vc_cex_elem_text(String::from("u32"), 4294967296u64 + 7u64) != String::from("7") { return 10; }
+    if vc_cex_elem_text(String::from("bool"), 0u64) != String::from("false") { return 11; }
+    if vc_cex_elem_text(String::from("bool"), 2u64) != String::from("true") { return 12; }
+    // A type it does not know keeps the slot.
+    if vc_cex_elem_text(String::from("Handle"), 18446744073709551609u64) != String::from("18446744073709551609") { return 13; }
+    0
+}
+
+fn check_elem_open() -> i64 {
+    if vc_cex_elem_open(String::from("v[0]")) != 1 { return 20; }
+    if vc_cex_elem_open(String::from("data[123]")) != 4 { return 21; }
+    if vc_cex_elem_open(String::from("v.len")) != -1 { return 22; }
+    if vc_cex_elem_open(String::from("v[]")) != -1 { return 23; }
+    if vc_cex_elem_open(String::from("[1]")) != -1 { return 24; }
+    if vc_cex_elem_open(String::from("o.1.0")) != -1 { return 25; }
+    if vc_cex_elem_open(String::from("v[a]")) != -1 { return 26; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_elem_text();
+    if r == 0 { r = check_elem_open(); }
+    i64_to_i32_wrap(r)
+}

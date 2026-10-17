@@ -1,0 +1,15 @@
+// TEST: unknown-reason opaque builtin result
+// The number of pieces depends on the separator occurrences the model does not encode, so a
+// claim about its exact value is `unknown`, whatever the facts every run has.
+module StringSplitCountOpaque
+
+fn two_pieces(s: String) -> u64 vow {
+  ensures: result == 2
+} {
+  string_split(s, String::from(",")).len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(two_pieces(String::from("a,b")));
+  0
+}

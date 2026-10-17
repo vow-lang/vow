@@ -1,0 +1,22 @@
+// TEST: category float
+// TEST: counterexample-fn "round_trip"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value x NaN
+// A float read back out of a `Vec` is the float that was stored, so `result == x`
+// fails exactly where `x == x` does: for a NaN. The slot round trip adds no failure
+// of its own, and the counterexample is the NaN, not a bit pattern.
+module FloatVecNanRoundTrip
+
+fn round_trip(x: f64) -> f64 vow {
+  ensures: result == x
+} {
+  let v: Vec<f64> = Vec::new();
+  v.push(x);
+  v[0]
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

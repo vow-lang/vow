@@ -1,0 +1,38 @@
+// TEST: category invariant
+// TEST: counterexample-fn count_nonempty
+// TEST: counterexample-blame Callee
+// A `Vec` that each iteration of the outer loop creates is not carried across iterations, which
+// lets the inductive cut handle the loop. A wrong invariant about it is still refuted: the row has
+// `c` elements after the inner loop, not `c + 1`.
+module LoopVecBornInLoopWrongInvariant
+
+fn count_nonempty(rows: u64, cols: u64) -> u64 vow {
+  ensures: result <= rows
+} {
+  let mut r: u64 = 0;
+  let mut hits: u64 = 0;
+  while r < rows vow {
+    invariant: r <= rows,
+    invariant: hits <= r
+  } {
+    let row: Vec<i64> = Vec::new();
+    let mut c: u64 = 0;
+    while c < cols vow {
+      invariant: c <= cols,
+      invariant: row.len() == c + 1
+    } {
+      row.push(0);
+      c = c + 1;
+    }
+    if row.len() > 0 {
+      hits = hits + 1;
+    }
+    r = r + 1;
+  }
+  hits
+}
+
+fn main() -> i32 [io] {
+  print_u64(count_nonempty(3, 2));
+  0
+}

@@ -1,0 +1,21 @@
+// A callee that returns different Vecs on its two paths: the result is the merge of
+// the two, and the caller reads the one the callee's branch picked.
+module InlineVecResultTwoBranches
+
+fn pick(c: i64) -> Vec<i64> {
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  b.push(1);
+  if c > 0 { a } else { b }
+}
+
+fn size(c: i64) -> u64 vow {
+  ensures: (c > 0 && result == 0) || (c <= 0 && result == 1)
+} {
+  pick(c).len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(size(1));
+  0
+}

@@ -1,0 +1,88 @@
+module StringContainsExact
+
+// `String::contains` is exact for strings of any length: true for an empty needle and
+// for a needle that matches at some start, false exactly when no start matches. The
+// true direction names a witness start, the false direction a Skolem position per start,
+// so a claim that needs only the true direction (a needle that is a prefix, a suffix, an
+// appended part or a substring is contained) and one that needs only the false direction
+// (a needle longer than the haystack is not) are both closed.
+fn needle_fits(s: String, p: String) -> bool vow {
+  ensures: result == true
+} {
+  !s.contains(p) || p.len() <= s.len()
+}
+
+fn empty_needle(s: String) -> bool vow {
+  ensures: result == true
+} {
+  s.contains("")
+}
+
+fn contains_itself(s: String) -> bool vow {
+  ensures: result == true
+} {
+  s.contains(s)
+}
+
+fn longer_needle_is_absent(s: String, p: String) -> bool vow {
+  requires: p.len() > s.len()
+  ensures: result == false
+} {
+  s.contains(p)
+}
+
+fn literal_in_literal() -> bool vow {
+  ensures: result == true
+} {
+  String::from("hello world").contains("o w")
+}
+
+fn literal_not_in_literal() -> bool vow {
+  ensures: result == true
+} {
+  !String::from("hello world").contains("xyz")
+}
+
+fn prefix_is_contained(s: String, p: String) -> bool vow {
+  ensures: result == true
+} {
+  string_starts_with(s, p) == 0 || s.contains(p)
+}
+
+fn suffix_is_contained(s: String, p: String) -> bool vow {
+  ensures: result == true
+} {
+  string_ends_with(s, p) == 0 || s.contains(p)
+}
+
+fn appended_part_is_contained(s: String, p: String) -> bool vow {
+  ensures: result == true
+} {
+  let t: String = String::from(s);
+  t.push_str(p);
+  t.contains(p)
+}
+
+fn pushed_byte_is_contained(s: String) -> bool vow {
+  ensures: result == true
+} {
+  let t: String = String::from(s);
+  t.push_byte(65u8);
+  t.contains("A")
+}
+
+fn substring_is_contained(s: String, a: u64, b: u64) -> bool vow {
+  ensures: result == true
+} {
+  s.contains(s.substring(a, b))
+}
+
+fn same_call_same_answer(s: String, p: String) -> bool vow {
+  ensures: result == true
+} {
+  s.contains(p) == s.contains(p)
+}
+
+fn main() -> i32 [io] {
+  if literal_in_literal() { 0 } else { 1 }
+}

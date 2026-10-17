@@ -3,6 +3,7 @@ module TestVcProbe
 use ir
 use verifier
 use vc_gate
+use vc_fp
 use vc_ops
 use vc_probe
 use tests.builders
@@ -297,7 +298,8 @@ fn check_default_constants() -> i64 {
     if vc_probe_default_op(ITY_I8()) != IOP_CONST_U8() { return 6; }
     if vc_probe_default_op(ITY_U128()) != IOP_CONST_U128() { return 7; }
     if vc_probe_default_op(ITY_I128()) != IOP_CONST_I128() { return 8; }
-    if vc_probe_default_op(ITY_F64()) >= 0 { return 9; }
+    if vc_probe_default_op(ITY_F64()) != IOP_CONST_F64() { return 9; }
+    if vc_probe_default_op(ITY_F32()) != IOP_CONST_F32() { return 19; }
     if vc_probe_default_op(ITY_PTR()) >= 0 { return 10; }
     // Each constant opcode the probe emits is one the gate accepts for its type.
     let tys: Vec<i64> = Vec::new();
@@ -343,6 +345,30 @@ fn check_trivial_bool_result() -> i64 {
     0
 }
 
+// A returned `f64` is replaced by a `+0.0` constant the executor accepts.
+fn check_trivial_float_result() -> i64 {
+    let b0: Vec<IrInst> = Vec::new();
+    b0.push(mk_inst_arg(0, ITY_F64(), 0));
+    b0.push(mk_inst(1, IOP_ADD_F64(), ITY_F64(), args2(0, 0)));
+    b0.push(mk_inst(2, IOP_GE_F64(), ITY_BOOL(), args2(1, 0)));
+    b0.push(mk_vow(3, IOP_VOW_ENS(), 2, 0));
+    b0.push(mk_inst_return(4, 1));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, b0));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_F64());
+    let f: IrFunction = mk_function(6, String::from("dbl"), p, ITY_F64(), blocks);
+    add_vow(f, String::from("ensures result >= x"));
+    if !vc_probe_trivial_applicable(f) { return 1; }
+    let g: IrFunction = vc_probe_trivial(f);
+    let ret: IrInst = find_inst(g, 4);
+    let c: IrInst = find_inst(g, ret.args[0]);
+    if c.op != IOP_CONST_F64() || c.dv != 0 || c.ty != ITY_F64() { return 2; }
+    if !vc_fp_inst_ok(c, -1, -1) { return 3; }
+    if find_inst(g, 2).args[0] != c.id { return 4; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_vacuity_cuts_in_join_block();
     if r != 0 { return i64_to_i32_wrap(10 + r); }
@@ -360,5 +386,7 @@ fn main() -> i32 {
     if r != 0 { return i64_to_i32_wrap(140 + r); }
     r = check_trivial_bool_result();
     if r != 0 { return i64_to_i32_wrap(170 + r); }
+    r = check_trivial_float_result();
+    if r != 0 { return i64_to_i32_wrap(190 + r); }
     0
 }

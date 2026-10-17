@@ -1,0 +1,25 @@
+// A byte appended to a `String` parameter while a byte is read from a `String` held in a field:
+// `out` may be that `String`, and the byte read through the field stays in `0..=255` either way.
+module HeapParamStringPushThenFieldByte
+
+// TEST: esbmc-model-artifact fn="tag_then_first" blame=None vow_id=4294967293 "ESBMC reads the String field l.text as a fresh String of nondeterministic length at each use, so the reads of l.text.len() and l.text.byte_at(0) are unrelated values and the claim fails; it also fails its own String capacity assertion for a parameter already at its model limit. The native model reads one field as one value and keeps the aliasing a parameter may have with it; a debug-mode replay over sizes 0 to 300 with the parameter distinct from and aliasing the field satisfies every clause"
+
+struct Label { text: String, n: i64 }
+
+fn tag_then_first(out: String, l: Label) -> i64 vow {
+  ensures: result >= 0 && result < 256
+} {
+  out.push_byte(7);
+  if l.text.len() > 0 {
+    l.text.byte_at(0)
+  } else {
+    0
+  }
+}
+
+fn main() -> i32 [io] {
+  let l: Label = Label { text: String::from("a"), n: 1 };
+  let out: String = String::new();
+  print_i64(tag_then_first(out, l));
+  0
+}

@@ -1,0 +1,52 @@
+module MapParamState
+
+fn len_is_stable(m: HashMap<i64, i64>) -> i64 vow {
+  ensures: result >= 0,
+  ensures: result == m.len() as i64
+} {
+  m.len() as i64
+}
+
+fn empty_has_no_key(m: HashMap<i64, i64>, k: i64) -> bool vow {
+  requires: m.len() == 0,
+  ensures: !result
+} {
+  m.contains_key(k)
+}
+
+fn insert_makes_nonempty(m: HashMap<i64, i64>, k: i64, v: i64) -> u64 vow {
+  ensures: result >= 1
+} {
+  m.insert(k, v);
+  m.len()
+}
+
+fn insert_grows_by_one(m: HashMap<i64, i64>, k: i64) -> u64 vow {
+  requires: !m.contains_key(k),
+  ensures: result == m.len()
+} {
+  let before: u64 = m.len();
+  m.insert(k, 0);
+  before + 1
+}
+
+fn remove_never_grows(m: HashMap<u64, i64>, k: u64) -> u64 vow {
+  ensures: result <= m.len()
+} {
+  let before: u64 = m.len();
+  m.remove(k);
+  m.len()
+}
+
+fn btree_insert_makes_present(b: BTreeMap<i64, i64>, k: i64) -> bool vow {
+  ensures: result
+} {
+  b.insert(k, 1);
+  b.contains(k)
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<i64, i64> = HashMap::new();
+  print_i64(len_is_stable(m));
+  0
+}

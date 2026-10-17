@@ -1,0 +1,22 @@
+// TEST: skip-reason unsupported-opcode
+// A `Vec` that holds a stored pointer and is merged with another by an `if`/`else` is still
+// the one that holds it: reading an element back from the merged `Vec` is `Skipped`, as for
+// the `Vec` itself, never a free answer.
+module VecPointerPhiReadBackSkipped
+
+fn pick(c: bool, a: Vec<Vec<i64>>, b: Vec<Vec<i64>>) -> u64 vow {
+  ensures: result == 0
+} {
+  let w: Vec<i64> = Vec::new();
+  a.push(w);
+  let v: Vec<Vec<i64>> = if c { a } else { b };
+  let e: Vec<i64> = v[0];
+  e.len()
+}
+
+fn main() -> i32 [io] {
+  let a: Vec<Vec<i64>> = Vec::new();
+  let b: Vec<Vec<i64>> = Vec::new();
+  print_u64(pick(true, a, b));
+  0
+}

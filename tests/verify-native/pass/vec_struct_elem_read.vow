@@ -1,0 +1,19 @@
+module VecStructElemRead
+
+// TEST: esbmc-model-artifact fn="last_is_terminal" blame=None vow_id=4294967293 "ESBMC reads the Vec field b.insts as a fresh Vec of nondeterministic length at each use, so the length n does not bound b.insts[n - 1] and it reports an out-of-bounds read; the native model reads one field as one value"
+
+struct Inst { op: i64 }
+struct Block { insts: Vec<Inst> }
+
+fn last_is_terminal(b: Block) -> bool vow {
+    ensures: true
+} {
+    let n: u64 = b.insts.len();
+    if n == 0 { return false; }
+    let last: Inst = b.insts[n - 1];
+    last.op >= 0
+}
+
+fn main() -> i32 [io] {
+    0
+}

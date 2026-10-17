@@ -1,0 +1,22 @@
+// TEST: counterexample-fn "push_through"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The push through the merge reaches exactly one of the two Vecs, so the lengths
+// sum to 2, not 3, whichever branch is taken.
+module VecPhiMergeWrong
+
+fn push_through(c: bool) -> u64 vow {
+  ensures: result == 3
+} {
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  b.push(1);
+  let v: Vec<i64> = if c { a } else { b };
+  v.push(7);
+  a.len() + b.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(push_through(true));
+  0
+}

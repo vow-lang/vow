@@ -1,0 +1,237 @@
+module TestVcPool
+
+use ir
+use verifier
+use vc_native
+use vc_cache
+use vc_worker
+use vc_queue
+use vc_irwire
+use vc_pool
+
+fn pool_of(n: u64, jobs: i64) -> VcPool [read] {
+    let idx: Vec<i64> = Vec::new();
+    let names: Vec<String> = Vec::new();
+    let mut k: u64 = 0;
+    while k < n {
+        idx.push(k as i64);
+        names.push(String::from("f"));
+        k = k + 1;
+    }
+    vc_pool_new(String::from("vowc"), String::from("a.vow"), idx, names, jobs, 1000)
+}
+
+fn argv_value(a: Vec<String>, flag: String) -> String {
+    let mut i: u64 = 0;
+    while i + 1 < a.len() {
+        if a[i] == flag { return a[i + 1]; }
+        i = i + 1;
+    }
+    String::from("")
+}
+
+fn argv_has(a: Vec<String>, flag: String) -> bool {
+    let mut i: u64 = 0;
+    while i < a.len() {
+        if a[i] == flag { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// A worker is a session of the queue: it learns the queue and its own id from
+// argv, and everything per task from the task table.
+fn check_session_argv() -> i64 [read] {
+    let p: VcPool = pool_of(3, 2);
+    p.root[0] = String::from("/q/root");
+    let a: Vec<String> = vc_worker_argv(p, 4);
+    if a[0] != String::from("verify-worker") || a[1] != String::from("a.vow") { return 1; }
+    if argv_value(a, String::from("--worker-session")) != String::from("/q/root") { return 2; }
+    if argv_value(a, String::from("--worker-id")) != String::from("4") { return 3; }
+    if argv_value(a, String::from("--worker-budget-ms")) != String::from("1000") { return 4; }
+    if argv_has(a, String::from("--worker-index")) || argv_has(a, String::from("--worker-name")) { return 5; }
+    if argv_has(a, String::from("--worker-probe")) || argv_has(a, String::from("--worker-scratch")) { return 6; }
+    0
+}
+
+fn check_clause_mode_flag() -> i64 [read] {
+    let p: VcPool = pool_of(1, 1);
+    let plain: Vec<String> = vc_worker_argv(p, 0);
+    if argv_has(plain, String::from("--worker-clauses")) { return 1; }
+    p.clauses = true;
+    let with: Vec<String> = vc_worker_argv(p, 0);
+    if !argv_has(with, String::from("--worker-clauses")) { return 2; }
+    if with.len() != plain.len() + 1 { return 3; }
+    0
+}
+
+fn check_module_root_flag() -> i64 [read] {
+    let p: VcPool = pool_of(1, 1);
+    if argv_has(vc_worker_argv(p, 0), String::from("--worker-module-root")) { return 1; }
+    p.module_root = String::from("/src/mods");
+    if argv_value(vc_worker_argv(p, 0), String::from("--worker-module-root")) != String::from("/src/mods") { return 2; }
+    0
+}
+
+// The worker is told the parent's cache only when both halves are known.
+fn check_cache_flags() -> i64 [read] {
+    let p: VcPool = pool_of(1, 1);
+    let plain: Vec<String> = vc_worker_argv(p, 0);
+    if argv_has(plain, String::from("--worker-cache-dir")) || argv_has(plain, String::from("--worker-solver-id")) { return 1; }
+    p.cache = VcCache { dir: String::from("/c/verify-native"), solver_id: String::from("") };
+    let half: Vec<String> = vc_worker_argv(p, 0);
+    if argv_has(half, String::from("--worker-cache-dir")) || argv_has(half, String::from("--worker-solver-id")) { return 2; }
+    p.cache = VcCache { dir: String::from("/c/verify-native"), solver_id: String::from("0.7.0") };
+    let both: Vec<String> = vc_worker_argv(p, 0);
+    if argv_value(both, String::from("--worker-cache-dir")) != String::from("/c/verify-native") { return 3; }
+    if argv_value(both, String::from("--worker-solver-id")) != String::from("0.7.0") { return 4; }
+    if both.len() != plain.len() + 4 { return 5; }
+    0
+}
+
+// Reporting stops at the first function that is not proven for `verify`, but a
+// clause report spans functions, so a pool built for it keeps every task alive.
+fn check_pool_halt() -> i64 [io, read] {
+    let failed: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_FAILED(), String::from("")));
+    let halting: VcPool = pool_of(3, 2);
+    vc_pool_finish(halting, 0, failed);
+    if halting.state[VC_ST_LIMIT()] != 0 { return 1; }
+    let open: VcPool = pool_of(3, 2);
+    open.halt = false;
+    vc_pool_finish(open, 0, failed);
+    if open.state[VC_ST_LIMIT()] != 3 { return 2; }
+    if !vc_pool_ready(open, 0) { return 3; }
+    if open.results[0].result.status != VERIFY_FAILED() { return 4; }
+    let proven: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_PROVEN(), String::from("")));
+    let ok: VcPool = pool_of(3, 2);
+    vc_pool_finish(ok, 1, proven);
+    if ok.state[VC_ST_LIMIT()] != 3 { return 5; }
+    0
+}
+
+// A halted pool is settled once the tasks below the limit are done, though the
+// ones above it were never started.
+fn check_pool_settled() -> i64 [io, read] {
+    let failed: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_FAILED(), String::from("")));
+    let p: VcPool = pool_of(3, 2);
+    if vc_pool_settled(p) { return 1; }
+    p.phase[0] = VC_TASK_RUNNING();
+    if vc_pool_settled(p) { return 2; }
+    vc_pool_finish(p, 0, failed);
+    if !vc_pool_settled(p) { return 3; }
+    let q: VcPool = pool_of(3, 2);
+    vc_pool_finish(q, 2, failed);
+    if vc_pool_settled(q) { return 4; }
+    vc_pool_finish(q, 0, failed);
+    if !vc_pool_settled(q) { return 5; }
+    if vc_pool_ready(q, 1) { return 6; }
+    0
+}
+
+// A halt takes every task above the failed one off the queue, so no session
+// starts work whose answer would never be reported.
+fn check_halt_withdraws_queue() -> i64 [io, read, write] {
+    let failed: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_FAILED(), String::from("")));
+    let p: VcPool = pool_of(4, 2);
+    let root: String = mktemp_dir(String::from("vow-pool-test"));
+    if root.len() == 0 { return 1; }
+    let t: VcQTasks = VcQTasks { idx: p.fn_idx, names: p.fn_names, kinds: p.kinds };
+    if !vc_q_init(root, t) { return 2; }
+    p.root[0] = root;
+    vc_pool_finish(p, 1, failed);
+    if !vc_q_is_unclaimed(root, 0) || !vc_q_is_unclaimed(root, 1) { return 3; }
+    if vc_q_is_unclaimed(root, 2) || vc_q_is_unclaimed(root, 3) { return 4; }
+    if vc_pool_unclaimed(p) != 1 { return 5; }
+    vc_pool_abort(p);
+    if fs_exists(root) == 1 { return 6; }
+    vc_pool_abort(p);
+    0
+}
+
+// A retry counts as unclaimed work and as a retry; a live session that has taken
+// nothing can still take it, one that has begun a task cannot.
+fn check_retry_accounting() -> i64 [io, read, write] {
+    let p: VcPool = pool_of(3, 2);
+    let root: String = mktemp_dir(String::from("vow-pool-test"));
+    if root.len() == 0 { return 1; }
+    let t: VcQTasks = VcQTasks { idx: p.fn_idx, names: p.fn_names, kinds: p.kinds };
+    if !vc_q_init(root, t) { return 2; }
+    p.root[0] = root;
+    if vc_pool_unclaimed(p) != 3 || vc_pool_retries(p) != 0 { return 3; }
+    fs_mkdir(vc_q_session_dir(root, 0));
+    if !vc_q_claim(root, 0, 1) { return 4; }
+    if vc_pool_unclaimed(p) != 2 { return 5; }
+    if !vc_q_requeue(root, 1) { return 6; }
+    if vc_pool_unclaimed(p) != 3 || vc_pool_retries(p) != 1 { return 7; }
+    if vc_pool_fresh_sessions(p) != 0 { return 8; }
+    p.s_handle.push(1234);
+    p.s_cur.push(-1);
+    p.s_done.push(0);
+    p.s_begun.push(0);
+    if vc_pool_fresh_sessions(p) != 1 { return 9; }
+    p.s_begun[0] = 1;
+    if vc_pool_fresh_sessions(p) != 0 { return 10; }
+    p.s_handle[0] = -1;
+    vc_pool_abort(p);
+    0
+}
+
+// A module the pool shares is written under the queue when it is laid out, and
+// workers are told its path only then; the task table written with it keeps the
+// probe kinds, and the file decodes to what was shared.
+fn check_shared_module() -> i64 [io, read, write] {
+    let p: VcPool = pool_of(2, 1);
+    p.kinds[1] = VC_TASK_KIND_TRIVIAL();
+    let m: IrModule = ir_module_new(String::from("shared"));
+    m.strings.push(String::from("hello"));
+    if argv_has(vc_worker_argv(p, 0), String::from("--worker-ir")) { return 1; }
+    vc_pool_share_module(p, m);
+    if argv_has(vc_worker_argv(p, 0), String::from("--worker-ir")) { return 2; }
+    vc_pool_prepare(p);
+    let a: Vec<String> = vc_worker_argv(p, 0);
+    let file: String = argv_value(a, String::from("--worker-ir"));
+    let mut r: i64 = 0;
+    if file.len() == 0 { r = 3; }
+    if r == 0 {
+        match vc_q_tasks_decode(fs_read(vc_q_tasks_path(vc_pool_root(p)))) {
+            Option::Some(t) => {
+                if t.kinds.len() != 2 || t.kinds[0] != VC_TASK_KIND_VERIFY() || t.kinds[1] != VC_TASK_KIND_TRIVIAL() { r = 6; }
+            },
+            Option::None => { r = 7; },
+        }
+    }
+    if r == 0 {
+        match vc_irw_decode(fs_read(file)) {
+            Option::Some(back) => {
+                if back.name != String::from("shared") || back.strings.len() != 1 { r = 4; }
+            },
+            Option::None => { r = 5; },
+        }
+    }
+    vc_pool_abort(p);
+    r
+}
+
+// The bounded rounds after an inductive proof get a quarter of `--timeout` on top of what the
+// proof took, and never more than `--timeout` itself.
+fn check_refine_budget() -> i64 {
+    if vc_refine_limit(0, 300000) != 75000 { return 1; }
+    if vc_refine_limit(100000, 300000) != 175000 { return 2; }
+    if vc_refine_limit(250000, 300000) != 300000 { return 3; }
+    if vc_refine_limit(400000, 300000) != 300000 { return 4; }
+    0
+}
+
+fn main() -> i32 [io, read, write] {
+    let mut r: i64 = check_session_argv();
+    if r == 0 { r = check_refine_budget() + 900; if r == 900 { r = 0; } }
+    if r == 0 { r = check_clause_mode_flag(); }
+    if r == 0 { r = check_module_root_flag(); }
+    if r == 0 { r = check_cache_flags(); }
+    if r == 0 { r = check_pool_halt(); }
+    if r == 0 { r = check_pool_settled(); }
+    if r == 0 { r = check_halt_withdraws_queue(); }
+    if r == 0 { r = check_retry_accounting(); }
+    if r == 0 { r = check_shared_module(); }
+    i64_to_i32_wrap(r)
+}

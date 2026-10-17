@@ -1,0 +1,27 @@
+// TEST: category unverifiable
+module CollectionResultFromUserFnSkipped
+
+// Regression test for issue #1631. `arena_str` returns a String read from a
+// Vec<String> field; the ESBMC C model hands that result back as an `int64_t`.
+// `find` compares the call result with `==`, which classifies it as a string
+// value, so pre-fix the C declared `__vow_string_t vN` and assigned the
+// `int64_t` call result to it (uncompilable). Post-fix `find` is non-modelable
+// and Skipped.
+struct Arena {
+  strs: Vec<String>
+}
+
+fn arena_str(a: Arena, sid: i64) -> String {
+  a.strs[sid as u64]
+}
+
+fn find(a: Arena, name: String, sid: i64) -> i64 vow {
+  ensures: result == sid || result == -1
+} {
+  if arena_str(a, sid) == name { sid } else { -1 }
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

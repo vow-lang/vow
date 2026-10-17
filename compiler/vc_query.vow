@@ -1,0 +1,168 @@
+module VcQuery
+
+use vc_ops
+use vc_term
+use vc_smt
+
+// Claim query construction. The executor records append-only prefixes; full,
+// selected, incremental and hook callers ask this module to assemble them.
+// Solver transport, cone selection and verdict decisions stay with callers.
+
+// One shared command list (`header`) and one append-only assumption list serve
+// every claim: claim `k` is the first `header_lens[k]` header commands, the
+// first `assumed_lens[k]` assumptions and its negated goal. Queries are built
+// on demand by `vc_claim_script`, so memory stays linear in the function size.
+struct VcClaims {
+    arena: VcArena,
+    header: SmtScript,
+    assumed: Vec<i64>,
+    kinds: Vec<i64>,
+    frames: Vec<i64>,
+    fr: VcFrames,
+    pre_only: bool,
+    step: bool,
+    hyp_now: bool,
+    vow_ids: Vec<i64>,
+    labels: Vec<String>,
+    ostarts: Vec<i64>,
+    olens: Vec<i64>,
+    negated_goals: Vec<i64>,
+    header_lens: Vec<i64>,
+    assumed_lens: Vec<i64>,
+    model_names: Vec<String>,
+    model_params: Vec<i64>,
+    // Parallel to `model_params`: the path from the parameter to the child object a
+    // field belongs to (`.1` for the payload in slot 1), "" for the parameter itself.
+    model_paths: Vec<String>,
+    model_tys: Vec<i64>,
+    model_widths: Vec<i64>,
+    model_slots: Vec<i64>,
+    model_hdr: Vec<i64>,
+    model_ambig: Vec<i64>,
+    hook_vars: Vec<i64>,
+    map_vars: Vec<i64>,
+    vec_param: Vec<i64>,
+    vec_arr: Vec<String>,
+    vec_len: Vec<String>,
+    vec_hdr: Vec<i64>,
+    // Parallel to `vec_param`: the element type of a parameter whose elements are
+    // 128-bit integers (`ITY_I128`/`ITY_U128`), else -1.
+    vec_wide: Vec<i64>,
+}
+
+// `model_slots` of the length of a `Vec` or `String` parameter; a scalar
+// parameter is -1, an aggregate parameter's identity `VC_ALIAS_SLOT` (-2) and a
+// field of an aggregate one its slot, 0 or more.
+fn VC_SLOT_VEC_LEN() -> i64 { -3 }
+
+// `model_slots` of the address a parameter that may be the memory a handle names carries
+// (`vc_overlay`): `<param>.addr` in a counterexample.
+fn VC_SLOT_ADDR() -> i64 { -4 }
+
+// Number of model symbols claim `k`'s query declares: the header is only
+// declared up to `header_lens[k]`, and `get-value` of a symbol declared later
+// is a solver error. Symbols are listed in declaration order, so these are the
+// first entries of every `model_*` list.
+fn vc_claim_model_count(cs: VcClaims, k: u64) -> u64 {
+    let mut n: u64 = 0;
+    while n < cs.model_hdr.len() && cs.model_hdr[n] < cs.header_lens[k] {
+        n = n + 1;
+    }
+    n
+}
+
+fn vc_claim_model_names(cs: VcClaims, k: u64) -> Vec<String> {
+    let out: Vec<String> = Vec::new();
+    let n: u64 = vc_claim_model_count(cs, k);
+    let mut j: u64 = 0;
+    while j < n {
+        out.push(cs.model_names[j]);
+        j = j + 1;
+    }
+    out
+}
+
+fn vc_claim_model_widths(cs: VcClaims, k: u64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let n: u64 = vc_claim_model_count(cs, k);
+    let mut j: u64 = 0;
+    while j < n {
+        out.push(cs.model_widths[j]);
+        j = j + 1;
+    }
+    out
+}
+
+// The tail every query of claim `k` ends in: its negated goal, the check and
+// the model request.
+fn vc_claim_script_finish(s: SmtScript, cs: VcClaims, k: u64) -> SmtScript {
+    vc_script_assert(s, cs.negated_goals[k]);
+    vc_script_check_sat(s);
+    vc_script_get_value(s, vc_claim_model_names(cs, k));
+    s
+}
+
+// An independent full prefix, without the goal, check or model request.
+// Hook confirmation adds its own question without mutating shared storage.
+fn vc_claim_context_script(cs: VcClaims, k: u64) -> SmtScript {
+    let hdr: SmtScript = cs.header;
+    let s: SmtScript = vc_script_prefix(hdr, cs.header_lens[k] as u64);
+    let na: u64 = cs.assumed_lens[k] as u64;
+    let mut i: u64 = 0;
+    while i < na {
+        vc_script_assert(s, cs.assumed[i]);
+        i = i + 1;
+    }
+    s
+}
+
+// The self-contained query that decides claim `k`, with its visible model.
+fn vc_claim_script(cs: VcClaims, k: u64) -> SmtScript {
+    vc_claim_script_finish(vc_claim_context_script(cs, k), cs, k)
+}
+
+// The exact standalone text also serves as the result-cache key.
+fn vc_claim_query(cs: VcClaims, k: u64) -> String {
+    vc_smt_render(cs.arena, vc_claim_script(cs, k))
+}
+
+// The slicer supplies ascending header/assumption indices inside claim `k`'s
+// recorded prefix. It owns dependency closure; this module owns assembly and
+// the ordinary query tail. All declarations remain in the selected header.
+fn vc_claim_script_selected(cs: VcClaims, k: u64, commands: Vec<i64>, assumptions: Vec<i64>) -> SmtScript {
+    let hdr: SmtScript = cs.header;
+    let s: SmtScript = vc_script_new();
+    let mut i: u64 = 0;
+    while i < commands.len() {
+        let c: u64 = commands[i] as u64;
+        vc_script_push(s, hdr.kinds[c], hdr.names[c], hdr.vals[c], hdr.sorts[c], hdr.terms[c]);
+        i = i + 1;
+    }
+    let mut j: u64 = 0;
+    while j < assumptions.len() {
+        vc_script_assert(s, cs.assumed[assumptions[j] as u64]);
+        j = j + 1;
+    }
+    vc_claim_script_finish(s, cs, k)
+}
+
+// A session's capability probe sends this header without assumptions, goal,
+// check or model request. Rendering directly avoids temporary command arrays.
+fn vc_claim_header_text(cs: VcClaims, k: u64) -> String {
+    vc_smt_render_cmds(cs.arena, cs.header, 0, cs.header_lens[k] as u64)
+}
+
+// The unsent part of the full claim context: header commands first, then
+// assumptions. Session cursors refer to successful writes and must not exceed
+// this claim's recorded lengths; claims are asked in prefix order.
+fn vc_claim_context_delta(cs: VcClaims, k: u64, sent_header: u64, sent_assumptions: u64) -> String {
+    let out: String = vc_smt_render_cmds(cs.arena, cs.header, sent_header, cs.header_lens[k] as u64);
+    let na: u64 = cs.assumed_lens[k] as u64;
+    let mut i: u64 = sent_assumptions;
+    while i < na {
+        vc_smt_push_assert(out, cs.arena, cs.assumed[i]);
+        out.push_str(String::from("\n"));
+        i = i + 1;
+    }
+    out
+}

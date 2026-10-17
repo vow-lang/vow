@@ -1,0 +1,36 @@
+// TEST: esbmc-model-artifact fn="equal_after_the_merge" blame=Callee vow_id=0 "ESBMC's string_eq result for the merged String and the literal `yes` is unconstrained (`__str_eq` is 0 although both hold the bytes of `yes`), so the claim fails; at runtime the merged String is the one picked, and a debug-mode run of every function in this file over both values of the bool parameter satisfies every clause"
+module StringPhiMerge
+
+fn pick(c: bool) -> u64 vow {
+  ensures: (c && result == 3) || (!c && result == 4)
+} {
+  let s: String = if c { String::from("foo") } else { String::from("barx") };
+  s.len()
+}
+
+fn append_to_the_pick(c: bool) -> u64 vow {
+  ensures: (c && result == 5) || (!c && result == 6)
+} {
+  let s: String = if c { String::from("foo") } else { String::from("barx") };
+  s.push_str(String::from("zz"));
+  s.len()
+}
+
+fn first_byte_of_the_pick(c: bool) -> i64 vow {
+  ensures: (c && result == 102) || (!c && result == 98)
+} {
+  let s: String = if c { String::from("foo") } else { String::from("barx") };
+  s.byte_at(0)
+}
+
+fn equal_after_the_merge(c: bool) -> bool vow {
+  ensures: result == c
+} {
+  let s: String = if c { String::from("yes") } else { String::from("no") };
+  s == String::from("yes")
+}
+
+fn main() -> i32 [io] {
+  print_u64(pick(true));
+  0
+}

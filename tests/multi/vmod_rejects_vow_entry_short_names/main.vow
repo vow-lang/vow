@@ -1,0 +1,26 @@
+// TEST: exit 134
+// A vow entry with fewer binding names than binding ids is malformed: the encoder aborts.
+module Main
+
+use ir
+use module_io
+
+fn main() -> i32 {
+    let ids: Vec<i64> = Vec::new();
+    ids.push(7);
+    ids.push(8);
+    let names: Vec<String> = Vec::new();
+    names.push(String::from("n"));
+    let entry: IrVowEntry = IrVowEntry {
+        id: 5,
+        description: String::from("d"),
+        blame: BLAME_CALLER(),
+        binding_ids: ids,
+        binding_names: names,
+        file: String::from("f"),
+        offset: 9,
+    };
+    let out: Vec<i64> = Vec::new();
+    write_vow_entry(out, entry);
+    0
+}

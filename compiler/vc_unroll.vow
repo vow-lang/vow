@@ -3,6 +3,7 @@ module VcUnroll
 use ir
 use ir_dominance
 use vc_ops
+use vc_mapops
 use vc_loops
 
 // Bounded unrolling of the natural loops of a function `vc_loop_shape_detail`
@@ -284,7 +285,7 @@ fn vc_unroll_status(f: IrFunction, status: i64, looped: bool) -> VcUnrolled {
 }
 
 // True when the step case can be built: exactly one loop, no pointer carried by
-// its header Phi and no aggregate or Vec written in it. An object keeps its entry
+// its header Phi and no aggregate, Vec or map written in it. An object keeps its entry
 // state in the first copy (only the header Phis are havoc'd), and so does a
 // Vec's `(array, length)`, so a write in the loop would make the step start from
 // a state no iteration has.
@@ -303,7 +304,7 @@ fn vc_step_applicable(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>) -> bool {
                     return false;
                 }
                 let vk: i64 = vc_inst_vec_kind(inst);
-                if vc_vec_kind_writes(vk) {
+                if vc_vec_kind_mutates(vk) || vc_map_kind_mutates(vc_inst_map_kind(inst)) {
                     return false;
                 }
                 i = i + 1;

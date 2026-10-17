@@ -1,0 +1,19 @@
+// TEST: replay-skipped the replay harness rebuilds only scalar parameters, not a map
+// TEST: counterexample-fn "len_below_hundred"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// A BTreeMap key is always i64, so a length of any size is a run even when no key operand
+// shows the key width.
+module BTreeMapParamLenUnbounded
+
+fn len_below_hundred(m: BTreeMap<i64, i64>) -> u64 vow {
+  ensures: result < 100
+} {
+  m.len()
+}
+
+fn main() -> i32 [io] {
+  let m: BTreeMap<i64, i64> = BTreeMap::new();
+  print_u64(len_below_hundred(m));
+  0
+}

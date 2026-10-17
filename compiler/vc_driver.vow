@@ -4,9 +4,11 @@ use ir
 use verifier
 use vc_cex
 use vc_inline
+use vc_linear
 use vc_native
 use vc_probe
 use vc_worker
+use vc_pool
 
 // The native pool as `contracts --verify` and `test --verify` use it. Both ask
 // the same question of a module: for each function that carries a contract,
@@ -42,9 +44,10 @@ fn vc_driver_plan_task(task_fn: Vec<i64>, task_name: Vec<String>, task_kind: Vec
 // weak-contract probes where they apply, and every function verified whatever
 // an earlier one did. Without it the run is a gate that stops launching and
 // cancels the rest at the first function that does not prove. `module_root` is
-// the explicit root the parent lowered with ("" when none): each worker lowers
-// the program again and has to see the same module graph.
-fn vc_driver_run(exe: String, path: String, module_root: String, ir_mod: IrModule, report: bool, jobs: i64, budget_ms: i64) -> VcDriverRun [io, read] {
+// the explicit root the parent lowered with ("" when none): a worker that cannot
+// read the shared module lowers the program and has to see the same module graph.
+fn vc_driver_run(exe: String, path: String, module_root: String, source_mod: IrModule, report: bool, jobs: i64, budget_ms: i64) -> VcDriverRun [io, read, write] {
+    let ir_mod: IrModule = vc_erase_linear(source_mod);
     let fns: Vec<IrFunction> = ir_mod.functions;
     let run: VcDriverRun = VcDriverRun {
         skip: Vec::new(),
@@ -85,6 +88,7 @@ fn vc_driver_run(exe: String, path: String, module_root: String, ir_mod: IrModul
     pool.halt = !report;
     pool.kinds = task_kind;
     pool.module_root = module_root;
+    vc_pool_share_module(pool, ir_mod);
     while !vc_pool_settled(pool) {
         vc_pool_step(pool);
     }

@@ -1,0 +1,24 @@
+// A counterexample for a linear parameter is reported like any struct parameter:
+// its fields are listed as `h.0`, `h.1`.
+// TEST: counterexample-fn "bad_flags"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures result == h.fd"
+module LinearParamWrongPost
+
+linear struct Handle {
+    fd: i64,
+    flags: i64,
+}
+
+fn bad_flags(h: Handle) -> i64 vow {
+    ensures: result == h.fd
+} {
+    let flags: i64 = h.flags;
+    drop(h);
+    flags
+}
+
+fn main() -> i32 {
+    0
+}

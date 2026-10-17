@@ -311,6 +311,43 @@ fn check_not_applicable() -> i64 {
     0
 }
 
+// A loop without an `invariant` is cut with the clause `true` by `vc_induct_cut_trivial`: the
+// header proper is the same havoc state with one assumption, there is one claim on entry and
+// one on the back edge, and the function is well formed. A loop that has an invariant is cut as
+// before, and a loop-free function is still not cut.
+fn check_trivial_cut() -> i64 {
+    let f: IrFunction = count_up_no_invariant();
+    if vc_induct_cut(f).status != VC_INDUCT_NA() { return 1; }
+    let c: VcInduct = vc_induct_cut_trivial(f);
+    if c.status != VC_INDUCT_OK() { return 2; }
+    let g: IrFunction = c.f;
+    if g.blocks.len() != 6 || !well_formed(g) { return 3; }
+    if count_op(g, IOP_VOW_INV()) != 2 || count_op(g, IOP_VOW_REQ()) != 1 { return 4; }
+    if count_marker(g, VC_INTERNAL_CUT_END()) != 1 || count_marker(g, VC_INTERNAL_HAVOC()) != 1 { return 5; }
+    // the original function is untouched
+    if count_op(f, IOP_VOW_INV()) != 0 { return 6; }
+    // the same cut as `count_up` gives, apart from the clause's id (no vow id)
+    let h: IrBlock = block_by_id(g, 1);
+    let mut synthetic: i64 = 0;
+    let mut i: u64 = 0;
+    while i < h.insts.len() {
+        let inst: IrInst = h.insts[i];
+        if inst.op == IOP_VOW_REQ() && inst.dv == -1 { synthetic = synthetic + 1; }
+        i = i + 1;
+    }
+    if synthetic != 1 { return 7; }
+    // every loop has a clause: the cut with `true` has nothing to add
+    if vc_induct_cut_trivial(count_up()).status != VC_INDUCT_NA() { return 8; }
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_const_i64(0, 1));
+    e.push(mk_inst_return(1, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    let flat: IrFunction = mk_function(1, String::from("flat"), Vec::new(), ITY_I64(), blocks);
+    if vc_induct_cut_trivial(flat).status != VC_INDUCT_NA() { return 10; }
+    0
+}
+
 fn check_ptr_phi() -> i64 {
     let f: IrFunction = count_up();
     let e: IrBlock = f.blocks[0];
@@ -321,72 +358,462 @@ fn check_ptr_phi() -> i64 {
     0
 }
 
-// `count_up` with one Vec call at the top of its loop body.
-fn with_vec_call(sym: String, args: Vec<i64>) -> IrFunction {
-    let f: IrFunction = count_up();
-    let body: IrBlock = f.blocks[2];
-    let w: Vec<IrInst> = Vec::new();
-    w.push(mk_inst_call_extern(50, ITY_UNIT(), args, sym));
-    let mut i: u64 = 0;
-    while i < body.insts.len() {
-        w.push(body.insts[i]);
-        i = i + 1;
-    }
-    f.blocks[2] = mk_block(2, w);
-    f
+fn one(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
 }
 
-// A Vec written in the loop body is not a header Phi, so the havoc copy would
-// keep the state the loop was entered with: the function is not cut.
-fn check_vec_written_in_loop() -> i64 {
-    if vc_induct_cut(count_up()).status != VC_INDUCT_OK() { return 1; }
-    let one: Vec<i64> = Vec::new();
-    one.push(0);
-    if vc_induct_cut(with_vec_call(String::from("__vow_vec_push_val"), pair(0, 9))).status != VC_INDUCT_NA() { return 2; }
-    if vc_induct_cut(with_vec_call(String::from("__vow_vec_clear"), one)).status != VC_INDUCT_NA() { return 3; }
-    if vc_induct_cut(with_vec_call(String::from("__vow_vec_truncate"), pair(0, 9))).status != VC_INDUCT_NA() { return 4; }
-    0
-}
-
-// A field written in the loop body on an object allocated before the loop is
-// not a header Phi either, so the function is not cut. An object allocated and
-// written inside the body is fresh each iteration and keeps the cut.
-fn check_agg_written_in_loop() -> i64 {
+// `count_up` with `pre` ahead of the preheader's code and `body` ahead of the
+// loop body's.
+fn count_up_with(pre: Vec<IrInst>, body: Vec<IrInst>) -> IrFunction {
     let f: IrFunction = count_up();
     let e: IrBlock = f.blocks[0];
-    let pre: Vec<IrInst> = Vec::new();
-    pre.push(mk_inst_alloc(30, 8));
     let mut i: u64 = 0;
     while i < e.insts.len() {
         pre.push(e.insts[i]);
         i = i + 1;
     }
     f.blocks[0] = mk_block(0, pre);
-    let body: IrBlock = f.blocks[2];
-    let w: Vec<IrInst> = Vec::new();
-    w.push(body.insts[0]);
-    w.push(mk_inst_field_set(31, 30, 0, 9));
-    let mut j: u64 = 1;
-    while j < body.insts.len() {
-        w.push(body.insts[j]);
+    let lb: IrBlock = f.blocks[2];
+    let mut j: u64 = 0;
+    while j < lb.insts.len() {
+        body.push(lb.insts[j]);
         j = j + 1;
     }
-    f.blocks[2] = mk_block(2, w);
-    if vc_induct_cut(f).status != VC_INDUCT_NA() { return 1; }
+    f.blocks[2] = mk_block(2, body);
+    f
+}
 
-    let g: IrFunction = count_up();
-    let gb: IrBlock = g.blocks[2];
-    let loc: Vec<IrInst> = Vec::new();
-    loc.push(mk_inst_alloc(32, 8));
-    loc.push(gb.insts[0]);
-    loc.push(mk_inst_field_set(33, 32, 0, 9));
-    let mut k: u64 = 1;
-    while k < gb.insts.len() {
-        loc.push(gb.insts[k]);
+fn vec_new_inst(id: i64) -> IrInst {
+    mk_inst_call_extern(id, ITY_PTR(), Vec::new(), String::from("__vow_vec_new"))
+}
+
+// A Vec allocated before the loop and written in its body is not a header Phi:
+// the header proper havocs its `(array, length)` with one marker, after the Phis
+// and nowhere else. A loop that only pushes marks it as growing (data value 1).
+fn check_vec_written_in_loop() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(vec_new_inst(40));
+    let body: Vec<IrInst> = Vec::new();
+    body.push(mk_inst_call_extern(50, ITY_UNIT(), pair(40, 0), String::from("__vow_vec_push_val")));
+    let f: IrFunction = count_up_with(pre, body);
+    let c: VcInduct = vc_induct_cut(f);
+    if c.status != VC_INDUCT_OK() { return 1; }
+    let g: IrFunction = c.f;
+    if count_marker(g, VC_INTERNAL_HAVOC_VEC()) != 1 { return 2; }
+    let h: IrBlock = block_by_id(g, 1);
+    let m: IrInst = h.insts[1];
+    if !vc_is_havoc_vec(m) || m.args.len() != 1 || m.args[0] != 40 || m.ty != ITY_UNIT() { return 3; }
+    if m.dv != 1 { return 8; }
+    if !vc_is_havoc(h.insts[0]) || vc_is_havoc_vec(h.insts[0]) { return 4; }
+    if m.id <= dom_max_inst_id(f) || vc_is_havoc_vec(h.insts[2]) { return 5; }
+    if !well_formed(g) { return 6; }
+    let again: VcInduct = vc_induct_cut(f);
+    if print_function(again.f) != print_function(g) { return 7; }
+    0
+}
+
+// A Vec the loop `clear`s or `truncate`s is havocked like one it writes, and since it can
+// end shorter than it began its marker does not say "no shorter".
+fn check_vec_shrunk_in_loop() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(vec_new_inst(40));
+    let body: Vec<IrInst> = Vec::new();
+    body.push(mk_inst_call_extern(50, ITY_UNIT(), one(40), String::from("__vow_vec_clear")));
+    let cleared: VcInduct = vc_induct_cut(count_up_with(pre, body));
+    if cleared.status != VC_INDUCT_OK() { return 1; }
+    if count_marker(cleared.f, VC_INTERNAL_HAVOC_VEC()) != 1 { return 2; }
+    if block_by_id(cleared.f, 1).insts[1].dv != 0 { return 3; }
+    let pre2: Vec<IrInst> = Vec::new();
+    pre2.push(vec_new_inst(40));
+    let body2: Vec<IrInst> = Vec::new();
+    body2.push(mk_inst_call_extern(50, ITY_UNIT(), pair(40, 0), String::from("__vow_vec_truncate")));
+    let cut: VcInduct = vc_induct_cut(count_up_with(pre2, body2));
+    if cut.status != VC_INDUCT_OK() { return 4; }
+    if count_marker(cut.f, VC_INTERNAL_HAVOC_VEC()) != 1 { return 5; }
+    if block_by_id(cut.f, 1).insts[1].dv != 0 { return 6; }
+    0
+}
+
+// A loop header that opens a region starts with its marker, ahead of the Phis:
+// the havoc of a written Vec lands after the Phis, behind that marker.
+fn check_vec_written_in_region_header() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(vec_new_inst(40));
+    let body: Vec<IrInst> = Vec::new();
+    body.push(mk_inst_call_extern(50, ITY_UNIT(), pair(40, 0), String::from("__vow_vec_push_val")));
+    let f: IrFunction = count_up_with(pre, body);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        if f.blocks[bi].id == 1 {
+            let head: Vec<IrInst> = Vec::new();
+            head.push(mk_inst(60, IOP_REGION_OPEN(), ITY_UNIT(), Vec::new()));
+            let hb: IrBlock = f.blocks[bi];
+            let mut k: u64 = 0;
+            while k < hb.insts.len() {
+                head.push(hb.insts[k]);
+                k = k + 1;
+            }
+            f.blocks[bi] = mk_block(1, head);
+        }
+        bi = bi + 1;
+    }
+    let c: VcInduct = vc_induct_cut(f);
+    if c.status != VC_INDUCT_OK() { return 1; }
+    if count_marker(c.f, VC_INTERNAL_HAVOC_VEC()) != 1 { return 2; }
+    if !well_formed(c.f) { return 3; }
+    let h: IrBlock = block_by_id(c.f, 1);
+    if h.insts.len() < 3 || h.insts[0].op != IOP_REGION_OPEN() || !vc_is_havoc_vec(h.insts[2]) { return 4; }
+    0
+}
+
+// A Vec only read in the loop keeps its state: no marker.
+fn check_vec_read_in_loop() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(vec_new_inst(40));
+    let body: Vec<IrInst> = Vec::new();
+    body.push(mk_inst_call_extern(50, ITY_I64(), one(40), String::from("__vow_vec_len")));
+    let c: VcInduct = vc_induct_cut(count_up_with(pre, body));
+    if c.status != VC_INDUCT_OK() { return 1; }
+    if count_marker(c.f, VC_INTERNAL_HAVOC_VEC()) != 0 { return 2; }
+    0
+}
+
+// A Vec born in the loop that writes it is created afresh by every iteration, so its
+// header gets no marker and the function is still cut.
+fn check_vec_born_in_loop() -> i64 {
+    let born: Vec<IrInst> = Vec::new();
+    born.push(vec_new_inst(41));
+    born.push(mk_inst_call_extern(42, ITY_UNIT(), pair(41, 0), String::from("__vow_vec_push_val")));
+    let c: VcInduct = vc_induct_cut(count_up_with(Vec::new(), born));
+    if c.status != VC_INDUCT_OK() { return 1; }
+    if count_marker(c.f, VC_INTERNAL_HAVOC_VEC()) != 0 { return 2; }
+    if !well_formed(c.f) { return 3; }
+    0
+}
+
+// A String written in a loop is havoced like a Vec: one marker after the Phis, with the
+// grow bit set when the loop only appends (`push_str`, `push_byte`) and clear when it
+// shortens the string (`clear`) or mixes the two.
+fn check_string_written_in_loop() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(mk_inst_call_extern(40, ITY_PTR(), Vec::new(), String::from("__vow_string_new")));
+
+    let appends: Vec<IrInst> = Vec::new();
+    appends.push(mk_inst_call_extern(50, ITY_UNIT(), pair(40, 40), String::from("__vow_string_push_str")));
+    appends.push(mk_inst_call_extern(51, ITY_UNIT(), pair(40, 0), String::from("__vow_string_push_byte")));
+    let c: VcInduct = vc_induct_cut(count_up_with(pre, appends));
+    if c.status != VC_INDUCT_OK() { return 1; }
+    if count_marker(c.f, VC_INTERNAL_HAVOC_VEC()) != 1 { return 2; }
+    let h: IrBlock = block_by_id(c.f, 1);
+    let m: IrInst = h.insts[1];
+    if !vc_is_havoc_vec(m) || m.args.len() != 1 || m.args[0] != 40 || m.dv != 1 { return 3; }
+    if !well_formed(c.f) { return 4; }
+
+    let pre2: Vec<IrInst> = Vec::new();
+    pre2.push(mk_inst_call_extern(40, ITY_PTR(), Vec::new(), String::from("__vow_string_new")));
+    let clears: Vec<IrInst> = Vec::new();
+    clears.push(mk_inst_call_extern(50, ITY_UNIT(), pair(40, 40), String::from("__vow_string_push_str")));
+    clears.push(mk_inst_call_extern(51, ITY_UNIT(), one(40), String::from("__vow_string_clear")));
+    let d: VcInduct = vc_induct_cut(count_up_with(pre2, clears));
+    if d.status != VC_INDUCT_OK() { return 5; }
+    if count_marker(d.f, VC_INTERNAL_HAVOC_VEC()) != 1 { return 6; }
+    if block_by_id(d.f, 1).insts[1].dv != 0 { return 7; }
+
+    let born: Vec<IrInst> = Vec::new();
+    born.push(mk_inst_call_extern(41, ITY_PTR(), Vec::new(), String::from("__vow_string_new")));
+    born.push(mk_inst_call_extern(42, ITY_UNIT(), pair(41, 41), String::from("__vow_string_push_str")));
+    let e: VcInduct = vc_induct_cut(count_up_with(Vec::new(), born));
+    if e.status != VC_INDUCT_OK() { return 8; }
+    if count_marker(e.f, VC_INTERNAL_HAVOC_VEC()) != 0 { return 9; }
+    0
+}
+
+// A receiver the model cannot name leaves the function uncut.
+// A receiver that is a Phi merging a String born outside the loop with one born inside it is
+// the outer String as far as the loop is concerned: the marker names the outer one, not the
+// Phi, and an object the Phi merges that is none of an allocation, a call result or a
+// parameter leaves the function uncut.
+fn check_string_phi_receiver() -> i64 {
+    let f: IrFunction = count_up();
+    let e: IrBlock = f.blocks[0];
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(mk_inst_call_extern(40, ITY_PTR(), Vec::new(), String::from("__vow_string_new")));
+    pre.push(mk_inst_call_extern(41, ITY_PTR(), Vec::new(), String::from("__vow_string_new")));
+    let mut i: u64 = 0;
+    while i < e.insts.len() {
+        pre.push(e.insts[i]);
+        i = i + 1;
+    }
+    f.blocks[0] = mk_block(0, pre);
+    let lb: IrBlock = f.blocks[2];
+    let body: Vec<IrInst> = Vec::new();
+    body.push(mk_inst_phi(60, ITY_PTR()));
+    let mut j: u64 = 0;
+    while j < lb.insts.len() {
+        body.push(lb.insts[j]);
+        j = j + 1;
+    }
+    f.blocks[2] = mk_block(2, body);
+    // the Phi has no Upsilon source here, so it names nothing: not cut
+    f.blocks[2].insts.push(mk_inst_call_extern(61, ITY_UNIT(), pair(60, 40), String::from("__vow_string_push_str")));
+    if vc_induct_cut(f).status != VC_INDUCT_NA() { return 1; }
+    0
+}
+
+// A loop that only pushes to one Vec and clears an unrelated String still knows the Vec is
+// no shorter: the grow bit is per receiver.
+fn check_grow_per_receiver() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(vec_new_inst(40));
+    pre.push(mk_inst_call_extern(41, ITY_PTR(), Vec::new(), String::from("__vow_string_new")));
+    let body: Vec<IrInst> = Vec::new();
+    body.push(mk_inst_call_extern(50, ITY_UNIT(), pair(40, 0), String::from("__vow_vec_push_val")));
+    body.push(mk_inst_call_extern(51, ITY_UNIT(), one(41), String::from("__vow_string_clear")));
+    let c: VcInduct = vc_induct_cut(count_up_with(pre, body));
+    if c.status != VC_INDUCT_OK() { return 1; }
+    let h: IrBlock = block_by_id(c.f, 1);
+    if !vc_is_havoc_vec(h.insts[1]) || h.insts[1].args[0] != 40 || h.insts[1].dv != 1 { return 2; }
+    if !vc_is_havoc_vec(h.insts[2]) || h.insts[2].args[0] != 41 || h.insts[2].dv != 0 { return 3; }
+    0
+}
+
+fn check_vec_havoc_refused() -> i64 {
+
+    let anon: Vec<IrInst> = Vec::new();
+    anon.push(mk_inst_call_extern(50, ITY_UNIT(), Vec::new(), String::from("__vow_vec_push_val")));
+    if vc_induct_cut(count_up_with(Vec::new(), anon)).status != VC_INDUCT_NA() { return 3; }
+
+    let neg: Vec<IrInst> = Vec::new();
+    neg.push(mk_inst_call_extern(50, ITY_UNIT(), pair(0 - 1, 0), String::from("__vow_vec_push_val")));
+    if vc_induct_cut(count_up_with(Vec::new(), neg)).status != VC_INDUCT_NA() { return 4; }
+
+    let far: Vec<IrInst> = Vec::new();
+    far.push(mk_inst_call_extern(50, ITY_UNIT(), pair(9999, 0), String::from("__vow_vec_push_val")));
+    if vc_induct_cut(count_up_with(Vec::new(), far)).status != VC_INDUCT_NA() { return 5; }
+    0
+}
+
+// An indexed assignment and a pop mutate a Vec as a push does: each gets the
+// havoc marker, once per loop however many writes the body holds.
+fn check_vec_set_pop_in_loop() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(vec_new_inst(40));
+    let body: Vec<IrInst> = Vec::new();
+    let set_args: Vec<i64> = pair(40, 0);
+    set_args.push(0);
+    body.push(mk_inst_call_extern(50, ITY_UNIT(), set_args, String::from("__vow_vec_set_val")));
+    body.push(mk_inst_call_extern(51, ITY_PTR(), one(40), String::from("__vow_vec_pop")));
+    let c: VcInduct = vc_induct_cut(count_up_with(pre, body));
+    if c.status != VC_INDUCT_OK() { return 1; }
+    if count_marker(c.f, VC_INTERNAL_HAVOC_VEC()) != 1 { return 2; }
+    let h: IrBlock = block_by_id(c.f, 1);
+    if h.insts[1].dv != 0 { return 3; }
+    0
+}
+
+fn map_new_inst(id: i64) -> IrInst {
+    mk_inst_call_extern(id, ITY_PTR(), Vec::new(), String::from("__vow_map_new"))
+}
+
+fn triple(a: i64, b: i64, c: i64) -> Vec<i64> {
+    let v: Vec<i64> = pair(a, b);
+    v.push(c);
+    v
+}
+
+// A map allocated before the loop and written in its body is havoc'd like a Vec,
+// by the map's own marker: one `__vc_havoc_map` after the Phis, no Vec marker, and
+// a map only read in the loop keeps its state.
+fn check_map_written_in_loop() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(map_new_inst(40));
+    let body: Vec<IrInst> = Vec::new();
+    body.push(mk_inst_call_extern(50, ITY_UNIT(), triple(40, 0, 0), String::from("__vow_map_insert")));
+    let f: IrFunction = count_up_with(pre, body);
+    let c: VcInduct = vc_induct_cut(f);
+    if c.status != VC_INDUCT_OK() { return 1; }
+    let g: IrFunction = c.f;
+    if count_marker(g, VC_INTERNAL_HAVOC_MAP()) != 1 { return 2; }
+    if count_marker(g, VC_INTERNAL_HAVOC_VEC()) != 0 { return 3; }
+    let h: IrBlock = block_by_id(g, 1);
+    let m: IrInst = h.insts[1];
+    if !vc_is_havoc_map(m) || vc_is_havoc_vec(m) || m.args.len() != 1 || m.args[0] != 40 { return 4; }
+    if !well_formed(g) { return 5; }
+
+    let read_pre: Vec<IrInst> = Vec::new();
+    read_pre.push(map_new_inst(40));
+    let read_body: Vec<IrInst> = Vec::new();
+    read_body.push(mk_inst_call_extern(50, ITY_U64(), one(40), String::from("__vow_map_len")));
+    let r: VcInduct = vc_induct_cut(count_up_with(read_pre, read_body));
+    if r.status != VC_INDUCT_OK() { return 6; }
+    if count_marker(r.f, VC_INTERNAL_HAVOC_MAP()) != 0 { return 7; }
+    0
+}
+
+// A map born in the loop that writes it leaves the function uncut; a `remove` on a
+// map made before the loop is a write like `insert` and keeps the cut.
+fn check_map_havoc_refused() -> i64 {
+    let born: Vec<IrInst> = Vec::new();
+    born.push(map_new_inst(41));
+    born.push(mk_inst_call_extern(42, ITY_UNIT(), triple(41, 0, 0), String::from("__vow_map_insert")));
+    if vc_induct_cut(count_up_with(Vec::new(), born)).status != VC_INDUCT_NA() { return 1; }
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(map_new_inst(40));
+    let body: Vec<IrInst> = Vec::new();
+    body.push(mk_inst_call_extern(50, ITY_UNIT(), pair(40, 0), String::from("__vow_map_remove")));
+    if vc_induct_cut(count_up_with(pre, body)).status != VC_INDUCT_OK() { return 2; }
+    0
+}
+
+// `count_up` with `pre` ahead of the preheader's code and `writes` right after the
+// loop body's constant 9, so a write may name it.
+fn count_up_writing(pre: Vec<IrInst>, writes: Vec<IrInst>) -> IrFunction {
+    let f: IrFunction = count_up();
+    let e: IrBlock = f.blocks[0];
+    let mut i: u64 = 0;
+    while i < e.insts.len() {
+        pre.push(e.insts[i]);
+        i = i + 1;
+    }
+    f.blocks[0] = mk_block(0, pre);
+    let lb: IrBlock = f.blocks[2];
+    let body: Vec<IrInst> = Vec::new();
+    body.push(lb.insts[0]);
+    let mut k: u64 = 0;
+    while k < writes.len() {
+        body.push(writes[k]);
         k = k + 1;
     }
-    g.blocks[2] = mk_block(2, loc);
-    if vc_induct_cut(g).status != VC_INDUCT_OK() { return 2; }
+    let mut j: u64 = 1;
+    while j < lb.insts.len() {
+        body.push(lb.insts[j]);
+        j = j + 1;
+    }
+    f.blocks[2] = mk_block(2, body);
+    f
+}
+
+// The `(object, slot, type)` of the `i`-th field marker of the header block.
+fn field_marker(g: IrFunction, i: u64) -> IrInst {
+    let h: IrBlock = block_by_id(g, 1);
+    h.insts[1 + i]
+}
+
+// A field written in the loop body on an object allocated before the loop is not a
+// header Phi: the header proper havocs the slot with one marker after the Phis (the
+// object, the slot, the type of the value written). An object allocated and written
+// inside the body is fresh each iteration and gets none.
+fn check_agg_written_in_loop() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(mk_inst_alloc(30, 16));
+    let w: Vec<IrInst> = Vec::new();
+    w.push(mk_inst_field_set(31, 30, 1, 9));
+    let c: VcInduct = vc_induct_cut(count_up_writing(pre, w));
+    if c.status != VC_INDUCT_OK() { return 1; }
+    if count_marker(c.f, VC_INTERNAL_HAVOC_FIELD()) != 1 { return 2; }
+    let m: IrInst = field_marker(c.f, 0);
+    if !vc_is_havoc_field(m) || m.args.len() != 1 || m.args[0] != 30 || m.dv != 1 || m.dv2 != ITY_I64() { return 3; }
+    if m.ty != ITY_UNIT() || vc_is_havoc_vec(m) || vc_is_havoc_map(m) { return 4; }
+    if !well_formed(c.f) { return 5; }
+    if m.id <= dom_max_inst_id(count_up()) { return 6; }
+
+    let born: Vec<IrInst> = Vec::new();
+    born.push(mk_inst_alloc(32, 8));
+    born.push(mk_inst_field_set(33, 32, 0, 9));
+    let g: VcInduct = vc_induct_cut(count_up_writing(Vec::new(), born));
+    if g.status != VC_INDUCT_OK() { return 7; }
+    if count_marker(g.f, VC_INTERNAL_HAVOC_FIELD()) != 0 { return 8; }
+    0
+}
+
+// One marker per distinct `(object, slot, type)`, in the order the writes appear;
+// a Vec the same loop pushes to keeps its own marker ahead of them.
+fn check_agg_slots_deduplicated() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(mk_inst_alloc(30, 16));
+    pre.push(mk_inst_alloc(31, 16));
+    pre.push(vec_new_inst(40));
+    let w: Vec<IrInst> = Vec::new();
+    w.push(mk_inst_field_set(50, 30, 0, 9));
+    w.push(mk_inst_field_set(51, 30, 0, 9));
+    w.push(mk_inst_field_set(52, 30, 1, 9));
+    w.push(mk_inst_field_set(53, 31, 0, 9));
+    w.push(mk_inst_call_extern(54, ITY_UNIT(), pair(40, 0), String::from("__vow_vec_push_val")));
+    let c: VcInduct = vc_induct_cut(count_up_writing(pre, w));
+    if c.status != VC_INDUCT_OK() { return 1; }
+    if count_marker(c.f, VC_INTERNAL_HAVOC_FIELD()) != 3 { return 2; }
+    if count_marker(c.f, VC_INTERNAL_HAVOC_VEC()) != 1 { return 3; }
+    let m0: IrInst = field_marker(c.f, 1);
+    let m1: IrInst = field_marker(c.f, 2);
+    let m2: IrInst = field_marker(c.f, 3);
+    if !vc_is_havoc_field(m0) || m0.args[0] != 30 || m0.dv != 0 { return 4; }
+    if !vc_is_havoc_field(m1) || m1.args[0] != 30 || m1.dv != 1 { return 5; }
+    if !vc_is_havoc_field(m2) || m2.args[0] != 31 || m2.dv != 0 { return 6; }
+    if !well_formed(c.f) { return 7; }
+    0
+}
+
+// A pointer parameter is a root like an allocation born before the loop.
+fn check_agg_param_written_in_loop() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(mk_inst_arg(30, ITY_PTR(), 0));
+    let w: Vec<IrInst> = Vec::new();
+    w.push(mk_inst_field_set(31, 30, 2, 9));
+    let f: IrFunction = count_up_writing(pre, w);
+    f.params.push(ITY_PTR());
+    let c: VcInduct = vc_induct_cut(f);
+    if c.status != VC_INDUCT_OK() { return 1; }
+    if count_marker(c.f, VC_INTERNAL_HAVOC_FIELD()) != 1 { return 2; }
+    let m: IrInst = field_marker(c.f, 0);
+    if m.args[0] != 30 || m.dv != 2 { return 3; }
+    if !well_formed(c.f) { return 4; }
+    0
+}
+
+// A pointer stored in a field is the address of the object it names, a 64-bit slot the loop
+// may overwrite, so it gets a marker of type `i64` like any other slot. A write the model
+// cannot attribute to a parameter or an allocation leaves the loop uncut: the target is a
+// call result, a `WideSlot` element address, or a value of unit type.
+fn check_agg_write_refused() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(mk_inst_alloc(30, 16));
+    pre.push(mk_inst_alloc(31, 16));
+    let w: Vec<IrInst> = Vec::new();
+    w.push(mk_inst_field_set(32, 30, 0, 31));
+    let c: VcInduct = vc_induct_cut(count_up_writing(pre, w));
+    if c.status != VC_INDUCT_OK() { return 1; }
+    if count_marker(c.f, VC_INTERNAL_HAVOC_FIELD()) != 1 { return 2; }
+    let pm: IrInst = field_marker(c.f, 0);
+    if !vc_is_havoc_field(pm) || pm.args[0] != 30 || pm.dv != 0 || pm.dv2 != ITY_I64() { return 5; }
+
+    let call: Vec<IrInst> = Vec::new();
+    call.push(mk_inst_call_extern(30, ITY_PTR(), Vec::new(), String::from("__vow_string_new")));
+    let cw: Vec<IrInst> = Vec::new();
+    cw.push(mk_inst_field_set(32, 30, 0, 9));
+    if vc_induct_cut(count_up_writing(call, cw)).status != VC_INDUCT_NA() { return 3; }
+
+    let addr: Vec<IrInst> = Vec::new();
+    addr.push(mk_inst_call_extern(30, ITY_PTR(), Vec::new(), String::from("__vow_vec_get_wide_ptr")));
+    let aw: Vec<IrInst> = Vec::new();
+    aw.push(mk_inst_field_set_wide(32, 30, 0, 9));
+    if vc_induct_cut(count_up_writing(addr, aw)).status != VC_INDUCT_NA() { return 4; }
+    0
+}
+
+// A 128-bit field of an object is written through a `WideSlot` like any other slot,
+// so it gets a marker of its own; only an element address (a call result) is refused.
+fn check_agg_wide_field_write() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(mk_inst_alloc(30, 16));
+    let w: Vec<IrInst> = Vec::new();
+    w.push(mk_inst_field_set_wide(32, 30, 1, 9));
+    let c: VcInduct = vc_induct_cut(count_up_writing(pre, w));
+    if c.status != VC_INDUCT_OK() { return 1; }
+    if count_marker(c.f, VC_INTERNAL_HAVOC_FIELD()) != 1 { return 2; }
+    let m: IrInst = field_marker(c.f, 0);
+    if !vc_is_havoc_field(m) || m.args[0] != 30 || m.dv != 1 { return 3; }
     0
 }
 
@@ -396,8 +823,24 @@ fn main() -> i32 {
     if r == 0 { r = check_claims() + 150; if r == 150 { r = 0; } }
     if r == 0 { r = check_deterministic() + 200; if r == 200 { r = 0; } }
     if r == 0 { r = check_not_applicable() + 300; if r == 300 { r = 0; } }
+    if r == 0 { r = check_trivial_cut() + 350; if r == 350 { r = 0; } }
     if r == 0 { r = check_ptr_phi() + 400; if r == 400 { r = 0; } }
     if r == 0 { r = check_vec_written_in_loop() + 500; if r == 500 { r = 0; } }
+    if r == 0 { r = check_vec_written_in_region_header() + 540; if r == 540 { r = 0; } }
+    if r == 0 { r = check_vec_read_in_loop() + 550; if r == 550 { r = 0; } }
+    if r == 0 { r = check_vec_born_in_loop() + 560; if r == 560 { r = 0; } }
+    if r == 0 { r = check_string_written_in_loop() + 700; if r == 700 { r = 0; } }
+    if r == 0 { r = check_string_phi_receiver() + 720; if r == 720 { r = 0; } }
+    if r == 0 { r = check_grow_per_receiver() + 740; if r == 740 { r = 0; } }
+    if r == 0 { r = check_vec_havoc_refused() + 570; if r == 570 { r = 0; } }
+    if r == 0 { r = check_map_written_in_loop() + 580; if r == 580 { r = 0; } }
+    if r == 0 { r = check_map_havoc_refused() + 585; if r == 585 { r = 0; } }
+    if r == 0 { r = check_vec_set_pop_in_loop() + 590; if r == 590 { r = 0; } }
+    if r == 0 { r = check_vec_shrunk_in_loop() + 595; if r == 595 { r = 0; } }
     if r == 0 { r = check_agg_written_in_loop() + 600; if r == 600 { r = 0; } }
+    if r == 0 { r = check_agg_slots_deduplicated() + 620; if r == 620 { r = 0; } }
+    if r == 0 { r = check_agg_param_written_in_loop() + 640; if r == 640 { r = 0; } }
+    if r == 0 { r = check_agg_write_refused() + 660; if r == 660 { r = 0; } }
+    if r == 0 { r = check_agg_wide_field_write() + 680; if r == 680 { r = 0; } }
     i64_to_i32_wrap(r)
 }

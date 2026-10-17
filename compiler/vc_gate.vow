@@ -8,8 +8,17 @@ use vc_int
 use vc_fp
 use vc_cfg
 use vc_loops
+use vc_agg_shape
 use vc_agg
 use vc_vec
+use vc_wide
+use vc_heap
+use vc_ptrstore
+use vc_map
+use vc_mapops
+use vc_strops
+use vc_str
+use vc_narrow
 use ast
 
 // Fail-closed subset gate for the native verifier. `vc_skip_reason` returns ""
@@ -17,8 +26,8 @@ use ast
 // and whose loops are reducible and unrollable (`vc_loops`), built from the
 // integer (8 to 128 bits), IEEE float (`f32`, `f64`) and Bool operations the
 // symbolic executor models and the struct, enum and `Option` values it
-// scalarises (`vc_agg`) and the `Vec`s of Bool and integers up to 64 bits it
-// models as an array plus a length (`vc_vec`), with the control-flow shape `vc_cfg_detail` accepts;
+// scalarises (`vc_agg`) and the `Vec`s of Bool and integers it
+// models as an array plus a length (`vc_vec`, `vc_wide`), with the control-flow shape `vc_cfg_detail` accepts;
 // every other function is `Skipped` with "<code>: <detail>" using the closed
 // codes of ADR-1430 (listed in `vc_ops`). An unknown opcode is never accepted.
 
@@ -189,16 +198,24 @@ fn vc_scalar_value_ty(ty: i64) -> bool {
     ty == ITY_BOOL() || vc_ty_is_int(ty) || vc_ty_is_float(ty)
 }
 
+// A value that can cross a call or a return: a scalar, or an aggregate or
+// collection object (a pointer), which the splicer substitutes by the caller's
+// own object.
+fn vc_call_value_ty(ty: i64) -> bool {
+    vc_scalar_value_ty(ty) || ty == ITY_PTR()
+}
+
 // A call of a user function the splicer can inline: every argument and the
-// result are integer, float or Bool (or the result is Unit). Aggregates do not cross a
-// call yet.
-fn vc_call_scalar(inst: IrInst, tys: Vec<i64>) -> bool {
+// result is a scalar or an object (or the result is Unit). The object model
+// (`vc_agg`, `vc_vec`) keeps one object per value, so a callee that reads or
+// mutates an argument acts on the caller's object, and a result is the callee's
+// returned object.
+fn vc_call_inlinable(inst: IrInst, tys: Vec<i64>) -> bool {
     if inst.dk != IDATA_CALL_TARGET() { return false; }
-    if inst.ty != ITY_UNIT() && !vc_scalar_value_ty(inst.ty) { return false; }
+    if inst.ty != ITY_UNIT() && !vc_call_value_ty(inst.ty) { return false; }
     let mut k: u64 = 0;
     while k < inst.args.len() {
-        let t: i64 = vc_arg_ty(tys, inst, k);
-        if !vc_scalar_value_ty(t) { return false; }
+        if !vc_call_value_ty(vc_arg_ty(tys, inst, k)) { return false; }
         k = k + 1;
     }
     true
@@ -211,28 +228,121 @@ fn vc_vec_elem_ok(ty: i64) -> bool {
     ty == ITY_BOOL() || (vc_ty_is_int(ty) && vc_ty_bits(ty) <= 64)
 }
 
+// True when a value of type `have` stands for one of type `want` through the heap
+// model: the IR types a pointer loaded out of a field or a `Vec` element `i64` (a
+// handle, see `vc_heap`), so such a value is passed and returned where an object is
+// declared. A consumer that needs the object itself (a write, a merge with an object)
+// has its own gate and rejects the handle.
+fn vc_handle_for_object(want: i64, have: i64) -> bool {
+    want == ITY_PTR() && have == ITY_I64()
+}
+
+// A value a `push` or `set` may store: an element (`vc_vec_elem_ok`) or an object
+// (`String`, `Vec`, struct), which the slot holds as an address the model does not
+// track. `vc_ptr_store_detail` keeps every function that could read such an address
+// back out of the subset.
+fn vc_vec_store_ok(ty: i64) -> bool {
+    vc_vec_elem_ok(ty) || ty == ITY_PTR()
+}
+
 fn vc_vec_index_ok(ty: i64) -> bool {
     vc_ty_is_int(ty) && vc_ty_bits(ty) == 64
 }
 
 // Operand and result types of a `Vec` call. `get` yields the raw 8-byte slot as
-// `i64`; the lowerer narrows it with its own cast.
-fn vc_vec_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
+// `i64`; the lowerer narrows it with its own cast. With `calls` (the check of one
+// function of a call tree, before `vc_inline` flattens it) a write whose receiver is a
+// handle is taken as a write on the object it may resolve to once the callee that
+// builds the struct is inlined (`vc_resolve_ptr_fields`); the gate of the flattened
+// function, which has no `calls`, rejects it when it did not.
+fn vc_vec_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64, calls: bool) -> bool {
     let n: u64 = inst.args.len();
-    let t0: i64 = vc_arg_ty(tys, inst, 0);
+    let mut t0: i64 = vc_arg_ty(tys, inst, 0);
+    if calls && t0 == ITY_I64() && vc_vec_kind_mutates(kind) { t0 = ITY_PTR(); }
     let t1: i64 = vc_arg_ty(tys, inst, 1);
-    if kind == VC_VEC_NEW() {
+    if kind == VC_VEC_NEW() || kind == VC_STR_NEW() {
         return n == 2 && inst.ty == ITY_PTR() && vc_ty_is_int(t0) && vc_ty_is_int(t1);
     }
+    if kind == VC_STR_FROM_RAW_PARTS() {
+        return n == 2 && inst.ty == ITY_PTR() && vc_vec_index_ok(t0) && vc_vec_index_ok(t1);
+    }
+    if kind == VC_STR_FORMAT_F64() {
+        return n == 1 && inst.ty == ITY_PTR() && vc_vec_index_ok(t0);
+    }
+    if vc_str_kind_formats_int(kind) {
+        return n == 1 && inst.ty == ITY_PTR() && vc_ty_is_int(t0) && vc_ty_bits(t0) == vc_str_kind_int_bits(kind);
+    }
+    if t0 == ITY_I64() { return vc_heap_vec_call_ok(inst, t1, kind); }
     if t0 != ITY_PTR() { return false; }
-    if kind == VC_VEC_PUSH() { return n == 2 && inst.ty == ITY_UNIT() && vc_vec_elem_ok(t1); }
+    if vc_str_kind_is_string_op(kind) { return vc_str_call_ok(inst, tys, kind); }
+    if kind == VC_VEC_PUSH() { return n == 2 && inst.ty == ITY_UNIT() && vc_vec_store_ok(t1); }
     if kind == VC_VEC_GET() { return n == 2 && inst.ty == ITY_I64() && vc_vec_index_ok(t1); }
     if kind == VC_VEC_SET() {
-        return n == 3 && inst.ty == ITY_UNIT() && vc_vec_index_ok(t1) && vc_vec_elem_ok(vc_arg_ty(tys, inst, 2));
+        return n == 3 && inst.ty == ITY_UNIT() && vc_vec_index_ok(t1) && vc_vec_store_ok(vc_arg_ty(tys, inst, 2));
     }
     if kind == VC_VEC_LEN() { return n == 1 && inst.ty == ITY_U64(); }
     if kind == VC_VEC_POP() || kind == VC_VEC_CLEAR() { return n == 1 && inst.ty == ITY_UNIT(); }
     if kind == VC_VEC_TRUNCATE() { return n == 2 && inst.ty == ITY_UNIT() && vc_vec_index_ok(t1); }
+    if kind == VC_VEC_SORT() { return n == 1 && inst.ty == ITY_PTR(); }
+    if kind == VC_VEC_PUSH_WIDE() { return n == 1 && inst.ty == ITY_PTR(); }
+    if kind == VC_VEC_GET_WIDE() || kind == VC_VEC_SET_WIDE() {
+        return n == 2 && inst.ty == ITY_PTR() && vc_vec_index_ok(t1);
+    }
+    false
+}
+
+// A map key is a Bool or an integer up to 64 bits, one 8-byte slot, as a `Vec`
+// element is. A map value is the same or unit; a pointer value (`String`, `Vec`,
+// a struct) is not modelled.
+fn vc_map_value_ok(ty: i64) -> bool {
+    ty == ITY_UNIT() || vc_vec_elem_ok(ty)
+}
+
+// Operand and result types of a map call (`vc_map`). The `Option` a `get` or a
+// `BTreeMap` `insert` returns is a pointer; `contains` yields Bool, `len` `u64`.
+fn vc_map_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
+    let n: u64 = inst.args.len();
+    if kind == VC_MAP_NEW() { return n == 0 && inst.ty == ITY_PTR(); }
+    if vc_arg_ty(tys, inst, 0) != ITY_PTR() { return false; }
+    if kind == VC_MAP_LEN() { return n == 1 && inst.ty == ITY_U64(); }
+    if !vc_vec_elem_ok(vc_arg_ty(tys, inst, 1)) { return false; }
+    if kind == VC_MAP_CONTAINS() { return n == 2 && inst.ty == ITY_BOOL(); }
+    if kind == VC_MAP_GET() { return n == 2 && inst.ty == ITY_PTR(); }
+    if kind == VC_MAP_REMOVE() { return n == 2 && inst.ty == ITY_UNIT(); }
+    if !vc_map_value_ok(vc_arg_ty(tys, inst, 2)) { return false; }
+    if kind == VC_MAP_INSERT() { return n == 3 && inst.ty == ITY_UNIT(); }
+    n == 3 && inst.ty == ITY_PTR()
+}
+
+// Operand and result types of a `String` call whose first operand is a string
+// pointer (`vc_str`). Offsets and lengths are 64-bit integers (the checker types
+// them `u64`; an unsuffixed literal reaches the IR as `i64`), a byte is `u8` or an
+// `i64` literal the checker has range-checked (the runtime keeps its low 8 bits).
+fn vc_str_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
+    let n: u64 = inst.args.len();
+    let t1: i64 = vc_arg_ty(tys, inst, 1);
+    let t2: i64 = vc_arg_ty(tys, inst, 2);
+    if kind == VC_STR_LITERAL() || kind == VC_STR_CLONE() { return n == 1 && inst.ty == ITY_PTR(); }
+    if kind == VC_STR_PARSE_F64() { return n == 1 && inst.ty == ITY_U64(); }
+    if kind == VC_STR_CLEAR() { return n == 1 && inst.ty == ITY_UNIT(); }
+    if kind == VC_STR_PUSH_STR() { return n == 2 && inst.ty == ITY_UNIT() && t1 == ITY_PTR(); }
+    if kind == VC_STR_PUSH_BYTE() { return n == 2 && inst.ty == ITY_UNIT() && (t1 == ITY_U8() || t1 == ITY_I64()); }
+    if kind == VC_STR_BYTE_AT() { return n == 2 && inst.ty == ITY_I64() && vc_vec_index_ok(t1); }
+    if kind == VC_STR_EQ() { return n == 2 && inst.ty == ITY_BOOL() && t1 == ITY_PTR(); }
+    if kind == VC_STR_STARTS_WITH() || kind == VC_STR_ENDS_WITH() {
+        return n == 2 && inst.ty == ITY_I64() && t1 == ITY_PTR();
+    }
+    if kind == VC_STR_HASH() { return n == 1 && inst.ty == ITY_U64(); }
+    if kind == VC_STR_HEX_ENCODE() || kind == VC_STR_HEX_DECODE() || vc_str_kind_opaque(kind) { return n == 1 && inst.ty == ITY_PTR(); }
+    if kind == VC_STR_CONTAINS() { return n == 2 && (inst.ty == ITY_I64() || inst.ty == ITY_BOOL()) && t1 == ITY_PTR(); }
+    if kind == VC_STR_REPLACE() { return n == 3 && inst.ty == ITY_PTR() && t1 == ITY_PTR() && t2 == ITY_PTR(); }
+    if kind == VC_STR_SPLIT() || kind == VC_STR_JOIN() { return n == 2 && inst.ty == ITY_PTR() && t1 == ITY_PTR(); }
+    if kind == VC_STR_MATCHES_LITERAL_AT() {
+        return n == 4 && inst.ty == ITY_I64() && vc_vec_index_ok(t1) && t2 == ITY_PTR() && vc_ty_is_int(vc_arg_ty(tys, inst, 3));
+    }
+    if kind == VC_STR_SUBSTRING() || kind == VC_STR_SUBSTR() {
+        return n == 3 && inst.ty == ITY_PTR() && vc_vec_index_ok(t1) && vc_vec_index_ok(t2);
+    }
     false
 }
 
@@ -255,25 +365,38 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
     if op == IOP_UPSILON() { return n == 1 && inst.dk == IDATA_PHI_TARGET() && vc_is_merge_ty(t0); }
     if vc_fp_is_op(op) { return vc_fp_inst_ok(inst, t0, t1); }
     if op == IOP_GET_ARG() {
-        return (vc_ty_is_int(inst.ty) || vc_ty_is_float(inst.ty) || inst.ty == ITY_PTR()) && n == 0 && inst.dv >= 0
+        return (inst.ty == ITY_BOOL() || vc_ty_is_int(inst.ty) || vc_ty_is_float(inst.ty) || inst.ty == ITY_PTR()) && n == 0 && inst.dv >= 0
             && inst.dv < f.params.len() as i64 && f.params[inst.dv as u64] == inst.ty;
     }
     if op == IOP_REGION_ALLOC() {
         return inst.ty == ITY_PTR() && n == 0 && inst.dk == IDATA_ALLOC_SIZE() && inst.dv >= 8;
     }
     if op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE() { return n == 0; }
+    if op == IOP_LINEAR_CONSUME() { return n == 1 && t0 == ITY_PTR() && inst.ty == ITY_UNIT(); }
+    if op == IOP_CONST_STR() {
+        return inst.ty == ITY_PTR() && n == 0 && inst.dk == IDATA_CONST_STR() && inst.dv2 == VC_STR_RESOLVED();
+    }
     if op == IOP_FIELD_GET() {
-        return n == 1 && t0 == ITY_PTR() && inst.dv >= 0 && vc_field_access_ok(inst.dk, inst.ty);
+        return (n == 1 && t0 == ITY_PTR() && inst.dv >= 0 && (vc_field_access_ok(inst.dk, inst.ty) || (inst.dk == IDATA_FIELD() && inst.ty == ITY_PTR())))
+            || vc_heap_field_get_ok(inst, t0);
     }
     if op == IOP_FIELD_SET() {
         return n == 2 && t0 == ITY_PTR() && inst.dv >= 0 && inst.ty == ITY_UNIT()
-            && vc_field_access_ok(inst.dk, t1);
+            && (vc_field_access_ok(inst.dk, t1) || (inst.dk == IDATA_FIELD() && t1 == ITY_PTR()));
     }
     if op == IOP_CALL() {
         if vc_is_unwrap_abort(inst) { return n == 0 && inst.ty == ITY_UNIT(); }
+        if vc_is_havoc(inst) { return n == 0 && inst.dv == VC_SUMMARY_HAVOC_MARK() && vc_scalar_value_ty(inst.ty); }
         let vk: i64 = vc_inst_vec_kind(inst);
-        if vk != VC_VEC_NONE() { return vc_vec_call_ok(inst, tys, vk); }
-        return calls && vc_call_scalar(inst, tys);
+        if vk != VC_VEC_NONE() { return vc_vec_call_ok(inst, tys, vk, calls); }
+        let mk: i64 = vc_inst_map_kind(inst);
+        if mk != VC_MAP_NONE() { return vc_map_call_ok(inst, tys, mk); }
+        if vc_inst_scalar_kind(inst) == VC_SCALAR_HASH_U64() {
+            return n == 1 && inst.ty == ITY_U64() && vc_vec_index_ok(t0);
+        }
+        let nar: VcNarrow = vc_narrow_of(inst);
+        if nar.kind != VC_NAR_NONE() { return vc_narrow_shape_ok(nar, inst, t0); }
+        return calls && vc_call_inlinable(inst, tys);
     }
     if vc_is_arith_op(op) {
         return vc_ty_is_int(inst.ty) && n == 2 && vc_operand_ok(inst, tys, lits, 0, inst.ty)
@@ -302,7 +425,7 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
     }
     if op == IOP_RETURN() {
         if f.return_ty == ITY_UNIT() { return n == 0 || (n == 1 && t0 == ITY_UNIT()); }
-        return n == 1 && t0 == f.return_ty
+        return n == 1 && (t0 == f.return_ty || vc_handle_for_object(f.return_ty, t0))
             && (vc_scalar_value_ty(f.return_ty) || f.return_ty == ITY_PTR());
     }
     false
@@ -316,8 +439,11 @@ fn vc_inst_specific_reason(inst: IrInst) -> String {
     let model: i64 = vc_op_model(inst.op);
     if model == VC_OPM_FLOAT_REM() { return vc_reason(VC_SKIP_FLOAT_REM(), opcode_name(inst.op)); }
     if model == VC_OPM_CALL() {
+        if vc_inst_map_kind(inst) != VC_MAP_NONE() {
+            return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), String::from("map key or value that is not a Bool, an integer up to 64 bits or unit"));
+        }
         if inst.dk == IDATA_CALL_EXTERN() && !vc_is_unwrap_abort(inst) && vc_inst_vec_kind(inst) == VC_VEC_NONE()
-            && !catalogue_verifier_known(inst.ds) {
+            && !catalogue_verifier_known(inst.ds) && vc_narrow_of(inst).kind == VC_NAR_NONE() {
             return vc_reason(VC_SKIP_UNMODELED_BUILTIN(), inst.ds);
         }
         return String::from("");
@@ -406,10 +532,30 @@ fn vc_skip_reason_with(src: IrFunction, calls: bool) -> String {
     if shape.len() > 0 {
         return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), shape);
     }
+    let map_shape: String = vc_map_shape_detail(f, tys.len());
+    if map_shape.len() > 0 {
+        return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), map_shape);
+    }
+    let child: String = vc_agg_child_detail(f, tys.len());
+    if child.len() > 0 {
+        return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), child);
+    }
     if has_vec {
-        let vec_shape: String = vc_vec_shape_detail(f, tys.len());
+        let elems: String = vc_ptr_store_detail(f, tys, calls);
+        if elems.len() > 0 {
+            return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), elems);
+        }
+        let vec_shape: String = vc_vec_shape_detail(f, tys.len(), calls);
         if vec_shape.len() > 0 {
             return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), vec_shape);
+        }
+        let str_shape: String = vc_str_shape_detail(f, tys.len());
+        if str_shape.len() > 0 {
+            return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), str_shape);
+        }
+        let wide_shape: String = vc_wide_shape_detail(f, tys.len());
+        if wide_shape.len() > 0 {
+            return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), wide_shape);
         }
     }
     let cfg: String = vc_cfg_detail(f, tys);

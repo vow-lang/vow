@@ -1010,45 +1010,7 @@ mod tests {
 
     #[test]
     fn keyword_as_str_all_variants() {
-        let pairs: &[(TokenKind, &str)] = &[
-            (TokenKind::KwFn, "fn"),
-            (TokenKind::KwLet, "let"),
-            (TokenKind::KwMut, "mut"),
-            (TokenKind::KwStruct, "struct"),
-            (TokenKind::KwEnum, "enum"),
-            (TokenKind::KwMatch, "match"),
-            (TokenKind::KwIf, "if"),
-            (TokenKind::KwElse, "else"),
-            (TokenKind::KwWhile, "while"),
-            (TokenKind::KwLoop, "loop"),
-            (TokenKind::KwBreak, "break"),
-            (TokenKind::KwContinue, "continue"),
-            (TokenKind::KwReturn, "return"),
-            (TokenKind::KwPub, "pub"),
-            (TokenKind::KwUse, "use"),
-            (TokenKind::KwModule, "module"),
-            (TokenKind::KwVow, "vow"),
-            (TokenKind::KwRequires, "requires"),
-            (TokenKind::KwEnsures, "ensures"),
-            (TokenKind::KwInvariant, "invariant"),
-            (TokenKind::KwWhere, "where"),
-            (TokenKind::KwRegion, "region"),
-            (TokenKind::KwLinear, "linear"),
-            (TokenKind::KwExtern, "extern"),
-            (TokenKind::KwImpl, "impl"),
-            (TokenKind::KwTrait, "trait"),
-            (TokenKind::KwType, "type"),
-            (TokenKind::KwFor, "for"),
-            (TokenKind::KwIn, "in"),
-            (TokenKind::KwAs, "as"),
-            (TokenKind::KwConst, "const"),
-            (TokenKind::KwRead, "read"),
-            (TokenKind::KwWrite, "write"),
-            (TokenKind::KwIO, "io"),
-            (TokenKind::KwPanic, "panic"),
-            (TokenKind::KwUnsafe, "unsafe"),
-        ];
-        for (kind, expected) in pairs {
+        for (kind, expected) in KEYWORD_PAIRS {
             assert_eq!(keyword_as_str(kind), Some(*expected), "keyword: {kind:?}");
         }
         assert_eq!(keyword_as_str(&TokenKind::LBrace), None);
@@ -1071,6 +1033,123 @@ mod tests {
             !diags.is_empty(),
             "expected diagnostic for unexpected token"
         );
+    }
+
+    const KEYWORD_PAIRS: &[(TokenKind, &str)] = &[
+        (TokenKind::KwFn, "fn"),
+        (TokenKind::KwLet, "let"),
+        (TokenKind::KwMut, "mut"),
+        (TokenKind::KwStruct, "struct"),
+        (TokenKind::KwEnum, "enum"),
+        (TokenKind::KwMatch, "match"),
+        (TokenKind::KwIf, "if"),
+        (TokenKind::KwElse, "else"),
+        (TokenKind::KwWhile, "while"),
+        (TokenKind::KwLoop, "loop"),
+        (TokenKind::KwBreak, "break"),
+        (TokenKind::KwContinue, "continue"),
+        (TokenKind::KwReturn, "return"),
+        (TokenKind::KwPub, "pub"),
+        (TokenKind::KwUse, "use"),
+        (TokenKind::KwModule, "module"),
+        (TokenKind::KwVow, "vow"),
+        (TokenKind::KwRequires, "requires"),
+        (TokenKind::KwEnsures, "ensures"),
+        (TokenKind::KwInvariant, "invariant"),
+        (TokenKind::KwWhere, "where"),
+        (TokenKind::KwRegion, "region"),
+        (TokenKind::KwLinear, "linear"),
+        (TokenKind::KwExtern, "extern"),
+        (TokenKind::KwImpl, "impl"),
+        (TokenKind::KwTrait, "trait"),
+        (TokenKind::KwType, "type"),
+        (TokenKind::KwFor, "for"),
+        (TokenKind::KwIn, "in"),
+        (TokenKind::KwAs, "as"),
+        (TokenKind::KwConst, "const"),
+        (TokenKind::KwRead, "read"),
+        (TokenKind::KwWrite, "write"),
+        (TokenKind::KwIO, "io"),
+        (TokenKind::KwPanic, "panic"),
+        (TokenKind::KwUnsafe, "unsafe"),
+    ];
+
+    // (source before the keyword, source after it, whether `mut` is valid there).
+    const KEYWORD_IDENT_POSITIONS: &[(&str, &str, bool)] = &[
+        ("module M\nstruct S {\n    ", ": i64,\n}\n", false),
+        (
+            "module M\nstruct S {\n    a: i64,\n    ",
+            ": i64,\n}\n",
+            false,
+        ),
+        ("module M\nstruct ", " {\n}\n", false),
+        ("module M\nenum E {\n    A,\n    ", ",\n}\n", false),
+        ("module M\nenum E {\n    A(", "),\n}\n", false),
+        ("module M\nenum E {\n    A { ", ": i64 },\n}\n", false),
+        ("module M\nfn ", "() -> i64 {\n    0\n}\n", false),
+        ("module M\nfn f(", ": i64) -> i64 {\n    0\n}\n", false),
+        ("module M\nfn f(a: ", ") -> i64 {\n    0\n}\n", false),
+        (
+            "module M\nfn f() -> i64 {\n    let ",
+            " = 1;\n    0\n}\n",
+            true,
+        ),
+        (
+            "module M\nfn f() -> i64 {\n    for ",
+            " in v { }\n    0\n}\n",
+            false,
+        ),
+        (
+            "module M\nfn f(e: E) -> i64 {\n    match e {\n        E::A(",
+            ") => 0,\n    }\n}\n",
+            true,
+        ),
+        (
+            "module M\nfn f(e: E) -> i64 {\n    match e {\n        E::A(x, ",
+            ") => 0,\n    }\n}\n",
+            true,
+        ),
+        (
+            "module M\nfn f(e: E) -> i64 {\n    match e {\n        S { ",
+            ": x } => 0,\n    }\n}\n",
+            false,
+        ),
+        (
+            "module M\nfn f(e: E) -> i64 {\n    match e {\n        (a, ",
+            ") => 0,\n    }\n}\n",
+            true,
+        ),
+    ];
+
+    // A keyword where an identifier is required is an UnexpectedToken at the
+    // keyword, and the parser terminates (#1777). The self-hosted parser pins
+    // the same table in compiler/tests/test_parser_keyword_idents.vow.
+    #[test]
+    fn keyword_in_identifier_position_is_reported_at_the_keyword() {
+        for (before, after, mut_is_valid) in KEYWORD_IDENT_POSITIONS {
+            for (_, kw) in KEYWORD_PAIRS {
+                if *mut_is_valid && *kw == "mut" {
+                    continue;
+                }
+                let src = format!("{before}{kw}{after}");
+                let (_, diags) = parse_module(&src, "<test>");
+                let first = diags
+                    .first()
+                    .unwrap_or_else(|| panic!("`{kw}` accepted in {src:?}"));
+                assert_eq!(first.code, ErrorCode::UnexpectedToken, "{src:?}");
+                assert_eq!(first.primary.byte_offset as usize, before.len(), "{src:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn struct_field_named_module_reports_three_errors_and_stops() {
+        let src =
+            "module M\nstruct Holder {\n    n: i64,\n    module: i64,\n}\nfn main() -> i32 { 0 }\n";
+        let (module, diags) = parse_module(src, "<test>");
+        assert_eq!(module.items.len(), 1);
+        assert_eq!(diags.len(), 3, "{diags:?}");
+        assert!(diags.iter().all(|d| d.code == ErrorCode::UnexpectedToken));
     }
 
     #[test]

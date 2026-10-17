@@ -503,6 +503,7 @@ fn MCI_NONSCALAR_EXTERN() -> i64 { 4 }
 fn MCI_STRUCTURED_TARGET() -> i64 { 5 }
 fn MCI_TARGET() -> i64 { 6 }
 fn MCI_BAD_CALL() -> i64 { 7 }
+fn MCI_STRUCTURED_RESULT() -> i64 { 8 }
 
 // The modelability gate and the skip diagnostic share this instruction policy.
 // Strings are rendered only for an issue, never on the successful scan path.
@@ -528,6 +529,9 @@ fn modelability_issue(inst: IrInst, facts: ModelFacts, m: IrModule, const_fn_ind
        || op == IOP_LE_F32() || op == IOP_LE_F64()
        || op == IOP_GT_F32() || op == IOP_GT_F64()
        || op == IOP_GE_F32() || op == IOP_GE_F64()
+       || op == IOP_NEG_F32() || op == IOP_NEG_F64()
+       || op == IOP_F32_TO_BITS() || op == IOP_F64_TO_BITS()
+       || op == IOP_BITS_TO_F32() || op == IOP_BITS_TO_F64()
        || op == IOP_NOT() || op == IOP_AND() || op == IOP_OR()
        || op == IOP_CONST_U64() || op == IOP_CONST_I128() || op == IOP_CONST_U128()
        || op == IOP_VOW_REQ() || op == IOP_VOW_ENS() || op == IOP_VOW_INV()
@@ -550,6 +554,10 @@ fn modelability_issue(inst: IrInst, facts: ModelFacts, m: IrModule, const_fn_ind
             if passes_structured_arg(inst, facts.vec_vars, facts.string_vars, facts.hashmap_vars,
                                      facts.btreemap_vars, facts.option_vars) {
                 return MCI_STRUCTURED_TARGET();
+            }
+            if is_structured_value_id(inst.id, facts.vec_vars, facts.string_vars, facts.hashmap_vars,
+                                      facts.btreemap_vars, facts.option_vars) {
+                return MCI_STRUCTURED_RESULT();
             }
             let target_fi: i64 = inst.dv;
             if vec_contains_i64(const_fn_indices, target_fi) { return MCI_OK(); }
@@ -659,6 +667,9 @@ fn model_issue_name(issue: i64, inst: IrInst, m: IrModule) -> String {
     }
     if issue == MCI_STRUCTURED_TARGET() {
         return String::from("Call target with a collection argument");
+    }
+    if issue == MCI_STRUCTURED_RESULT() {
+        return String::from("Call target with a collection result");
     }
     if issue == MCI_TARGET() {
         let fns: Vec<IrFunction> = m.functions;
@@ -1831,6 +1842,23 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>, 
         return;
     }
 
+    if op == IOP_F32_TO_BITS() || op == IOP_F64_TO_BITS() {
+        let float_ty: i64 = if op == IOP_F32_TO_BITS() { ITY_F32() } else { ITY_F64() };
+        out.push_str(str4(String::from("  v"), i64_to_string(id), String::from(" = "),
+            cemit_str2(float_slot_encode(float_ty, cemit_str2(String::from("v"), i64_to_string(iargs[0]))), String::from(";\n"))));
+        return;
+    }
+    if op == IOP_BITS_TO_F32() || op == IOP_BITS_TO_F64() {
+        let float_ty: i64 = if op == IOP_BITS_TO_F32() { ITY_F32() } else { ITY_F64() };
+        out.push_str(str4(String::from("  v"), i64_to_string(id), String::from(" = "),
+            cemit_str2(float_slot_decode(float_ty, cemit_str2(String::from("v"), i64_to_string(iargs[0]))), String::from(";\n"))));
+        return;
+    }
+    if op == IOP_NEG_F32() || op == IOP_NEG_F64() {
+        out.push_str(str4(String::from("  v"), i64_to_string(id), String::from(" = -v"),
+            cemit_str2(i64_to_string(iargs[0]), String::from(";\n"))));
+        return;
+    }
     if op == IOP_NOT() {
         out.push_str(str4(String::from("  v"), i64_to_string(id), String::from(" = !v"),
             cemit_str2(i64_to_string(iargs[0]), String::from(";\n"))));
@@ -3690,7 +3718,7 @@ fn scope_has_op(scope: Vec<IrFunction>, op: i64, ty: i64, arith: bool) -> bool {
 
 // Bit 1 (f64) / bit 2 (f32) set when a function in `scope` moves a value of
 // that float type through an aggregate slot (FieldGet result type, or the
-// value operand of a FieldSet). One walk; operand types are resolved lazily,
+// value operand of a FieldSet) or a Vec slot (the float-bits opcodes). One walk; operand types are resolved lazily,
 // only for functions that actually contain a FieldSet.
 fn float_slot_use_mask(scope: Vec<IrFunction>) -> i64 {
     let mut mask: i64 = 0;
@@ -3710,6 +3738,10 @@ fn float_slot_use_mask(scope: Vec<IrFunction>) -> i64 {
                 let mut slot_ty: i64 = ITY_I64();
                 if inst.op == IOP_FIELD_GET() {
                     slot_ty = inst.ty;
+                } else if inst.op == IOP_F32_TO_BITS() || inst.op == IOP_BITS_TO_F32() {
+                    slot_ty = ITY_F32();
+                } else if inst.op == IOP_F64_TO_BITS() || inst.op == IOP_BITS_TO_F64() {
+                    slot_ty = ITY_F64();
                 } else if inst.op == IOP_FIELD_SET() && inst.args.len() > 1 {
                     if !have_tys {
                         inst_ty_by_id = build_inst_ty_by_id(f);

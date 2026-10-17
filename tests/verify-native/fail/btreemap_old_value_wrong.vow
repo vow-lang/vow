@@ -1,0 +1,17 @@
+// TEST: counterexample-fn "replaced"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+module BTreeMapOldValueWrong
+
+fn replaced(k: i64) -> i64 [panic] vow {
+  ensures: result == 6
+} {
+  let m: BTreeMap<i64, i64> = BTreeMap::new();
+  m.insert(k, 5);
+  m.insert(k, 6).unwrap()
+}
+
+fn main() -> i32 [io, panic] {
+  print_i64(replaced(1));
+  0
+}

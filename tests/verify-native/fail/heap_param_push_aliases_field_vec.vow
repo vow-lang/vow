@@ -1,0 +1,24 @@
+// TEST: replay-skipped field 0 is a Vec, which the replay harness cannot build
+// TEST: counterexample-fn "push_one"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// `out` may be the `Vec` that `b.items` holds, and then the push changes the length read
+// through the field: the claim that it does not is refuted.
+module HeapParamPushAliasesFieldVec
+
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn push_one(out: Vec<i64>, b: Bag) -> bool vow {
+  ensures: result
+} {
+  let before: u64 = b.items.len();
+  out.push(1);
+  b.items.len() == before
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), tag: 1 };
+  let out: Vec<i64> = Vec::new();
+  if push_one(out, b) { print_i64(1); }
+  0
+}

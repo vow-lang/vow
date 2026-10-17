@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "fill"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// One push through the field makes the length 1, so a length of 2 is refuted: the
+// push is not dropped as a write to a handle the model does not track.
+module PtrFieldVecPushViaFieldWrong
+
+struct Block { id: i64, insts: Vec<i64> }
+
+fn block_new(id: i64) -> Block { Block { id: id, insts: Vec::new() } }
+
+fn fill() -> u64 vow {
+  ensures: result == 2
+} {
+  let b: Block = block_new(7);
+  b.insts.push(1);
+  b.insts.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill());
+  0
+}

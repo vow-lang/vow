@@ -1,0 +1,53 @@
+module MulDivisionGuard
+
+fn rect_area(w: i64, h: i64) -> i64 vow {
+  requires: w >= 0,
+  requires: h >= 0,
+  requires: h == 0 || w <= 9223372036854775807 / h,
+  ensures: result >= 0
+} {
+  w * h
+}
+
+fn rect_area_flipped(w: i64, h: i64) -> i64 vow {
+  requires: w >= 0,
+  requires: h >= 0,
+  requires: h == 0 || 9223372036854775807 / h >= w,
+  ensures: result >= 0
+} {
+  w * h
+}
+
+fn rect_area_not_over(w: i64, h: i64) -> i64 vow {
+  requires: w >= 0,
+  requires: h > 0,
+  requires: !(w > 9223372036854775807 / h),
+  ensures: result >= 0 && result >= w
+} {
+  w * h
+}
+
+fn rect_area_u32(w: u32, h: u32) -> u32 vow {
+  requires: h == 0 || w <= 4294967295 / h,
+  ensures: h == 0 || result >= w
+} {
+  w * h
+}
+
+fn rect_area_i32(w: i32, h: i32) -> i32 vow {
+  requires: w >= 0,
+  requires: h >= 0,
+  requires: h == 0 || w <= 2147483647 / h,
+  ensures: result >= 0
+} {
+  w * h
+}
+
+fn main() -> i32 [io] {
+  print_i64(rect_area(3, 4));
+  print_i64(rect_area_flipped(3, 4));
+  print_i64(rect_area_not_over(3, 4));
+  print_u64(rect_area_u32(3, 4) as u64);
+  print_i64(rect_area_i32(3, 4) as i64);
+  0
+}

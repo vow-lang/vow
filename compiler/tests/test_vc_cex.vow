@@ -7,6 +7,7 @@ use vc_exec
 use vc_smt
 use vc_term
 use vc_cex
+use vc_vecmodel
 use tests.builders
 
 fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
@@ -29,11 +30,19 @@ fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
         assumed_lens: Vec::new(),
         model_names: Vec::new(),
         model_params: Vec::new(),
+        model_paths: Vec::new(),
         model_tys: Vec::new(),
         model_widths: Vec::new(),
         model_slots: Vec::new(),
         model_hdr: Vec::new(),
         model_ambig: Vec::new(),
+        hook_vars: Vec::new(),
+        vec_param: Vec::new(),
+        vec_arr: Vec::new(),
+        vec_len: Vec::new(),
+        vec_hdr: Vec::new(),
+        map_vars: Vec::new(),
+        vec_wide: Vec::new(),
     };
     cs.kinds.push(kind);
     cs.frames.push(-1);
@@ -43,6 +52,8 @@ fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
     cs.model_names.push(String::from("p1"));
     cs.model_params.push(0);
     cs.model_params.push(1);
+    cs.model_paths.push(String::from(""));
+    cs.model_paths.push(String::from(""));
     cs.model_tys.push(ITY_I64());
     cs.model_tys.push(ITY_I64());
     cs.model_widths.push(64);
@@ -55,7 +66,12 @@ fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
 }
 
 fn push_field(cs: VcClaims, param: i64, slot: i64, ty: i64, width: i64, ambig: i64) {
+    push_path_field(cs, param, String::from(""), slot, ty, width, ambig);
+}
+
+fn push_path_field(cs: VcClaims, param: i64, path: String, slot: i64, ty: i64, width: i64, ambig: i64) {
     cs.model_names.push(String::from("f"));
+    cs.model_paths.push(path);
     cs.model_params.push(param);
     cs.model_tys.push(ty);
     cs.model_widths.push(width);
@@ -218,6 +234,7 @@ fn check_aggregate_fields() -> i64 {
     let fresh: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
     fresh.model_names.pop();
     fresh.model_params.pop();
+    fresh.model_paths.pop();
     fresh.model_tys.pop();
     fresh.model_widths.pop();
     fresh.model_slots.pop();
@@ -245,6 +262,7 @@ fn check_aggregate_fields() -> i64 {
     let amb: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
     amb.model_names.pop();
     amb.model_params.pop();
+    amb.model_paths.pop();
     amb.model_tys.pop();
     amb.model_widths.pop();
     amb.model_slots.pop();
@@ -257,6 +275,7 @@ fn check_aggregate_fields() -> i64 {
     let fl: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
     fl.model_names.pop();
     fl.model_params.pop();
+    fl.model_paths.pop();
     fl.model_tys.pop();
     fl.model_widths.pop();
     fl.model_slots.pop();
@@ -266,6 +285,58 @@ fn check_aggregate_fields() -> i64 {
     let r4: VerifyResult = vc_claim_result(f, fl, 0, ans);
     if r4.var_names[1] != String::from("o.1:f64") { return 71; }
     if r4.var_names[2] != String::from("o.1:f32") { return 72; }
+    // The identity of an aggregate parameter reads `<param>.alias`.
+    let al: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
+    al.model_names.pop();
+    al.model_params.pop();
+    al.model_paths.pop();
+    al.model_tys.pop();
+    al.model_widths.pop();
+    al.model_slots.pop();
+    al.model_ambig.pop();
+    push_field(al, 1, VC_ALIAS_SLOT(), ITY_U8(), 8, 0);
+    push_field(al, 1, 0, ITY_I64(), 64, 0);
+    let r5: VerifyResult = vc_claim_result(f, al, 0, ans);
+    if r5.var_names[1] != String::from("o.alias") { return 73; }
+    if r5.var_names[2] != String::from("o.0") { return 74; }
+    // A parameter that is the same object as an earlier one shows that one's
+    // field, not the value the solver left on its own symbol; a distinct one
+    // keeps its own.
+    let eq: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
+    eq.model_names.pop();
+    eq.model_params.pop();
+    eq.model_paths.pop();
+    eq.model_tys.pop();
+    eq.model_widths.pop();
+    eq.model_slots.pop();
+    eq.model_ambig.pop();
+    push_field(eq, 1, VC_ALIAS_SLOT(), ITY_U8(), 8, 0);
+    push_field(eq, 2, VC_ALIAS_SLOT(), ITY_U8(), 8, 0);
+    push_field(eq, 3, VC_ALIAS_SLOT(), ITY_U8(), 8, 0);
+    push_field(eq, 1, 0, ITY_I64(), 64, 0);
+    push_field(eq, 2, 0, ITY_I64(), 64, 0);
+    push_field(eq, 3, 0, ITY_I64(), 64, 0);
+    let av: Vec<i64> = Vec::new();
+    av.push(9);
+    av.push(3);
+    av.push(3);
+    av.push(4);
+    av.push(10);
+    av.push(99);
+    av.push(55);
+    let ah: Vec<i64> = Vec::new();
+    ah.push(0);
+    ah.push(0);
+    ah.push(0);
+    ah.push(0);
+    ah.push(0);
+    ah.push(0);
+    ah.push(0);
+    let aans: VcSolverAnswer = VcSolverAnswer { verdict: VC_ANS_SAT(), values: av, highs: ah, raw: String::from("") };
+    let r6: VerifyResult = vc_claim_result(f, eq, 0, aans);
+    if r6.var_values[4] != String::from("10") { return 75; }
+    if r6.var_values[5] != String::from("10") { return 76; }
+    if r6.var_values[6] != String::from("55") { return 77; }
     // The answer of an earlier claim carries only the symbols it declared.
     let short_values: Vec<i64> = Vec::new();
     short_values.push(9);
@@ -275,6 +346,282 @@ fn check_aggregate_fields() -> i64 {
     let r3: VerifyResult = vc_claim_result(f, fresh, 0, early);
     if r3.var_names.len() != 1 { return 69; }
     if r3.var_values[0] != String::from("9") { return 70; }
+    // A field of the object a parameter holds in its slot 1 is named by the path
+    // down to it, so it is not the parameter's own slot 0.
+    let kid: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
+    kid.model_names.pop();
+    kid.model_params.pop();
+    kid.model_paths.pop();
+    kid.model_tys.pop();
+    kid.model_widths.pop();
+    kid.model_slots.pop();
+    kid.model_ambig.pop();
+    push_field(kid, 1, 0, ITY_I64(), 64, 0);
+    push_path_field(kid, 1, String::from(".1"), 0, ITY_I64(), 64, 0);
+    let r7: VerifyResult = vc_claim_result(f, kid, 0, ans);
+    if r7.var_names[1] != String::from("o.0") { return 78; }
+    if r7.var_names[2] != String::from("o.1.0") { return 79; }
+    if r7.var_values[2] != String::from("1") { return 80; }
+    0
+}
+
+
+fn vec_fn() -> IrFunction {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    p.push(ITY_PTR());
+    let f: IrFunction = mk_function(1, String::from("h"), p, ITY_I64(), Vec::new());
+    f.param_names[0] = String::from("x");
+    f.param_names[1] = String::from("v");
+    f
+}
+
+// `x` is a scalar parameter and `v` a `Vec` whose length constant sits at header
+// position 3, declared before claim 0's prefix of 10 commands.
+fn vec_claims() -> VcClaims {
+    let cs: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
+    cs.model_names[1] = String::from("p1_vlen");
+    cs.model_tys[1] = ITY_U64();
+    cs.model_slots[1] = VC_SLOT_VEC_LEN();
+    cs.model_hdr.push(0);
+    cs.model_hdr.push(3);
+    cs.header_lens.push(10);
+    cs.vec_param.push(1);
+    cs.vec_arr.push(String::from("p1_varr"));
+    cs.vec_len.push(String::from("p1_vlen"));
+    cs.vec_hdr.push(3);
+    cs.vec_wide.push(-1);
+    cs
+}
+
+fn vec_answer(x: i64, len: i64, e0: i64, e1: i64, with_contents: bool) -> VcSolverAnswer {
+    let values: Vec<i64> = Vec::new();
+    let highs: Vec<i64> = Vec::new();
+    values.push(x);
+    values.push(len);
+    if with_contents {
+        let mut i: i64 = 0;
+        while i < 8 {
+            if i == 0 { values.push(e0); } else if i == 1 { values.push(e1); } else { values.push(99); }
+            i = i + 1;
+        }
+    }
+    let mut h: u64 = 0;
+    while h < values.len() {
+        highs.push(0);
+        h = h + 1;
+    }
+    VcSolverAnswer { verdict: VC_ANS_SAT(), values: values, highs: highs, raw: String::from("") }
+}
+
+fn check_vec_contents() -> i64 {
+    let f: IrFunction = vec_fn();
+    let cs: VcClaims = vec_claims();
+    let r: VerifyResult = vc_claim_result(f, cs, 0, vec_answer(5, 2, 7, -1, true));
+    if r.var_names.len() != 4 { return 80; }
+    if r.var_names[0] != String::from("x") || r.var_values[0] != String::from("5") { return 81; }
+    if r.var_names[1] != String::from("v.len") || r.var_values[1] != String::from("2") { return 82; }
+    if r.var_names[2] != String::from("v[0]") || r.var_values[2] != String::from("7") { return 83; }
+    if r.var_names[3] != String::from("v[1]") || r.var_values[3] != String::from("18446744073709551615") { return 84; }
+    let bare: VerifyResult = vc_claim_result(f, vec_claims(), 0, vec_answer(5, 2, 0, 0, false));
+    if bare.var_names.len() != 2 || bare.var_names[1] != String::from("v.len") { return 85; }
+    let none: VerifyResult = vc_claim_result(f, vec_claims(), 0, vec_answer(5, 0, 0, 0, true));
+    if none.var_names.len() != 2 || none.var_values[1] != String::from("0") { return 86; }
+    let big: VerifyResult = vc_claim_result(f, vec_claims(), 0, vec_answer(5, 100, 0, 0, true));
+    if big.var_names.len() != 2 || big.var_values[1] != String::from("100") { return 87; }
+    0
+}
+
+// The elements of a wide `Vec` are 128-bit entries printed in their own type, from
+// both limbs of the answer.
+fn check_wide_vec_contents() -> i64 {
+    let f: IrFunction = vec_fn();
+    let cs: VcClaims = vec_claims();
+    cs.vec_wide[0] = ITY_I128();
+    let values: Vec<i64> = Vec::new();
+    let highs: Vec<i64> = Vec::new();
+    values.push(5);
+    highs.push(0);
+    values.push(2);
+    highs.push(0);
+    values.push(7);
+    highs.push(0);
+    values.push(0);
+    highs.push(-9223372036854775808);
+    let ans: VcSolverAnswer = VcSolverAnswer { verdict: VC_ANS_SAT(), values: values, highs: highs, raw: String::from("") };
+    let r: VerifyResult = vc_claim_result(f, cs, 0, ans);
+    if r.var_names.len() != 4 { return 90; }
+    if r.var_names[2] != String::from("v[0]") || r.var_values[2] != String::from("7") { return 91; }
+    if r.var_names[3] != String::from("v[1]") || r.var_values[3] != String::from("-170141183460469231731687303715884105728") { return 92; }
+    let cu: VcClaims = vec_claims();
+    cu.vec_wide[0] = ITY_U128();
+    let ru: VerifyResult = vc_claim_result(f, cu, 0, ans);
+    if ru.var_values[3] != String::from("170141183460469231731687303715884105728") { return 93; }
+    0
+}
+
+// The elements of a float `Vec` print as the float their slot holds, an `f32` from the
+// low 32 bits only, and keep the 64-bit element width of a raw slot; the parameter's
+// `<param>.elem` entry names the float type, since an integer-valued float prints like a slot.
+fn check_float_vec_contents() -> i64 {
+    let f: IrFunction = vec_fn();
+    let values: Vec<i64> = Vec::new();
+    let highs: Vec<i64> = Vec::new();
+    values.push(5);
+    highs.push(0);
+    values.push(2);
+    highs.push(0);
+    values.push(4612811918334230528);
+    highs.push(0);
+    values.push(-4616189618054758400);
+    highs.push(0);
+    let ans: VcSolverAnswer = VcSolverAnswer { verdict: VC_ANS_SAT(), values: values, highs: highs, raw: String::from("") };
+    let cs: VcClaims = vec_claims();
+    cs.vec_wide[0] = ITY_F64();
+    let r: VerifyResult = vc_claim_result(f, cs, 0, ans);
+    if r.var_names.len() != 5 { return 100; }
+    if r.var_names[2] != String::from("v.elem") || r.var_values[2] != String::from("f64") { return 108; }
+    if r.var_names[3] != String::from("v[0]") || r.var_values[3] != String::from("2.5") { return 101; }
+    if r.var_names[4] != String::from("v[1]") || r.var_values[4] != String::from("-1") { return 102; }
+    let script: SmtScript = vc_script_new();
+    let requested: Vec<String> = Vec::new();
+    let widths: Vec<i64> = Vec::new();
+    vc_append_vec_projection(cs, vc_cex_vecs(cs, 0), 2, script, requested, widths);
+    if widths.len() != 2 || widths[0] != 64 || widths[1] != 64 { return 103; }
+    let c32: VcClaims = vec_claims();
+    c32.vec_wide[0] = ITY_F32();
+    let v32: Vec<i64> = Vec::new();
+    v32.push(5);
+    v32.push(2);
+    v32.push(1075838976 + 8589934592);
+    v32.push(3212836864);
+    let h32: Vec<i64> = Vec::new();
+    h32.push(0);
+    h32.push(0);
+    h32.push(0);
+    h32.push(0);
+    let a32: VcSolverAnswer = VcSolverAnswer { verdict: VC_ANS_SAT(), values: v32, highs: h32, raw: String::from("") };
+    let r32: VerifyResult = vc_claim_result(f, c32, 0, a32);
+    if r32.var_values[2] != String::from("f32") { return 109; }
+    if r32.var_values[3] != String::from("2.5") || r32.var_values[4] != String::from("-1") { return 104; }
+    // an integer element type never reads as a float
+    let ci: VcClaims = vec_claims();
+    ci.vec_wide[0] = ITY_I64();
+    let ri: VerifyResult = vc_claim_result(f, ci, 0, ans);
+    if ri.var_values[2] != String::from("4612811918334230528") { return 105; }
+    if vc_cex_float_ty(ci, 0) != -1 || vc_cex_wide_ty(ci, 0) != -1 { return 106; }
+    if vc_cex_float_ty(cs, 0) != ITY_F64() || vc_cex_wide_ty(cs, 0) != -1 { return 107; }
+    0
+}
+
+// The answer tail is parameter-major even when lengths differ, and its unused
+// slots must not shift the next parameter's first element.
+fn mixed_vec_claims() -> VcClaims {
+    let cs: VcClaims = vec_claims();
+    cs.vec_wide[0] = ITY_I128();
+    let mut p: i64 = 2;
+    while p < 4 {
+        let stem: String = String::from("p");
+        stem.push_str(i64_to_string(p));
+        let len_name: String = String::from(stem);
+        len_name.push_str(String::from("_vlen"));
+        let arr_name: String = String::from(stem);
+        arr_name.push_str(String::from("_varr"));
+        cs.model_names.push(len_name);
+        cs.model_params.push(p);
+        cs.model_tys.push(ITY_U64());
+        cs.model_widths.push(64);
+        cs.model_slots.push(VC_SLOT_VEC_LEN());
+        cs.model_hdr.push(18 + p);
+        cs.model_ambig.push(0);
+        cs.vec_param.push(p);
+        cs.vec_arr.push(arr_name);
+        cs.vec_len.push(len_name);
+        cs.vec_hdr.push(18 + p);
+        cs.vec_wide.push(if p == 2 { ITY_F64() } else { -1 });
+        p = p + 1;
+    }
+    cs.header_lens[0] = 30;
+    cs
+}
+
+fn append_answer_entry(ans: VcSolverAnswer, low: i64, high: i64) {
+    ans.values.push(low);
+    ans.highs.push(high);
+}
+
+fn mixed_vec_answer(wide_len: i64, float_len: i64, raw_len: i64) -> VcSolverAnswer {
+    let ans: VcSolverAnswer = typed_answer(5, 0, wide_len, 0);
+    append_answer_entry(ans, float_len, 0);
+    append_answer_entry(ans, raw_len, 0);
+    append_answer_entry(ans, 7, 0);
+    append_answer_entry(ans, 0, -9223372036854775807 - 1);
+    append_answer_entry(ans, 4612811918334230528, 0);
+    append_answer_entry(ans, 99, 0);
+    append_answer_entry(ans, -1, 0);
+    append_answer_entry(ans, 99, 0);
+    ans
+}
+
+fn check_append_mixed_vec_contents() -> i64 {
+    let names: Vec<String> = Vec::new();
+    let values: Vec<String> = Vec::new();
+    names.push(String::from("existing"));
+    values.push(String::from("prefix"));
+    vc_append_vec_answer_contents(vec_fn(), mixed_vec_claims(), 0, mixed_vec_answer(2, 1, 1), names, values);
+    if names.len() != 6 || values.len() != 6 { return 110; }
+    if names[0] != String::from("existing") || values[0] != String::from("prefix") { return 111; }
+    if names[1] != String::from("v[0]") || values[1] != String::from("7") { return 112; }
+    if names[2] != String::from("v[1]") || values[2] != String::from("-170141183460469231731687303715884105728") { return 113; }
+    if names[3] != String::from("p2.elem") || values[3] != String::from("f64") { return 114; }
+    if names[4] != String::from("p2[0]") || values[4] != String::from("2.5") { return 115; }
+    if names[5] != String::from("p3[0]") || values[5] != String::from("18446744073709551615") { return 116; }
+    0
+}
+
+fn check_append_visible_vec_contents() -> i64 {
+    let cs: VcClaims = mixed_vec_claims();
+    cs.header_lens[0] = 10;
+    let names: Vec<String> = Vec::new();
+    let values: Vec<String> = Vec::new();
+    vc_append_vec_answer_contents(vec_fn(), cs, 0, vec_answer(5, 2, 11, 12, true), names, values);
+    if names.len() != 2 || values.len() != 2 { return 120; }
+    if names[0] != String::from("v[0]") || values[0] != String::from("11") { return 121; }
+    if names[1] != String::from("v[1]") || values[1] != String::from("12") { return 122; }
+    0
+}
+
+fn append_leaves_prefix(ans: VcSolverAnswer) -> bool {
+    let names: Vec<String> = Vec::new();
+    let values: Vec<String> = Vec::new();
+    names.push(String::from("existing"));
+    values.push(String::from("prefix"));
+    vc_append_vec_answer_contents(vec_fn(), mixed_vec_claims(), 0, ans, names, values);
+    names.len() == 1 && values.len() == 1
+        && names[0] == String::from("existing") && values[0] == String::from("prefix")
+}
+
+fn check_append_unusable_vec_tails() -> i64 {
+    let bare: VcSolverAnswer = mixed_vec_answer(2, 1, 1);
+    let mut i: i64 = 0;
+    while i < 6 {
+        bare.values.pop();
+        bare.highs.pop();
+        i = i + 1;
+    }
+    if !append_leaves_prefix(bare) { return 130; }
+    let malformed: VcSolverAnswer = mixed_vec_answer(2, 1, 1);
+    malformed.values.pop();
+    malformed.highs.pop();
+    if !append_leaves_prefix(malformed) { return 131; }
+    if !append_leaves_prefix(mixed_vec_answer(-1, -1, -1)) { return 132; }
+    if !append_leaves_prefix(mixed_vec_answer(3, 3, 3)) { return 133; }
+    let names: Vec<String> = Vec::new();
+    let values: Vec<String> = Vec::new();
+    vc_append_vec_answer_contents(vec_fn(), mixed_vec_claims(), 0, mixed_vec_answer(0, 0, 0), names, values);
+    // A zero-length float Vec still carries its element-type marker.
+    if names.len() != 1 || values.len() != 1 { return 134; }
+    if names[0] != String::from("p2.elem") || values[0] != String::from("f64") { return 135; }
     0
 }
 
@@ -286,5 +633,11 @@ fn main() -> i32 {
     if r == 0 { r = check_shift_and_arith_labels(); }
     if r == 0 { r = check_callee_clauses(); }
     if r == 0 { r = check_aggregate_fields(); }
+    if r == 0 { r = check_vec_contents(); }
+    if r == 0 { r = check_wide_vec_contents(); }
+    if r == 0 { r = check_float_vec_contents(); }
+    if r == 0 { r = check_append_mixed_vec_contents(); }
+    if r == 0 { r = check_append_visible_vec_contents(); }
+    if r == 0 { r = check_append_unusable_vec_tails(); }
     i64_to_i32_wrap(r)
 }

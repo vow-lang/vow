@@ -1,0 +1,18 @@
+// TEST: counterexample-fn "at_most_hundred"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The shortest counterexample has more elements than the 64 the first bounds list,
+// so the contents come from the larger bound and the replay builds the whole `Vec`.
+module VecParamLongCex
+
+fn at_most_hundred(v: Vec<i64>) -> u64 vow {
+  ensures: result <= 100
+} {
+  v.len()
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  print_u64(at_most_hundred(v));
+  0
+}

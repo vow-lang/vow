@@ -1,0 +1,26 @@
+// TEST: category invariant
+// The invariant holds, and the postcondition claims one element too many.
+module PtrFieldVecLoopWrongPost
+
+struct Block { id: i64, insts: Vec<i64> }
+
+fn block_new(id: i64) -> Block { Block { id: id, insts: Vec::new() } }
+
+fn fill(n: u64) -> u64 vow {
+  ensures: result == n + 1
+} {
+  let b: Block = block_new(7);
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n && b.insts.len() == i
+  } {
+    b.insts.push(1);
+    i = i + 1;
+  }
+  b.insts.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill(3));
+  0
+}

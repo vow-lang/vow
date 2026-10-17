@@ -1,0 +1,20 @@
+// TEST: counterexample-fn "last_byte_decides"
+// TEST: counterexample-vow-id 3
+// TEST: counterexample-blame Callee
+// Two strings that agree on every byte but one are not equal: the model has to
+// find the differing position among arbitrarily many.
+module StringEqOneByteDiffers
+
+fn last_byte_decides(a: String, b: String, i: u64) -> bool vow {
+  requires: a.len() == b.len()
+  requires: i < a.len()
+  requires: a.byte_at(i) == b.byte_at(i)
+  ensures: result == true
+} {
+  a.eq(b)
+}
+
+fn main() -> i32 [io] {
+  if last_byte_decides(String::from("a"), String::from("a"), 0) { print_u64(1); }
+  0
+}

@@ -1,0 +1,20 @@
+module InlineVecArgAliased
+
+fn push_pair(a: Vec<i64>, b: Vec<i64>) {
+  a.push(1);
+  b.push(2);
+}
+
+fn grow_both(v: Vec<i64>) -> u64 vow {
+  ensures: result == 2
+} {
+  let n: u64 = v.len();
+  push_pair(v, v);
+  v.len() - n
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  print_u64(grow_both(v));
+  0
+}

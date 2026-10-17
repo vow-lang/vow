@@ -1,0 +1,98 @@
+// TEST: stdout "1 1 1 1 1 1 1 1\n"
+// Regression fixture for #1681: a `Vec<f64>` element is stored in the runtime's 8-byte
+// slot bit for bit, so `push`, `v[i]`, `v[i] = x` and a `for` binding round-trip it
+// exactly, including `-0.0`, an infinity and a NaN (the language has no such literals,
+// so they are built by arithmetic). Floats have no printer, so each result is observed
+// through a comparison. No float literal yields an `f32`, so the `Vec<f32>` functions
+// are compiled but never called.
+module VecFloatElements
+
+struct Samples {
+  xs: Vec<f64>
+}
+
+fn bit(c: bool) -> i64 {
+  if c { 1 } else { 0 }
+}
+
+fn first(x: f64) -> f64 {
+  let v: Vec<f64> = Vec::new();
+  v.push(x);
+  v[0]
+}
+
+fn sum(v: Vec<f64>) -> f64 {
+  let mut acc: f64 = 0.0;
+  for x in v {
+    acc = acc + x;
+  }
+  acc
+}
+
+fn sum_indexed(s: Samples) -> f64 {
+  let mut acc: f64 = 0.0;
+  let mut i: u64 = 0;
+  while i < s.xs.len() {
+    acc = acc + s.xs[i];
+    i = i + 1;
+  }
+  acc
+}
+
+fn overwrite(v: Vec<f64>, x: f64) -> f64 {
+  v[1] = x;
+  v[1]
+}
+
+fn first32(x: f32) -> f32 {
+  let v: Vec<f32> = Vec::new();
+  v.push(x);
+  v[0]
+}
+
+fn sum32(v: Vec<f32>) -> f32 {
+  let mut acc: f32 = v[0];
+  for x in v {
+    acc = acc + x;
+  }
+  v[0] = acc;
+  acc
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<f64> = Vec::new();
+  v.push(1.5);
+  v.push(2.25);
+  v.push(-4.0);
+  let a: i64 = bit(v[0] == 1.5 && v[1] == 2.25 && v[2] == -4.0);
+  let b: i64 = bit(sum(v) == -0.25);
+  let s: Samples = Samples { xs: v };
+  let c: i64 = bit(sum_indexed(s) == -0.25);
+  let d: i64 = bit(overwrite(v, 8.5) == 8.5 && v[1] == 8.5);
+  let zero: f64 = 0.0;
+  let neg_zero: f64 = -zero;
+  let e: i64 = bit(1.0 / first(neg_zero) < 0.0);
+  let inf: f64 = 1.0 / zero;
+  let f: i64 = bit(first(inf) == inf);
+  let nan: f64 = zero / zero;
+  let g: i64 = bit(first(nan) != first(nan));
+  let tenth: f64 = 0.1;
+  let h: i64 = bit(first(tenth) == tenth);
+  print_i64(a);
+  print_str(String::from(" "));
+  print_i64(b);
+  print_str(String::from(" "));
+  print_i64(c);
+  print_str(String::from(" "));
+  print_i64(d);
+  print_str(String::from(" "));
+  print_i64(e);
+  print_str(String::from(" "));
+  print_i64(f);
+  print_str(String::from(" "));
+  print_i64(g);
+  print_str(String::from(" "));
+  print_i64(h);
+  print_str(String::from("\n"));
+  0
+}

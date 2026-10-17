@@ -1,0 +1,96 @@
+module VcWide
+
+use ir
+use ir_dominance
+use vc_ops
+use vc_term
+
+// Model of the 128-bit elements of a `Vec<i128>` or `Vec<u128>` (`vc_vec`). The runtime
+// keeps such an element in two 8-byte slots, so the lowerer reaches it through the
+// address of the element (`push`, `get` or `set` of the `_wide_ptr` helpers, which
+// check the bounds like their one-slot twins) and a two-slot `WideSlot` field access
+// on that address. The model keeps the `Vec`'s array of 64-bit slots and gives
+// element `i` the keys `2i` (low limb) and `2i + 1` (high limb), so the length, the
+// bounds claim, `pop` and the loop cut are the one-slot model's own. An index below
+// the length cannot wrap when doubled (a length is below 2^63).
+//
+// The address is not a term: the executor remembers, for each address a wide call
+// defines, the `Vec` and the element index, and the `WideSlot` read or write on it
+// is a read or write of the two keys. A `push` extends the length and leaves the new
+// element unconstrained until the write that follows it, like `Vec::new`'s contents.
+
+// 1 for every id a wide `Vec` call defines, else 0.
+fn vc_wide_ref_ids(f: IrFunction, n_ids: u64) -> Vec<i64> {
+    let out: Vec<i64> = dom_fill(n_ids, 0);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.id >= 0 && (inst.id as u64) < n_ids && vc_vec_kind_is_wide(vc_inst_vec_kind(inst)) {
+                out[inst.id as u64] = 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    out
+}
+
+// True for an access the model reads or writes an element address through: the
+// first limb pair of the address, as a `FieldGet` result or a `FieldSet` target.
+fn vc_wide_access_ok(inst: IrInst) -> bool {
+    (inst.op == IOP_FIELD_GET() || inst.op == IOP_FIELD_SET()) && inst.dk == IDATA_WIDE_SLOT() && inst.dv == 0
+}
+
+// Gate rule: an element address is used only as the target of a `WideSlot` access,
+// never as a value (a `Phi` operand, a call argument, a stored pointer). "" when
+// every use is one, else the detail of an `unsupported-opcode` skip.
+fn vc_wide_shape_detail(f: IrFunction, n_ids: u64) -> String {
+    let refs: Vec<i64> = vc_wide_ref_ids(f, n_ids);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            let mut a: u64 = 0;
+            while a < inst.args.len() {
+                let id: i64 = inst.args[a];
+                if id >= 0 && (id as u64) < n_ids && refs[id as u64] == 1 {
+                    if a != 0 || !vc_wide_access_ok(inst) {
+                        return String::from("wide Vec element address used as a value");
+                    }
+                }
+                a = a + 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    String::from("")
+}
+
+// Key of the low (`hi` false) or high limb of element `idx`.
+fn vc_wide_key(ar: VcArena, idx: i64, hi: bool) -> i64 {
+    let twice: i64 = vc_tm_app2(ar, VC_OP_BVADD(), idx, idx);
+    if hi { return vc_tm_app2(ar, VC_OP_BVADD(), twice, vc_tm_bv(ar, 64, 1, 0)); }
+    twice
+}
+
+// The 128-bit value of element `idx` of the array term `arr`.
+fn vc_wide_read(ar: VcArena, arr: i64, idx: i64) -> i64 {
+    let lo: i64 = vc_tm_app2(ar, VC_OP_SELECT(), arr, vc_wide_key(ar, idx, false));
+    let hi: i64 = vc_tm_app2(ar, VC_OP_SELECT(), arr, vc_wide_key(ar, idx, true));
+    vc_tm_app2(ar, VC_OP_CONCAT(), hi, lo)
+}
+
+// The array `arr` with element `idx` replaced by the 128-bit term `val`.
+fn vc_wide_write(ar: VcArena, arr: i64, idx: i64, val: i64) -> i64 {
+    let lo: i64 = vc_tm_ext(ar, VC_EXT_LOW(), 64, val);
+    let high: i64 = vc_tm_app2(ar, VC_OP_BVLSHR(), val, vc_tm_bv(ar, 128, 64, 0));
+    let hi: i64 = vc_tm_ext(ar, VC_EXT_LOW(), 64, high);
+    let low_stored: i64 = vc_tm_app3(ar, VC_OP_STORE(), arr, vc_wide_key(ar, idx, false), lo);
+    vc_tm_app3(ar, VC_OP_STORE(), low_stored, vc_wide_key(ar, idx, true), hi)
+}

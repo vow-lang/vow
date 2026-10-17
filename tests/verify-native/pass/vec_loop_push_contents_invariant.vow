@@ -1,0 +1,23 @@
+// TEST: category invariant
+// The loop pushes contents as well as length; the invariant keeps the length
+// fact ahead of the guarded read so the read is in bounds.
+module VecLoopPushContentsInvariant
+
+fn fill() -> Vec<i64> vow {
+  ensures: result.len() == 100 && result[0] == 7
+} {
+  let v: Vec<i64> = Vec::new();
+  let mut i: u64 = 0;
+  while i < 100 vow {
+    invariant: i <= 100 && v.len() == i && (i == 0 || v[0] == 7)
+  } {
+    v.push(7);
+    i = i + 1;
+  }
+  v
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill().len());
+  0
+}

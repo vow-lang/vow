@@ -1,0 +1,20 @@
+// TEST: unknown-reason opaque builtin result
+// `parse_u8` is a total function of its string, but the model does not say which: the Some flag
+// and the payload are fresh constants (of the width of `u8`). A counterexample that needs the
+// payload to be a particular value above 99 is not a run the program can be shown to have, and the
+// claim holds for most results, so it is inconclusive: unknown, never a proof and never a
+// counterexample.
+module ParseValueOpaque
+
+fn parsed_is_small(s: String) -> bool vow {
+  ensures: result == true
+} {
+  match parse_u8(s) {
+    Option::Some(v) => v < 100u8,
+    Option::None => true,
+  }
+}
+
+fn main() -> i32 [io] {
+  if parsed_is_small(String::from("7")) { 0 } else { 1 }
+}

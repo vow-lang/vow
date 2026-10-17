@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "span"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The callee's struct has `lo` and `hi` in the order built, so swapping them is refuted.
+module InlineStructResultWrong
+
+struct P { lo: i64, hi: i64 }
+
+fn make(lo: i64, hi: i64) -> P {
+  P { lo: lo, hi: hi }
+}
+
+fn span(lo: i64, hi: i64) -> i64 vow {
+  ensures: result == lo - hi
+} {
+  let p: P = make(lo, hi);
+  p.hi - p.lo
+}
+
+fn main() -> i32 [io] {
+  print_i64(span(1, 4));
+  0
+}

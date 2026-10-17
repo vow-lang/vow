@@ -1,0 +1,22 @@
+// A pointer stored into a `Vec` that is one of two the function built, chosen by a branch:
+// the receiver is a Phi merging two allocations, and the function also reads memory through a
+// handle (`a.names.len()`).
+module VecPointerStorePhiBuiltVec
+
+struct Bag { names: Vec<String> }
+
+fn total(a: Bag, s: String, left: bool) -> u64 vow {
+  ensures: result == a.names.len() + 1
+} {
+  let x: Vec<String> = Vec::new();
+  let y: Vec<String> = Vec::new();
+  let out: Vec<String> = if left { x } else { y };
+  out.push(s);
+  a.names.len() + out.len()
+}
+
+fn main() -> i32 [io] {
+  let a: Bag = Bag { names: Vec::new() };
+  print_u64(total(a, String::from("a"), true));
+  0
+}

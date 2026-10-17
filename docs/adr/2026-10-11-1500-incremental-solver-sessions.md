@@ -101,3 +101,64 @@ round) instead of 36.
   session and the only source of models.
 - Follow-up: prefix-stable unrolling so one session spans the bounds of a
   schedule (decision 6).
+
+## Addendum (issue #1684): no session ask behind a quantifier binder
+
+A scoped check (`push`, `check-sat`, `pop`) on a query that holds a `String`
+quantifier binder (`VC_T_QEQ`, `VC_T_QLT`, `VC_T_QDIFF`) is far slower in
+Bitwuzla than the same query asked once. On
+`tests/verify-native/fail/string_append_wrong_byte.vow` the session's `sat` on
+the hard claim took 0.3 to 0.8 s, then was discarded for the standalone query,
+which Bitwuzla decides in about 5 ms (`VOW_VERIFY_NO_INCREMENTAL=1` took the run
+from about 0.8 s to 0.09 s). The cause is the session, not the `String`
+encoding.
+
+A session therefore never asks a claim whose prefix holds a binder
+(`vc_claims_first_binder` gives the index of the first such assumption;
+`vc_session_admits` is the test). Those claims take the standalone sliced path
+exactly as with `VOW_VERIFY_NO_INCREMENTAL=1`; claims before the first binder
+still share the session. `vc_session_wanted` counts only admitted claims.
+Verdicts and counterexamples are unchanged: a session `sat` on a hard claim was
+never used, and `unsat` is decided by the same solver on the same assertions.
+
+## Addendum (issue #1745): the last claim of a round is hedged
+
+The last claim of a round that needs a solver is the one claim a session cannot
+help afterwards: nothing follows it to reuse what the solver learnt, and a `sat`
+on a hard claim is thrown away for the standalone query. On a query that an
+incremental Bitwuzla rewrites as it is asserted it can take about twice what a
+fresh process does: for `tests/verify-native/fail/int_to_string_wrong_first_digit.vow`
+the scoped `sat` took 0.17 s and was re-decided standalone in 0.09 s, so the row
+ran 2.2x slower than ESBMC. Replaying the captured session script offline
+reproduced the gap, which closes with `--rewrite-level 1`: it is the rewriting of
+the incrementally asserted prefix, not the search.
+
+Neither a static rule nor a deadline predicts which side wins. Skipping the
+session for that claim loses on claims the session settles sooner than a fresh
+process (an `unsat` on 64-bit division, where the solver reuses the circuits of
+the claims before it: `unsigned_div`, `mul_division_guard`), and a probe window
+that kills the session charges those claims the window plus a fresh solve. The
+last claim is therefore **hedged**: the session gets `vc_session_hedge_window_ms`
+(10 ms, a few times what starting a process costs); a reply that has not come by
+then is left outstanding and a fresh process is asked the same full query beside
+it (`vc_check_claim_race`). The first final answer stands:
+
+- a session `unsat`, or its `sat` on a soft claim, ends the standalone process;
+- a standalone answer of any kind ends the session (nothing follows the claim);
+- any other session reply (`unknown`, a malformed reply, a hard `sat`) leaves the
+  standalone process to decide, as after a session `sat` today;
+- both are abandoned when the claim's budget is spent.
+
+Models, hence counterexamples, still come only from the standalone full query, so
+reports are byte-identical with and without the hedge. A claim the session
+answers inside the window starts no second process. The cost is CPU, not time:
+while both run, the slower one is wasted work.
+
+Measured on the 511-fixture native corpus (`vowc verify --backend native
+--no-cache`, min of 3 interleaved runs, host load 7 to 11, same sources and
+runtime): `int_to_string_wrong_first_digit` 0.289 s to 0.136 s (ESBMC 0.209 s),
+`loop_symbolic_body_bound_16` 0.330 s to 0.094 s; no fixture is more than 1.25x
+slower than before or than with `VOW_VERIFY_NO_INCREMENTAL=1`, and all 511
+outputs are byte-identical. User plus system CPU rises on `mul_division_guard`
+(0.43 s to 0.75 s) and `unsigned_div` (0.06 s to 0.11 s), whose last claim the
+session answers a little after the window.

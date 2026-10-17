@@ -1,7 +1,6 @@
 module VcAgg
 
 use ir
-use ir_dominance
 use vc_term
 use vc_smt
 use vc_flow
@@ -12,14 +11,16 @@ use vc_flow
 // construction and `match` reduce to the i64/Bool terms the executor already
 // handles.
 //
-// Three kinds of object exist. An allocation (`RegionAlloc`) starts with no
+// Four kinds of object exist. An allocation (`RegionAlloc`) starts with no
 // field values and is written by `FieldSet`; a parameter's fields are
 // per-parameter symbols; a pointer Phi is the `ite` over its incoming objects.
 // A field nothing wrote is a fresh unconstrained constant, never 0: it is what
 // the other arm of a `Some`/`None` merge would leave in the payload slot. Slots
-// are read lazily, so a parameter needs no layout. A slot is keyed by index and
-// sort (Bool or a bit-vector width), because one enum slot can hold an i64
-// payload in one variant and a Bool in another. A 128-bit value is one term of
+// are read lazily, so a parameter needs no layout. A child is the object a
+// parameter holds in a pointer slot (the payload of an enum, `Option` or `Result`
+// parameter), one per parent and slot, whose own slots are symbols too. A slot is
+// keyed by index and sort (Bool or a bit-vector width), because one enum slot can
+// hold an i64 payload in one variant and a Bool in another. A 128-bit value is one term of
 // sort 128 that occupies slots `idx` and `idx + 1`.
 //
 // A write at path condition `pc` stores `ite(pc, new, old)`. This is exact
@@ -30,12 +31,27 @@ use vc_flow
 // walk order is the object's state on whichever path is taken. A write whose
 // path condition is the one the object was created under, or `true`, has no
 // observable old value and replaces the slot. The gate
-// (`vc_agg_shape_detail`) allows a `FieldSet` only on an allocation or a
-// parameter; mutation of anything else is `Skipped`, never guessed at.
+// (`vc_agg_shape_detail`) allows a `FieldSet` only on an allocation, a
+// parameter or a merge of them; mutation of anything else is `Skipped`, never
+// guessed at.
+//
+// A write through a pointer Phi reaches each object the merge may stand for,
+// under the condition of the edge that supplies it. Parameters may be one object:
+// when the function writes through a parameter and several parameters are
+// aggregates (`vc_agg_alias_params`), each such parameter carries a free
+// identity (an 8-bit bit-vector, `alias` in a counterexample) and two are the
+// same object exactly when their identities are equal, so the relation is an
+// equivalence by construction. A parameter's initial slot is then the initial
+// symbol of the first parameter with its identity, and a write to one parameter
+// is also applied, under the identity test, to every other.
 
 fn VC_OBJ_ALLOC() -> i64 { 0 }
 fn VC_OBJ_PARAM() -> i64 { 1 }
 fn VC_OBJ_PHI() -> i64 { 2 }
+fn VC_OBJ_CHILD() -> i64 { 3 }
+
+// Slot number of a parameter's identity in the parameter-symbol tables.
+fn VC_ALIAS_SLOT() -> i64 { -2 }
 
 struct VcAgg {
     fl: VcFlow,
@@ -55,6 +71,11 @@ struct VcAgg {
     ps_sort: Vec<i64>,
     ps_ty: Vec<i64>,
     ps_hdr: Vec<i64>,
+    ps_obj: Vec<i64>,
+    ps_name: Vec<String>,
+    ps_path: Vec<String>,
+    al_params: Vec<i64>,
+    al_ids: Vec<i64>,
     junk: i64,
 }
 
@@ -79,12 +100,18 @@ fn vc_agg_new(fl: VcFlow) -> VcAgg {
         ps_sort: Vec::new(),
         ps_ty: Vec::new(),
         ps_hdr: Vec::new(),
+        ps_obj: Vec::new(),
+        ps_name: Vec::new(),
+        ps_path: Vec::new(),
+        al_params: Vec::new(),
+        al_ids: Vec::new(),
         junk: 0,
     }
 }
 
-// `owner` is the parameter index of a parameter object and the block of a Phi
-// object (whose Phi is `phi`); -1 otherwise. `births` is the path condition an
+// `owner` is the parameter index of a parameter object, the block of a Phi
+// object (whose Phi is `phi`) and the parent object of a child (whose slot in it
+// is `phi`); -1 otherwise. `births` is the path condition an
 // allocation was created under; -1 for every other kind.
 fn vc_agg_push_obj(ag: VcAgg, kind: i64, owner: i64, phi: i64) -> i64 {
     let id: i64 = ag.kinds.len() as i64;
@@ -113,6 +140,44 @@ fn vc_agg_param(ag: VcAgg, k: i64) -> i64 {
         o = o + 1;
     }
     vc_agg_push_obj(ag, VC_OBJ_PARAM(), k, -1)
+}
+
+// The object held in pointer slot `slot` of the parameter or child `parent`: one
+// per slot, so two reads of a slot see the same fields.
+fn vc_agg_child(ag: VcAgg, parent: i64, slot: i64) -> i64 {
+    let mut o: u64 = 0;
+    while o < ag.kinds.len() {
+        if ag.kinds[o] == VC_OBJ_CHILD() && ag.owners[o] == parent && ag.phis[o] == slot {
+            return o as i64;
+        }
+        o = o + 1;
+    }
+    vc_agg_push_obj(ag, VC_OBJ_CHILD(), parent, slot)
+}
+
+// True when `obj` is memory the function was given or may be (a parameter, a child of one, or a
+// merge), not an object the function allocated.
+fn vc_agg_is_param(ag: VcAgg, obj: i64) -> bool {
+    obj >= 0 && ag.kinds[obj as u64] != VC_OBJ_ALLOC()
+}
+
+// The parameter a parameter or child object belongs to.
+fn vc_agg_root_param(ag: VcAgg, obj: i64) -> i64 {
+    let mut o: i64 = obj;
+    while ag.kinds[o as u64] == VC_OBJ_CHILD() {
+        o = ag.owners[o as u64];
+    }
+    ag.owners[o as u64]
+}
+
+// ".<slot>" of each step from the parameter down to child `obj`, as a
+// counterexample names it (`o.1` is slot 1 of `o`, `o.1.0` slot 0 of what it holds).
+fn vc_agg_child_path(ag: VcAgg, obj: i64) -> String {
+    if ag.kinds[obj as u64] != VC_OBJ_CHILD() { return String::from(""); }
+    let out: String = vc_agg_child_path(ag, ag.owners[obj as u64]);
+    out.push_str(String::from("."));
+    out.push_str(i64_to_string(ag.phis[obj as u64]));
+    out
 }
 
 fn vc_agg_find(ag: VcAgg, obj: i64, idx: i64, sort: i64) -> i64 {
@@ -169,10 +234,58 @@ fn vc_agg_set(ag: VcAgg, obj: i64, idx: i64, sort: i64, term: i64) {
 }
 
 // Writes `term` into slot `idx` of `obj` when the block runs under `pc`. A write
-// that always runs once the object exists replaces the slot; any other keeps the
-// old value on the paths that skip it, and every other view the write covers
-// becomes unconstrained on the paths that take it.
+// through a Phi reaches every object the merge may stand for, and one through an
+// aliasable parameter every parameter that may be the same object.
 fn vc_agg_write(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, sort: i64, term: i64, pc: i64) {
+    let kind: i64 = ag.kinds[obj as u64];
+    let pos: i64 = { if kind == VC_OBJ_PARAM() { vc_agg_alias_pos(ag, ag.owners[obj as u64]) } else { -1 } };
+    if kind == VC_OBJ_PHI() {
+        vc_agg_write_phi(ag, ar, hdr, obj, idx, sort, term, pc);
+    } else if pos >= 0 {
+        vc_agg_write_aliased(ag, ar, hdr, pos, idx, sort, term, pc);
+    } else {
+        vc_agg_write_one(ag, ar, hdr, obj, idx, sort, term, pc);
+    }
+}
+
+// A loop cut's havoc of slot `idx` of `obj` at `sort` (`__vc_havoc_field`): the slot
+// takes a fresh unconstrained constant on every path that reaches the marker's
+// block, through the same reach as a write (every object a Phi merges, every
+// parameter that may be the same object).
+fn vc_agg_havoc(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, sort: i64, pc: i64) {
+    vc_agg_write(ag, ar, hdr, obj, idx, sort, vc_agg_junk(ag, ar, hdr, sort), pc);
+}
+
+// The write to each object a Phi merges, under `pc` and the condition of the edge
+// that supplies the object.
+fn vc_agg_write_phi(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, sort: i64, term: i64, pc: i64) {
+    let fl: VcFlow = ag.fl;
+    let phi: i64 = ag.phis[obj as u64];
+    let mut e: i64 = fl.in_head[ag.owners[obj as u64] as u64];
+    while e >= 0 {
+        let child: i64 = vc_flow_upsilon_from(fl, phi, fl.e_src[e as u64]);
+        vc_agg_write(ag, ar, hdr, child, idx, sort, term, vc_flow_and(fl, ar, hdr, pc, fl.e_cond[e as u64]));
+        e = fl.e_next[e as u64];
+    }
+}
+
+// The write to the aliasable parameter at position `pos`, and to each other one
+// when the two identities are equal.
+fn vc_agg_write_aliased(ag: VcAgg, ar: VcArena, hdr: SmtScript, pos: i64, idx: i64, sort: i64, term: i64, pc: i64) {
+    let mut i: i64 = 0;
+    while i < ag.al_params.len() as i64 {
+        let o: i64 = vc_agg_param(ag, ag.al_params[i as u64]);
+        let at: i64 = { if i == pos { pc } else { vc_flow_and(ag.fl, ar, hdr, pc, vc_agg_same_object(ag, ar, hdr, pos, i)) } };
+        vc_agg_write_one(ag, ar, hdr, o, idx, sort, term, at);
+        i = i + 1;
+    }
+}
+
+// Writes `term` into slot `idx` of the allocation or parameter `obj` when the
+// block runs under `pc`. A write that always runs once the object exists replaces
+// the slot; any other keeps the old value on the paths that skip it, and every
+// other view the write covers becomes unconstrained on the paths that take it.
+fn vc_agg_write_one(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, sort: i64, term: i64, pc: i64) {
     if vc_tm_is_true(ar, pc) || pc == ag.births[obj as u64] {
         vc_agg_set(ag, obj, idx, sort, term);
         return;
@@ -208,6 +321,10 @@ fn vc_agg_junk(ag: VcAgg, ar: VcArena, hdr: SmtScript, sort: i64) -> i64 {
 fn vc_agg_symbol_name(k: i64, idx: i64, sort: i64) -> String {
     let name: String = String::from("p");
     name.push_str(i64_to_string(k));
+    if idx == VC_ALIAS_SLOT() {
+        name.push_str(String::from("alias"));
+        return name;
+    }
     name.push_str(String::from("f"));
     name.push_str(i64_to_string(idx));
     name.push_str(String::from("s"));
@@ -215,17 +332,114 @@ fn vc_agg_symbol_name(k: i64, idx: i64, sort: i64) -> String {
     name
 }
 
-// Declares the symbol of slot `idx` of parameter `k` at `sort` and records it
-// (`ps_*`, in declaration order) so a counterexample can read it back: `ps_hdr`
-// is its position in the header, `ps_ty` is filled in by the caller that knows
-// the IR type of the read.
-fn vc_agg_param_symbol(ag: VcAgg, ar: VcArena, hdr: SmtScript, k: i64, idx: i64, sort: i64) -> i64 {
+// Declares the symbol `name` for slot `idx` of the parameter `k` (or of its child
+// object `obj`, whose path from the parameter is `path`) at `sort` and records it
+// (`ps_*`, in declaration order) so a counterexample can read it back: `ps_hdr` is
+// its position in the header, `ps_ty` is filled in by the caller that knows the IR
+// type of the read.
+fn vc_agg_push_symbol(ag: VcAgg, ar: VcArena, hdr: SmtScript, k: i64, idx: i64, sort: i64, name: String, obj: i64, path: String) -> i64 {
     ag.ps_param.push(k);
     ag.ps_slot.push(idx);
     ag.ps_sort.push(sort);
     ag.ps_ty.push(-1);
     ag.ps_hdr.push(hdr.kinds.len() as i64);
-    vc_agg_declare(ar, hdr, vc_agg_symbol_name(k, idx, sort), sort)
+    ag.ps_obj.push(obj);
+    ag.ps_name.push(name);
+    ag.ps_path.push(path);
+    vc_agg_declare(ar, hdr, name, sort)
+}
+
+fn vc_agg_param_symbol(ag: VcAgg, ar: VcArena, hdr: SmtScript, k: i64, idx: i64, sort: i64) -> i64 {
+    vc_agg_push_symbol(ag, ar, hdr, k, idx, sort, vc_agg_symbol_name(k, idx, sort), -1, String::from(""))
+}
+
+// The symbol of slot `idx` of child object `obj` at `sort`, declared on first use.
+fn vc_agg_child_symbol(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, sort: i64) -> i64 {
+    let mut i: u64 = 0;
+    while i < ag.ps_obj.len() {
+        if ag.ps_obj[i] == obj && ag.ps_slot[i] == idx && ag.ps_sort[i] == sort {
+            return vc_tm_var(ar, ag.ps_name[i]);
+        }
+        i = i + 1;
+    }
+    let k: i64 = vc_agg_root_param(ag, obj);
+    let name: String = String::from("p");
+    name.push_str(i64_to_string(k));
+    name.push_str(String::from("c"));
+    name.push_str(i64_to_string(obj));
+    name.push_str(String::from("f"));
+    name.push_str(i64_to_string(idx));
+    name.push_str(String::from("s"));
+    name.push_str(i64_to_string(sort));
+    vc_agg_push_symbol(ag, ar, hdr, k, idx, sort, name, obj, vc_agg_child_path(ag, obj))
+}
+
+// Declares the identity of each parameter in `params` (ascending indices of the
+// parameters that may be one object), when there is more than one. 8 bits tell
+// up to 256 parameters apart, 64 any more.
+fn vc_agg_enable_alias(ag: VcAgg, ar: VcArena, hdr: SmtScript, params: Vec<i64>) {
+    if params.len() < 2 { return; }
+    let sort: i64 = { if params.len() <= 256 { 8 } else { 64 } };
+    let ty: i64 = { if sort == 8 { ITY_U8() } else { ITY_U64() } };
+    let mut i: u64 = 0;
+    while i < params.len() {
+        ag.al_ids.push(vc_agg_param_symbol(ag, ar, hdr, params[i], VC_ALIAS_SLOT(), sort));
+        ag.ps_ty[ag.ps_ty.len() - 1] = ty;
+        ag.al_params.push(params[i]);
+        i = i + 1;
+    }
+}
+
+// Position of parameter `k` among the aliasable ones, or -1.
+fn vc_agg_alias_pos(ag: VcAgg, k: i64) -> i64 {
+    let mut i: u64 = 0;
+    while i < ag.al_params.len() {
+        if ag.al_params[i] == k { return i as i64; }
+        i = i + 1;
+    }
+    -1
+}
+
+// The Bool term "the aliasable parameters at positions `i` and `j` are one object".
+fn vc_agg_same_object(ag: VcAgg, ar: VcArena, hdr: SmtScript, i: i64, j: i64) -> i64 {
+    vc_flow_name(ag.fl, ar, hdr, VC_SORT_BOOL(), vc_tm_app2(ar, VC_OP_EQ(), ag.al_ids[i as u64], ag.al_ids[j as u64]))
+}
+
+// The symbol of slot `idx` of parameter `k` at `sort`, declared on first use.
+fn vc_agg_own_symbol(ag: VcAgg, ar: VcArena, hdr: SmtScript, k: i64, idx: i64, sort: i64) -> i64 {
+    let mut i: u64 = 0;
+    while i < ag.ps_param.len() {
+        if ag.ps_param[i] == k && ag.ps_obj[i] < 0 && ag.ps_slot[i] == idx && ag.ps_sort[i] == sort {
+            return vc_tm_var(ar, vc_agg_symbol_name(k, idx, sort));
+        }
+        i = i + 1;
+    }
+    vc_agg_param_symbol(ag, ar, hdr, k, idx, sort)
+}
+
+// Initial value of slot `idx` of parameter `k` at `sort`: its own symbol, unless
+// it is the same object as an earlier aliasable parameter, when it is the symbol
+// of the first parameter with its identity (the lowest position equal to it).
+fn vc_agg_param_initial(ag: VcAgg, ar: VcArena, hdr: SmtScript, k: i64, idx: i64, sort: i64) -> i64 {
+    let pos: i64 = vc_agg_alias_pos(ag, k);
+    let mut acc: i64 = vc_agg_own_symbol(ag, ar, hdr, k, idx, sort);
+    let mut j: i64 = pos - 1;
+    while j >= 0 {
+        let first: i64 = vc_agg_own_symbol(ag, ar, hdr, ag.al_params[j as u64], idx, sort);
+        acc = vc_tm_app3(ar, VC_OP_ITE(), vc_agg_same_object(ag, ar, hdr, j, pos), first, acc);
+        j = j - 1;
+    }
+    if pos > 0 { vc_flow_name(ag.fl, ar, hdr, sort, acc) } else { acc }
+}
+
+// Gives the parameter symbols declared since the first `seen` the IR type `ty` of
+// the access that declared them, which is what a counterexample prints them as.
+fn vc_agg_type_symbols(ag: VcAgg, seen: u64, ty: i64) {
+    let mut j: u64 = seen;
+    while j < ag.ps_param.len() {
+        ag.ps_ty[j] = ty;
+        j = j + 1;
+    }
 }
 
 // Term of slot `idx` of `obj` at `sort` at the current point of the walk. A slot
@@ -240,7 +454,9 @@ fn vc_agg_get(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, sort: 
     }
     let t: i64 = {
         if kind == VC_OBJ_PARAM() && s < 0 {
-            vc_agg_param_symbol(ag, ar, hdr, ag.owners[obj as u64], idx, sort)
+            vc_agg_param_initial(ag, ar, hdr, ag.owners[obj as u64], idx, sort)
+        } else if kind == VC_OBJ_CHILD() && s < 0 {
+            vc_agg_child_symbol(ag, ar, hdr, obj, idx, sort)
         } else if kind == VC_OBJ_PHI() {
             // Named like a scalar Phi: merges of merges would otherwise print
             // every shared subterm once per use and grow exponentially.
@@ -289,56 +505,4 @@ fn vc_agg_phi(ag: VcAgg, bi: u64, phi_id: i64) -> i64 {
         e = fl.e_next[e as u64];
     }
     base
-}
-
-// Gate rule for writes: a `FieldSet` must target a `RegionAlloc` or a pointer
-// parameter. A write through a merged object would have to reach every object
-// the merge may stand for, and a parameter may be the very object another
-// parameter names, so neither is modelled. "" when every write is, else the
-// detail of an `unsupported-opcode` skip. `n_ids` is the size of the
-// instruction-id space.
-fn vc_agg_shape_detail(f: IrFunction, n_ids: u64) -> String {
-    let def_op: Vec<i64> = dom_fill(n_ids, -1);
-    let mut bi: u64 = 0;
-    while bi < f.blocks.len() {
-        let blk: IrBlock = f.blocks[bi];
-        let mut ii: u64 = 0;
-        while ii < blk.insts.len() {
-            let inst: IrInst = blk.insts[ii];
-            if inst.id >= 0 {
-                def_op[inst.id as u64] = inst.op;
-            }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    let mut n_ptr_params: i64 = 0;
-    let mut pi: u64 = 0;
-    while pi < f.params.len() {
-        if f.params[pi] == ITY_PTR() { n_ptr_params = n_ptr_params + 1; }
-        pi = pi + 1;
-    }
-    bi = 0;
-    while bi < f.blocks.len() {
-        let blk: IrBlock = f.blocks[bi];
-        let mut ii: u64 = 0;
-        while ii < blk.insts.len() {
-            let inst: IrInst = blk.insts[ii];
-            if inst.op == IOP_FIELD_SET() {
-                let op: i64 = def_op[inst.args[0] as u64];
-                if op == IOP_PHI() {
-                    return String::from("FieldSet through a merged value");
-                }
-                if op == IOP_GET_ARG() && n_ptr_params > 1 {
-                    return String::from("FieldSet on a parameter that may alias another parameter");
-                }
-                if op != IOP_REGION_ALLOC() && op != IOP_GET_ARG() {
-                    return String::from("FieldSet on a value that is neither an allocation nor a parameter");
-                }
-            }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    String::from("")
 }

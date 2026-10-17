@@ -1,0 +1,24 @@
+// TEST: counterexample-fn "wrong_neighbour"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// Writing element 1 does change element 1 and nothing else, so claiming it also
+// changes element 0 is refuted; the refutation needs the model to keep the two
+// limbs of different elements apart.
+module WideVecLimbSwapWrong
+
+fn wrong_neighbour(v: Vec<u128>, x: u128) -> bool vow {
+  requires: v.len() > 1,
+  ensures: !result
+} {
+  let before: u128 = v[0];
+  v[1] = x;
+  v[0] == before
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<u128> = Vec::new();
+  v.push(1);
+  v.push(2);
+  if wrong_neighbour(v, 5) { print_i64(1); }
+  0
+}

@@ -1,0 +1,88 @@
+module VcMapops
+
+use ir
+
+// The native verifier's `HashMap`/`BTreeMap` op table, keyed by runtime symbol
+// (ADR-2026-10-08-1422, rule 3 and its #1678 addendum). The two maps share one
+// model: the runtime has no iteration API, so the order of a `BTreeMap` and the
+// slot a `HashMap` key hashes to are never observable, and both are a finite
+// partial function from keys to values. Only the result of `insert` differs: a
+// `HashMap`'s is unit, a `BTreeMap`'s the `Option` of the value it replaced.
+// Like the `Vec` operations these are not catalogue entries (they have no
+// grammar row of their own); a map symbol not listed here is an unmodelled
+// builtin.
+
+fn VC_MAP_NONE() -> i64 { 0 }
+fn VC_MAP_NEW() -> i64 { 1 }
+fn VC_MAP_LEN() -> i64 { 2 }
+fn VC_MAP_INSERT() -> i64 { 3 }
+fn VC_MAP_INSERT_OLD() -> i64 { 4 }
+fn VC_MAP_GET() -> i64 { 5 }
+fn VC_MAP_CONTAINS() -> i64 { 6 }
+fn VC_MAP_REMOVE() -> i64 { 7 }
+
+fn VC_MAP_HASH_PREFIX() -> String { String::from("__vow_map_") }
+fn VC_MAP_BTREE_PREFIX() -> String { String::from("__vow_btreemap_") }
+
+// The kind of an operation named `op` (the symbol after its prefix), or
+// `VC_MAP_NONE`. `insert` is the one operation whose kind depends on the map.
+fn vc_map_suffix_kind(op: String, btree: bool) -> i64 {
+    if op == String::from("new") { return VC_MAP_NEW(); }
+    if op == String::from("len") { return VC_MAP_LEN(); }
+    if op == String::from("get") { return VC_MAP_GET(); }
+    if op == String::from("contains") { return VC_MAP_CONTAINS(); }
+    if op == String::from("insert") {
+        if btree { return VC_MAP_INSERT_OLD(); }
+        return VC_MAP_INSERT();
+    }
+    if op == String::from("remove") && !btree { return VC_MAP_REMOVE(); }
+    VC_MAP_NONE()
+}
+
+// Holds when `sym` is `prefix` followed by at least one more byte.
+fn vc_sym_has_prefix(sym: String, prefix: String) -> bool {
+    sym.len() > prefix.len() && string_starts_with(sym, prefix) == 1
+}
+
+fn vc_map_op_kind(sym: String) -> i64 {
+    let hp: String = VC_MAP_HASH_PREFIX();
+    if vc_sym_has_prefix(sym, hp) {
+        return vc_map_suffix_kind(sym.substring(hp.len(), sym.len()), false);
+    }
+    let bp: String = VC_MAP_BTREE_PREFIX();
+    if vc_sym_has_prefix(sym, bp) {
+        return vc_map_suffix_kind(sym.substring(bp.len(), sym.len()), true);
+    }
+    VC_MAP_NONE()
+}
+
+// The map operation an instruction is, or `VC_MAP_NONE`.
+fn vc_inst_map_kind(inst: IrInst) -> i64 {
+    if inst.op != IOP_CALL() || inst.dk != IDATA_CALL_EXTERN() { return VC_MAP_NONE(); }
+    vc_map_op_kind(inst.ds)
+}
+
+// True for a `BTreeMap` operation, whose key is always `i64`.
+fn vc_inst_is_btree_op(inst: IrInst) -> bool {
+    vc_sym_has_prefix(inst.ds, VC_MAP_BTREE_PREFIX())
+}
+
+// An operation that changes the key set or a value of the map its first operand
+// names: the loop cut havocs the map a loop mutates.
+fn vc_map_kind_mutates(k: i64) -> bool {
+    k == VC_MAP_INSERT() || k == VC_MAP_INSERT_OLD() || k == VC_MAP_REMOVE()
+}
+
+// An operation whose result is a freshly built `Option` aggregate.
+fn vc_map_kind_returns_option(k: i64) -> bool {
+    k == VC_MAP_GET() || k == VC_MAP_INSERT_OLD()
+}
+
+// A loop cut (`vc_induct`) puts one at the top of a loop header proper for each
+// map the loop writes: its operand's state becomes an arbitrary map for the rest
+// of the header, the way a `Vec`'s does (`__vc_havoc_vec`).
+fn VC_INTERNAL_HAVOC_MAP() -> String { String::from("__vc_havoc_map") }
+
+fn vc_is_havoc_map(inst: IrInst) -> bool {
+    inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == VC_INTERNAL_HAVOC_MAP()
+}

@@ -1,0 +1,11 @@
+// TEST: error-code UnexpectedToken
+// TEST: error-count 4
+module EnumTuplePayloadKeyword
+
+enum Shape {
+    Circle(where),
+}
+
+fn main() -> i32 {
+    0
+}

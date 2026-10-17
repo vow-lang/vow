@@ -1,0 +1,36 @@
+// Getters return a `String` or a `Vec` read out of a field or an element: the IR types such a
+// value `i64` (a handle), so the callee's `Return` carries a handle where its signature says
+// `String`. Every read of the result is a read of the memory the handle names.
+module HandleReturnGetter
+
+struct Person { name: String, tags: Vec<String> }
+
+fn name_of(p: Person) -> String {
+  p.name
+}
+
+fn name_length(p: Person) -> u64 vow {
+  ensures: result == p.name.len()
+} {
+  name_of(p).len()
+}
+
+fn first_tag(v: Vec<String>) -> String vow {
+  requires: v.len() >= 1
+  ensures: result.len() == v[0].len()
+} {
+  v[0]
+}
+
+fn first_tag_length(p: Person) -> u64 vow {
+  requires: p.tags.len() >= 1
+  ensures: result == p.tags[0].len()
+} {
+  first_tag(p.tags).len()
+}
+
+fn main() -> i32 [io] {
+  let p: Person = Person { name: String::from("ada"), tags: Vec::new() };
+  print_u64(name_length(p));
+  0
+}

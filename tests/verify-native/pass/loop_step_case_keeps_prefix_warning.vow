@@ -1,0 +1,21 @@
+// TEST: warning ArithOverflowReachable
+// The loop has no invariant, so the k-induction step case proves `result >= n` for every trip
+// count; the checked add before the loop is still reported, since ending the search for warnings
+// early must never drop a site the unrolled round found.
+module LoopStepCaseKeepsPrefixWarning
+
+fn spin(n: u64, x: i64) -> u64 vow {
+  ensures: result >= n
+} {
+  let _first: i64 = x +! 1;
+  let mut i: u64 = 0;
+  while i < n {
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  print_u64(spin(3, 0));
+  0
+}

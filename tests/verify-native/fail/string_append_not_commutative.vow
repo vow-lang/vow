@@ -1,0 +1,17 @@
+// TEST: counterexample-fn "commutes"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures result == true"
+module StringAppendNotCommutative
+
+// The ground read of a built string keeps the equality exact: swapping the operands
+// is a different string, so the verifier refutes it.
+fn commutes(a: String, b: String) -> bool vow {
+  ensures: result == true
+} {
+  let x: String = String::from(a);
+  x.push_str(b);
+  let y: String = String::from(b);
+  y.push_str(a);
+  x.eq(y)
+}

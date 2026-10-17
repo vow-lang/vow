@@ -1,0 +1,26 @@
+module HeapStructBuiltWithVecFields
+
+struct Pair { ids: Vec<i64>, names: Vec<i64> }
+
+fn copy_pair(ids: Vec<i64>, names: Vec<i64>) -> Pair {
+  let out_ids: Vec<i64> = Vec::new();
+  let out_names: Vec<i64> = Vec::new();
+  let mut i: u64 = 0;
+  while i < ids.len() vow {
+    invariant: i <= ids.len()
+  } {
+    out_ids.push(ids[i]);
+    i = i + 1;
+  }
+  out_names.push(names.len() as i64);
+  Pair { ids: out_ids, names: out_names }
+}
+
+fn main() -> i32 [io] {
+  let ids: Vec<i64> = Vec::new();
+  ids.push(1);
+  let names: Vec<i64> = Vec::new();
+  let p: Pair = copy_pair(ids, names);
+  print_i64(p.ids.len() as i64);
+  0
+}

@@ -1,0 +1,38 @@
+// TEST: summary-expect proven
+// TEST: summary-budget 300
+fn small(x: i64) -> bool {
+    x >= 0 && x < 1000
+}
+
+fn inc(x: i64, n: i64) -> i64 vow {
+    requires: small(x),
+    ensures: small(result) && result >= 1
+} {
+    let p1: i64 = n & 255;
+    let p2: i64 = (n / 2) & 255;
+    let p3: i64 = (p1 + p2) & 255;
+    let p4: i64 = (p3 * 3) & 255;
+    let p5: i64 = (p4 + p1) & 255;
+    let p6: i64 = (p5 + p2) & 255;
+    let p7: i64 = (p6 * 5 + p1) & 255;
+    let p8: i64 = (p7 + p6 + p5) & 255;
+    let p9: i64 = (p8 * 7 + p4) & 255;
+    let p10: i64 = (p9 + p3 + p2) & 255;
+    let p11: i64 = (p10 * 3 + p8) & 255;
+    let p12: i64 = (p11 + p10 + p1) & 255;
+    let p13: i64 = p12 & 15;
+    x / 2 + 1 + (p13 - p13)
+}
+
+fn run(x: i64) -> bool vow {
+    requires: x >= 0 && x < 500,
+    ensures: result
+} {
+    let a: i64 = inc(x, 1);
+    let b: i64 = inc(a, 2);
+    let c: i64 = inc(b, 3);
+    let d: i64 = inc(c, 4);
+    d > 0
+}
+
+fn main() -> i32 { 0 }

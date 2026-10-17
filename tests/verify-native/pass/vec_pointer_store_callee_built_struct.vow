@@ -1,0 +1,23 @@
+// A pointer pushed into a `Vec` held in a field of a struct a callee builds, in a function that
+// also reads memory through a handle (`a.names.len()`): the field is the callee's `Vec` once the
+// callee is inlined, so the `Vec` is one the function built.
+module VecPointerStoreCalleeBuiltStruct
+
+struct Bag { names: Vec<String> }
+struct Crate { items: Vec<String>, n: i64 }
+
+fn crate_new() -> Crate { Crate { items: Vec::new(), n: 0 } }
+
+fn total(a: Bag, s: String) -> u64 vow {
+  ensures: result == a.names.len() + 1
+} {
+  let c: Crate = crate_new();
+  c.items.push(s);
+  a.names.len() + c.items.len()
+}
+
+fn main() -> i32 [io] {
+  let a: Bag = Bag { names: Vec::new() };
+  print_u64(total(a, String::from("a")));
+  0
+}

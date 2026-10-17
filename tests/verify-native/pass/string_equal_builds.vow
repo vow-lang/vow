@@ -1,0 +1,34 @@
+module StringEqualBuilds
+
+// TEST: esbmc-model-artifact fn="same_build_is_equal" blame=Callee vow_id=0 "ESBMC models string_eq as a cached nondeterministic Bool, so it does not relate equal strings; the native model is exact; its counterexample has every string empty and string_eq returning 0"
+
+// The same sequence of appends over the same operands builds one array, so two
+// such strings compare equal without relating two quantified definitions, and a
+// chain of equalities between parameters closes by transitivity.
+fn same_build_is_equal(a: String, b: String) -> bool vow {
+  ensures: result == true
+} {
+  let x: String = String::from(a);
+  x.push_str(b);
+  x.push_str(a);
+  x.push_str(b);
+  let y: String = String::from(a);
+  y.push_str(b);
+  y.push_str(a);
+  y.push_str(b);
+  x.eq(y) && x.len() == a.len() + b.len() + a.len() + b.len()
+}
+
+fn equality_chain(a: String, b: String, c: String, d: String, e: String) -> bool vow {
+  requires: a.eq(b)
+  requires: b.eq(c)
+  requires: c.eq(d)
+  requires: d.eq(e)
+  ensures: result == true
+} {
+  a.eq(e) && e.eq(a) && b.eq(d) && a.eq(c) && c.eq(e)
+}
+
+fn main() -> i32 {
+  0
+}

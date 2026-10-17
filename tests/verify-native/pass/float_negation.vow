@@ -1,0 +1,35 @@
+// TEST: category float
+module FloatNegation
+
+fn negate(x: f64) -> f64 vow {
+  requires: x > 0.0,
+  ensures: result < 0.0
+} {
+  -x
+}
+
+fn negate_twice(x: f64) -> f64 vow {
+  requires: x == x,
+  ensures: result == x
+} {
+  -(-x)
+}
+
+fn negate32(x: f32) -> f32 vow {
+  requires: x > x - x,
+  ensures: result < x - x
+} {
+  -x
+}
+
+fn negate_twice32(x: f32) -> f32 vow {
+  requires: x == x,
+  ensures: result == x
+} {
+  -(-x)
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

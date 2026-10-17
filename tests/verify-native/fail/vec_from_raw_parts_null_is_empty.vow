@@ -1,0 +1,19 @@
+// TEST: counterexample-fn "copies_the_length"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value p 0
+// A null source copies nothing, so without `requires: p != 0` the length is not `n`.
+module VecFromRawPartsNullIsEmpty
+
+fn copies_the_length(p: i64, n: u64) -> bool vow {
+  ensures: result == true
+} {
+  let v: Vec<i64> = Vec::from_raw_parts_copy(p, n);
+  v.len() == n
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::from_raw_parts_copy(0, 2);
+  print_u64(v.len());
+  0
+}

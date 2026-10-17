@@ -95,6 +95,12 @@ fn IOP_CONST_U8() -> i64 { 138 }
 fn IOP_INT_CAST() -> i64 { 139 }
 fn IOP_CONST_I128() -> i64 { 140 }
 fn IOP_CONST_U128() -> i64 { 141 }
+fn IOP_NEG_F32() -> i64 { 142 }
+fn IOP_NEG_F64() -> i64 { 143 }
+fn IOP_F32_TO_BITS() -> i64 { 144 }
+fn IOP_F64_TO_BITS() -> i64 { 145 }
+fn IOP_BITS_TO_F32() -> i64 { 146 }
+fn IOP_BITS_TO_F64() -> i64 { 147 }
 
 fn REGION_KIND_BLOCK()  -> i64 { 0 }
 fn REGION_KIND_CALLER() -> i64 { 1 }
@@ -124,7 +130,7 @@ fn region_rodata() -> i64 { region_pack(REGION_KIND_RODATA(), 0) }
 // Skips 2 because `tests/multi/vmod_decode_bad_version/main.vow` pins the
 // literal byte 2 as its bad-version probe — kept synchronized with the
 // Rust `MODULE_VERSION` constant in `vow-ir/src/serialize.rs`.
-fn MODULE_VERSION() -> i64 { 5 }
+fn MODULE_VERSION() -> i64 { 7 }
 
 fn iop_is_terminal(op: i64) -> bool vow {
     requires: op >= 0
@@ -441,6 +447,9 @@ fn fresh_arena_base_extern(sym: String) -> bool {
         let c0: i64 = sym.byte_at(13);
         if c0 == 106 {
             return sym == String::from("__vow_string_join");
+        }
+        if c0 == 109 {
+            return sym == String::from("__vow_proc_sample");
         }
         if c0 == 111 {
             return sym == String::from("__vow_path_lookup");

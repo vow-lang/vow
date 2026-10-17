@@ -3,6 +3,7 @@ module VcOps
 use ir
 use ir_dominance
 use vc_fp
+use vc_strops
 
 // The native verifier's op-model table: the one place that says which IR
 // opcodes and runtime builtins the verifier models, and the closed set of
@@ -19,6 +20,7 @@ fn VC_SKIP_UNMODELED_BUILTIN() -> String { String::from("unmodeled-builtin") }
 fn VC_SKIP_UNSUPPORTED_OPCODE() -> String { String::from("unsupported-opcode") }
 fn VC_SKIP_NON_MODELABLE_CALLEE() -> String { String::from("non-modelable-callee") }
 fn VC_SKIP_RESERVED_SYMBOL() -> String { String::from("reserved-verifier-symbol") }
+fn VC_SKIP_INLINING_TOO_LARGE() -> String { String::from("inlining-too-large") }
 
 // The closed list; adding a code requires amending the ADR.
 fn vc_skip_code_valid(code: String) -> bool {
@@ -30,6 +32,7 @@ fn vc_skip_code_valid(code: String) -> bool {
         || code == VC_SKIP_UNSUPPORTED_OPCODE()
         || code == VC_SKIP_NON_MODELABLE_CALLEE()
         || code == VC_SKIP_RESERVED_SYMBOL()
+        || code == VC_SKIP_INLINING_TOO_LARGE()
 }
 
 // A function named after one of the checker's own intrinsics is never verified
@@ -73,14 +76,14 @@ fn vc_op_modeled_core(op: i64) -> bool {
         || op == IOP_CONST_UNIT() || op == IOP_BRANCH() || op == IOP_JUMP() || op == IOP_UNREACHABLE()
         || op == IOP_PHI() || op == IOP_UPSILON()
         || op == IOP_REGION_ALLOC() || op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE()
+        || op == IOP_CONST_STR() || op == IOP_LINEAR_CONSUME()
 }
 
 fn vc_op_unsupported(op: i64) -> bool {
-    op == IOP_CONST_STR()
-        || op == IOP_LOAD() || op == IOP_STORE()
+    op == IOP_LOAD() || op == IOP_STORE()
         || op == IOP_DEBUG_CALL()
         || op == IOP_COMPLEXITY_DESCRIPTOR()
-        || op == IOP_LINEAR_CONSUME() || op == IOP_LINEAR_BORROW()
+        || op == IOP_LINEAR_BORROW()
 }
 
 // How the verifier treats an opcode. An opcode in none of the lists is
@@ -108,7 +111,7 @@ fn vc_is_unwrap_abort(inst: IrInst) -> bool {
 // length (`vc_vec`). They are listed here by runtime symbol, like the unwrap
 // abort, and not in the builtin catalogue: the catalogue is keyed by Vow builtin
 // name and its entries need a grammar row. A symbol not listed (`reserve`,
-// `from_raw_parts_copy`, the wide-slot variants, ...) is an
+// the arena variants, ...) is an
 // unmodelled builtin.
 fn VC_VEC_NONE() -> i64 { 0 }
 fn VC_VEC_NEW() -> i64 { 1 }
@@ -117,12 +120,22 @@ fn VC_VEC_GET() -> i64 { 3 }
 fn VC_VEC_SET() -> i64 { 4 }
 fn VC_VEC_LEN() -> i64 { 5 }
 fn VC_VEC_POP() -> i64 { 6 }
-fn VC_VEC_CLEAR() -> i64 { 7 }
-fn VC_VEC_TRUNCATE() -> i64 { 8 }
+// `clear` drops every element, `truncate(n)` keeps the first `n`.
+fn VC_VEC_CLEAR() -> i64 { 44 }
+fn VC_VEC_TRUNCATE() -> i64 { 45 }
 
-// True for the operations that change a Vec's `(array, length)` state.
-fn vc_vec_kind_writes(k: i64) -> bool {
-    k == VC_VEC_PUSH() || k == VC_VEC_SET() || k == VC_VEC_POP() || k == VC_VEC_CLEAR() || k == VC_VEC_TRUNCATE()
+// `vec_sort(v)`: a new `Vec` holding the sorted elements of `v` (`vc_vec`, `VC_T_QSORT`).
+fn VC_VEC_SORT() -> i64 { 43 }
+
+// A 128-bit element takes two 8-byte slots, so the lowerer reaches it through the
+// address of its element (`push`, `get` and `set` of the `_wide_ptr` helpers) and a
+// two-slot `WideSlot` access on that address (`vc_wide`).
+fn VC_VEC_PUSH_WIDE() -> i64 { 40 }
+fn VC_VEC_GET_WIDE() -> i64 { 41 }
+fn VC_VEC_SET_WIDE() -> i64 { 42 }
+
+fn vc_vec_kind_is_wide(k: i64) -> bool {
+    k >= VC_VEC_PUSH_WIDE() && k <= VC_VEC_SET_WIDE()
 }
 
 // Dispatched on the symbol's length, so a call to anything else costs one
@@ -133,6 +146,8 @@ fn vc_vec_op_kind(sym: String) -> i64 {
         if sym == String::from("__vow_vec_new") { return VC_VEC_NEW(); }
         if sym == String::from("__vow_vec_len") { return VC_VEC_LEN(); }
         if sym == String::from("__vow_vec_pop") { return VC_VEC_POP(); }
+    } else if n == 14 {
+        if sym == String::from("__vow_vec_sort") { return VC_VEC_SORT(); }
     } else if n == 15 {
         if sym == String::from("__vow_vec_clear") { return VC_VEC_CLEAR(); }
     } else if n == 17 {
@@ -141,8 +156,43 @@ fn vc_vec_op_kind(sym: String) -> i64 {
     } else if n == 18 {
         if sym == String::from("__vow_vec_push_val") { return VC_VEC_PUSH(); }
         if sym == String::from("__vow_vec_truncate") { return VC_VEC_TRUNCATE(); }
+    } else if n == 22 {
+        if sym == String::from("__vow_vec_get_wide_ptr") { return VC_VEC_GET_WIDE(); }
+        if sym == String::from("__vow_vec_set_wide_ptr") { return VC_VEC_SET_WIDE(); }
+    } else if n == 23 {
+        if sym == String::from("__vow_vec_push_wide_ptr") { return VC_VEC_PUSH_WIDE(); }
+    } else if n == 25 {
+        if sym == String::from("__vow_vec_pin_to_root_val") { return VC_STR_CLONE(); }
+    } else if n == 33 {
+        if sym == String::from("__vow_vec_from_raw_parts_copy_val") { return VC_STR_FROM_RAW_PARTS(); }
     }
-    VC_VEC_NONE()
+    vc_str_op_kind(sym)
+}
+
+// True for an operation that changes the contents or length of the object its
+// first operand names: the loop cut havocs the object a loop mutates, a `Vec` or
+// a `String` alike (`vc_induct_vec_havocs`).
+fn vc_vec_kind_mutates(k: i64) -> bool {
+    k == VC_VEC_PUSH() || k == VC_VEC_SET() || k == VC_VEC_POP() || k == VC_VEC_CLEAR() || k == VC_VEC_TRUNCATE()
+        || k == VC_VEC_PUSH_WIDE() || k == VC_VEC_SET_WIDE() || vc_str_kind_mutates(k)
+}
+
+// True for a mutation that never shortens what it writes: a loop that only does these leaves
+// the object no shorter than when the loop was entered.
+fn vc_vec_kind_grows(k: i64) -> bool {
+    k == VC_VEC_PUSH() || k == VC_VEC_PUSH_WIDE() || k == VC_STR_PUSH_STR() || k == VC_STR_PUSH_BYTE()
+}
+
+// A pure scalar builtin the executor encodes as a closed term of its integer
+// operand (`vc_numeric`). It has no object operand, so it takes no part in the
+// `Vec`/`String` kinds above.
+fn VC_SCALAR_NONE() -> i64 { 0 }
+fn VC_SCALAR_HASH_U64() -> i64 { 1 }
+
+fn vc_inst_scalar_kind(inst: IrInst) -> i64 {
+    if inst.op != IOP_CALL() || inst.dk != IDATA_CALL_EXTERN() { return VC_SCALAR_NONE(); }
+    if inst.ds == String::from("__vow_hash_u64") { return VC_SCALAR_HASH_U64(); }
+    VC_SCALAR_NONE()
 }
 
 // The `Vec` operation an instruction is, or `VC_VEC_NONE`.
@@ -166,8 +216,43 @@ fn vc_is_unwind_sink(inst: IrInst) -> bool {
 // header and no claim is left to make.
 fn VC_INTERNAL_HAVOC() -> String { String::from("__vc_havoc") }
 
+// The data value of the havoc call of a callee summary (`vc_summary`): the gate takes a havoc call
+// from a summary and from no program.
+fn VC_SUMMARY_HAVOC_MARK() -> i64 { 1 }
+
 fn vc_is_havoc(inst: IrInst) -> bool {
     inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == VC_INTERNAL_HAVOC()
+}
+
+// A loop cut (`vc_induct`) puts one at the top of a loop header proper for each
+// `Vec` the loop writes: its operand's `(array, length)` becomes an arbitrary
+// pair for the rest of the header, the way a header Phi's value does. The marker's
+// data value is 1 when the loop only pushes, so the new length is no shorter than
+// the length the loop was entered with.
+fn VC_INTERNAL_HAVOC_VEC() -> String { String::from("__vc_havoc_vec") }
+
+fn vc_is_havoc_vec(inst: IrInst) -> bool {
+    inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == VC_INTERNAL_HAVOC_VEC()
+}
+
+// A loop cut puts one at the top of a loop header proper for each `(object, slot)`
+// the loop writes through a `FieldSet`: operand 0 is the object (a parameter or an
+// allocation born outside the loop), the data value is the slot and the second data
+// value the IR type of the value written there, which fixes the slot's sort. The
+// slot becomes an unconstrained constant, the way a header Phi's value does.
+fn VC_INTERNAL_HAVOC_FIELD() -> String { String::from("__vc_havoc_field") }
+
+fn vc_is_havoc_field(inst: IrInst) -> bool {
+    inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == VC_INTERNAL_HAVOC_FIELD()
+}
+
+// A `VowReq` that is an assumption in the function it is spliced into, not a claim of the
+// frame it came from: the `ensures` of a summarised callee (`vc_summary`), proven by the
+// callee's own run and assumed by its callers.
+fn VC_INTERNAL_ASSUME() -> String { String::from("__vc_assume") }
+
+fn vc_is_assume(inst: IrInst) -> bool {
+    inst.op == IOP_VOW_REQ() && inst.ds == VC_INTERNAL_ASSUME()
 }
 
 fn VC_INTERNAL_CUT_END() -> String { String::from("__vc_cut_end") }
@@ -182,16 +267,18 @@ fn vc_is_cut_end(inst: IrInst) -> bool {
 // `vc_clone_inst` preserves, so the marker survives loop closing and unrolling.
 // Frame k of `VcFrames` is the k-th spliced call, in depth-first order: the
 // function it enters, the source range of the call and the frame of the call's
-// own caller (-1 for the verify target).
+// own caller (-1 for the verify target). `trusted`: the ids of the functions proven on
+// their own (`vc_claim_trusted`).
 struct VcFrames {
     func_ids: Vec<i64>,
     call_starts: Vec<i64>,
     call_lens: Vec<i64>,
     parents: Vec<i64>,
+    trusted: Vec<i64>,
 }
 
 fn vc_frames_new() -> VcFrames {
-    VcFrames { func_ids: Vec::new(), call_starts: Vec::new(), call_lens: Vec::new(), parents: Vec::new() }
+    VcFrames { func_ids: Vec::new(), call_starts: Vec::new(), call_lens: Vec::new(), parents: Vec::new(), trusted: Vec::new() }
 }
 
 fn VC_FRAME_PREFIX() -> String { String::from("__vc_frame:") }
@@ -209,7 +296,7 @@ fn vc_frame_mark(k: i64) -> String {
 fn vc_frame_in_dv2(inst: IrInst) -> bool {
     if vc_is_unwrap_abort(inst) { return true; }
     let k: i64 = vc_inst_vec_kind(inst);
-    k == VC_VEC_GET() || k == VC_VEC_SET()
+    k == VC_VEC_GET() || k == VC_VEC_SET() || k == VC_STR_BYTE_AT()
 }
 
 // The frame an instruction was spliced from; -1 for the target's own.
@@ -249,6 +336,130 @@ fn vc_op_gate_candidate(op: i64) -> bool {
 
 // GENERATE:OPERATIONS:START
 fn catalogue_verifier_known(sym: String) -> bool {
+    let n: u64 = sym.len();
+    if n == 14 {
+        let c0: i64 = sym.byte_at(11);
+        if c0 == 111 {
+            return sym == String::from("__vow_vec_sort");
+        }
+        if c0 == 115 {
+            return sym == String::from("__vow_hash_str");
+        }
+        if c0 == 117 {
+            return sym == String::from("__vow_hash_u64");
+        }
+    }
+    if n == 16 {
+        let c0: i64 = sym.byte_at(10);
+        if c0 == 100 {
+            return sym == String::from("__vow_hex_decode");
+        }
+        if c0 == 101 {
+            return sym == String::from("__vow_hex_encode");
+        }
+    }
+    if n == 17 {
+        let c0: i64 = sym.byte_at(13);
+        if c0 == 106 {
+            return sym == String::from("__vow_string_join");
+        }
+        if c0 == 116 {
+            return sym == String::from("__vow_string_trim");
+        }
+    }
+    if n == 18 {
+        return sym == String::from("__vow_string_split");
+    }
+    if n == 19 {
+        return sym == String::from("__vow_string_substr");
+    }
+    if n == 20 {
+        let c0: i64 = sym.byte_at(6);
+        if c0 == 112 {
+            return sym == String::from("__vow_parse_f64_bits");
+        }
+        if c0 == 115 {
+            return sym == String::from("__vow_string_replace");
+        }
+    }
+    if n == 21 {
+        let c0: i64 = sym.byte_at(16);
+        if c0 == 95 {
+            return sym == String::from("__vow_format_f64_bits");
+        }
+        if c0 == 108 {
+            return sym == String::from("__vow_string_to_lower");
+        }
+        if c0 == 109 {
+            let c1: i64 = sym.byte_at(18);
+            if c1 == 105 {
+                return sym == String::from("__vow_string_from_i64");
+            }
+            if c1 == 117 {
+                return sym == String::from("__vow_string_from_u64");
+            }
+        }
+        if c0 == 117 {
+            return sym == String::from("__vow_string_to_upper");
+        }
+    }
+    if n == 22 {
+        let c0: i64 = sym.byte_at(18);
+        if c0 == 105 {
+            return sym == String::from("__vow_string_from_i128");
+        }
+        if c0 == 117 {
+            return sym == String::from("__vow_string_from_u128");
+        }
+        if c0 == 119 {
+            return sym == String::from("__vow_string_ends_with");
+        }
+    }
+    if n == 24 {
+        return sym == String::from("__vow_string_starts_with");
+    }
+    if n == 25 {
+        let c0: i64 = sym.byte_at(19);
+        if c0 == 105 {
+            return sym == String::from("__vow_string_parse_i8_opt");
+        }
+        if c0 == 117 {
+            return sym == String::from("__vow_string_parse_u8_opt");
+        }
+    }
+    if n == 26 {
+        let c0: i64 = sym.byte_at(20);
+        if c0 == 49 {
+            let c1: i64 = sym.byte_at(19);
+            if c1 == 105 {
+                return sym == String::from("__vow_string_parse_i16_opt");
+            }
+            if c1 == 117 {
+                return sym == String::from("__vow_string_parse_u16_opt");
+            }
+        }
+        if c0 == 51 {
+            let c1: i64 = sym.byte_at(19);
+            if c1 == 105 {
+                return sym == String::from("__vow_string_parse_i32_opt");
+            }
+            if c1 == 117 {
+                return sym == String::from("__vow_string_parse_u32_opt");
+            }
+        }
+        if c0 == 54 {
+            return sym == String::from("__vow_string_parse_i64_opt");
+        }
+    }
+    if n == 27 {
+        let c0: i64 = sym.byte_at(19);
+        if c0 == 105 {
+            return sym == String::from("__vow_string_parse_i128_opt");
+        }
+        if c0 == 117 {
+            return sym == String::from("__vow_string_parse_u128_opt");
+        }
+    }
     return false;
 }
 // GENERATE:OPERATIONS:END

@@ -1,0 +1,8 @@
+# Functions of compiler/*.vow that `vowc verify --backend native` still skips
+# (issue #1432, epic #1398). scripts/verify_compiler.py accepts a native `Skipped`
+# only for a function listed here, with the closed-list reason the native gate
+# gives and the issue that tracks closing the gap. An entry whose function is no
+# longer skipped fails the run, so this list only shrinks: delete the row in the
+# commit that closes its issue.
+#
+# `code` is checked against the reason the native verifier reports.

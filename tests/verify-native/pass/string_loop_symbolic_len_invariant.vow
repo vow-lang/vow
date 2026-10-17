@@ -1,0 +1,23 @@
+// TEST: category invariant
+// The bound is a parameter, so no finite unrolling covers every `n`: the invariant
+// `s.len() == i` is what decides the loop, over a String the loop writes.
+module StringLoopSymbolicLenInvariant
+
+fn fill(n: u64) -> String vow {
+  ensures: result.len() == n
+} {
+  let s: String = String::new();
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n && s.len() == i
+  } {
+    s.push_byte(65u8);
+    i = i + 1;
+  }
+  s
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill(3).len());
+  0
+}

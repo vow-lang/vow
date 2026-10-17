@@ -1,0 +1,17 @@
+// TEST: counterexample-fn "off_by_one"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures result == parse_f64_bits(format_f64_bits(bits)) + 1 as u64"
+// The claim contradicts itself for every result of the two hooks, so the
+// counterexample does not depend on the model's choice for them and is reported.
+module FloatBitsHookIndependentFailure
+
+fn off_by_one(bits: u64) -> u64 vow {
+  ensures: result == parse_f64_bits(format_f64_bits(bits)) + 1u64
+} {
+  parse_f64_bits(format_f64_bits(bits))
+}
+
+fn main() -> i32 [io] {
+  0
+}

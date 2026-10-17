@@ -1,0 +1,20 @@
+// TEST: counterexample-fn "first_is_200"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// An element is the 8-byte slot of the runtime. A `Vec<u8>` slot can carry bits
+// above the byte that no read observes, so the replay keeps only the low 8.
+module VecParamU8Elements
+
+fn first_is_200(bytes: Vec<u8>) -> u8 vow {
+  requires: bytes.len() == 1
+  ensures: result != 200
+} {
+  bytes[0]
+}
+
+fn main() -> i32 [io] {
+  let b: Vec<u8> = Vec::new();
+  b.push(1);
+  print_u64(first_is_200(b) as u64);
+  0
+}

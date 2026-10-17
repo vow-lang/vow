@@ -1,0 +1,36 @@
+// TEST: category bounds
+// `String::contains` on the cases both verifiers decide: an empty needle is always
+// contained, a needle longer than the haystack never is, and literals are compared byte
+// by byte. (The native verifier models `contains` exactly for any length; the ESBMC model
+// is a bounded loop, so the properties that need more are native-only,
+// see tests/verify-native/pass/string_contains_exact.vow.)
+module StringContainsBasic
+
+fn empty_needle(s: String) -> bool vow {
+  ensures: result == true
+} {
+  s.contains("")
+}
+
+fn longer_needle_is_absent(s: String, p: String) -> bool vow {
+  requires: p.len() > s.len()
+  ensures: result == false
+} {
+  s.contains(p)
+}
+
+fn literal_in_literal() -> bool vow {
+  ensures: result == true
+} {
+  String::from("hello world").contains("o w")
+}
+
+fn literal_not_in_literal() -> bool vow {
+  ensures: result == true
+} {
+  !String::from("hello world").contains("xyz")
+}
+
+fn main() -> i32 {
+  if literal_in_literal() { 0 } else { 1 }
+}

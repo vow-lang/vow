@@ -1,0 +1,37 @@
+module BTreeMapInsertOldValue
+
+fn first_insert_is_none(k: i64) -> bool vow {
+  ensures: result
+} {
+  let m: BTreeMap<i64, i64> = BTreeMap::new();
+  match m.insert(k, 5) {
+    Option::Some(old) => { false },
+    Option::None => { true },
+  }
+}
+
+fn second_insert_returns_first_value(k: i64) -> i64 [panic] vow {
+  ensures: result == 5
+} {
+  let m: BTreeMap<i64, i64> = BTreeMap::new();
+  m.insert(k, 5);
+  m.insert(k, 6).unwrap()
+}
+
+fn overwrite_keeps_len(a: i64, b: i64) -> BTreeMap<i64, i64> vow {
+  requires: a != b,
+  ensures: result.len() == 2,
+  ensures: result.get(a).unwrap() == 3,
+  ensures: result.get(b).unwrap() == 2
+} {
+  let m: BTreeMap<i64, i64> = BTreeMap::new();
+  m.insert(a, 1);
+  m.insert(b, 2);
+  m.insert(a, 3);
+  m
+}
+
+fn main() -> i32 [io] {
+  print_u64(overwrite_keeps_len(1, 2).len());
+  0
+}

@@ -3560,8 +3560,7 @@ fn read_proc_table() -> Vec<ProcInfo> {
 /// separated string `"<group>|<rss_kb>|<cpu_pct>"` per line (integers), e.g.
 /// `"compiler|10240|3\nesbmc:8123|512000|198"`. Empty string on non-Linux or
 /// when nothing could be read — the Vow tracer then emits no counters.
-#[unsafe(no_mangle)]
-pub extern "C" fn __vow_proc_sample() -> *mut u8 {
+fn proc_sample_text() -> String {
     let own_pid = std::process::id() as u64;
     let procs = read_proc_table();
     let samples = collect_proc_samples(&procs, own_pid);
@@ -3575,7 +3574,19 @@ pub extern "C" fn __vow_proc_sample() -> *mut u8 {
             smp.group, smp.rss_kb as i64, smp.cpu_pct as i64
         ));
     }
-    unsafe { __vow_string_new(s.as_ptr() as *const c_char, s.len()) }
+    s
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_proc_sample_in_arena(arena: *mut VowArena) -> *mut u8 {
+    let s = proc_sample_text();
+    unsafe { alloc_bytes_string(arena, s.as_bytes()) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_proc_sample() -> *mut u8 {
+    let s = proc_sample_text();
+    unsafe { with_root_arena(|arena| alloc_bytes_string(arena, s.as_bytes())) }
 }
 
 /// Gzip-compress `data` and write it to `path` (both Vow Strings). Returns 0 on
@@ -4713,6 +4724,15 @@ pub extern "C" fn __vow_process_stderr_for(handle: i64) -> *mut u8 {
     unsafe { with_root_arena(|arena| alloc_bytes_string(arena, &bytes)) }
 }
 
+/// Delay before poll `round` of `__vow_process_wait_timeout`: 50 us doubling to
+/// a 10 ms cap. A fixed 10 ms quantum was longer than most solver queries, so
+/// every short child cost an extra few milliseconds of sleep on top of its run.
+fn wait_poll_delay(round: u32) -> std::time::Duration {
+    const FIRST_US: u64 = 50;
+    const CAP_US: u64 = 10_000;
+    std::time::Duration::from_micros((FIRST_US << round.min(8)).min(CAP_US))
+}
+
 /// Wait for a process with a timeout in milliseconds.
 /// Returns exit code on success, -2 on timeout, -1 on error.
 #[unsafe(no_mangle)]
@@ -4736,6 +4756,7 @@ pub extern "C" fn __vow_process_wait_timeout(handle: i64, timeout_ms: i64) -> i6
             let piped = piped::lookup(handle);
             let timeout = std::time::Duration::from_millis(timeout_ms.max(0) as u64);
             let start = std::time::Instant::now();
+            let mut round: u32 = 0;
             let result = loop {
                 if let Some(p) = &piped {
                     p.pump();
@@ -4745,10 +4766,12 @@ pub extern "C" fn __vow_process_wait_timeout(handle: i64, timeout_ms: i64) -> i6
                         break Ok(process_status_code(handle, status));
                     }
                     Ok(None) => {
-                        if start.elapsed() >= timeout {
+                        let elapsed = start.elapsed();
+                        if elapsed >= timeout {
                             break Err(-2i64); // timeout
                         }
-                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        std::thread::sleep(wait_poll_delay(round).min(timeout - elapsed));
+                        round = round.saturating_add(1);
                     }
                     Err(_) => {
                         break Err(-1i64); // error
@@ -6224,6 +6247,31 @@ mod tests {
     }
 
     #[test]
+    fn wait_poll_delay_starts_short_doubles_and_caps() {
+        use std::time::Duration;
+        assert_eq!(wait_poll_delay(0), Duration::from_micros(50));
+        assert_eq!(wait_poll_delay(1), Duration::from_micros(100));
+        assert_eq!(wait_poll_delay(7), Duration::from_micros(6_400));
+        assert_eq!(wait_poll_delay(8), Duration::from_millis(10));
+        assert_eq!(wait_poll_delay(u32::MAX), Duration::from_millis(10));
+        let mut prev = Duration::ZERO;
+        for round in 0..64 {
+            let d = wait_poll_delay(round);
+            assert!(d >= prev && d <= Duration::from_millis(10));
+            prev = d;
+        }
+    }
+
+    #[test]
+    fn wait_timeout_does_not_overshoot_a_short_deadline() {
+        let handle = spawn_capped("sh", &["-c".to_string(), "sleep 30".to_string()], 0);
+        let start = std::time::Instant::now();
+        assert_eq!(__vow_process_wait_timeout(handle, 25), -2);
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+        __vow_process_kill(handle);
+    }
+
+    #[test]
     fn capped_signal_death_is_distinct_from_spawn_error() {
         let handle = spawn_capped("sh", &["-c".to_string(), "kill -9 $$".to_string()], 0);
         assert_eq!(
@@ -7010,6 +7058,18 @@ mod tests {
         );
         assert_eq!(vow_text(__vow_process_get_stdout()), "last-out");
         assert_eq!(vow_text(__vow_process_get_stderr()), "last-err");
+
+        let sampled = vow_text(unsafe { __vow_proc_sample_in_arena(ap) });
+        for line in sampled.lines() {
+            let fields: Vec<&str> = line.split('|').collect();
+            assert_eq!(fields.len(), 3, "{line}");
+            assert!(fields[1].parse::<i64>().is_ok() && fields[2].parse::<i64>().is_ok());
+        }
+        assert_eq!(
+            sampled.is_empty(),
+            vow_text(__vow_proc_sample()).is_empty(),
+            "arena and root variants agree on availability"
+        );
 
         unsafe { __vow_arena_close(ap) };
     }

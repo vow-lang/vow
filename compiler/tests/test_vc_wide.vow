@@ -1,0 +1,93 @@
+module TestVcWide
+
+use ir
+use vc_term
+use vc_smt
+use vc_wide
+use tests.builders
+
+fn arr_script(ar: VcArena, name: String) -> SmtScript {
+    let s: SmtScript = vc_script_new();
+    vc_script_declare_const(s, name, VC_SORT_ARRAY64());
+    s
+}
+
+// Element `i` lives at the keys `2i` and `2i + 1`; with a constant index they fold.
+fn check_keys_fold_for_a_constant_index() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let three: i64 = vc_tm_bv(ar, 64, 3, 0);
+    let lo: i64 = vc_wide_key(ar, three, false);
+    let hi: i64 = vc_wide_key(ar, three, true);
+    if !vc_tm_is_leaf(ar, lo) || !vc_tm_is_leaf(ar, hi) { return 1; }
+    0
+}
+
+// A read joins the high limb in front of the low one; a write stores both.
+fn check_read_and_write_render() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let s: SmtScript = arr_script(ar, String::from("a"));
+    let arr: i64 = vc_tm_var(ar, String::from("a"));
+    let idx: i64 = vc_tm_var(ar, String::from("i"));
+    vc_script_define_fun(s, String::from("r"), 128, vc_wide_read(ar, arr, idx));
+    let text: String = vc_command_text(ar, s, 1);
+    let want: String = String::from("(define-fun r () (_ BitVec 128) (concat (select a (bvadd (bvadd i i) #x0000000000000001)) (select a (bvadd i i))))");
+    if text != want { return 2; }
+    let v: i64 = vc_tm_var(ar, String::from("v"));
+    let stored: i64 = vc_wide_write(ar, arr, idx, v);
+    vc_script_define_fun(s, String::from("w"), VC_SORT_ARRAY64(), stored);
+    let wtext: String = vc_command_text(ar, s, 2);
+    if !wtext.contains(String::from("((_ extract 63 0) v)")) { return 3; }
+    if !wtext.contains(String::from("((_ extract 63 0) (bvlshr v #x00000000000000000000000000000040))")) { return 4; }
+    0
+}
+
+fn args2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v.push(b);
+    v
+}
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+// 0 vec_new args, 1 vec_new args, 2 vec, 3 push address, 4 value, 5 write, 6 use
+fn address_fn(use_inst: IrInst) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_const_i64(0, 8));
+    insts.push(mk_inst_const_i64(1, 8));
+    insts.push(mk_inst_call_extern(2, ITY_PTR(), args2(0, 1), String::from("__vow_vec_new")));
+    insts.push(mk_inst_call_extern(3, ITY_PTR(), args1(2), String::from("__vow_vec_push_wide_ptr")));
+    insts.push(mk_inst_arg(4, ITY_I128(), 0));
+    insts.push(mk_inst_field_set_wide(5, 3, 0, 4));
+    insts.push(use_inst);
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let ps: Vec<i64> = Vec::new();
+    ps.push(ITY_I128());
+    mk_function(1, String::from("f"), ps, ITY_UNIT(), blocks)
+}
+
+fn check_ref_table_and_shape() -> i64 {
+    let f: IrFunction = address_fn(mk_inst_return(6, 5));
+    let refs: Vec<i64> = vc_wide_ref_ids(f, 8);
+    if refs[3] != 1 || refs[2] != 0 || refs[4] != 0 || refs[0] != 0 { return 10; }
+    if vc_wide_shape_detail(f, 8).len() != 0 { return 11; }
+    let as_value: IrFunction = address_fn(mk_inst_return(6, 3));
+    if vc_wide_shape_detail(as_value, 8) != String::from("wide Vec element address used as a value") { return 12; }
+    let second_slot: IrFunction = address_fn(mk_inst_field_get_wide(6, ITY_I128(), 3, 1));
+    if vc_wide_shape_detail(second_slot, 8).len() == 0 { return 13; }
+    let narrow_get: IrFunction = address_fn(mk_inst_field_get(6, ITY_I64(), 3, 0));
+    if vc_wide_shape_detail(narrow_get, 8).len() == 0 { return 14; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_keys_fold_for_a_constant_index();
+    if r == 0 { r = check_read_and_write_render(); }
+    if r == 0 { r = check_ref_table_and_shape(); }
+    i64_to_i32_wrap(r)
+}

@@ -42,7 +42,7 @@ The table is the whole difference: contracts, blame and `vow_id` are the same un
 
 The native verifier executes the IR symbolically and encodes integers as fixed-width bit-vectors, so wrapping, signedness and 128-bit values are exact. Each `ensures` clause, loop `invariant` and abort site (division or remainder by zero, `MIN / -1`, an over-wide shift, `unwrap()` on `None`, an out-of-bounds `Vec` index) is a proof obligation; a `requires` is an assumption for the obligations after it. The exact subset, loop strategy and flags are in `docs/spec/cli.md` → "Native backend". A function outside the subset is `Skipped` with a code from the closed list in [`VerificationSkipped`](errors.md#verificationskipped), never `Verified`.
 
-**Known limits.** String parsing and formatting builtins are opaque (`Skipped`). `f32` and `f64` are IEEE-754 (SMT-LIB `FloatingPoint`, round to nearest, ties to even): comparisons with a NaN are false except `!=`, `-0.0 == 0.0`, and division by zero is an infinity or a NaN, not an abort. There is one canonical NaN, so NaN payload and sign bits are not distinguished (a property of them is neither provable nor refutable), float `%` is `Skipped` as `float-rem-unsupported` until codegen defines it, and `parse_f64_bits`/`format_f64_bits` stay `Skipped` as unmodelled builtins because their other side is a `String`. Float `*` and `/` can be expensive to decide, so such a contract may end `unknown` or `timeout`. Callee inlining makes a caller's query as large as its whole call tree, so a deep call tree can end `unknown` with `inlining budget:`.
+**Known limits.** The `parse_<int>`, `string_trim`, `string_to_upper`, `string_to_lower`, `parse_f64_bits` and `format_f64_bits` builtins are opaque total functions of their operands (a property that holds for every result is proven, one that depends on a result is `unknown`), `hash_str`, `hex_encode`, `hex_decode` and the decimal formatters are exact, and `replace`, `split` and `join` are opaque total functions too (`split` keeps the facts every run has about its piece count and `join` of no parts is empty). `f32` and `f64` are IEEE-754 (SMT-LIB `FloatingPoint`, round to nearest, ties to even): comparisons with a NaN are false except `!=`, `-0.0 == 0.0`, and division by zero is an infinity or a NaN, not an abort. There is one canonical NaN, so NaN payload and sign bits are not distinguished (a property of them is neither provable nor refutable), float `%` is `Skipped` as `float-rem-unsupported` until codegen defines it, and `parse_f64_bits`/`format_f64_bits` are exact on their `u64` side and a deterministic function of their `String` side, with the text conversion itself opaque: a property that depends on the value `parse_f64_bits` returns or on the text `format_f64_bits` returns (or on the result of an opaque string builtin above) is `unknown` (`opaque builtin result`). Float `*` and `/` can be expensive to decide, so such a contract may end `unknown` or `timeout`. Callee inlining makes a caller's query as large as its whole call tree, so a deep call tree can end `unknown` with `inlining budget:`.
 
 ### ESBMC backend
 
@@ -53,7 +53,7 @@ The native verifier executes the IR symbolically and encodes integers as fixed-w
 
 ### Collection Models for Verification
 
-**Native backend.** A `Vec<T>` whose element `T` is `bool` or an integer of up to 64 bits (`new`, `push`, `pop`, `clear`, `truncate`, `len`, indexing, indexed assignment) is an array plus a 64-bit symbolic length. There is no capacity: a property over every length is proven for every length, an index at or past the length is its own obligation (`index out of bounds`), and no `ModelCapacityAssumed` note is ever emitted. `String`, the maps, wide (`i128`/`u128`) or pointer elements and the operations `reserve`, `sort`, `from_raw_parts_copy` and `pin_to_root` are `Skipped` (see `docs/spec/cli.md` → "Native backend", "Collections"). The rest of this section describes the ESBMC backend.
+**Native backend.** A `Vec<T>` whose element `T` is `bool` or an integer of up to 64 bits (`new`, `push`, `pop`, `clear`, `truncate`, `len`, indexing, indexed assignment) is an array plus a 64-bit symbolic length. There is no capacity: a property over every length is proven for every length, an index at or past the length is its own obligation (`index out of bounds`), and no `ModelCapacityAssumed` note is ever emitted. `String` is modelled the same way (see `docs/spec/cli.md` → "Native backend", "Strings"). Elements of 128 bits or of a float type, `sort`, `from_raw_parts_copy` and `pin_to_root` are modelled too, and so is a pointer element (`String`, `Vec`, struct) that is pushed or stored; a pointer element read back and the `Vec` operation `reserve` is `Skipped` (see `docs/spec/cli.md` → "Native backend", "Collections"). The rest of this section describes the ESBMC backend.
 
 **ESBMC backend.** ESBMC is a *bounded* model checker, so it models collection types as
 fixed-size arrays and reasons about them up to a finite capacity. These
@@ -177,15 +177,18 @@ This is a *differential test*, **not part of the proof**. The static verdict and
 
 ## Integer Contracts
 
-### Non-zero Guard
+### Division Guard
 
 ```vow
 fn divide(x: i64, y: i64) -> i64 vow {
     requires: y != 0
+    requires: x >= -9223372036854775807 || y != -1
 } {
     x / y
 }
 ```
+
+Signed `/` has two abort cases, and the true domain of `divide` excludes both: a zero divisor, and `i64::MIN / -1`, whose quotient is not representable (the runtime aborts with `ArithmeticOverflow` for it exactly as for a zero divisor). The second clause is that overflow guard (`x >= -9223372036854775807` is `x != i64::MIN`), a real part of the function's domain and not a verifier bound; `requires: y != 0` alone is not the whole domain. The native backend proves each as an obligation, so it refutes the one-clause version with `x = i64::MIN`, `y = -1`. The ESBMC C model does not check `MIN / -1` (see `cli.md` → "Verdict divergence from ESBMC"). Unsigned division has only the zero-divisor case.
 
 ### Range Bounds
 
@@ -531,8 +534,9 @@ as 128-bit bit-vectors, so every value is exact (`i128::MIN`, `i128::MAX` and
 the ESBMC backend 128-bit constants are modelled exactly under the bit-vector
 encoding, and a proof from its `--encoding ir` timeout fallback is reported as
 plain `proven` and is weaker; 128-bit checked arithmetic and aggregate fields
-are `Skipped`. A `Vec<i128>` or `Vec<u128>` element is `Skipped` under both
-backends. A contract over 128-bit scalars and literals verifies under both:
+are `Skipped`. A `Vec<i128>` or `Vec<u128>` element is `Skipped` under the
+ESBMC backend; `--backend native` models it exactly (a parameter or local `Vec`,
+not one read through a struct field). A contract over 128-bit scalars and literals verifies under both:
 
 ```vow
 fn at_least_one(x: u128) -> u128

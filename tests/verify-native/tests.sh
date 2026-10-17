@@ -27,6 +27,15 @@ export VOW_VERIFY_NO_INCREMENTAL=1
 cat > "$FAKE_DIR/bitwuzla" <<'SHIM'
 #!/usr/bin/env bash
 set -eu
+# Waits $1 seconds without a child process: a `sleep` orphaned by a kill would
+# keep the solver's output pipe open and delay the parent's reap.
+nap() {
+    local fifo="$FAKE_BW_DIR/.nap.$$"
+    mkfifo "$fifo"
+    exec 7<>"$fifo"
+    rm -f "$fifo"
+    read -r -t "$1" -u 7 _ || true
+}
 if [ "${1:-}" = "--version" ]; then
     [ -n "${FAKE_BW_VERSION:-}" ] || exit 2
     echo "$FAKE_BW_VERSION"
@@ -69,6 +78,9 @@ if [ "${file%.smt2}" = "$file" ]; then
                 case "$FAKE_BW_MODE" in
                     garbage) echo "what is this" ;;
                     session_error_line) echo '(error "boom")' ;;
+                    hedge_slow_unsat) if [ "$checks" -eq 3 ]; then nap 8; fi; echo unsat ;;
+                    hedge_slow_sat) if [ "$checks" -eq 3 ]; then nap 8; echo sat; else echo unsat; fi ;;
+                    hedge_win) if [ "$checks" -eq 3 ]; then nap 0.3; fi; echo unsat ;;
                     sat) echo sat ;;
                     unknown|session_unknown) echo unknown ;;
                     *) echo unsat ;;
@@ -85,6 +97,7 @@ fi
 # `sat` and a model: every scalar parameter symbol (`p<k>`) and aggregate
 # field symbol (`p<k>f<slot>s<sort>`) the query declares gets `$1`, except a
 # slot-0 field (an enum's discriminant), which gets `$2`. A Bool is true unless 0.
+# A float is +0.0.
 emit_model() {
     echo sat
     echo "("
@@ -100,6 +113,10 @@ emit_model() {
             echo "  ($name (_ bv$v $width))"
         fi
     done
+    grep -oE '^\(declare-const p[0-9]+ \(_ FloatingPoint [0-9]+ [0-9]+\)\)' "$file" \
+        | sed -E 's/^\(declare-const (p[0-9]+) \(_ FloatingPoint ([0-9]+) ([0-9]+)\)\)/\1 \2 \3/' | while read -r name eb sb; do
+        printf '  (%s (fp #b0 #b%s #b%s))\n' "$name" "$(printf '%0*d' "$eb" 0)" "$(printf '%0*d' $((sb - 1)) 0)"
+    done
     echo ")"
 }
 n=1
@@ -108,7 +125,9 @@ cp "$file" "$FAKE_BW_DIR/q.$n.smt2"
 echo "$file" >> "$FAKE_BW_DIR/paths"
 echo "$*" >> "$FAKE_BW_DIR/args"
 case "$FAKE_BW_MODE" in
-    unsat|session_unknown|session_die_after_*|session_error_line|session_noscope) echo unsat ;;
+    unsat|session_unknown|session_die_after_*|session_error_line|session_noscope|hedge_slow_unsat) echo unsat ;;
+    hedge_slow_sat) emit_model 7 7 ;;
+    hedge_win) echo $$ >> "$FAKE_BW_DIR/pids"; nap 8; echo unsat ;;
     unknown) echo unknown ;;
     garbage) echo "what is this" ;;
     exit1) echo "[error] boom" >&2; exit 1 ;;
@@ -131,6 +150,38 @@ case "$FAKE_BW_MODE" in
         wait
         ;;
     slow_unsat) echo $$ >> "$FAKE_BW_DIR/pids"; sleep 0.3; echo unsat ;;
+    record_unsat) echo "$PPID" >> "$FAKE_BW_DIR/worker_ppids"; echo unsat ;;
+    copy_ir)
+        # keeps the module file the worker (our parent) was told to decode.
+        if [ ! -s "$FAKE_BW_DIR/ir.bin" ]; then
+            ir=$(tr '\0' '\n' < "/proc/$PPID/cmdline" | grep -x -A1 -- '--worker-ir' | tail -1)
+            [ -z "$ir" ] || cp "$ir" "$FAKE_BW_DIR/ir.bin"
+        fi
+        echo unsat
+        ;;
+    kill_once_3)
+        # the third query of the run kills its worker, once: a retry succeeds.
+        echo "$PPID" >> "$FAKE_BW_DIR/worker_ppids"
+        if [ "$n" -eq 3 ] && mkdir "$FAKE_BW_DIR/.killed" 2>/dev/null; then kill -9 "$PPID"; sleep 5; fi
+        echo unsat
+        ;;
+    kill_from_3)
+        # every query from the third on kills its worker.
+        echo "$PPID" >> "$FAKE_BW_DIR/worker_ppids"
+        if [ "$n" -ge 3 ]; then kill -9 "$PPID"; sleep 5; fi
+        echo unsat
+        ;;
+    hang_once_3)
+        # the third query of the run hangs, once, with a solver child of its own.
+        echo "$PPID" >> "$FAKE_BW_DIR/worker_pids"
+        if [ "$n" -eq 3 ] && mkdir "$FAKE_BW_DIR/.hung" 2>/dev/null; then
+            echo $$ >> "$FAKE_BW_DIR/pids"
+            sleep 29 &
+            echo $! >> "$FAKE_BW_DIR/grandchild_pids"
+            wait
+        fi
+        echo unsat
+        ;;
     unknown_unwinding)
         # `unsat` for a claim whose goal is a negation (an ensures or invariant),
         # `unknown` for the unwinding claim, whose query ends in the bare path
@@ -435,7 +486,13 @@ expect "call sat function" "$(field "$RUN_OUT" counterexamples.0.function)" "cal
 expect "call sat blame" "$(field "$RUN_OUT" counterexamples.0.blame)" "Caller"
 expect "call sat vow id" "$(field "$RUN_OUT" counterexamples.0.vow_id)" "0"
 expect "call site function" "$(field "$RUN_OUT" counterexamples.0.call_sites.0.caller_function)" "caller"
-expect "call stops at first claim" "$(queries)" "1"
+# `caller` stops at its first claim (one query). The worker session may already
+# have started the next target, `keep`, when the parent reads the failure and
+# stops it, so one more query is allowed; no further claim of `caller` is.
+call_sat_queries=$(queries)
+if [ "$call_sat_queries" != "1" ] && [ "$call_sat_queries" != "2" ]; then
+    fail "call stops at first claim: got '$call_sat_queries' queries, want 1 or 2"
+fi
 no_leftovers "calls sat"
 
 # recursion is skipped, never sent to the solver.
@@ -540,6 +597,79 @@ got_ok=$(combined slow_unsat 8)
 if [ "$ref_ok" != "$got_ok" ]; then fail "all-proven output differs between --verify-jobs 1 and 8"; fi
 no_leftovers "determinism"
 if [ -f "$BW_DIR/pids" ]; then all_dead "$BW_DIR/pids" "solver (determinism)"; fi
+
+# A worker session lowers the program once and decides many functions (#1683):
+# with one job every query of the six targets comes from the same worker, and
+# no more workers than jobs are ever started while all targets are proven.
+distinct_workers() { if [ -f "$1" ]; then sort -u "$1" | wc -l | tr -d ' '; else echo 0; fi; }
+run_native record_unsat "$MANY" --verify-jobs 1
+expect "session status" "$(field "$RUN_OUT" status)" "Verified"
+if [ "$(queries)" -lt 6 ]; then fail "session: expected a query per target, got $(queries)"; fi
+expect "session: one worker for all targets" "$(distinct_workers "$BW_DIR/worker_ppids")" "1"
+no_leftovers "session one job"
+run_native record_unsat "$MANY" --verify-jobs 3
+expect "session jobs=3 status" "$(field "$RUN_OUT" status)" "Verified"
+workers=$(distinct_workers "$BW_DIR/worker_ppids")
+if [ "$workers" -lt 1 ] || [ "$workers" -gt 3 ]; then fail "session jobs=3: $workers workers"; fi
+no_leftovers "session three jobs"
+
+# A worker killed from outside after it has answered earlier targets may only
+# have been squeezed by what they left behind: its target is retried once in a
+# fresh worker, which is what a worker per function would have run.
+run_native kill_once_3 "$MANY" --verify-jobs 1
+expect "session retry status" "$(field "$RUN_OUT" status)" "Verified"
+expect "session retry exit" "$RUN_RC" "0"
+expect "session retry: a second worker" "$(distinct_workers "$BW_DIR/worker_ppids")" "2"
+no_leftovers "session retry"
+# ... but only once: a target that kills the fresh worker too is `unknown`.
+run_native kill_from_3 "$MANY" --verify-jobs 1
+expect "session retry once status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+expect "session retry once verify_status" "$(field "$RUN_OUT" verify_status)" "unknown"
+case "$(field "$RUN_OUT" verify_message)" in
+    *"memory limit exceeded"*) ;;
+    *) fail "session retry once: reason is '$(field "$RUN_OUT" verify_message)'" ;;
+esac
+expect "session retry once: two workers" "$(distinct_workers "$BW_DIR/worker_ppids")" "2"
+no_leftovers "session retry once"
+
+# The deadline is per target: a hang on the third target times out that target
+# alone, the whole process group of its worker is gone, and the earlier targets
+# keep their proofs (nothing above the first non-proven one is reported).
+run_native hang_once_3 "$MANY" --timeout 2 --verify-jobs 1
+expect "session hang verify_status" "$(field "$RUN_OUT" verify_status)" "timeout"
+all_dead "$BW_DIR/worker_pids" "session worker"
+all_dead "$BW_DIR/pids" "session solver"
+all_dead "$BW_DIR/grandchild_pids" "session solver child"
+no_leftovers "session hang"
+
+# Workers that never take a task: one that exits at once (here, as a worker
+# does when the program is not the one the parent planned) fails the run closed
+# after a second try, and one that cannot be started fails it too, never a hang.
+FAKE_VOWC="$TMP_ROOT/fake_vowc"
+cat > "$FAKE_VOWC" <<'SHIM'
+#!/usr/bin/env bash
+if [ "$1" = verify-worker ]; then echo "worker refused" >&2; exit 3; fi
+exec -a "$0" "$REAL_VOWC" "$@"
+SHIM
+chmod +x "$FAKE_VOWC"
+BW_DIR=$(mktemp -d "$TMP_ROOT/bw.XXXXXX")
+RUN_RC=0
+RUN_OUT=$(REAL_VOWC="$VOWC_BIN" PATH="$FAKE_DIR:$PATH" TMPDIR="$SCRATCH" FAKE_BW_MODE=unsat FAKE_BW_DIR="$BW_DIR" \
+    "$FAKE_VOWC" verify --no-cache --backend native --verify-jobs 1 "$MANY" 2>/dev/null) || RUN_RC=$?
+expect "refusing worker verify_status" "$(field "$RUN_OUT" verify_status)" "panicked"
+expect "refusing worker exit" "$RUN_RC" "1"
+case "$(field "$RUN_OUT" verify_message)" in
+    *"exit status 3"*"worker refused"*) ;;
+    *) fail "refusing worker: message is '$(field "$RUN_OUT" verify_message)'" ;;
+esac
+expect "refusing worker: no queries" "$(queries)" "0"
+no_leftovers "refusing worker"
+RUN_RC=0
+RUN_OUT=$(REAL_VOWC="$VOWC_BIN" PATH="$FAKE_DIR:$PATH" TMPDIR="$SCRATCH" FAKE_BW_MODE=unsat FAKE_BW_DIR="$BW_DIR" \
+    bash -c 'exec -a /nonexistent/vowc "$REAL_VOWC" verify --no-cache --backend native "$1"' _ "$MANY" 2>/dev/null) || RUN_RC=$?
+expect "unstartable worker verify_status" "$(field "$RUN_OUT" verify_status)" "panicked"
+expect "unstartable worker message" "$(field "$RUN_OUT" verify_message)" "cannot start the verification worker"
+no_leftovers "unstartable worker"
 
 # real Bitwuzla, real memory pressure: a straight-line function whose query is
 # too large for the worker's address-space cap is `unknown` with a memory reason
@@ -812,15 +942,15 @@ expect "replay with main confirmed" "$(field "$RUN_OUT" counterexamples.0.replay
 expect "replay with main has no bug report" "$(field "$RUN_OUT" diagnostics.1.error_code)" ""
 no_leftovers "replay with main"
 
-# a skipped replay never ran, so it is not a verifier bug (an i32 parameter is not replayable).
+# a skipped replay never ran, so it is not a verifier bug (an f32 parameter is not replayable: it has no source literal).
 REPLAY_SKIP_SRC="$TMP_ROOT/replay_skip.vow"
 cat > "$REPLAY_SKIP_SRC" <<'SRC'
 module ReplaySkip
 
-fn quot(a: i32, b: i32) -> i32 vow {
-  ensures: result - a / b == 0
+fn sum(a: f32, b: f32) -> f32 vow {
+  ensures: result != a + b
 } {
-  a / b
+  a + b
 }
 SRC
 run_native sat_zero "$REPLAY_SKIP_SRC" --replay-cex
@@ -907,12 +1037,9 @@ fn area(s: Shape) -> i64 vow {
 SRC
 run_native sat_tag_9 "$AGG_ENUM" --replay-cex
 expect "enum param discriminant value" "$(ce_value s.0)" "9"
-expect "enum param out-of-range replay" "$(field "$RUN_OUT" counterexamples.0.replay)" "skipped"
-case "$(field "$RUN_OUT" counterexamples.0.replay_reason)" in
-    *"discriminant 9 outside Shape (3 variants)"*) ;;
-    *) fail "enum param skip reason: $(field "$RUN_OUT" counterexamples.0.replay_reason)" ;;
-esac
-expect "skipped enum replay is not a bug" "$(field "$RUN_OUT" diagnostics.1.error_code)" ""
+# a tag outside the enum takes the arm no test selects, which `Shape::Empty` takes too
+expect "enum param out-of-range replay" "$(field "$RUN_OUT" counterexamples.0.replay)" "confirmed"
+expect "confirmed enum replay is not a bug" "$(field "$RUN_OUT" diagnostics.1.error_code)" ""
 no_leftovers "enum param"
 
 run_native sat_zero "$AGG_ENUM" --replay-cex
@@ -1140,10 +1267,39 @@ export FAKE_BW_NEEDLE="#x0000000000000007"
 expect "clauses all proven" "$(worker_clauses unsat --worker-clauses)" "0 -1 2:1,3:1"
 expect "clauses: only the second sat" "$(worker_clauses sat_if_contains --worker-clauses)" "1 3 2:1,3:0"
 expect "default mode has no clauses" "$(worker_clauses sat_if_contains)" "1 3 "
+# A worker told a shared module it cannot read (missing, or not an encoding) lowers
+# the program itself and decides the same task.
+printf 'not a module' > "$TMP_ROOT/bad_ir"
+expect "clauses: missing shared module" \
+    "$(worker_clauses unsat --worker-clauses --worker-ir "$TMP_ROOT/no_such_ir")" "0 -1 2:1,3:1"
+expect "clauses: corrupt shared module" \
+    "$(worker_clauses unsat --worker-clauses --worker-ir "$TMP_ROOT/bad_ir")" "0 -1 2:1,3:1"
 expect "clauses: first failure is the overall result" \
     "$(worker_clauses sat --worker-clauses | cut -d' ' -f1,2)" "1 2"
 unset FAKE_BW_NEEDLE
 no_leftovers "worker clauses"
+
+# The module the parent shares is what a worker decides from: a worker started on
+# the file the parent wrote needs no source (the path below does not exist), and
+# one handed the module of another program refuses the task table.
+OUTER_BW_DIR="$BW_DIR"
+run_native copy_ir "$MANY" --verify-jobs 1
+expect "shared module: status" "$(field "$RUN_OUT" status)" "Verified"
+if [ ! -s "$BW_DIR/ir.bin" ]; then fail "shared module: the worker was not told a module to decode"; fi
+IR_BIN="$BW_DIR/ir.bin"
+SHARED_BW_DIR=$(mktemp -d "$TMP_ROOT/bw.XXXXXX")
+shared_worker() {
+    PATH="$FAKE_DIR:$PATH" TMPDIR="$SCRATCH" FAKE_BW_MODE=unsat FAKE_BW_DIR="$SHARED_BW_DIR" \
+        "$VOWC_BIN" verify-worker "$TMP_ROOT/no_such_source.vow" --worker-index 0 --worker-name "$1" \
+        --worker-ir "$IR_BIN" --worker-budget-ms 60000 2>/dev/null
+}
+expect "shared module: a worker decides from it without the source" \
+    "$(shared_worker keep0 | python3 "$WIRE_DECODE")" "0 -1 "
+SHARED_RC=0
+shared_worker not_in_that_module >/dev/null || SHARED_RC=$?
+expect "shared module: another program's task table is refused" "$SHARED_RC" "3"
+no_leftovers "shared module"
+BW_DIR="$OUTER_BW_DIR"
 
 # A solver answer that no later claim can improve on stops the schedule, and the
 # clauses it left undecided get no verdict (the caller maps them to the overall).
@@ -1615,6 +1771,44 @@ if [ "$elapsed" -gt 10 ]; then fail "session hang took ${elapsed}s with --timeou
 all_dead "$BW_DIR/spids" "hung session"
 all_dead "$BW_DIR/pid" "hung solver"
 no_leftovers "session hang"
+
+# the last claim of a round is hedged (#1745): a session that has not answered it
+# within the window is raced by a fresh process, and the first final answer stands.
+# A claim the session answers at once starts no second process (the `unsat` runs
+# above: no standalone query).
+start=$(date +%s)
+run_incremental hedge_slow_unsat "$THREE_CLAIMS"
+elapsed=$(( $(date +%s) - start ))
+expect "hedge slow session status" "$(field "$RUN_OUT" status)" "Verified"
+expect "hedge slow session: one session" "$(sessions)" "1"
+expect "hedge slow session: only the last claim goes standalone" "$(queries)" "1"
+if [ "$elapsed" -gt 6 ]; then fail "hedge slow session waited for the session: ${elapsed}s"; fi
+no_survivors "hedge slow session"
+no_leftovers "hedge slow session"
+
+# a hard `sat` that the session reaches late is the standalone full query's, model and all.
+start=$(date +%s)
+run_incremental hedge_slow_sat "$THREE_CLAIMS"
+elapsed=$(( $(date +%s) - start ))
+expect "hedge slow sat status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+expect "hedge slow sat vow id" "$(field "$RUN_OUT" counterexamples.0.vow_id)" "0"
+expect "hedge slow sat blame" "$(field "$RUN_OUT" counterexamples.0.blame)" "Callee"
+expect "hedge slow sat model" "$(field "$RUN_OUT" counterexamples.0.values.a)" "7"
+expect "hedge slow sat: one standalone query" "$(queries)" "1"
+if [ "$elapsed" -gt 6 ]; then fail "hedge slow sat waited for the session: ${elapsed}s"; fi
+no_survivors "hedge slow sat"
+no_leftovers "hedge slow sat"
+
+# a session that answers `unsat` inside the race ends the standalone process.
+start=$(date +%s)
+run_incremental hedge_win "$THREE_CLAIMS"
+elapsed=$(( $(date +%s) - start ))
+expect "hedge session wins status" "$(field "$RUN_OUT" status)" "Verified"
+expect "hedge session wins: the standalone query was started" "$(queries)" "1"
+if [ "$elapsed" -gt 6 ]; then fail "hedge session wins waited for the standalone solver: ${elapsed}s"; fi
+all_dead "$BW_DIR/pids" "raced standalone solver"
+no_survivors "hedge session wins"
+no_leftovers "hedge session wins"
 
 # a round with a single claim for the solver has nothing to share.
 run_incremental unsat "$ONE_CLAIM"
