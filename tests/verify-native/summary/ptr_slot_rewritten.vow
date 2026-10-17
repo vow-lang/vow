@@ -1,6 +1,8 @@
-// TEST: summary-expect skipped
+// TEST: summary-expect unknown
 // TEST: summary-baseline failed
-// TEST: summary-budget 400
+// TEST: summary-budget 200
+// `reset` stores a Vec it built, with one element, into a pointer slot of its parameter. The slot is
+// havoced to an unconstrained handle, so the caller cannot conclude the Vec is empty.
 struct H { items: Vec<i64>, n: i64 }
 
 fn reset(h: H, n: i64) {
@@ -17,21 +19,21 @@ fn reset(h: H, n: i64) {
     let p11: i64 = (p10 * 3 + p8) & 255;
     let p12: i64 = (p11 + p10 + p1) & 255;
     let p13: i64 = p12 & 15;
-    h.n = p13;
-    h.items = Vec::new();
+    let w: Vec<i64> = Vec::new();
+    w.push(p13 + 1);
+    h.items = w;
 }
 
-fn run(v: Vec<i64>) -> bool vow {
+fn run(v: Vec<i64>) -> i64 vow {
     requires: v.len() == 0,
-    ensures: v.len() == 1
+    ensures: result == 0
 } {
     let h: H = H { items: v, n: 0 };
     reset(h, 1);
     reset(h, 2);
     reset(h, 3);
     reset(h, 4);
-    h.items.push(1);
-    true
+    h.items.len() as i64
 }
 
 fn main() -> i32 { 0 }

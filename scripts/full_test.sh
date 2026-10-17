@@ -1673,16 +1673,22 @@ print(sum(1 for d in ds if d.get('error_code') == sys.argv[2]))
     fi
 done
 # Callee summaries (#1791): tests/verify-native/summary/run.sh decides each fixture with the
-# inlining budget lowered so a proven callee is summarised, and with the default budget.
+# inlining budget lowered so a proven callee is summarised, and with the default budget. A run
+# that prints fewer lines than there are fixtures (a crash, a missing binary) fails.
 if [ "$native_have_solver" -eq 0 ]; then
     skip "verify-native/summary fixtures" "bitwuzla not on PATH"
 else
+    summary_want=$(find tests/verify-native/summary -maxdepth 1 -name '*.vow' | wc -l)
+    summary_got=0
     while IFS= read -r summary_line; do
         case "$summary_line" in
-            PASS\ *) pass "verify-native/${summary_line#PASS }" ;;
-            FAIL\ *) fail "verify-native/${summary_line#FAIL }" "see tests/verify-native/summary/run.sh" ;;
+            PASS\ *) pass "verify-native/${summary_line#PASS }"; summary_got=$((summary_got + 1)) ;;
+            FAIL\ *) fail "verify-native/${summary_line#FAIL }" "see tests/verify-native/summary/run.sh"; summary_got=$((summary_got + 1)) ;;
         esac
     done < <(bash tests/verify-native/summary/run.sh "$SELF" 2>/dev/null)
+    if [ "$summary_got" -ne "$summary_want" ]; then
+        fail "verify-native/summary" "run.sh reported $summary_got of $summary_want fixtures"
+    fi
 fi
 # Every code of the closed `Skipped` list is pinned by a skip/ fixture (or an
 # explicit exemption) and the list matches ADR-1430 section 4.

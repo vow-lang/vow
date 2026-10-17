@@ -1,8 +1,8 @@
 // TEST: summary-expect unknown
 // TEST: summary-baseline failed
-// TEST: summary-budget 400
-// `pick` returns its parameter x on one path and, after a `let x = y`, its parameter y on the
-// other, and its ensures names x at both returns: the clause is a different one at each. The
+// TEST: summary-budget 300
+// `pick` returns its parameter x on one path and, after a `let x = y`, the new x (the value of y) on the
+// other, and its ensures names x at both returns: the lowerer reads a different x at each. The
 // summary may assume neither alone.
 fn pick(x: i64, y: i64, n: i64) -> i64 vow {
     requires: x >= 0 && y >= 0,
@@ -25,7 +25,7 @@ fn pick(x: i64, y: i64, n: i64) -> i64 vow {
         return x;
     }
     let x: i64 = y + (p13 - p13);
-    x
+    return x;
 }
 
 fn run(a: i64, b: i64, n: i64) -> i64 vow {
