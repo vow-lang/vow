@@ -21,20 +21,11 @@ use vc_pool
 // skip it has without summaries. The parent plans from the proven ids and hands the same ids to
 // every worker (`--worker-summaries`), so planner and worker agree on every summary.
 
-// Function indices that stand for a summary in the call tree of the function at index `fi`,
+// Ids of the functions that stand for a summary in the call tree of the function at index `fi`,
 // if everything that can be summarised were: the callees its proof or its decision needs.
 fn vc_waves_needs(fns: Vec<IrFunction>, m: IrModule, fi: u64, budget: i64) -> Vec<i64> {
     let sm: VcSummarised = vc_summary_module(fns[fi], m, vc_trust_all(), budget);
     sm.used_ids
-}
-
-fn vc_waves_fn_index(fns: Vec<IrFunction>, id: i64) -> i64 {
-    let mut i: u64 = 0;
-    while i < fns.len() {
-        if fns[i].id == id { return i as i64; }
-        i = i + 1;
-    }
-    -1
 }
 
 fn vc_waves_all_in(needs: Vec<i64>, proven: Vec<i64>) -> bool {
@@ -50,14 +41,14 @@ fn vc_waves_all_in(needs: Vec<i64>, proven: Vec<i64>) -> bool {
 // function at index `fi` (`vc_waves_needs`), and of those functions in turn: an uncontracted
 // intermediate that is itself above the budget is no root, but its callees are proven before it.
 // A function already in `tried` is not wanted again.
-fn vc_waves_collect(fns: Vec<IrFunction>, vm: IrModule, fi: i64, budget: i64, want: Vec<i64>, tried: Vec<i64>) {
+fn vc_waves_collect(fns: Vec<IrFunction>, idx_of: Vec<i64>, vm: IrModule, fi: i64, budget: i64, want: Vec<i64>, tried: Vec<i64>) {
     let needs: Vec<i64> = vc_waves_needs(fns, vm, fi as u64, budget);
     let mut n: u64 = 0;
     while n < needs.len() {
-        let ci: i64 = vc_waves_fn_index(fns, needs[n]);
+        let ci: i64 = vc_callee_index(idx_of, needs[n]);
         if ci >= 0 && !vc_id_in(want, ci) && !vc_id_in(tried, needs[n]) {
             want.push(ci);
-            vc_waves_collect(fns, vm, ci, budget, want, tried);
+            vc_waves_collect(fns, idx_of, vm, ci, budget, want, tried);
         }
         n = n + 1;
     }
@@ -90,6 +81,7 @@ fn vc_waves_outcome_of(p: VcWaveProofs, fi: i64) -> i64 {
 // needs summaries). Empty when no root asks for a summary or nothing is proven.
 fn vc_waves_prove(exe: String, path: String, vm: IrModule, roots: Vec<i64>, jobs: i64, timeout_ms: i64, budget: i64, cache: VcCache) -> VcWaveProofs [io, read, write] {
     let fns: Vec<IrFunction> = vm.functions;
+    let idx_of: Vec<i64> = vc_fn_index_table(fns);
     let out: VcWaveProofs = vc_waves_none();
     let proven: Vec<i64> = out.ids;
     let tried: Vec<i64> = Vec::new();
@@ -99,7 +91,7 @@ fn vc_waves_prove(exe: String, path: String, vm: IrModule, roots: Vec<i64>, jobs
         let want: Vec<i64> = Vec::new();
         let mut r: u64 = 0;
         while r < roots.len() {
-            vc_waves_collect(fns, vm, roots[r], budget, want, tried);
+            vc_waves_collect(fns, idx_of, vm, roots[r], budget, want, tried);
             r = r + 1;
         }
         let batch: Vec<i64> = Vec::new();

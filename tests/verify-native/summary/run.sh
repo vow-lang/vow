@@ -58,8 +58,7 @@ sys.exit(0 if ok else 1)" "$json" 2>/dev/null || errors+=("summary run: expected
     st=$(status_of "$json")
     case "$base" in
         proven) [ "$st" = "Verified" ] || errors+=("baseline run: expected Verified, got '$st'") ;;
-        failed) [ "$st" = "VerifyFailed" ] || errors+=("baseline run: expected VerifyFailed, got '$st'") ;;
-        unknown) [ "$st" = "VerifyFailed" ] || errors+=("baseline run: expected VerifyFailed, got '$st'") ;;
+        failed|unknown) [ "$st" = "VerifyFailed" ] || errors+=("baseline run: expected VerifyFailed, got '$st'") ;;
         skipped) [ "$st" = "Skipped" ] || errors+=("baseline run: expected Skipped, got '$st'") ;;
     esac
     json=$(VOW_VERIFY_NO_SUMMARIES=1 VOW_VERIFY_INLINE_BUDGET="$budget" "$VOWC" verify --backend native --no-cache "$f" 2>/dev/null)

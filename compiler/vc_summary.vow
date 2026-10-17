@@ -22,7 +22,8 @@ use vc_summary_ens
 // A summary is a function in its own right. `vc_stub_of` builds it from the callee: the
 // callee's code up to its last `requires` (so the clauses are claims of a spliced frame, with
 // the blame and call chain of an inlined call), then a `FieldSet` of an unconstrained value
-// for every field slot of a parameter object the callee may write, then a `Return` of an
+// for every field slot of a parameter object the callee may write, then the `ensures` clauses
+// the callee's code lets `vc_summary_ens` copy, as assumptions, then a `Return` of an
 // unconstrained value. The splicer treats it like any callee, and `vc_summary_module` swaps
 // it into a copy of the module for the callees the caller trusts, so inlining, the gate, the
 // loop cut and the executor see ordinary IR and need to know nothing about summaries.
@@ -439,8 +440,7 @@ struct VcSummarised {
     used_ids: Vec<i64>,
 }
 
-// A copy of `m` with every function of `trusted` (function ids proven on their own, see
-// `vc_summary_module`) replaced by its summary where the replacement is allowed.
+// A copy of `m` whose function list is `fns`.
 fn vc_module_with(m: IrModule, fns: Vec<IrFunction>) -> IrModule {
     let out: IrModule = ir_module_new(m.name);
     out.functions = fns;

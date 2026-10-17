@@ -1953,10 +1953,11 @@ fn native_plan(fns: Vec<IrFunction>, ir_mod: IrModule, vm: IrModule, const_fn_in
         let f: IrFunction = fns[fi];
         if is_verify_target(f, ir_mod, const_fn_indices) {
             let reason: String = vc_module_skip_reason_trusted(vfns[fi], vm, cfg.trusted, cfg.budget);
+            let pre: i64 = vc_waves_outcome_of(waves, fi as i64);
             if reason.len() > 0 {
                 entries.push(NativeEntry { fn_index: fi as i64, reason: reason, task: -1, pre: -1 });
-            } else if f.vows.len() > 0 && vc_waves_outcome_of(waves, fi as i64) >= 0 {
-                entries.push(NativeEntry { fn_index: fi as i64, reason: String::from(""), task: -1, pre: vc_waves_outcome_of(waves, fi as i64) });
+            } else if f.vows.len() > 0 && pre >= 0 {
+                entries.push(NativeEntry { fn_index: fi as i64, reason: String::from(""), task: -1, pre: pre });
             } else {
                 entries.push(NativeEntry { fn_index: fi as i64, reason: String::from(""), task: task_idx.len() as i64, pre: -1 });
                 task_idx.push(fi as i64);
