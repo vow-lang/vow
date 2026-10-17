@@ -1,0 +1,18 @@
+// TEST: trust-expect failed
+// A callee that changes a collection it was given is not left to its proof: its proof takes the two
+// `Vec` parameters for different objects, and `run` passes one for both.
+fn tail(a: Vec<i64>, b: Vec<i64>) -> i64 vow {
+    requires: a.len() > 0 && b.len() > 0
+} {
+    let n: u64 = b.len();
+    a.pop();
+    b[n - 1]
+}
+
+fn run(v: Vec<i64>) -> i64 vow {
+    requires: v.len() == 1
+} {
+    tail(v, v)
+}
+
+fn main() -> i32 { 0 }

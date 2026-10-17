@@ -208,10 +208,10 @@ fn check_session_skips_claims_behind_a_binder() -> i64 [io] {
 // live session that may ask it does.
 fn check_the_last_solver_claim_is_the_hedged_one() -> i64 {
     let cs: VcClaims = two_claims();
-    if vc_claims_last_solver(cs) != 1 { return 1; }
+    if vc_claims_last_solver(vc_frames_new(), cs) != 1 { return 1; }
     let ss: VcSession = vc_session_new(true, -1);
     if vc_session_hedges(ss, cs, 1) { return 2; }
-    ss.last_at = vc_claims_last_solver(cs);
+    ss.last_at = vc_claims_last_solver(vc_frames_new(), cs);
     if !vc_session_hedges(ss, cs, 1) { return 3; }
     if vc_session_hedges(ss, cs, 0) { return 4; }
     let dead: VcSession = vc_session_new(false, -1);
@@ -225,7 +225,7 @@ fn check_the_last_solver_claim_is_the_hedged_one() -> i64 {
 fn check_a_claim_behind_a_binder_is_not_hedged() -> i64 {
     let cs: VcClaims = binder_claims();
     let ss: VcSession = vc_session_new(true, vc_claims_first_binder(cs));
-    ss.last_at = vc_claims_last_solver(cs);
+    ss.last_at = vc_claims_last_solver(vc_frames_new(), cs);
     if ss.last_at != 1 { return 1; }
     if vc_session_hedges(ss, cs, 1) { return 2; }
     0

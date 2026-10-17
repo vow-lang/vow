@@ -1690,6 +1690,24 @@ else
         fail "verify-native/summary" "run.sh reported $summary_got of $summary_want fixtures"
     fi
 fi
+# Proven callees whose claims are not decided again (#1803): tests/verify-native/trust/run.sh decides
+# each fixture with the default size and with every caller waiting for its callees' proofs; both
+# must give the verdict and counterexamples the fixture names.
+if [ "$native_have_solver" -eq 0 ]; then
+    skip "verify-native/trust fixtures" "bitwuzla not on PATH"
+else
+    trust_want=$(find tests/verify-native/trust -maxdepth 1 -name '*.vow' | wc -l)
+    trust_got=0
+    while IFS= read -r trust_line; do
+        case "$trust_line" in
+            PASS\ *) pass "verify-native/${trust_line#PASS }"; trust_got=$((trust_got + 1)) ;;
+            FAIL\ *) fail "verify-native/${trust_line#FAIL }" "see tests/verify-native/trust/run.sh"; trust_got=$((trust_got + 1)) ;;
+        esac
+    done < <(bash tests/verify-native/trust/run.sh "$SELF" 2>/dev/null)
+    if [ "$trust_got" -ne "$trust_want" ]; then
+        fail "verify-native/trust" "run.sh reported $trust_got of $trust_want fixtures"
+    fi
+fi
 # Every code of the closed `Skipped` list is pinned by a skip/ fixture (or an
 # explicit exemption) and the list matches ADR-1430 section 4.
 skip_codes_log="$TMPDIR/verify-native-skip-codes.log"

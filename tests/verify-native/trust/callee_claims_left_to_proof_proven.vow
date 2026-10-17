@@ -1,0 +1,22 @@
+// TEST: trust-expect proven
+// The claims inside a callee proven on its own (the division, the index) are not decided again in
+// the callers, and the callers are proven all the same.
+fn pick(v: Vec<i64>, i: u64, d: i64) -> i64 vow {
+    requires: i < v.len() && d != 0 && d != -1
+} {
+    v[i] / d
+}
+
+fn twice(v: Vec<i64>, i: u64) -> i64 vow {
+    requires: i < v.len()
+} {
+    pick(v, i, 3) + pick(v, i, 5)
+}
+
+fn run(v: Vec<i64>) -> i64 vow {
+    requires: v.len() > 1
+} {
+    twice(v, 0) + twice(v, 1)
+}
+
+fn main() -> i32 { 0 }

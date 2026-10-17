@@ -1,0 +1,71 @@
+module TestVcWaves
+
+use ir
+use vc_ops
+use vc_inline
+use vc_summary
+use vc_waves
+use tests.builders
+
+fn padded(id: i64, name: String, pad: i64, callee: i64) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    let mut n: i64 = 0;
+    while n < pad {
+        i.push(mk_inst_const_i64(n, 1));
+        n = n + 1;
+    }
+    if callee >= 0 {
+        i.push(mk_inst_call_target(n, ITY_UNIT(), Vec::new(), callee));
+        n = n + 1;
+    }
+    i.push(mk_inst_return(n, 0));
+    let b: Vec<IrBlock> = Vec::new();
+    b.push(mk_block(0, i));
+    mk_function(id, name, Vec::new(), ITY_UNIT(), b)
+}
+
+// leaf (11 instructions) <- mid (53 with the leaf) <- top (155 with both)
+fn chain() -> IrModule {
+    let fs: Vec<IrFunction> = Vec::new();
+    fs.push(padded(1, String::from("leaf"), 10, -1));
+    fs.push(padded(2, String::from("mid"), 40, 1));
+    fs.push(padded(3, String::from("top"), 100, 2));
+    mk_module(fs)
+}
+
+fn ids_text(ids: Vec<i64>) -> String {
+    vc_ids_text(ids)
+}
+
+fn needs_at(c: VcWaveCtx, fi: u64, root_min: i64) -> String {
+    c.root_min = root_min;
+    ids_text(vc_trust_needs(c, fi))
+}
+
+// A function above `root_min` waits for the callees whose own call tree is at least a quarter of
+// it, callees first; a function within it waits for none.
+fn check_trust_needs() -> i64 [read] {
+    let c: VcWaveCtx = vc_wave_ctx(chain(), 16384);
+    if needs_at(c, 2, 100) != String::from("2") { return 1; }
+    if needs_at(c, 2, 200) != String::from("") { return 2; }
+    if needs_at(c, 2, 40) != String::from("1,2") { return 3; }
+    if needs_at(c, 1, 40) != String::from("1") { return 4; }
+    if needs_at(c, 0, 5) != String::from("") { return 5; }
+    0
+}
+
+// Within the inlining budget a function has no summaries to wait for, and at the default root size
+// (1024) these functions wait for nothing; the answer is remembered.
+fn check_waves_needs_within_budget() -> i64 [read] {
+    let c: VcWaveCtx = vc_wave_ctx(chain(), 16384);
+    if vc_trust_root_min() != 1024 { return 1; }
+    if vc_waves_needs(c, 2).len() != 0 { return 2; }
+    if c.known[2] != 1 { return 3; }
+    0
+}
+
+fn main() -> i32 [read] {
+    let mut r: i64 = check_trust_needs();
+    if r == 0 { let d: i64 = check_waves_needs_within_budget(); if d != 0 { r = 100 + d; } }
+    i64_to_i32_wrap(r)
+}

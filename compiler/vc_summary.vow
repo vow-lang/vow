@@ -10,6 +10,7 @@ use vc_loops
 use vc_agg_shape
 use vc_induct_agg
 use vc_inline
+use vc_overlay
 use vc_summary_ens
 
 // Callee summaries for the native verifier (#1791, ADR-2026-10-16-1800). A function whose
@@ -62,6 +63,20 @@ fn vc_summaries_enabled() -> bool [read] {
 // The smallest call tree worth a summary under `budget`: a smaller callee costs less to
 // inline than the precision a summary gives up.
 fn vc_summary_min_insts(budget: i64) -> i64 { budget / 4 }
+
+fn vc_trust_root_env() -> String { String::from("VOW_VERIFY_TRUST_ROOT_MIN") }
+
+// The call tree size above which a function is decided after its callees worth a proof of their own
+// (`vc_trust_needs`): `VOW_VERIFY_TRUST_ROOT_MIN` (test-only, like the budget) or 1024.
+fn vc_trust_root_min() -> i64 [read] {
+    match parse_i64(getenv(vc_trust_root_env())) {
+        Option::Some(v) => { if v > 0 { v } else { 1024 } },
+        Option::None => { 1024 },
+    }
+}
+
+// The smallest call tree worth a proof of its own under `root_min`.
+fn vc_trust_callee_min(root_min: i64) -> i64 { root_min / 4 }
 
 // The summaries a verify run uses: the ids of the functions proven on their own (`trusted`)
 // and the inlining budget the run applies (`vc_summary_budget`).
@@ -196,6 +211,85 @@ fn vc_stored_operand(inst: IrInst) -> i64 {
 // True when `inst` changes a collection (`Vec`, `String` or map) held by its first operand.
 fn vc_mutates_collection(inst: IrInst) -> bool {
     vc_vec_kind_mutates(vc_inst_vec_kind(inst)) || vc_map_kind_mutates(vc_inst_map_kind(inst))
+}
+
+// True when a caller could pass one object for two parameters of a proof that takes them for
+// different objects: the flattened body `flat` changes a `Vec`, `String` or map it was given and has
+// two parameters that are collections of one class. A change through a pointer read out of given
+// memory is refused whatever the parameters are.
+fn vc_collection_alias_risk(flat: IrFunction) -> bool {
+    let n_ids: u64 = (dom_max_inst_id(flat) + 1) as u64;
+    let rpo: Vec<i64> = vc_cfg_rpo(flat);
+    let src: VcPhiSources = vc_fh_phi_sources(flat, rpo, n_ids);
+    let def_op: Vec<i64> = vc_agg_def_ops(flat, n_ids);
+    let given: Vec<i64> = vc_given_table(flat, rpo, n_ids, src);
+    let param_of: Vec<i64> = vc_param_table(flat, n_ids);
+    let seen: Vec<i64> = dom_fill(n_ids, -1);
+    let classes: Vec<i64> = dom_fill(flat.params.len(), 0);
+    let mut mutated: bool = false;
+    let mut stamp: i64 = 0;
+    let mut bi: u64 = 0;
+    while bi < flat.blocks.len() {
+        if rpo[bi] >= 0 {
+            let blk: IrBlock = flat.blocks[bi];
+            let mut ii: u64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                let k: i64 = vc_inst_vec_kind(inst);
+                let mk: i64 = vc_inst_map_kind(inst);
+                if (k != VC_VEC_NONE() || mk != VC_MAP_NONE()) && inst.args.len() > 0 {
+                    let mut cls: i64 = VC_OV_MAP();
+                    let mut objects: u64 = 1;
+                    if mk == VC_MAP_NONE() {
+                        cls = vc_overlay_op_class(inst, k);
+                        if cls == VC_OV_STRING() { objects = vc_str_kind_object_operands(k); }
+                    }
+                    let writes: bool = vc_mutates_collection(inst);
+                    let mut j: u64 = 0;
+                    while j < objects && j < inst.args.len() {
+                        stamp = stamp + 1;
+                        let leaves: Vec<i64> = vc_fh_leaves(inst.args[j], src, def_op, seen, stamp);
+                        let mut li: u64 = 0;
+                        while li < leaves.len() {
+                            let l: i64 = leaves[li];
+                            if l < 0 || (l as u64) >= n_ids { return true; }
+                            if given[l as u64] == 1 {
+                                if param_of[l as u64] < 0 || (param_of[l as u64] as u64) >= classes.len() {
+                                    if writes && j == 0 { return true; }
+                                } else {
+                                    let p: u64 = param_of[l as u64] as u64;
+                                    classes[p] = classes[p] | cls;
+                                    if writes && j == 0 { mutated = true; }
+                                }
+                            }
+                            li = li + 1;
+                        }
+                        j = j + 1;
+                    }
+                }
+                ii = ii + 1;
+            }
+        }
+        bi = bi + 1;
+    }
+    mutated && (vc_class_shared(classes, VC_OV_VEC()) || vc_class_shared(classes, VC_OV_STRING()) || vc_class_shared(classes, VC_OV_MAP()))
+}
+
+// True when two parameters are objects of class `cls`.
+fn vc_class_shared(classes: Vec<i64>, cls: i64) -> bool {
+    let mut n: i64 = 0;
+    let mut p: u64 = 0;
+    while p < classes.len() {
+        if (classes[p] & cls) != 0 { n = n + 1; }
+        p = p + 1;
+    }
+    n >= 2
+}
+
+// True when a claim of `g` may be left to its proof wherever `g` is inlined.
+fn vc_trust_sound(g: IrFunction, m: IrModule) -> bool {
+    let flat: VcInlined = vc_inline(g, m, VC_INLINE_INST_CAP());
+    flat.status == VC_INLINE_OK() && !vc_collection_alias_risk(flat.f)
 }
 
 // The summary of the function whose flattened body is `flat` (`g` as declared): `ok` when

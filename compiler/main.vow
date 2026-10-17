@@ -1969,14 +1969,20 @@ fn native_plan(fns: Vec<IrFunction>, ir_mod: IrModule, vm: IrModule, const_fn_in
     entries
 }
 
-// Indices of the functions the plan skipped as too large to inline: the ones the proofs of
-// `vc_waves` are for.
-fn native_summary_roots(entries: Vec<NativeEntry>) -> Vec<i64> {
+// Indices of the functions whose decision waits for proofs of other functions (`vc_waves`): the
+// ones the plan skipped as too large to inline, which need summaries, and the ones that will run
+// with a call tree above `vc_trust_root_min`, which skip the claims of the callees proven first.
+fn native_summary_roots(entries: Vec<NativeEntry>, vm: IrModule) -> Vec<i64> [read] {
     let roots: Vec<i64> = Vec::new();
+    let vfns: Vec<IrFunction> = vm.functions;
+    let idx_of: Vec<i64> = vc_fn_index_table(vfns);
+    let sizes: Vec<i64> = dom_fill(vfns.len(), -1);
+    let root_min: i64 = vc_trust_root_min();
     let mut e: u64 = 0;
     while e < entries.len() {
         let en: NativeEntry = entries[e];
         if en.task < 0 && en.pre < 0 && vc_reason_code(en.reason) == VC_SKIP_INLINING_TOO_LARGE() { roots.push(en.fn_index); }
+        else if en.task >= 0 && vc_tree_size(vfns, idx_of, sizes, en.fn_index, VC_INLINE_SKIP_INSTS()) > root_min { roots.push(en.fn_index); }
         e = e + 1;
     }
     roots
@@ -2008,12 +2014,12 @@ fn run_verify_native(argv: Vec<String>, fr: LoweredFrontend, path: String, tctx:
     let mut entries: Vec<NativeEntry> = native_plan(fns, ir_mod, vm, const_fn_indices, task_idx, task_names, cfg, waves);
     let use_cache: bool = !has_flag(argv, "--no-cache") && timeout_ms > 0;
     let mut cache: VcCache = vc_cache_off();
-    let roots: Vec<i64> = native_summary_roots(entries);
+    let roots: Vec<i64> = native_summary_roots(entries, vm);
     if roots.len() > 0 && timeout_ms > 0 && vc_summaries_enabled() {
         if use_cache { cache = vc_cache_resolve(vc_solver_locate()); }
         waves = vc_waves_prove(vc_worker_exe(argv[0]), path, vm, roots, jobs, timeout_ms, budget, cache);
         cfg.trusted = waves.ids;
-        if cfg.trusted.len() > 0 {
+        if waves.fns.len() > 0 {
             task_idx = Vec::new();
             task_names = Vec::new();
             entries = native_plan(fns, ir_mod, vm, const_fn_indices, task_idx, task_names, cfg, waves);

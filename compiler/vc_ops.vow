@@ -260,16 +260,18 @@ fn vc_is_cut_end(inst: IrInst) -> bool {
 // `vc_clone_inst` preserves, so the marker survives loop closing and unrolling.
 // Frame k of `VcFrames` is the k-th spliced call, in depth-first order: the
 // function it enters, the source range of the call and the frame of the call's
-// own caller (-1 for the verify target).
+// own caller (-1 for the verify target). `trusted`: the ids of the functions proven on
+// their own (`vc_claim_trusted`).
 struct VcFrames {
     func_ids: Vec<i64>,
     call_starts: Vec<i64>,
     call_lens: Vec<i64>,
     parents: Vec<i64>,
+    trusted: Vec<i64>,
 }
 
 fn vc_frames_new() -> VcFrames {
-    VcFrames { func_ids: Vec::new(), call_starts: Vec::new(), call_lens: Vec::new(), parents: Vec::new() }
+    VcFrames { func_ids: Vec::new(), call_starts: Vec::new(), call_lens: Vec::new(), parents: Vec::new(), trusted: Vec::new() }
 }
 
 fn VC_FRAME_PREFIX() -> String { String::from("__vc_frame:") }
