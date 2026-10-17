@@ -276,7 +276,7 @@ fn vc_agg_write_phi(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, 
 fn vc_agg_write_aliased(ag: VcAgg, ar: VcArena, hdr: SmtScript, pos: i64, idx: i64, sort: i64, term: i64, pc: i64) {
     let mut i: i64 = 0;
     while i < ag.al_params.len() as i64 {
-        if i == pos || vc_agg_same_group(ag, pos, i) {
+        if vc_agg_same_group(ag, pos, i) {
             let o: i64 = vc_agg_param(ag, ag.al_params[i as u64]);
             let at: i64 = { if i == pos { pc } else { vc_flow_and(ag.fl, ar, hdr, pc, vc_agg_same_object(ag, ar, hdr, pos, i)) } };
             vc_agg_write_one(ag, ar, hdr, o, idx, sort, term, at);
@@ -380,11 +380,13 @@ fn vc_agg_child_symbol(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i6
 
 // Declares the identity of each parameter in `params` (ascending indices of the
 // parameters that may be one object), when there is more than one; `keys` is the
-// type group of each (`vc_agg_alias_keys`); `vc_agg_group_facts` says the
-// identities of different groups differ, so equal identities always mean one
-// group. 8 bits tell up to 256 parameters apart, 64 any more.
-fn vc_agg_enable_alias(ag: VcAgg, ar: VcArena, hdr: SmtScript, params: Vec<i64>, keys: Vec<String>) {
-    if params.len() < 2 { return; }
+// type group of each (`vc_agg_alias_keys`). Returns the Bool terms the caller must
+// assume: the identities of parameters of different groups differ, so equal
+// identities always mean one group. 8 bits tell up to 256 parameters apart, 64
+// any more.
+fn vc_agg_enable_alias(ag: VcAgg, ar: VcArena, hdr: SmtScript, params: Vec<i64>, keys: Vec<String>) -> Vec<i64> {
+    let facts: Vec<i64> = Vec::new();
+    if params.len() < 2 { return facts; }
     let sort: i64 = { if params.len() <= 256 { 8 } else { 64 } };
     let ty: i64 = { if sort == 8 { ITY_U8() } else { ITY_U64() } };
     let mut i: u64 = 0;
@@ -393,26 +395,16 @@ fn vc_agg_enable_alias(ag: VcAgg, ar: VcArena, hdr: SmtScript, params: Vec<i64>,
         ag.ps_ty[ag.ps_ty.len() - 1] = ty;
         ag.al_params.push(params[i]);
         ag.al_keys.push(keys[i]);
-        i = i + 1;
-    }
-}
-
-// The Bool terms that hold of every model: the identities of two aliasable
-// parameters of different type groups differ.
-fn vc_agg_group_facts(ag: VcAgg, ar: VcArena) -> Vec<i64> {
-    let out: Vec<i64> = Vec::new();
-    let mut i: i64 = 0;
-    while i < ag.al_ids.len() as i64 {
         let mut j: i64 = 0;
-        while j < i {
-            if !vc_agg_same_group(ag, j, i) {
-                out.push(vc_tm_app1(ar, VC_OP_NOT(), vc_tm_app2(ar, VC_OP_EQ(), ag.al_ids[j as u64], ag.al_ids[i as u64])));
+        while j < i as i64 {
+            if !vc_agg_same_group(ag, j, i as i64) {
+                facts.push(vc_tm_app1(ar, VC_OP_NOT(), vc_tm_app2(ar, VC_OP_EQ(), ag.al_ids[j as u64], ag.al_ids[i])));
             }
             j = j + 1;
         }
         i = i + 1;
     }
-    out
+    facts
 }
 
 // True when the aliasable parameters at positions `i` and `j` have one type group.

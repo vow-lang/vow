@@ -225,8 +225,9 @@ fn vc_agg_read_use_ok(inst: IrInst, a: u64) -> bool {
 //     (those are modelled per parameter, `vc_vec`);
 //   - no parameter may be the very object a child names, which `vc_heap` rules
 //     out by forbidding writes to parameters in a function that reads a pointer
-//     out of a field, and the aliasable-parameter identities (`alias_params`)
-//     are not needed.
+//     out of a field. The gate uses `vc_agg_alias_marked`, not the type-narrowed
+//     `vc_agg_alias_params`: a child pointer is not typed here, so a parameter
+//     of another type may still be the object it names.
 // "" when it holds, else the detail of an `unsupported-opcode` skip.
 fn vc_agg_child_detail(f: IrFunction, n_ids: u64) -> String {
     let rooted: Vec<i64> = vc_agg_arg_params(f, n_ids);

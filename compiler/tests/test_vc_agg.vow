@@ -874,26 +874,22 @@ fn keyed(f: IrFunction, a: String, b: String, c: String, d: String) -> IrFunctio
     f
 }
 
-fn ids_text(ids: Vec<i64>) -> String {
-    vc_ids_text(ids)
-}
-
 // Parameters of different declared types are never one object: only those that share their
 // type with another marked parameter keep an identity, and a parameter whose type is not known
 // puts all of them back in one group.
 fn check_alias_params_by_type() -> i64 {
     let f: IrFunction = keyed(four_params_fn(), String::from("P"), String::from("P"), String::from("Q"), String::from("Q"));
-    if ids_text(vc_agg_alias_params(f, vc_ty_table(f).len())) != String::from("0,1,2,3") { return 200; }
+    if vc_ids_text(vc_agg_alias_params(f, vc_ty_table(f).len())) != String::from("0,1,2,3") { return 200; }
     let g: IrFunction = keyed(four_params_fn(), String::from("P"), String::from("P"), String::from("Q"), String::from("R"));
-    if ids_text(vc_agg_alias_params(g, vc_ty_table(g).len())) != String::from("0,1") { return 201; }
+    if vc_ids_text(vc_agg_alias_params(g, vc_ty_table(g).len())) != String::from("0,1") { return 201; }
     let h: IrFunction = keyed(four_params_fn(), String::from("P"), String::from("Q"), String::from("R"), String::from("S"));
     if vc_agg_alias_params(h, vc_ty_table(h).len()).len() != 0 { return 202; }
     let u: IrFunction = keyed(four_params_fn(), String::from("P"), String::from("Q"), String::from("R"), String::from(""));
     if u.param_keys.len() != 3 { return 203; }
-    if ids_text(vc_agg_alias_params(u, vc_ty_table(u).len())) != String::from("0,1,2,3") { return 204; }
+    if vc_ids_text(vc_agg_alias_params(u, vc_ty_table(u).len())) != String::from("0,1,2,3") { return 204; }
     let blank: IrFunction = keyed(four_params_fn(), String::from("P"), String::from("Q"), String::from("R"), String::from(" "));
     blank.param_keys[3] = String::from("");
-    if ids_text(vc_agg_alias_params(blank, vc_ty_table(blank).len())) != String::from("0,1,2,3") { return 205; }
+    if vc_ids_text(vc_agg_alias_params(blank, vc_ty_table(blank).len())) != String::from("0,1,2,3") { return 205; }
     let k: Vec<String> = vc_agg_alias_keys(g, vc_agg_alias_params(g, vc_ty_table(g).len()));
     if k.len() != 2 || k[0] != String::from("P") || k[1] != String::from("P") { return 206; }
     let ku: Vec<String> = vc_agg_alias_keys(blank, vc_agg_alias_params(blank, vc_ty_table(blank).len()));
