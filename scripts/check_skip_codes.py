@@ -27,9 +27,11 @@ ADR = (
 )
 FIXTURES = REPO_ROOT / "tests" / "verify-native" / "skip"
 
-# No source program produces it (the lowerer is fixed, #1407); it is a defensive gate.
+# No source program produces them: the lowerer is fixed (#1407), and an effectful builtin
+# is skipped as `function-has-effects` before it can be an unmodelled one.
 EXEMPT = {
-    "ir-non-dominating-read": "compiler/tests/test_vc_gate.vow check_non_dominating_read"
+    "ir-non-dominating-read": "compiler/tests/test_vc_gate.vow check_non_dominating_read",
+    "unmodeled-builtin": "compiler/tests/test_vc_gate.vow check_reason_codes",
 }
 
 _LITERAL = r'fn {name}\(\) -> String \{{ String::from\("([a-z-]+)"\) \}}'

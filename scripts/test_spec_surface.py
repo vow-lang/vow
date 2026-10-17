@@ -39,6 +39,7 @@ SKIP_FIXTURES = REPO_ROOT / "tests" / "verify-native" / "skip"
 # fixture; the entry names the test file that must still mention the code.
 UNIT_COVERED_CODES = {
     "ir-non-dominating-read": REPO_ROOT / "compiler" / "tests" / "test_vc_gate.vow",
+    "unmodeled-builtin": REPO_ROOT / "compiler" / "tests" / "test_vc_gate.vow",
 }
 
 GLOBAL_FLAGS = {"--help", "--human"}
