@@ -82,27 +82,23 @@ fn vc_trust_repeated(c: VcWaveCtx, fi: u64) -> Vec<i64> {
     let out: Vec<i64> = Vec::new();
     let cap: i64 = VC_INLINE_SKIP_INSTS();
     let order: Vec<i64> = vc_trust_reach(c, fi);
+    if order.len() == 0 { return out; }
     let copies: Vec<i64> = dom_fill(c.fns.len(), 0);
-    let mut u: i64 = fi as i64;
-    let mut oi: u64 = order.len();
-    let mut more: bool = true;
-    while more {
-        let weight: i64 = { if u == fi as i64 { 1 } else { copies[u as u64] } };
-        let calls: Vec<IrInst> = vc_user_calls(c.fns[u as u64]);
+    copies[fi] = 1;
+    // Callers before callees: the root, then `order` backwards.
+    let mut k: u64 = order.len() + 1;
+    while k > 0 {
+        k = k - 1;
+        let u: u64 = { if k == order.len() { fi } else { order[k] as u64 } };
+        let calls: Vec<IrInst> = vc_user_calls(c.fns[u]);
         let mut ci: u64 = 0;
         while ci < calls.len() {
             let t: i64 = vc_callee_index(c.idx_of, calls[ci].dv);
             if t >= 0 {
-                let sum: i64 = copies[t as u64] + weight;
+                let sum: i64 = copies[t as u64] + copies[u];
                 copies[t as u64] = { if sum > cap { cap } else { sum } };
             }
             ci = ci + 1;
-        }
-        if oi == 0 {
-            more = false;
-        } else {
-            oi = oi - 1;
-            u = order[oi];
         }
     }
     let big: i64 = vc_trust_callee_min(c.root_min);
