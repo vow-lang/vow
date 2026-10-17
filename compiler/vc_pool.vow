@@ -8,6 +8,7 @@ use vc_cex
 use vc_worker
 use vc_queue
 use vc_irwire
+use vc_summary
 
 // The parent's side of native verification: a pool of `vowc verify-worker`
 // sessions over a shared task queue (`vc_queue`). A session takes the lowered
@@ -46,7 +47,8 @@ fn VC_POOL_IDLE_DEATH_LIMIT() -> i64 { 2 }
 // that spans functions (`contracts`, `test`), so those clear it. `kinds` is per
 // task and `module_root` is the explicit module root the parent lowered with, if
 // any. `cache` is the result cache every worker of the pool shares (off by
-// default). `attempts[k]` counts the retries of task k. `shared` has the module the
+// default). `summaries` are the ids of the functions callee summaries may stand for in
+// every task of the pool (`vc_summary`). `attempts[k]` counts the retries of task k. `shared` has the module the
 // tasks index into once `vc_pool_share_module` has been given it, and `ir` one
 // element, the path of its encoding under the queue ("" until the queue is laid
 // out): a worker told that path decodes the module instead of lowering the
@@ -76,6 +78,7 @@ struct VcPool {
     module_root: String,
     shared: Vec<IrModule>,
     ir: Vec<String>,
+    summaries: Vec<i64>,
 }
 
 fn vc_pool_root(p: VcPool) -> String {
@@ -137,6 +140,7 @@ fn vc_pool_new(exe: String, path: String, fn_idx: Vec<i64>, fn_names: Vec<String
         module_root: String::from(""),
         shared: Vec::new(),
         ir: ir,
+        summaries: Vec::new(),
     }
 }
 
@@ -167,6 +171,10 @@ fn vc_worker_argv(p: VcPool, w: i64) -> Vec<String> {
     if ir.len() > 0 {
         a.push(String::from("--worker-ir"));
         a.push(ir);
+    }
+    if p.summaries.len() > 0 {
+        a.push(String::from("--worker-summaries"));
+        a.push(vc_ids_text(p.summaries));
     }
     if vc_cache_on(p.cache) {
         a.push(String::from("--worker-cache-dir"));

@@ -385,6 +385,7 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
     }
     if op == IOP_CALL() {
         if vc_is_unwrap_abort(inst) { return n == 0 && inst.ty == ITY_UNIT(); }
+        if vc_is_havoc(inst) { return n == 0 && inst.dv == VC_SUMMARY_HAVOC_MARK() && vc_scalar_value_ty(inst.ty); }
         let vk: i64 = vc_inst_vec_kind(inst);
         if vk != VC_VEC_NONE() { return vc_vec_call_ok(inst, tys, vk, calls); }
         let mk: i64 = vc_inst_map_kind(inst);

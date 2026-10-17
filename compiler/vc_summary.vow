@@ -1,0 +1,518 @@
+module VcSummary
+
+use ir
+use ir_dominance
+use vc_ops
+use vc_strops
+use vc_mapops
+use vc_gate
+use vc_loops
+use vc_agg_shape
+use vc_induct_agg
+use vc_inline
+use vc_summary_ens
+
+// Callee summaries for the native verifier (#1791, ADR-2026-10-16-1800). A function whose
+// call tree flattens above the inlining budget cannot be decided by inlining all of it, so a
+// callee that was proven on its own stands for its body: the call keeps the callee's
+// `requires` as claims blamed on the caller, havocs exactly what the callee may write and
+// returns an unconstrained result. Nothing the callee's body claims is decided again, which
+// is sound because the callee's own proof decided it for every state its `requires` admit.
+//
+// A summary is a function in its own right. `vc_stub_of` builds it from the callee: the
+// callee's code up to its last `requires` (so the clauses are claims of a spliced frame, with
+// the blame and call chain of an inlined call), then a `FieldSet` of an unconstrained value
+// for every field slot of a parameter object the callee may write, then the `ensures` clauses
+// the callee's code lets `vc_summary_ens` copy, as assumptions, then a `Return` of an
+// unconstrained value. The splicer treats it like any callee, and `vc_summary_module` swaps
+// it into a copy of the module for the callees the caller trusts, so inlining, the gate, the
+// loop cut and the executor see ordinary IR and need to know nothing about summaries.
+//
+// `vc_effects_of` decides, on the flattened body of a callee, whether such a summary covers
+// it. It does so fail-closed: every write must be a field of a parameter object (or an
+// object the callee built, which the caller never sees); nothing the callee was given, and
+// nothing it loaded out of memory it was given, may be stored anywhere or returned, because
+// the model of a pointer read back out of memory assumes it is not one of the caller's own
+// objects (`vc_overlay`), which holds for an object the callee built and for nothing else.
+// A callee that mutates a `Vec`, `String` or map it was given, or that does anything else
+// the analysis does not know, has no summary and stays inlined.
+//
+// What the analysis calls `given` is a value that may point into memory the function was
+// given: a pointer parameter, a pointer or `i64` read out of a given object (the IR types a
+// pointer loaded from a field or a `Vec` slot `i64`), and a Phi that merges one.
+
+fn vc_summary_budget_env() -> String { String::from("VOW_VERIFY_INLINE_BUDGET") }
+
+// The inlining budget a verify run uses: `VOW_VERIFY_INLINE_BUDGET` (a test-only switch, like
+// `VOW_VERIFY_NO_SLICE`) when it is a positive number below the default of `vc_inline`, else
+// that default: it can lower the budget, never raise it past what a worker decides in its cap.
+fn vc_summary_budget() -> i64 [read] {
+    match parse_i64(getenv(vc_summary_budget_env())) {
+        Option::Some(v) => { if v > 0 && v < VC_INLINE_SKIP_INSTS() { v } else { VC_INLINE_SKIP_INSTS() } },
+        Option::None => { VC_INLINE_SKIP_INSTS() },
+    }
+}
+
+// Test-only switch, like `VOW_VERIFY_NO_SLICE`: `VOW_VERIFY_NO_SUMMARIES=1` proves no callee and
+// summarises none, so a fixture can show that its verdict is the summary's doing.
+fn vc_summaries_enabled() -> bool [read] {
+    getenv(String::from("VOW_VERIFY_NO_SUMMARIES")) != String::from("1")
+}
+
+// The smallest call tree worth a summary under `budget`: a smaller callee costs less to
+// inline than the precision a summary gives up.
+fn vc_summary_min_insts(budget: i64) -> i64 { budget / 4 }
+
+// The summaries a verify run uses: the ids of the functions proven on their own (`trusted`)
+// and the inlining budget the run applies (`vc_summary_budget`).
+struct VcSummaryCfg {
+    trusted: Vec<i64>,
+    budget: i64,
+}
+
+fn vc_summary_cfg_none() -> VcSummaryCfg {
+    VcSummaryCfg { trusted: Vec::new(), budget: VC_INLINE_SKIP_INSTS() }
+}
+
+// What a callee may do to the caller's state. `wparam[k]`, `wdk[k]`, `wslot[k]` and `wty[k]`
+// describe the k-th field slot written: the parameter object, the slot kind and index, and
+// the type of the value stored (a pointer is stored as the `i64` the model reads back).
+struct VcEffects {
+    ok: bool,
+    why: String,
+    wparam: Vec<i64>,
+    wdk: Vec<i64>,
+    wslot: Vec<i64>,
+    wty: Vec<i64>,
+}
+
+fn vc_effects_new() -> VcEffects {
+    VcEffects { ok: true, why: String::from(""), wparam: Vec::new(), wdk: Vec::new(), wslot: Vec::new(), wty: Vec::new() }
+}
+
+fn vc_effects_reject(why: String) -> VcEffects {
+    let e: VcEffects = vc_effects_new();
+    e.ok = false;
+    e.why = why;
+    e
+}
+
+fn vc_effects_note(e: VcEffects, param: i64, dk: i64, slot: i64, ty: i64) {
+    let mut k: u64 = 0;
+    while k < e.wparam.len() {
+        if e.wparam[k] == param && e.wdk[k] == dk && e.wslot[k] == slot && e.wty[k] == ty { return; }
+        k = k + 1;
+    }
+    e.wparam.push(param);
+    e.wdk.push(dk);
+    e.wslot.push(slot);
+    e.wty.push(ty);
+}
+
+// The type a written value is stored at: a pointer is a handle once it is read back.
+fn vc_effects_store_ty(ty: i64) -> i64 {
+    if ty == ITY_PTR() { return ITY_I64(); }
+    ty
+}
+
+// True when `inst` reads an object out of memory its operand may be.
+fn vc_reads_given(inst: IrInst) -> bool {
+    if inst.op == IOP_FIELD_GET() { return inst.ty == ITY_I64() || inst.ty == ITY_PTR(); }
+    let k: i64 = vc_inst_vec_kind(inst);
+    k == VC_VEC_GET() || k == VC_VEC_GET_WIDE() || k == VC_VEC_SET_WIDE() || k == VC_VEC_PUSH_WIDE()
+}
+
+// True when value `inst` may point into given memory, from what `given` already says.
+fn vc_yields_given(inst: IrInst, given: Vec<i64>, src: VcPhiSources) -> bool {
+    if inst.op == IOP_GET_ARG() { return inst.ty == ITY_PTR(); }
+    if inst.op == IOP_PHI() {
+        let mut e: i64 = src.head[inst.id as u64];
+        while e >= 0 {
+            let v: i64 = src.val[e as u64];
+            if v >= 0 && given[v as u64] == 1 { return true; }
+            e = src.next[e as u64];
+        }
+        return false;
+    }
+    if vc_reads_given(inst) { return inst.args.len() > 0 && given[inst.args[0] as u64] == 1; }
+    false
+}
+
+// 1 for every value that may point into given memory (see the header), closed over Phis and
+// reads. Monotone, so it runs to a fixpoint.
+fn vc_given_table(f: IrFunction, rpo: Vec<i64>, n_ids: u64, src: VcPhiSources) -> Vec<i64> {
+    let given: Vec<i64> = dom_fill(n_ids, 0);
+    let mut changed: bool = true;
+    while changed {
+        changed = false;
+        let mut bi: u64 = 0;
+        while bi < f.blocks.len() {
+            if rpo[bi] >= 0 {
+                let blk: IrBlock = f.blocks[bi];
+                let mut ii: u64 = 0;
+                while ii < blk.insts.len() {
+                    let inst: IrInst = blk.insts[ii];
+                    if inst.id >= 0 && given[inst.id as u64] == 0 && vc_yields_given(inst, given, src) {
+                        given[inst.id as u64] = 1;
+                        changed = true;
+                    }
+                    ii = ii + 1;
+                }
+            }
+            bi = bi + 1;
+        }
+    }
+    given
+}
+
+// The parameter index a `GetArg` value reads, -1 for any other value.
+fn vc_param_table(f: IrFunction, n_ids: u64) -> Vec<i64> {
+    let idx: Vec<i64> = dom_fill(n_ids, -1);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_GET_ARG() && inst.id >= 0 { idx[inst.id as u64] = inst.dv; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    idx
+}
+
+// The operand of `inst` that a store writes into an object, -1 when it stores no value.
+fn vc_stored_operand(inst: IrInst) -> i64 {
+    if inst.op == IOP_FIELD_SET() { return 1; }
+    let k: i64 = vc_inst_vec_kind(inst);
+    if k == VC_VEC_PUSH() { return 1; }
+    if k == VC_VEC_SET() { return 2; }
+    let mk: i64 = vc_inst_map_kind(inst);
+    if mk == VC_MAP_INSERT() || mk == VC_MAP_INSERT_OLD() { return 2; }
+    -1
+}
+
+// True when `inst` changes a collection (`Vec`, `String` or map) held by its first operand.
+fn vc_mutates_collection(inst: IrInst) -> bool {
+    vc_vec_kind_mutates(vc_inst_vec_kind(inst)) || vc_map_kind_mutates(vc_inst_map_kind(inst))
+}
+
+// The summary of the function whose flattened body is `flat` (`g` as declared): `ok` when
+// every effect the body has on its caller's state is a write of a parameter object's field
+// of a value that is not given memory, with a result that is a scalar or an object the body
+// built. `flat` must be accepted by the gate.
+fn vc_effects_of(g: IrFunction, flat: IrFunction) -> VcEffects {
+    let n_ids: u64 = (dom_max_inst_id(flat) + 1) as u64;
+    let rpo: Vec<i64> = vc_cfg_rpo(flat);
+    let src: VcPhiSources = vc_fh_phi_sources(flat, rpo, n_ids);
+    let def_op: Vec<i64> = vc_agg_def_ops(flat, n_ids);
+    let given: Vec<i64> = vc_given_table(flat, rpo, n_ids, src);
+    let param_of: Vec<i64> = vc_param_table(flat, n_ids);
+    let tys: Vec<i64> = vc_ty_table(flat);
+    let seen: Vec<i64> = dom_fill(n_ids, -1);
+    let e: VcEffects = vc_effects_new();
+    let mut stamp: i64 = 0;
+    let mut bi: u64 = 0;
+    while bi < flat.blocks.len() {
+        if rpo[bi] >= 0 {
+            let blk: IrBlock = flat.blocks[bi];
+            let mut ii: u64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                let sv: i64 = vc_stored_operand(inst);
+                if sv >= 0 && (sv as u64) < inst.args.len() && given[inst.args[sv as u64] as u64] == 1 {
+                    return vc_effects_reject(String::from("stores a pointer it was given or read out of given memory"));
+                }
+                if inst.op == IOP_RETURN() && g.return_ty == ITY_PTR() && inst.args.len() > 0 && given[inst.args[0] as u64] == 1 {
+                    return vc_effects_reject(String::from("returns a pointer it was given or read out of given memory"));
+                }
+                let field_write: bool = inst.op == IOP_FIELD_SET();
+                if (field_write || vc_mutates_collection(inst)) && inst.args.len() > 0 {
+                    stamp = stamp + 1;
+                    let leaves: Vec<i64> = vc_fh_leaves(inst.args[0], src, def_op, seen, stamp);
+                    let mut li: u64 = 0;
+                    while li < leaves.len() {
+                        let l: i64 = leaves[li];
+                        if l < 0 || (l as u64) >= n_ids { return vc_effects_reject(String::from("writes an object it cannot name")); }
+                        if param_of[l as u64] >= 0 && given[l as u64] == 1 {
+                            if !field_write { return vc_effects_reject(String::from("mutates a collection it was given")); }
+                            // A struct field is read back as `i64` or a scalar (`vc_exec` reads a
+                            // pointer-typed `FieldGet` as a child object that ignores writes, which
+                            // only enum and `Option` payloads are, and those are written when built).
+                            vc_effects_note(e, param_of[l as u64], inst.dk, inst.dv, vc_effects_store_ty(vc_arg_ty(tys, inst, 1)));
+                        } else if given[l as u64] == 1 {
+                            return vc_effects_reject(String::from("writes through a pointer read out of given memory"));
+                        }
+                        li = li + 1;
+                    }
+                }
+                ii = ii + 1;
+            }
+        }
+        bi = bi + 1;
+    }
+    e
+}
+
+// The unconstrained value of a summary. Its data value marks it as the verifier's own: the gate
+// takes a havoc call from a summary and from no program, which could declare an extern of that
+// name.
+fn vc_summary_havoc(id: i64, ty: i64) -> IrInst {
+    ir_inst_new(id, IOP_CALL(), ty, Vec::new(), IDATA_CALL_EXTERN(), VC_SUMMARY_HAVOC_MARK(), 0, VC_INTERNAL_HAVOC())
+}
+
+fn vc_next_id(cell: Vec<i64>) -> i64 {
+    let id: i64 = cell[0];
+    cell[0] = id + 1;
+    id
+}
+
+// The code of `g` up to its last `requires` is copied into `h`; the block that ends in that
+// clause is returned open, with no terminator, to be continued. A callee without a `requires`
+// has one empty block.
+fn vc_stub_prefix(g: IrFunction, h: IrFunction) -> IrBlock {
+    let rpo: Vec<i64> = vc_cfg_rpo(g);
+    let at: Vec<i64> = vc_last_requires_at(g, rpo);
+    if at[0] < 0 {
+        let only: IrBlock = ir_block_new(0);
+        h.blocks.push(only);
+        return only;
+    }
+    let cut: IrFunction = vc_function_shell(g);
+    let open: IrBlock = ir_block_new(g.blocks[at[0] as u64].id);
+    let mut bi: u64 = 0;
+    while bi < g.blocks.len() {
+        if bi != at[0] as u64 {
+            cut.blocks.push(g.blocks[bi]);
+        } else {
+            let keep: u64 = (at[1] + 1) as u64;
+            let mut ii: u64 = 0;
+            while ii < keep {
+                open.insts.push(g.blocks[bi].insts[ii]);
+                ii = ii + 1;
+            }
+            cut.blocks.push(open);
+        }
+        bi = bi + 1;
+    }
+    let live: Vec<i64> = vc_cfg_rpo(cut);
+    let mut k: u64 = 0;
+    while k < cut.blocks.len() {
+        if live[k] >= 0 { h.blocks.push(cut.blocks[k]); }
+        k = k + 1;
+    }
+    open
+}
+
+// Appends to `open` a read of every parameter (`arg_new[p]`), a write of an unconstrained value
+// for each write of `e`, and the unconstrained result; its value id, -1 for a Unit result.
+fn vc_stub_head(g: IrFunction, e: VcEffects, open: IrBlock, next_val: Vec<i64>, arg_new: Vec<i64>) -> i64 {
+    let mut p: u64 = 0;
+    while p < g.params.len() {
+        let id: i64 = vc_next_id(next_val);
+        open.insts.push(ir_inst_new(id, IOP_GET_ARG(), g.params[p], Vec::new(), IDATA_ARG_INDEX(), p as i64, 0, String::from("")));
+        arg_new[p] = id;
+        p = p + 1;
+    }
+    let mut k: u64 = 0;
+    while k < e.wparam.len() {
+        let h: i64 = vc_next_id(next_val);
+        open.insts.push(vc_summary_havoc(h, e.wty[k]));
+        let args: Vec<i64> = Vec::new();
+        args.push(arg_new[e.wparam[k] as u64]);
+        args.push(h);
+        open.insts.push(ir_inst_new(vc_next_id(next_val), IOP_FIELD_SET(), ITY_UNIT(), args, e.wdk[k], e.wslot[k], 0, String::from("")));
+        k = k + 1;
+    }
+    if g.return_ty == ITY_UNIT() { return -1; }
+    let res: i64 = vc_next_id(next_val);
+    open.insts.push(vc_summary_havoc(res, vc_effects_store_ty(g.return_ty)));
+    res
+}
+
+// The summary function of `g`: its code up to the last `requires`, an unconstrained write of
+// each field `e` says it may write, an unconstrained result and, with `ens`, each `ensures`
+// clause `vc_ens_extract` can copy, as an assumption; then the `Return`. A callee without a
+// `requires` starts at the writes.
+fn vc_stub_of(g: IrFunction, e: VcEffects, ens: bool) -> IrFunction {
+    let h: IrFunction = vc_function_shell(g);
+    let next_val: Vec<i64> = Vec::new();
+    next_val.push(dom_max_inst_id(g) + 1);
+    let next_blk: Vec<i64> = Vec::new();
+    next_blk.push(vc_max_block_id(g) + 1);
+    let open: IrBlock = vc_stub_prefix(g, h);
+    let arg_new: Vec<i64> = dom_fill(g.params.len(), -1);
+    let res: i64 = vc_stub_head(g, e, open, next_val, arg_new);
+    let mut cur: IrBlock = open;
+    if ens {
+        let ctx: VcEnsCtx = vc_ens_ctx(g);
+        let sites: VcEnsSites = vc_ens_sites(ctx);
+        let mut s: u64 = 0;
+        while s < sites.starts.len() {
+            let c: VcEns = { if vc_ens_first_site(sites, s) { vc_ens_extract_clause(ctx, sites, s, arg_new, res, next_val, next_blk) } else { vc_ens_failed() } };
+            if c.ok {
+                cur.insts.push(ir_inst_new(vc_next_id(next_val), IOP_JUMP(), ITY_UNIT(), Vec::new(), IDATA_JUMP_TARGET(), c.entry, 0, String::from("")));
+                let mut b: u64 = 0;
+                while b < c.blocks.len() {
+                    h.blocks.push(c.blocks[b]);
+                    b = b + 1;
+                }
+                cur = c.exit_blk;
+            }
+            s = s + 1;
+        }
+    }
+    let ret: Vec<i64> = Vec::new();
+    if res >= 0 { ret.push(res); }
+    cur.insts.push(ir_inst_new(vc_next_id(next_val), IOP_RETURN(), ITY_UNIT(), ret, IDATA_NONE(), 0, 0, String::from("")));
+    h
+}
+
+// "3,17,40": the form a worker is told its trusted ids in.
+fn vc_ids_text(ids: Vec<i64>) -> String {
+    let out: String = String::from("");
+    let mut i: u64 = 0;
+    while i < ids.len() {
+        if i > 0 { out.push_str(String::from(",")); }
+        out.push_str(i64_to_string(ids[i]));
+        i = i + 1;
+    }
+    out
+}
+
+// The ids of `vc_ids_text`; a malformed element is dropped, which trusts less.
+fn vc_ids_parse(text: String) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut start: u64 = 0;
+    let mut i: u64 = 0;
+    while i <= text.len() {
+        if i == text.len() || text.byte_at(i) == 44 {
+            if i > start {
+                match parse_i64(text.substring(start, i)) {
+                    Option::Some(v) => { if v >= 0 { out.push(v); } },
+                    Option::None => {},
+                }
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// The id that, as the only element of `trusted`, stands for every function: the planner's
+// question "which callees could a summary stand for?" asks it before any proof exists.
+fn vc_trust_all() -> Vec<i64> {
+    let all: Vec<i64> = Vec::new();
+    all.push(-1);
+    all
+}
+
+fn vc_trusts(trusted: Vec<i64>, id: i64) -> bool {
+    vc_id_in(trusted, id) || vc_id_in(trusted, -1)
+}
+
+fn vc_id_in(ids: Vec<i64>, id: i64) -> bool {
+    let mut i: u64 = 0;
+    while i < ids.len() {
+        if ids[i] == id { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// The summary of `g` with its `ensures` clauses where the module `m` can take it, else without
+// them: a clause the gate would reject is not worth the callers that would then be skipped.
+// `None` (an empty function) when even the plain summary is outside the subset.
+fn vc_stub_valid(g: IrFunction, e: VcEffects, m: IrModule) -> IrFunction {
+    let full: IrFunction = vc_stub_of(g, e, true);
+    if vc_skip_reason_calls(vc_prepare_for_gate(full, m)).len() == 0 { return full; }
+    let plain: IrFunction = vc_stub_of(g, e, false);
+    if vc_skip_reason_calls(vc_prepare_for_gate(plain, m)).len() == 0 { return plain; }
+    ir_function_new(-1, String::from(""), ITY_UNIT(), 0, String::from(""))
+}
+
+// A module and whether any summary stands in it for a callee of the function asked about.
+struct VcSummarised {
+    m: IrModule,
+    used: bool,
+    used_ids: Vec<i64>,
+}
+
+// A copy of `m` whose function list is `fns`.
+fn vc_module_with(m: IrModule, fns: Vec<IrFunction>) -> IrModule {
+    let out: IrModule = ir_module_new(m.name);
+    out.functions = fns;
+    out.strings = m.strings;
+    out.struct_layouts = m.struct_layouts;
+    out.enum_layouts = m.enum_layouts;
+    out.warnings = m.warnings;
+    out
+}
+
+// The module `f` is inlined in: `m` itself unless the call tree of `f` is above `budget`,
+// and then a copy in which each function of `trusted` that `f` reaches and that is itself
+// above `vc_summary_min_insts(budget)` is its summary, when it has one. The callees are taken
+// bottom-up, so a summary is computed on the body of its callee with the summaries below it.
+// Deterministic in its arguments, so the parent that plans a run and the worker that decides
+// it build the same module. `used` is whether a summary stands for a callee `f` reaches.
+fn vc_summary_module(f: IrFunction, m: IrModule, trusted: Vec<i64>, budget: i64) -> VcSummarised {
+    let same: VcSummarised = VcSummarised { m: m, used: false, used_ids: Vec::new() };
+    if trusted.len() == 0 { return same; }
+    let fns: Vec<IrFunction> = m.functions;
+    let idx_of: Vec<i64> = vc_fn_index_table(fns);
+    let root: i64 = vc_callee_index(idx_of, f.id);
+    if root < 0 { return same; }
+    if vc_call_cycle(fns, idx_of, root).len() > 0 { return same; }
+    let sizes: Vec<i64> = dom_fill(fns.len(), -1);
+    if vc_body_size(fns, idx_of, sizes, f, budget) <= budget { return same; }
+    let seen: Vec<i64> = dom_fill(fns.len(), 0);
+    let order: Vec<i64> = Vec::new();
+    vc_reachable_callees(fns, idx_of, seen, order, root);
+    let cur: Vec<IrFunction> = Vec::new();
+    let mut i: u64 = 0;
+    while i < fns.len() {
+        cur.push(fns[i]);
+        i = i + 1;
+    }
+    let out: IrModule = vc_module_with(m, cur);
+    let min: i64 = vc_summary_min_insts(budget);
+    let swapped: Vec<i64> = Vec::new();
+    let mut oi: u64 = 0;
+    while oi < order.len() {
+        let u: i64 = order[oi];
+        let g: IrFunction = fns[u as u64];
+        if vc_trusts(trusted, g.id) && vc_tree_size(fns, idx_of, sizes, u, budget) > min {
+            let flat: VcInlined = vc_inline(g, out, VC_INLINE_INST_CAP());
+            if flat.status == VC_INLINE_OK() && vc_skip_reason(flat.f).len() == 0 {
+                let e: VcEffects = vc_effects_of(g, flat.f);
+                if e.ok {
+                    let stub: IrFunction = vc_stub_valid(g, e, out);
+                    if stub.id >= 0 {
+                        cur[u as u64] = stub;
+                        swapped.push(g.id);
+                    }
+                }
+            }
+        }
+        oi = oi + 1;
+    }
+    if swapped.len() == 0 { return same; }
+    let seen2: Vec<i64> = dom_fill(fns.len(), 0);
+    let order2: Vec<i64> = Vec::new();
+    vc_reachable_callees(cur, idx_of, seen2, order2, root);
+    let used_ids: Vec<i64> = Vec::new();
+    oi = 0;
+    while oi < order2.len() {
+        let id: i64 = cur[order2[oi] as u64].id;
+        if vc_id_in(swapped, id) { used_ids.push(id); }
+        oi = oi + 1;
+    }
+    VcSummarised { m: out, used: used_ids.len() > 0, used_ids: used_ids }
+}
+
+// `vc_module_skip_reason` with the callees in `trusted` summarised where `f` is above `budget`.
+fn vc_module_skip_reason_trusted(f: IrFunction, m: IrModule, trusted: Vec<i64>, budget: i64) -> String {
+    vc_module_skip_reason_via(f, m, vc_summary_module(f, m, trusted, budget).m, budget)
+}

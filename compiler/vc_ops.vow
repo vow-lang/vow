@@ -209,6 +209,10 @@ fn vc_is_unwind_sink(inst: IrInst) -> bool {
 // header and no claim is left to make.
 fn VC_INTERNAL_HAVOC() -> String { String::from("__vc_havoc") }
 
+// The data value of the havoc call of a callee summary (`vc_summary`): the gate takes a havoc call
+// from a summary and from no program.
+fn VC_SUMMARY_HAVOC_MARK() -> i64 { 1 }
+
 fn vc_is_havoc(inst: IrInst) -> bool {
     inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == VC_INTERNAL_HAVOC()
 }
@@ -233,6 +237,15 @@ fn VC_INTERNAL_HAVOC_FIELD() -> String { String::from("__vc_havoc_field") }
 
 fn vc_is_havoc_field(inst: IrInst) -> bool {
     inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == VC_INTERNAL_HAVOC_FIELD()
+}
+
+// A `VowReq` that is an assumption in the function it is spliced into, not a claim of the
+// frame it came from: the `ensures` of a summarised callee (`vc_summary`), proven by the
+// callee's own run and assumed by its callers.
+fn VC_INTERNAL_ASSUME() -> String { String::from("__vc_assume") }
+
+fn vc_is_assume(inst: IrInst) -> bool {
+    inst.op == IOP_VOW_REQ() && inst.ds == VC_INTERNAL_ASSUME()
 }
 
 fn VC_INTERNAL_CUT_END() -> String { String::from("__vc_cut_end") }

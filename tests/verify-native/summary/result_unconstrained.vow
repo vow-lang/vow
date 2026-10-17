@@ -1,0 +1,26 @@
+// TEST: summary-expect unknown
+// TEST: summary-baseline failed
+struct R { pos: i64, end: i64, err: i64 }
+
+fn step(r: R) -> i64 {
+    let a: i64 = r.pos & 255;
+    let b: i64 = (r.pos / 2) & 255;
+    let c: i64 = a + b;
+    if c > 100 {
+        r.err = 1;
+        return 0;
+    }
+    r.pos = r.pos + 1;
+    c
+}
+
+fn run(r: R) -> i64 vow {
+    requires: r.pos == 0,
+    ensures: result == 0
+} {
+    let x: i64 = step(r);
+    let y: i64 = step(r);
+    let z: i64 = step(r);
+    x + y + z + x
+}
+fn main() -> i32 { 0 }

@@ -1,0 +1,326 @@
+module TestVcSummary
+
+use ir
+use vc_ops
+use vc_gate
+use vc_inline
+use vc_summary
+use tests.builders
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn args2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v.push(b);
+    v
+}
+
+fn ptr_params2() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    p.push(ITY_PTR());
+    p
+}
+
+fn ptr_param() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    p
+}
+
+fn ptr_i64_params() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    p.push(ITY_I64());
+    p
+}
+
+fn one(b: IrBlock) -> Vec<IrBlock> {
+    let v: Vec<IrBlock> = Vec::new();
+    v.push(b);
+    v
+}
+
+fn ret_unit(id: i64) -> IrInst {
+    ir_inst_new(id, IOP_RETURN(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""))
+}
+
+// g(p: ptr, x: i64) { p.slot1 = x }
+fn writer() -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_arg(1, ITY_I64(), 1));
+    i.push(mk_inst_field_set(2, 0, 1, 1));
+    i.push(ret_unit(3));
+    mk_function(1, String::from("writer"), ptr_i64_params(), ITY_UNIT(), one(mk_block(0, i)))
+}
+
+fn check_scalar_field_write() -> i64 {
+    let g: IrFunction = writer();
+    let e: VcEffects = vc_effects_of(g, g);
+    if !e.ok { return 1; }
+    if e.wparam.len() != 1 || e.wparam[0] != 0 || e.wslot[0] != 1 || e.wty[0] != ITY_I64() { return 2; }
+    if e.wdk[0] != IDATA_FIELD() { return 3; }
+    0
+}
+
+// g(p: ptr, q: ptr) { p.slot1 = q }
+fn check_stored_given_pointer() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_arg(1, ITY_PTR(), 1));
+    i.push(mk_inst_field_set(2, 0, 1, 1));
+    i.push(ret_unit(3));
+    let g: IrFunction = mk_function(1, String::from("g"), ptr_params2(), ITY_UNIT(), one(mk_block(0, i)));
+    if vc_effects_of(g, g).ok { return 1; }
+    0
+}
+
+// g(p: ptr) { p.slot1 = p.slot0 } with an `i64` slot: the value may be a pointer.
+fn check_stored_loaded_i64() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_field_get(1, ITY_I64(), 0, 0));
+    i.push(mk_inst_field_set(2, 0, 1, 1));
+    i.push(ret_unit(3));
+    let g: IrFunction = mk_function(1, String::from("g"), ptr_param(), ITY_UNIT(), one(mk_block(0, i)));
+    if vc_effects_of(g, g).ok { return 1; }
+    // the same with a `u64` slot is a scalar copy
+    let j: Vec<IrInst> = Vec::new();
+    j.push(mk_inst_arg(0, ITY_PTR(), 0));
+    j.push(mk_inst_field_get(1, ITY_U64(), 0, 0));
+    j.push(mk_inst_field_set(2, 0, 1, 1));
+    j.push(ret_unit(3));
+    let h: IrFunction = mk_function(1, String::from("h"), ptr_param(), ITY_UNIT(), one(mk_block(0, j)));
+    if !vc_effects_of(h, h).ok { return 2; }
+    0
+}
+
+// g(v: ptr) { v.push(5) }
+fn check_collection_mutation() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_const_i64(1, 5));
+    i.push(mk_inst_call_extern(2, ITY_UNIT(), args2(0, 1), String::from("__vow_vec_push_val")));
+    i.push(ret_unit(3));
+    let g: IrFunction = mk_function(1, String::from("g"), ptr_param(), ITY_UNIT(), one(mk_block(0, i)));
+    if vc_effects_of(g, g).ok { return 1; }
+    // a Vec the callee built is invisible to the caller
+    let j: Vec<IrInst> = Vec::new();
+    j.push(mk_inst_const_i64(0, 0));
+    j.push(mk_inst_call_extern(1, ITY_PTR(), args2(0, 0), String::from("__vow_vec_new")));
+    j.push(mk_inst_const_i64(2, 5));
+    j.push(mk_inst_call_extern(3, ITY_UNIT(), args2(1, 2), String::from("__vow_vec_push_val")));
+    j.push(ret_unit(4));
+    let h: IrFunction = mk_function(1, String::from("h"), ptr_param(), ITY_UNIT(), one(mk_block(0, j)));
+    if !vc_effects_of(h, h).ok { return 2; }
+    0
+}
+
+// g(p: ptr) -> ptr { p } is refused, g() -> ptr { alloc } is not.
+fn check_returned_pointer() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_return(1, 0));
+    let g: IrFunction = mk_function(1, String::from("g"), ptr_param(), ITY_PTR(), one(mk_block(0, i)));
+    if vc_effects_of(g, g).ok { return 1; }
+    let j: Vec<IrInst> = Vec::new();
+    j.push(mk_inst_alloc(0, 16));
+    j.push(mk_inst_return(1, 0));
+    let h: IrFunction = mk_function(2, String::from("h"), Vec::new(), ITY_PTR(), one(mk_block(0, j)));
+    if !vc_effects_of(h, h).ok { return 2; }
+    0
+}
+
+// a read through a pointer loaded from given memory is not a write the summary can cover
+fn check_write_through_loaded_handle() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_field_get(1, ITY_I64(), 0, 0));
+    i.push(mk_inst_const_i64(2, 1));
+    i.push(mk_inst_field_set(3, 1, 0, 2));
+    i.push(ret_unit(4));
+    let g: IrFunction = mk_function(1, String::from("g"), ptr_param(), ITY_UNIT(), one(mk_block(0, i)));
+    if vc_effects_of(g, g).ok { return 1; }
+    0
+}
+
+fn count_op(f: IrFunction, op: i64) -> i64 {
+    let mut n: i64 = 0;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            if blk.insts[ii].op == op { n = n + 1; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    n
+}
+
+// g(p: ptr, x: i64) -> i64 with requires x >= 0 and a write of p.slot1: the stub keeps the
+// requires, writes an unconstrained value and returns one.
+fn contracted_writer() -> IrFunction {
+    let b0: Vec<IrInst> = Vec::new();
+    b0.push(mk_inst_arg(0, ITY_PTR(), 0));
+    b0.push(mk_inst_arg(1, ITY_I64(), 1));
+    b0.push(mk_inst_const_i64(2, 0));
+    let c: Vec<i64> = Vec::new();
+    c.push(1);
+    c.push(2);
+    b0.push(mk_inst(3, IOP_GE(), ITY_BOOL(), c));
+    b0.push(ir_inst_new(4, IOP_VOW_REQ(), ITY_UNIT(), args1(3), IDATA_VOW_ID(), 0, 0, String::from("")));
+    b0.push(mk_inst_field_set(5, 0, 1, 1));
+    let mut pad: i64 = 0;
+    while pad < 60 {
+        b0.push(mk_inst_const_i64(10 + pad, pad));
+        pad = pad + 1;
+    }
+    b0.push(mk_inst_const_i64(6, 9));
+    b0.push(mk_inst_return(7, 6));
+    let ps: Vec<i64> = ptr_i64_params();
+    let g: IrFunction = mk_function(1, String::from("cw"), ps, ITY_I64(), one(mk_block(0, b0)));
+    g.vows.push(IrVowEntry { id: 0, description: String::from("requires x >= 0"), blame: BLAME_CALLER(), binding_ids: Vec::new(), binding_names: Vec::new(), file: String::from("t.vow"), offset: 0 });
+    g
+}
+
+fn check_stub_shape() -> i64 {
+    let g: IrFunction = contracted_writer();
+    let e: VcEffects = vc_effects_of(g, g);
+    if !e.ok { return 1; }
+    let h: IrFunction = vc_stub_of(g, e, false);
+    if h.id != g.id || h.params.len() != 2 || h.return_ty != ITY_I64() { return 2; }
+    if h.vows.len() != 1 { return 3; }
+    if count_op(h, IOP_VOW_REQ()) != 1 { return 4; }
+    if count_op(h, IOP_FIELD_SET()) != 1 { return 5; }
+    if count_op(h, IOP_RETURN()) != 1 { return 6; }
+    // the unconstrained value of the write and of the result
+    let mut havocs: i64 = 0;
+    let blk: IrBlock = h.blocks[0];
+    let mut ii: u64 = 0;
+    while ii < blk.insts.len() {
+        if vc_is_havoc(blk.insts[ii]) { havocs = havocs + 1; }
+        ii = ii + 1;
+    }
+    if havocs != 2 { return 7; }
+    // the original constant the body returned is gone
+    if count_op(h, IOP_CONST_I64()) != 1 { return 8; }
+    if vc_skip_reason(h).len() > 0 { return 9; }
+    0
+}
+
+// A call of an extern that happens to be named like the verifier's havoc is not one.
+fn check_user_havoc_rejected() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_call_extern(0, ITY_I64(), Vec::new(), String::from("__vc_havoc")));
+    i.push(mk_inst_return(1, 0));
+    let g: IrFunction = mk_function(1, String::from("g"), Vec::new(), ITY_I64(), one(mk_block(0, i)));
+    if vc_skip_reason(g).len() == 0 { return 1; }
+    let j: Vec<IrInst> = Vec::new();
+    j.push(vc_summary_havoc(0, ITY_I64()));
+    j.push(mk_inst_return(1, 0));
+    let h: IrFunction = mk_function(2, String::from("h"), Vec::new(), ITY_I64(), one(mk_block(0, j)));
+    if vc_skip_reason(h).len() > 0 { return 2; }
+    0
+}
+
+fn check_stub_without_requires() -> i64 {
+    let g: IrFunction = writer();
+    let h: IrFunction = vc_stub_of(g, vc_effects_of(g, g), false);
+    if h.blocks.len() != 1 || count_op(h, IOP_VOW_REQ()) != 0 || count_op(h, IOP_FIELD_SET()) != 1 { return 1; }
+    if vc_skip_reason(h).len() > 0 { return 2; }
+    0
+}
+
+// caller(p: ptr, x: i64) calls cw(p, x) `n` times.
+fn caller_of(n: i64) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_arg(1, ITY_I64(), 1));
+    let mut k: i64 = 0;
+    while k < n {
+        i.push(mk_inst_call_target(2 + k, ITY_I64(), args2(0, 1), 1));
+        k = k + 1;
+    }
+    i.push(mk_inst_return(2 + n, 2));
+    mk_function(0, String::from("caller"), ptr_i64_params(), ITY_I64(), one(mk_block(0, i)))
+}
+
+fn module_of(caller: IrFunction, callee: IrFunction) -> IrModule {
+    let fs: Vec<IrFunction> = Vec::new();
+    fs.push(caller);
+    fs.push(callee);
+    mk_module(fs)
+}
+
+fn check_inert_without_trust() -> i64 {
+    let m: IrModule = module_of(caller_of(6), contracted_writer());
+    let s: VcSummarised = vc_summary_module(m.functions[0], m, Vec::new(), 100);
+    if s.used || s.m != m { return 1; }
+    // within the budget nothing is swapped even for a trusted callee
+    let t: VcSummarised = vc_summary_module(m.functions[0], m, vc_trust_all(), 100000);
+    if t.used || t.m != m { return 2; }
+    // a callee that is not trusted stays
+    let other: Vec<i64> = Vec::new();
+    other.push(77);
+    let u: VcSummarised = vc_summary_module(m.functions[0], m, other, 100);
+    if u.used { return 3; }
+    0
+}
+
+fn check_swap() -> i64 {
+    let m: IrModule = module_of(caller_of(6), contracted_writer());
+    let ids: Vec<i64> = Vec::new();
+    ids.push(1);
+    let s: VcSummarised = vc_summary_module(m.functions[0], m, ids, 100);
+    if !s.used || s.used_ids.len() != 1 || s.used_ids[0] != 1 { return 1; }
+    if s.m == m { return 2; }
+    // the original module is untouched
+    if count_op(m.functions[1], IOP_FIELD_SET()) != 1 || count_op(m.functions[1], IOP_CONST_I64()) != 62 { return 3; }
+    let plain: VcInlined = vc_inline(m.functions[0], m, VC_INLINE_INST_CAP());
+    let sum: VcInlined = vc_inline(m.functions[0], s.m, VC_INLINE_INST_CAP());
+    if sum.status != VC_INLINE_OK() || plain.status != VC_INLINE_OK() { return 4; }
+    if count_op(sum.f, IOP_VOW_REQ()) != 6 { return 5; }
+    if vc_skip_reason(sum.f).len() > 0 { return 6; }
+    // the call tree of the caller is the stubs now, so it is within a budget the bodies exceed
+    let big: String = vc_module_skip_reason_trusted(m.functions[0], m, ids, 100);
+    if big.len() > 0 { return 7; }
+    let none: String = vc_module_skip_reason_trusted(m.functions[0], m, Vec::new(), 100);
+    if vc_reason_code(none) != VC_SKIP_INLINING_TOO_LARGE() { return 8; }
+    0
+}
+
+fn check_ids_text() -> i64 {
+    let ids: Vec<i64> = Vec::new();
+    ids.push(3);
+    ids.push(17);
+    ids.push(40);
+    if vc_ids_text(ids) != String::from("3,17,40") { return 1; }
+    let back: Vec<i64> = vc_ids_parse(String::from("3,17,,x,-1,40"));
+    if back.len() != 3 || back[0] != 3 || back[1] != 17 || back[2] != 40 { return 2; }
+    if vc_ids_parse(String::from("")).len() != 0 { return 3; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_scalar_field_write();
+    if r == 0 { let d: i64 = check_stored_given_pointer(); if d != 0 { r = 100 + d; } }
+    if r == 0 { let d: i64 = check_stored_loaded_i64(); if d != 0 { r = 200 + d; } }
+    if r == 0 { let d: i64 = check_collection_mutation(); if d != 0 { r = 300 + d; } }
+    if r == 0 { let d: i64 = check_returned_pointer(); if d != 0 { r = 400 + d; } }
+    if r == 0 { let d: i64 = check_write_through_loaded_handle(); if d != 0 { r = 500 + d; } }
+    if r == 0 { let d: i64 = check_stub_shape(); if d != 0 { r = 600 + d; } }
+    if r == 0 { let d: i64 = check_stub_without_requires(); if d != 0 { r = 700 + d; } }
+    if r == 0 { let d: i64 = check_user_havoc_rejected(); if d != 0 { r = 1100 + d; } }
+    if r == 0 { let d: i64 = check_inert_without_trust(); if d != 0 { r = 800 + d; } }
+    if r == 0 { let d: i64 = check_swap(); if d != 0 { r = 900 + d; } }
+    if r == 0 { let d: i64 = check_ids_text(); if d != 0 { r = 1000 + d; } }
+    i64_to_i32_wrap(r)
+}

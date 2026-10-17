@@ -1,0 +1,137 @@
+module VcWaves
+
+use ir
+use verifier
+use vc_cache
+use vc_gate
+use vc_inline
+use vc_summary
+use vc_native
+use vc_worker
+use vc_pool
+
+// The proofs callee summaries rest on (#1791). A function above the inlining budget is decided
+// with a summary for each callee of it that was proven on its own (`vc_summary`), so those
+// callees have to be proven first, and a callee that is itself above the budget needs its own
+// callees proven before it. `vc_waves_prove` runs them in waves, each a pool of `PROOF` tasks
+// (every claim of the function, as for a function with a contract) told the ids proven so far:
+// the first wave has the callees that need nothing, the next those whose summaries the first
+// proved, until no callee is left that can be tried. A callee that is not proven, or that the
+// native subset does not take, is never trusted, and the function that needed it keeps the
+// skip it has without summaries. The parent plans from the proven ids and hands the same ids to
+// every worker (`--worker-summaries`), so planner and worker agree on every summary.
+
+// Ids of the functions that stand for a summary in the call tree of the function at index `fi`,
+// if everything that can be summarised were: the callees its proof or its decision needs.
+fn vc_waves_needs(fns: Vec<IrFunction>, m: IrModule, fi: u64, budget: i64) -> Vec<i64> {
+    let sm: VcSummarised = vc_summary_module(fns[fi], m, vc_trust_all(), budget);
+    sm.used_ids
+}
+
+fn vc_waves_all_in(needs: Vec<i64>, proven: Vec<i64>) -> bool {
+    let mut i: u64 = 0;
+    while i < needs.len() {
+        if !vc_id_in(proven, needs[i]) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+// Appends to `want` the index of every function a summary stands for in the call tree of the
+// function at index `fi` (`vc_waves_needs`), and of those functions in turn: an uncontracted
+// intermediate that is itself above the budget is no root, but its callees are proven before it.
+// A function already in `tried` is not wanted again.
+fn vc_waves_collect(fns: Vec<IrFunction>, idx_of: Vec<i64>, vm: IrModule, fi: i64, budget: i64, want: Vec<i64>, tried: Vec<i64>) {
+    let needs: Vec<i64> = vc_waves_needs(fns, vm, fi as u64, budget);
+    let mut n: u64 = 0;
+    while n < needs.len() {
+        let ci: i64 = vc_callee_index(idx_of, needs[n]);
+        if ci >= 0 && !vc_id_in(want, ci) && !vc_id_in(tried, needs[n]) {
+            want.push(ci);
+            vc_waves_collect(fns, idx_of, vm, ci, budget, want, tried);
+        }
+        n = n + 1;
+    }
+}
+
+// What the waves proved: the function ids, and for each its index in the module and its
+// outcome. A function the run would verify anyway takes the outcome as its verdict (it is the
+// verdict of a worker that decided every claim of it), instead of being decided twice.
+struct VcWaveProofs {
+    ids: Vec<i64>,
+    fns: Vec<i64>,
+    outcomes: Vec<VcOutcome>,
+}
+
+fn vc_waves_none() -> VcWaveProofs {
+    VcWaveProofs { ids: Vec::new(), fns: Vec::new(), outcomes: Vec::new() }
+}
+
+// Index into `p` of the outcome for the function at module index `fi`, -1 when it has none.
+fn vc_waves_outcome_of(p: VcWaveProofs, fi: i64) -> i64 {
+    let mut i: u64 = 0;
+    while i < p.fns.len() {
+        if p.fns[i] == fi { return i as i64; }
+        i = i + 1;
+    }
+    -1
+}
+
+// The functions proven by waves started from `roots` (indices of the functions whose decision
+// needs summaries). Empty when no root asks for a summary or nothing is proven.
+fn vc_waves_prove(exe: String, path: String, vm: IrModule, roots: Vec<i64>, jobs: i64, timeout_ms: i64, budget: i64, cache: VcCache) -> VcWaveProofs [io, read, write] {
+    let fns: Vec<IrFunction> = vm.functions;
+    let idx_of: Vec<i64> = vc_fn_index_table(fns);
+    let out: VcWaveProofs = vc_waves_none();
+    let proven: Vec<i64> = out.ids;
+    let tried: Vec<i64> = Vec::new();
+    let mut round: u64 = 0;
+    while round <= fns.len() {
+        round = round + 1;
+        let want: Vec<i64> = Vec::new();
+        let mut r: u64 = 0;
+        while r < roots.len() {
+            vc_waves_collect(fns, idx_of, vm, roots[r], budget, want, tried);
+            r = r + 1;
+        }
+        let batch: Vec<i64> = Vec::new();
+        let names: Vec<String> = Vec::new();
+        let mut w: u64 = 0;
+        while w < want.len() {
+            let u: IrFunction = fns[want[w] as u64];
+            if vc_waves_all_in(vc_waves_needs(fns, vm, want[w] as u64, budget), proven) {
+                tried.push(u.id);
+                if vc_module_skip_reason_trusted(u, vm, proven, budget).len() == 0 {
+                    batch.push(want[w]);
+                    names.push(u.name);
+                }
+            }
+            w = w + 1;
+        }
+        if batch.len() == 0 { return out; }
+        let pool: VcPool = vc_pool_new(vc_worker_exe(exe), path, batch, names, jobs, timeout_ms);
+        let mut k: u64 = 0;
+        while k < batch.len() {
+            pool.kinds[k] = VC_TASK_KIND_PROOF();
+            k = k + 1;
+        }
+        pool.halt = false;
+        pool.cache = cache;
+        pool.summaries = proven;
+        vc_pool_share_module(pool, vm);
+        while !vc_pool_settled(pool) {
+            vc_pool_step(pool);
+        }
+        vc_pool_abort(pool);
+        k = 0;
+        while k < batch.len() {
+            if pool.results[k].result.status == VERIFY_PROVEN() {
+                proven.push(fns[batch[k] as u64].id);
+                out.fns.push(batch[k]);
+                out.outcomes.push(pool.results[k]);
+            }
+            k = k + 1;
+        }
+    }
+    out
+}
