@@ -56,6 +56,7 @@ use vc_heap
 fn VC_OV_STRUCT() -> i64 { 4 }
 fn VC_OV_VEC() -> i64 { 1 }
 fn VC_OV_STRING() -> i64 { 2 }
+fn VC_OV_MAP() -> i64 { 8 }
 
 // An entry is a parameter (`param >= 0`, `obj == -1`: its object is `vc_agg_param`) or an
 // object the function allocated whose address was stored into a field (`param == -1`, `obj`

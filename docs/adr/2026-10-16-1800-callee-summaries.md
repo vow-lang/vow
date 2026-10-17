@@ -93,3 +93,26 @@ decided again in every caller, although the callee was proven on its own.
   needs it ends `unknown`; the summary is as sound without it.
 - The summary budget is part of the run, not of the program; the language and
   the contracts are untouched, so no contract is bounded or weakened to fit it.
+
+## Addendum 2026-10-17 (issue #1803): a proven callee's claims are not decided in its callers
+
+Cost, not precision. A caller within the budget is inlined whole, and every claim of every
+inlined callee was decided again in it, though the callee was proven on its own (2 654 claims for
+`module_encode` of `compiler/module_io.vow`, 2 350 of them inside `write_function` and below).
+
+- **The frames of a proven function are trusted.** `VcFrames.trusted` holds the ids the run has
+  proven; a hard claim whose frame, or any frame above it, is one of them is left to that proof
+  (`vc_claim_trusted`). The body stays inlined, so the claims that remain see the state they
+  saw before and the verdict, counterexample and sites are those of a full decision. The
+  `requires` of the trusted function stays a claim (the caller must meet it), and so do the
+  soft claims and the unwinding claims. A function that changes a `Vec`, `String` or map it was
+  given and has two parameters of one such class is never trusted
+  (`vc_collection_alias_risk`): its proof takes the two for different objects and a caller may
+  pass one object for both.
+- **More functions wait for proofs.** A function whose call tree is above 1 024 instructions
+  (`VOW_VERIFY_TRUST_ROOT_MIN`, test-only like the budget) is decided after the callees whose own
+  tree is at least a quarter of that, in the waves of `vc_waves`. A callee waits for its needs only
+  until they have been tried: one that is not proven costs its callers the shortcut, not their
+  decision. A function that went through a wave takes its outcome as its verdict, proven or not.
+- **A checked operator is decided once per site** within a round (`vc_claim_site_known`).
+- **The addresses of stored objects are tagged, not compared** (`vc_overlay_tag_start`).

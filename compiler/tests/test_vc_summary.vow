@@ -297,6 +297,67 @@ fn check_swap() -> i64 {
     0
 }
 
+fn vec_len_inst(id: i64, v: i64) -> IrInst {
+    mk_inst_call_extern(id, ITY_U64(), args1(v), String::from("__vow_vec_len"))
+}
+
+fn vec_push_inst(id: i64, v: i64, x: i64) -> IrInst {
+    mk_inst_call_extern(id, ITY_UNIT(), args2(v, x), String::from("__vow_vec_push_val"))
+}
+
+// A caller may pass one object for two collection parameters, which every proof takes for
+// different objects. So a function that changes a collection it was given and has two parameters
+// that are collections is not left to its proof; one with a single collection parameter, or that
+// only reads, or changes one it built, is.
+fn check_alias_risk_of_collection_parameters() -> i64 {
+    // g(a, b) { a.push(5); b.len() }
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_arg(1, ITY_PTR(), 1));
+    i.push(mk_inst_const_i64(2, 5));
+    i.push(vec_push_inst(3, 0, 2));
+    i.push(vec_len_inst(4, 1));
+    i.push(ret_unit(5));
+    let g: IrFunction = mk_function(1, String::from("g"), ptr_params2(), ITY_UNIT(), one(mk_block(0, i)));
+    if !vc_collection_alias_risk(g) { return 1; }
+    // the same body reading both is no risk
+    let r: Vec<IrInst> = Vec::new();
+    r.push(mk_inst_arg(0, ITY_PTR(), 0));
+    r.push(mk_inst_arg(1, ITY_PTR(), 1));
+    r.push(vec_len_inst(2, 0));
+    r.push(vec_len_inst(3, 1));
+    r.push(ret_unit(4));
+    if vc_collection_alias_risk(mk_function(2, String::from("r"), ptr_params2(), ITY_UNIT(), one(mk_block(0, r)))) { return 2; }
+    // g(v) { v.push(5) }: one collection, nothing to alias
+    let o: Vec<IrInst> = Vec::new();
+    o.push(mk_inst_arg(0, ITY_PTR(), 0));
+    o.push(mk_inst_const_i64(1, 5));
+    o.push(vec_push_inst(2, 0, 1));
+    o.push(ret_unit(3));
+    let one_vec: IrFunction = mk_function(3, String::from("one"), ptr_param(), ITY_UNIT(), one(mk_block(0, o)));
+    if vc_collection_alias_risk(one_vec) { return 3; }
+    // a Vec the function built
+    let j: Vec<IrInst> = Vec::new();
+    j.push(mk_inst_arg(0, ITY_PTR(), 0));
+    j.push(mk_inst_arg(1, ITY_PTR(), 1));
+    j.push(mk_inst_const_i64(2, 0));
+    j.push(mk_inst_call_extern(3, ITY_PTR(), args2(2, 2), String::from("__vow_vec_new")));
+    j.push(vec_push_inst(4, 3, 2));
+    j.push(vec_len_inst(5, 0));
+    j.push(vec_len_inst(6, 1));
+    j.push(ret_unit(7));
+    if vc_collection_alias_risk(mk_function(4, String::from("built"), ptr_params2(), ITY_UNIT(), one(mk_block(0, j)))) { return 4; }
+    // a caller that hands its one parameter to g twice is inlined with both, which is exact
+    let c: Vec<IrInst> = Vec::new();
+    c.push(mk_inst_arg(0, ITY_PTR(), 0));
+    c.push(mk_inst_call_target(1, ITY_UNIT(), args2(0, 0), 1));
+    c.push(ret_unit(2));
+    let caller: IrFunction = mk_function(0, String::from("caller"), ptr_param(), ITY_UNIT(), one(mk_block(0, c)));
+    if !vc_trust_sound(caller, module_of(caller, g)) { return 5; }
+    if vc_trust_sound(g, module_of(g, one_vec)) { return 6; }
+    0
+}
+
 fn check_ids_text() -> i64 {
     let ids: Vec<i64> = Vec::new();
     ids.push(3);
@@ -322,5 +383,6 @@ fn main() -> i32 {
     if r == 0 { let d: i64 = check_inert_without_trust(); if d != 0 { r = 800 + d; } }
     if r == 0 { let d: i64 = check_swap(); if d != 0 { r = 900 + d; } }
     if r == 0 { let d: i64 = check_ids_text(); if d != 0 { r = 1000 + d; } }
+    if r == 0 { let d: i64 = check_alias_risk_of_collection_parameters(); if d != 0 { r = 1200 + d; } }
     i64_to_i32_wrap(r)
 }

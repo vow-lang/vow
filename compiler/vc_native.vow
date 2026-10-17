@@ -373,14 +373,36 @@ fn vc_note_soft_sat(f: IrFunction, fr: VcFrames, cs: VcClaims, k: u64, sites: Ve
     false
 }
 
+// True when hard claim `k` is inside the body of a function proven on its own (`fr.trusted`):
+// that proof decided every claim of the body for every argument its `requires` admits. Not
+// the `requires` of the trusted function itself, which is the caller's to meet, nor the soft
+// claims, which the callers report (`vc_claim_site_known`), nor a loop's unwinding claim, which
+// depends on the bound of the round.
+fn vc_claim_trusted(fr: VcFrames, cs: VcClaims, k: u64) -> bool {
+    let kind: i64 = cs.kinds[k];
+    if kind == VC_CLAIM_ARITH() || kind == VC_CLAIM_UNWIND() || fr.trusted.len() == 0 { return false; }
+    let mut at: i64 = cs.frames[k];
+    if at >= 0 && kind == VC_CLAIM_CALLER_PRE() { at = fr.parents[at as u64]; }
+    while at >= 0 {
+        if vc_id_in(fr.trusted, fr.func_ids[at as u64]) { return true; }
+        at = fr.parents[at as u64];
+    }
+    false
+}
+
+// True when claim `k` is decided by a solver run: not by its own form (`vc_claim_is_static_sat`)
+// and not by the proof of the function it lies in (`vc_claim_trusted`).
+fn vc_claim_needs_solver(fr: VcFrames, cs: VcClaims, k: u64) -> bool {
+    !vc_claim_is_static_sat(cs, k) && !vc_claim_trusted(fr, cs, k)
+}
+
 // The source site of checked-operator claim `k`: every inlined copy of one operator has the same.
 fn vc_claim_site(f: IrFunction, fr: VcFrames, cs: VcClaims, k: u64) -> ParsedArithSite {
     ParsedArithSite { cause: cs.labels[k], owner: vc_frame_func(fr, cs.frames[k], f.id), ostart: cs.ostarts[k], olen: cs.olens[k] }
 }
 
 // True when checked-operator claim `k` has nothing left to decide: its site is already known to
-// abort, so a `sat` answer would only record it again, and any other answer changes no result.
-// Without this every inlined copy of a site costs a solver run.
+// abort, so a `sat` answer would only record it again. Every inlined copy of a site cost a solver run.
 fn vc_claim_site_known(f: IrFunction, fr: VcFrames, cs: VcClaims, k: u64, sites: Vec<ParsedArithSite>) -> bool {
     cs.kinds[k] == VC_CLAIM_ARITH() && vc_has_site(sites, vc_claim_site(f, fr, cs, k))
 }
@@ -402,19 +424,19 @@ fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, hyp: Vec<i64>, sites
         return vc_round(vc_proven_result(), false, false, -1, false, false);
     }
     let binder_at: i64 = vc_claims_first_binder(cs);
-    let ss: VcSession = vc_session_new(vc_session_wanted(cs, binder_at), binder_at);
-    ss.last_at = vc_claims_last_solver(cs);
+    let ss: VcSession = vc_session_new(vc_session_wanted(fr, cs, binder_at), binder_at);
+    ss.last_at = vc_claims_last_solver(fr, cs);
     let r: VcRound = vc_run_claims(f, fr, cs, ss, sites, started, timeout_ms, scratch, cache, slicing, all_claims, acc);
     vc_session_close(ss);
     r
 }
 
 // The index of the last claim of `cs` that needs a solver, -1 when none does.
-fn vc_claims_last_solver(cs: VcClaims) -> i64 {
+fn vc_claims_last_solver(fr: VcFrames, cs: VcClaims) -> i64 {
     let mut k: u64 = cs.kinds.len();
     while k > 0 {
         k = k - 1;
-        if !vc_claim_is_static_sat(cs, k) { return k as i64; }
+        if vc_claim_needs_solver(fr, cs, k) { return k as i64; }
     }
     -1
 }
@@ -422,12 +444,12 @@ fn vc_claims_last_solver(cs: VcClaims) -> i64 {
 // Whether the claims of a round share one solver process: only when at least
 // two of them need a solver and a session may ask them (`vc_session_admits`),
 // and the test-only switch is not set.
-fn vc_session_wanted(cs: VcClaims, binder_at: i64) -> bool [read] {
+fn vc_session_wanted(fr: VcFrames, cs: VcClaims, binder_at: i64) -> bool [read] {
     if !vc_incremental_enabled() { return false; }
     let mut needed: i64 = 0;
     let mut k: u64 = 0;
     while k < cs.kinds.len() {
-        if !vc_claim_is_static_sat(cs, k) && vc_session_admits(binder_at, cs, k) { needed = needed + 1; }
+        if vc_claim_needs_solver(fr, cs, k) && vc_session_admits(binder_at, cs, k) { needed = needed + 1; }
         k = k + 1;
     }
     needed >= 2
@@ -451,7 +473,7 @@ fn vc_run_claims(f: IrFunction, fr: VcFrames, cs: VcClaims, ss: VcSession, sites
         }
         if vc_claim_is_static_sat(cs, k) {
             if vc_note_soft_sat(f, fr, cs, k, sites) { open = true; }
-        } else if !vc_claim_site_known(f, fr, cs, k, sites) {
+        } else if !vc_claim_trusted(fr, cs, k) && !vc_claim_site_known(f, fr, cs, k, sites) {
             if !located {
                 bin = vc_solver_locate();
                 located = true;
@@ -682,16 +704,18 @@ fn vc_verify_function_mode(f: IrFunction, m: IrModule, timeout_ms: i64, scratch:
 // admits more behaviours than the callee has, so it is `unknown`, never `VerifyFailed`.
 fn vc_verify_function_summarised(f: IrFunction, m: IrModule, timeout_ms: i64, scratch: String, cache: VcCache, all_claims: bool, cfg: VcSummaryCfg, full: bool) -> VcOutcome [io, read, write] {
     let sm: VcSummarised = vc_summary_module(f, m, cfg.trusted, cfg.budget);
-    let oc: VcOutcome = vc_verify_function_in(f, sm.m, timeout_ms, scratch, cache, all_claims, full);
+    let oc: VcOutcome = vc_verify_function_in(f, sm.m, timeout_ms, scratch, cache, all_claims, full, cfg.trusted);
     if sm.used && oc.result.status == VERIFY_FAILED() {
         return vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), vc_summary_reason()));
     }
     oc
 }
 
-fn vc_verify_function_in(f: IrFunction, m: IrModule, timeout_ms: i64, scratch: String, cache: VcCache, all_claims: bool, full: bool) -> VcOutcome [io, read, write] {
+fn vc_verify_function_in(f: IrFunction, m: IrModule, timeout_ms: i64, scratch: String, cache: VcCache, all_claims: bool, full: bool, trusted: Vec<i64>) -> VcOutcome [io, read, write] {
     let bounds: Vec<i64> = vc_unwind_bounds();
     let inl: VcInlined = vc_inline(f, m, VC_INLINE_INST_CAP());
+    let frames: VcFrames = inl.frames;
+    frames.trusted = trusted;
     if inl.status == VC_INLINE_TOO_LARGE() {
         return vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), vc_inline_budget_reason(VC_INLINE_INST_CAP())));
     }
