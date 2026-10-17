@@ -46,17 +46,24 @@ fn vc_wave_ctx(vm: IrModule, budget: i64) -> VcWaveCtx [read] {
     VcWaveCtx { fns: fns, idx_of: vc_fn_index_table(fns), vm: vm, budget: budget, root_min: vc_trust_root_min(), sizes: dom_fill(fns.len(), -1), needs: needs, known: dom_fill(fns.len(), 0) }
 }
 
+// The callees of the function at index `fi`, callees first, when its call tree is above `root_min`
+// and has no cycle: the ones that can be worth a proof of their own. Empty otherwise.
+fn vc_trust_reach(c: VcWaveCtx, fi: u64) -> Vec<i64> {
+    let order: Vec<i64> = Vec::new();
+    if vc_tree_size(c.fns, c.idx_of, c.sizes, fi as i64, VC_INLINE_SKIP_INSTS()) <= c.root_min { return order; }
+    if vc_call_cycle(c.fns, c.idx_of, fi as i64).len() > 0 { return order; }
+    let seen: Vec<i64> = dom_fill(c.fns.len(), 0);
+    vc_reachable_callees(c.fns, c.idx_of, seen, order, fi as i64);
+    order
+}
+
 // Ids of the callees of the function at index `fi` that are worth a proof of their own when
 // the call tree of `fi` is above `root_min`: the ones whose own tree is at least
 // `vc_trust_callee_min`. Their claims are then not decided again in `fi` (`vc_claim_trusted`).
 fn vc_trust_needs(c: VcWaveCtx, fi: u64) -> Vec<i64> {
     let out: Vec<i64> = Vec::new();
     let cap: i64 = VC_INLINE_SKIP_INSTS();
-    if vc_tree_size(c.fns, c.idx_of, c.sizes, fi as i64, cap) <= c.root_min { return out; }
-    if vc_call_cycle(c.fns, c.idx_of, fi as i64).len() > 0 { return out; }
-    let seen: Vec<i64> = dom_fill(c.fns.len(), 0);
-    let order: Vec<i64> = Vec::new();
-    vc_reachable_callees(c.fns, c.idx_of, seen, order, fi as i64);
+    let order: Vec<i64> = vc_trust_reach(c, fi);
     let min: i64 = vc_trust_callee_min(c.root_min);
     let mut i: u64 = 0;
     while i < order.len() {
@@ -66,14 +73,60 @@ fn vc_trust_needs(c: VcWaveCtx, fi: u64) -> Vec<i64> {
     out
 }
 
+// Ids of the callees of the function at index `fi`, below the size `vc_trust_needs` asks for, that
+// its inlined call tree holds more than once and that are at least `vc_trust_repeat_min`: every
+// copy of such a callee decides its claims again (the byte readers of `compiler/module_io.vow`
+// are inlined over and over in `read_inst_data`), so one proof of it replaces the lot. Only for a
+// function above `root_min`; the others are small enough to be decided whole. Callees first.
+fn vc_trust_repeated(c: VcWaveCtx, fi: u64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let cap: i64 = VC_INLINE_SKIP_INSTS();
+    let order: Vec<i64> = vc_trust_reach(c, fi);
+    if order.len() == 0 { return out; }
+    let copies: Vec<i64> = dom_fill(c.fns.len(), 0);
+    copies[fi] = 1;
+    // Callers before callees: the root, then `order` backwards.
+    let mut k: u64 = order.len() + 1;
+    while k > 0 {
+        k = k - 1;
+        let u: u64 = { if k == order.len() { fi } else { order[k] as u64 } };
+        let calls: Vec<IrInst> = vc_user_calls(c.fns[u]);
+        let mut ci: u64 = 0;
+        while ci < calls.len() {
+            let t: i64 = vc_callee_index(c.idx_of, calls[ci].dv);
+            if t >= 0 {
+                let sum: i64 = copies[t as u64] + copies[u];
+                copies[t as u64] = { if sum > cap { cap } else { sum } };
+            }
+            ci = ci + 1;
+        }
+    }
+    let big: i64 = vc_trust_callee_min(c.root_min);
+    let min: i64 = vc_trust_repeat_min(c.root_min);
+    let mut i: u64 = 0;
+    while i < order.len() {
+        let size: i64 = vc_tree_size(c.fns, c.idx_of, c.sizes, order[i], cap);
+        if copies[order[i] as u64] >= 2 && size >= min && size < big { out.push(c.fns[order[i] as u64].id); }
+        i = i + 1;
+    }
+    out
+}
+
 // Ids of the functions the decision of the function at index `fi` waits for: the callees a
 // summary stands for if everything that can be summarised were, or, where none is (the call tree
-// is within the budget), the callees worth a proof of their own (`vc_trust_needs`).
+// is within the budget), the callees worth a proof of their own (`vc_trust_needs`); and, for a
+// function above `root_min`, the callees its call tree repeats (`vc_trust_repeated`).
 fn vc_waves_needs(c: VcWaveCtx, fi: u64) -> Vec<i64> {
     if c.known[fi] == 1 { return c.needs[fi]; }
     let sm: VcSummarised = vc_summary_module(c.fns[fi], c.vm, vc_trust_all(), c.budget);
     let mut ids: Vec<i64> = sm.used_ids;
     if ids.len() == 0 { ids = vc_trust_needs(c, fi); }
+    let rep: Vec<i64> = vc_trust_repeated(c, fi);
+    let mut r: u64 = 0;
+    while r < rep.len() {
+        if !vc_id_in(ids, rep[r]) { ids.push(rep[r]); }
+        r = r + 1;
+    }
     c.needs[fi] = ids;
     c.known[fi] = 1;
     ids
