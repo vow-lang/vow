@@ -320,12 +320,12 @@ fn vc_param_subst(callee: IrFunction, call: IrInst, sub: Vec<i64>, vbase: i64) -
 // block it sits in. Returns the index of the continuation block the caller goes on appending
 // to.
 fn vc_splice_call(sp: VcSplice, frame: i64, sub: Vec<i64>, vbase: i64, cur: u64, call: IrInst) -> u64 {
-    let callee_at: i64 = vc_callee_index(sp.idx_of, call.dv);
-    if callee_at < 0 || sp.fns[callee_at as u64].blocks.len() == 0 {
+    let ci: i64 = vc_callee_index(sp.idx_of, call.dv);
+    if ci < 0 || sp.fns[ci as u64].blocks.len() == 0 {
         sp.bad = true;
         return cur;
     }
-    let callee: IrFunction = sp.fns[callee_at as u64];
+    let callee: IrFunction = sp.fns[ci as u64];
     let fr: VcFrames = sp.frames;
     let k: i64 = fr.func_ids.len() as i64;
     fr.func_ids.push(callee.id);
@@ -592,10 +592,10 @@ fn vc_non_modelable_callee(g: IrFunction, why: String) -> String {
 
 // "" when the target `f` is inside the native subset once its calls are
 // inlined, else "<code>: <detail>": the one decision the driver takes before a
-// function goes to a worker. The answer is a copy: the flattened bodies the decision reads
-// are freed when it returns, not kept with the answer for as long as the caller keeps that. A function without calls is decided by
+// function goes to a worker. A function without calls is decided by
 // `vc_skip_reason` alone. A call tree above the size budget is not skipped: the
-// worker answers `unknown` for it.
+// worker answers `unknown` for it. The answer is a copy: the flattened bodies the decision
+// reads are freed when it returns, not kept for as long as the caller keeps the answer.
 fn vc_module_skip_reason(f: IrFunction, m: IrModule) -> String {
     String::from(vc_module_skip_reason_via(f, m, m, VC_INLINE_SKIP_INSTS()))
 }

@@ -46,13 +46,15 @@ fn chain(pad: i64) -> IrModule {
 
 fn RUNS() -> i64 { 20 }
 
-// Slack for the answers themselves and for the allocator's rounding: one flattened `top` below
-// is about a megabyte, so a decision that kept its scratch would exceed it after one run.
+// Slack for the answers themselves and for the allocator's rounding. The flattened `top` below
+// has over 4000 instructions, far above it, so a decision that kept its scratch exceeds it after
+// one run.
 fn SLACK_BYTES() -> u64 { 262144 }
 
 fn check_decision_is_scratch() -> i64 [io, read] {
     let m: IrModule = chain(1500);
     let top: IrFunction = m.functions[2];
+    if vc_inst_count(vc_inline(top, m, VC_INLINE_INST_CAP()).f) < 4000 { return 4; }
     let kept: Vec<String> = Vec::new();
     kept.push(vc_module_skip_reason(top, m));
     let root0: u64 = memory_root_arena_bytes();
@@ -89,15 +91,14 @@ fn check_trusted_decision_is_scratch() -> i64 [io, read] {
 fn check_wave_needs_is_scratch() -> i64 [io, read] {
     let m: IrModule = chain(1500);
     let warm: VcWaveCtx = vc_wave_ctx(m, 1000);
-    vc_waves_resolve(warm, 2);
-    if warm.needs[2].len() == 0 { return 1; }
+    if vc_waves_needs(warm, 2).len() == 0 { return 1; }
     let root0: u64 = memory_root_arena_bytes();
     let peak0: u64 = memory_peak_bytes();
     let kept: Vec<VcWaveCtx> = Vec::new();
     let mut r: i64 = 0;
     while r < 5 {
         let c: VcWaveCtx = vc_wave_ctx(m, 1000);
-        vc_waves_resolve(c, 2);
+        vc_waves_needs(c, 2);
         kept.push(c);
         r = r + 1;
     }
