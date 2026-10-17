@@ -571,9 +571,11 @@ Both are pure `(array, length)` transitions, mirroring `vow-runtime` exactly:
   arena passes emit `__vow_vec_reserve_in_arena`, so it never reaches the
   verifier.
 
-Verdict movement: no `tests/verify*` fixture uses `Vec::clear`/`truncate`, so
-no row of `scripts/verify_diff.py` moves. `examples/sat` (which uses both) keeps
-its one `unknown` function, `make_zero_vec`, which does not call them.
+Verdict movement: the four `tests/verify-native/pass` fixtures that call
+`Vec::clear`/`truncate` are `more_precise` rows of `scripts/verify_diff.py`
+(native proves where ESBMC skips); no row is `soundness`. `examples/sat` (which
+uses both) keeps its one `unknown` function, `make_zero_vec`, which does not
+call them.
 
 Still `Skipped` here: `reserve`, which has no source-level builtin.
 
