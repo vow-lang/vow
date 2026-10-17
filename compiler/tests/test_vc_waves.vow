@@ -34,6 +34,68 @@ fn chain() -> IrModule {
     mk_module(fs)
 }
 
+// `pad` constants, then one call per entry of `callees`.
+fn calling(id: i64, name: String, pad: i64, callees: Vec<i64>) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    let mut n: i64 = 0;
+    while n < pad {
+        i.push(mk_inst_const_i64(n, 1));
+        n = n + 1;
+    }
+    let mut c: u64 = 0;
+    while c < callees.len() {
+        i.push(mk_inst_call_target(n, ITY_UNIT(), Vec::new(), callees[c]));
+        n = n + 1;
+        c = c + 1;
+    }
+    i.push(mk_inst_return(n, 0));
+    let b: Vec<IrBlock> = Vec::new();
+    b.push(mk_block(0, i));
+    mk_function(id, name, Vec::new(), ITY_UNIT(), b)
+}
+
+fn pair(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v.push(a);
+    v.push(b);
+    v.push(b);
+    v
+}
+
+// 1 `small` (71, a repeat worth a proof), 2 `tiny` (21), 3 `large` (301, a proof by its size) and
+// 4 `once` (81): 5 `mid` (880) calls the first three twice and the last once, 6 `top` (1 982) calls it.
+fn repeats() -> IrModule {
+    let fs: Vec<IrFunction> = Vec::new();
+    fs.push(padded(1, String::from("small"), 69, -1));
+    fs.push(padded(2, String::from("tiny"), 19, -1));
+    fs.push(padded(3, String::from("large"), 299, -1));
+    fs.push(padded(4, String::from("once"), 79, -1));
+    let mc: Vec<i64> = pair(1, 2);
+    mc.push(3);
+    mc.push(3);
+    mc.push(4);
+    fs.push(calling(5, String::from("mid"), 5, mc));
+    let tc: Vec<i64> = Vec::new();
+    tc.push(5);
+    fs.push(calling(6, String::from("top"), 1100, tc));
+    mk_module(fs)
+}
+
+// A callee its root's call tree holds twice or more and whose own tree is from a sixteenth to a
+// quarter of the root size is proven; one held once, a smaller one and a bigger one are not (the
+// bigger is `vc_trust_needs`'s). A root within `root_min` has none (`mid` at the default size).
+fn check_trust_repeated() -> i64 [read] {
+    let c: VcWaveCtx = vc_wave_ctx(repeats(), 16384);
+    if ids_text(vc_trust_repeated(c, 4)) != String::from("") { return 1; }
+    if ids_text(vc_trust_repeated(c, 5)) != String::from("1") { return 2; }
+    c.root_min = 400;
+    if ids_text(vc_trust_repeated(c, 4)) != String::from("1") { return 3; }
+    c.root_min = 2000;
+    if ids_text(vc_trust_repeated(c, 5)) != String::from("") { return 4; }
+    0
+}
+
 fn ids_text(ids: Vec<i64>) -> String {
     vc_ids_text(ids)
 }
@@ -83,6 +145,7 @@ fn check_wave_lines() -> i64 {
 fn main() -> i32 [read] {
     let mut r: i64 = check_trust_needs();
     if r == 0 { let d: i64 = check_waves_needs_within_budget(); if d != 0 { r = 100 + d; } }
+    if r == 0 { let t: i64 = check_trust_repeated(); if t != 0 { r = 300 + t; } }
     if r == 0 { let l: i64 = check_wave_lines(); if l != 0 { r = 200 + l; } }
     i64_to_i32_wrap(r)
 }
