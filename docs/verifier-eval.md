@@ -439,7 +439,16 @@ sides. The driver's stderr is timestamped as it arrives. Each `Verifying <fn>...
 line opens a block that ends at its last progress line; a function's time is the
 gap from the end of the previous block to the end of its own, and its memory the
 peak of the process tree in that gap. What precedes the first block (front end,
-worker start-up) and the function reported first stay in both sides. A function
+worker start-up) and the function reported first stay in both sides. The native driver
+proves some functions before its first `Verifying` line, in waves (callee summaries, #1791),
+and prints `Wave <R>: proving <N> function(s)...` when a round starts and `Proof <fn>: <WORD>`
+as each proof is answered; these are not verdict lines. A proof is charged to its function,
+from the start of the round (or the previous proof) to its own line, in time and memory, and
+adds to the function's own block when the verdict is reported later. What runs between rounds
+stays common. A function proven only in a wave and given no verdict on either backend is a
+helper native proves for the summaries of its callers: it is listed under `counted` and its
+cost stays in native's side (it is not left out). A function ESBMC skips is left out with its
+proof like with its report. A function
 proven with reachable checked-arithmetic aborts prints only `<owner>: PROVEN
 (checked arithmetic can abort)` lines, so a block that reports nothing else is
 read as a proof of its `Verifying` function (with `--verify-jobs` above 1 the

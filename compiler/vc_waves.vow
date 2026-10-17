@@ -1,6 +1,7 @@
 module VcWaves
 
 use ir
+use diag
 use verifier
 use vc_cache
 use vc_gate
@@ -130,6 +131,51 @@ fn vc_waves_outcome_of(p: VcWaveProofs, fi: i64) -> i64 {
     -1
 }
 
+// The wave's progress on stderr, in the family the `verify` progress lines belong to, for
+// `scripts/verify_compiler.py` to attribute the time and the memory of a proof to the function it
+// proves (the proofs run before the first `Verifying` line, and without a line of their own the
+// run books them as common start-up). `Wave R: proving N function(s)...` is printed when the Rth
+// round that has something to prove starts its pool, `Proof <fn>: <WORD>` as each proof of the
+// round is answered. Neither matches the `  <fn>: <WORD>` verdict lines, so no function gains or
+// loses a verdict.
+fn vc_wave_start_line(round: u64, n: u64) -> String {
+    let s: String = String::from("Wave ");
+    s.push_str(i64_to_string(round as i64));
+    s.push_str(String::from(": proving "));
+    s.push_str(i64_to_string(n as i64));
+    s.push_str(String::from(" function(s)..."));
+    s
+}
+
+fn vc_wave_word(status: i64) -> String {
+    if status == VERIFY_PROVEN() || status == VERIFY_PROVEN_IR() { return String::from("PROVEN"); }
+    if status == VERIFY_FAILED() { return String::from("FAILED"); }
+    if status == VERIFY_TIMEOUT() { return String::from("TIMEOUT"); }
+    if status == VERIFY_UNKNOWN() { return String::from("UNKNOWN"); }
+    if status == VERIFY_PANICKED() { return String::from("PANICKED"); }
+    String::from("ERROR")
+}
+
+fn vc_wave_proof_line(name: String, status: i64) -> String {
+    let s: String = String::from("Proof ");
+    s.push_str(name);
+    s.push_str(String::from(": "));
+    s.push_str(vc_wave_word(status));
+    s
+}
+
+// Prints the proof line of every task of `pool` that is answered and not yet in `said`.
+fn vc_waves_say_ready(pool: VcPool, names: Vec<String>, said: Vec<i64>) [io] {
+    let mut k: u64 = 0;
+    while k < names.len() {
+        if said[k] == 0 && vc_pool_ready(pool, k) {
+            said[k] = 1;
+            diag_eprintln_best_effort(vc_wave_proof_line(names[k], pool.results[k].result.status));
+        }
+        k = k + 1;
+    }
+}
+
 // The functions proven by waves started from `roots` (indices of the functions whose decision
 // needs summaries). Empty when no root asks for a summary or nothing is proven.
 fn vc_waves_prove(exe: String, path: String, vm: IrModule, roots: Vec<i64>, jobs: i64, timeout_ms: i64, budget: i64, cache: VcCache) -> VcWaveProofs [io, read, write] {
@@ -139,6 +185,7 @@ fn vc_waves_prove(exe: String, path: String, vm: IrModule, roots: Vec<i64>, jobs
     let proven: Vec<i64> = out.ids;
     let tried: Vec<i64> = Vec::new();
     let mut round: u64 = 0;
+    let mut waves: u64 = 0;
     while round <= fns.len() {
         round = round + 1;
         let want: Vec<i64> = Vec::new();
@@ -180,9 +227,14 @@ fn vc_waves_prove(exe: String, path: String, vm: IrModule, roots: Vec<i64>, jobs
         pool.cache = cache;
         pool.summaries = proven;
         vc_pool_share_module(pool, vm);
+        let said: Vec<i64> = dom_fill(batch.len(), 0);
+        waves = waves + 1;
+        diag_eprintln_best_effort(vc_wave_start_line(waves, batch.len()));
         while !vc_pool_settled(pool) {
             vc_pool_step(pool);
+            vc_waves_say_ready(pool, names, said);
         }
+        vc_waves_say_ready(pool, names, said);
         vc_pool_abort(pool);
         k = 0;
         while k < batch.len() {
