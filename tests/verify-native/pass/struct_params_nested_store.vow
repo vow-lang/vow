@@ -1,0 +1,21 @@
+// TEST: category model-drift
+// TEST: esbmc-model-artifact fn="nested_ok" blame=Callee vow_id=0 "ESBMC's C model keeps every struct parameter at the same heap slot, so two parameters of different types are one object and the second write overwrites the first; no caller can pass one object for two parameters of different types, so the claim holds at runtime"
+// Storing a struct parameter into the field of a parameter of another type, then writing it:
+// the two parameters have different types, so they are never one object (#1802).
+module StructParamsNestedStore
+
+struct Inner { a: i64 }
+struct Outer { inner: Inner }
+
+fn nested_ok(o: Outer, i: Inner) -> bool vow {
+  ensures: result
+} {
+  o.inner = i;
+  i.a = 9;
+  o.inner.a == 9
+}
+
+fn main() -> i32 [io] {
+  print_i64(if nested_ok(Outer { inner: Inner { a: 0 } }, Inner { a: 0 }) { 1 } else { 0 });
+  0
+}
