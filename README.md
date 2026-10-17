@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/vow-lang/vow/actions/workflows/ci.yml/badge.svg)](https://github.com/vow-lang/vow/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/vow-lang/vow/graph/badge.svg)](https://codecov.io/gh/vow-lang/vow)
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/vow-lang/vow?utm_source=badge)
 
 An agent-first programming language with formal verification.
 
