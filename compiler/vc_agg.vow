@@ -155,6 +155,12 @@ fn vc_agg_child(ag: VcAgg, parent: i64, slot: i64) -> i64 {
     vc_agg_push_obj(ag, VC_OBJ_CHILD(), parent, slot)
 }
 
+// True when `obj` is memory the function was given or may be (a parameter, a child of one, or a
+// merge), not an object the function allocated.
+fn vc_agg_is_param(ag: VcAgg, obj: i64) -> bool {
+    obj >= 0 && ag.kinds[obj as u64] != VC_OBJ_ALLOC()
+}
+
 // The parameter a parameter or child object belongs to.
 fn vc_agg_root_param(ag: VcAgg, obj: i64) -> i64 {
     let mut o: i64 = obj;
@@ -240,6 +246,14 @@ fn vc_agg_write(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, sort
     } else {
         vc_agg_write_one(ag, ar, hdr, obj, idx, sort, term, pc);
     }
+}
+
+// A loop cut's havoc of slot `idx` of `obj` at `sort` (`__vc_havoc_field`): the slot
+// takes a fresh unconstrained constant on every path that reaches the marker's
+// block, through the same reach as a write (every object a Phi merges, every
+// parameter that may be the same object).
+fn vc_agg_havoc(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, sort: i64, pc: i64) {
+    vc_agg_write(ag, ar, hdr, obj, idx, sort, vc_agg_junk(ag, ar, hdr, sort), pc);
 }
 
 // The write to each object a Phi merges, under `pc` and the condition of the edge

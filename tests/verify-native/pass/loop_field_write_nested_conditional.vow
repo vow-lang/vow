@@ -1,0 +1,39 @@
+// Nested loops that write fields of one parameter, the inner one under a branch.
+// Every loop of the chain havocs the slots written beneath it, and a write on a
+// branch keeps the havoced value on the paths that skip it.
+module LoopFieldWriteNestedConditional
+
+struct State { count: u64, seen: bool }
+
+fn sweep(s: State, n: u64) -> State vow {
+  requires: s.count == 0 && !s.seen
+  ensures: result.count == n + n
+  ensures: !result.seen || n > 3
+} {
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n
+    invariant: s.count == i + i
+    invariant: !s.seen || i > 3
+  } {
+    let mut j: u64 = 0;
+    while j < 2 vow {
+      invariant: j <= 2
+      invariant: s.count == i + i + j
+    } {
+      s.count = s.count + 1;
+      j = j + 1;
+    }
+    if i == 3 {
+      s.seen = true;
+    }
+    i = i + 1;
+  }
+  s
+}
+
+fn main() -> i32 [io] {
+  let s: State = State { count: 0, seen: false };
+  print_u64(sweep(s, 5).count);
+  0
+}

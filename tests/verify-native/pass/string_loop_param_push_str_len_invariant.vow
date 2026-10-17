@@ -1,0 +1,25 @@
+// TEST: category invariant
+// The loop appends to a String parameter, whose state exists before the loop begins
+// rather than being created by it: the havoc at the header falls back to the
+// parameter's own length, and each `push_str` adds the length of the appended text.
+module StringLoopParamPushStrLenInvariant
+
+fn pad(s: String, n: u64) vow {
+  requires: s.len() == 0,
+  ensures: s.len() == n * 2
+} {
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n && s.len() == i * 2
+  } {
+    s.push_str(String::from("ab"));
+    i = i + 1;
+  }
+}
+
+fn main() -> i32 [io] {
+  let s: String = String::new();
+  pad(s, 3);
+  print_u64(s.len());
+  0
+}

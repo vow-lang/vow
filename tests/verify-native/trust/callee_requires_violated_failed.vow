@@ -1,0 +1,16 @@
+// TEST: trust-expect failed
+// The `requires` of a function proven on its own is still the caller's to meet.
+fn half(x: i64) -> i64 vow {
+    requires: x > 0,
+    ensures: result >= 0
+} {
+    x / 2 + x % 2
+}
+
+fn run(a: i64) -> i64 vow {
+    requires: a >= 0
+} {
+    half(a)
+}
+
+fn main() -> i32 { 0 }

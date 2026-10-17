@@ -125,6 +125,7 @@ fn check_closed_code_list() -> i64 {
     if !vc_skip_code_valid(VC_SKIP_UNSUPPORTED_OPCODE()) { return 805; }
     if !vc_skip_code_valid(VC_SKIP_NON_MODELABLE_CALLEE()) { return 806; }
     if !vc_skip_code_valid(VC_SKIP_RESERVED_SYMBOL()) { return 807; }
+    if !vc_skip_code_valid(VC_SKIP_INLINING_TOO_LARGE()) { return 809; }
     if vc_skip_code_valid(String::from("wide-aggregate-field")) { return 808; }
     if vc_skip_code_valid(String::from("something-else")) { return 809; }
     0

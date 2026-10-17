@@ -169,7 +169,8 @@ fn vc_claims_harvest_fields(cs: VcClaims, ag: VcAgg, vv: VcVec, memory: VcHandle
     let mut i: u64 = 0;
     let mut v: u64 = 0;
     let mut a: u64 = 0;
-    while i < ag.ps_param.len() || v < vv.pv_param.len() || a < ov.param.len() {
+    while i < ag.ps_param.len() || v < vv.pv_param.len() || vc_overlay_next_listed(ov, a) < ov.param.len() {
+        a = vc_overlay_next_listed(ov, a);
         let hi: i64 = { if i < ag.ps_param.len() { ag.ps_hdr[i] } else { none } };
         let hv: i64 = { if v < vv.pv_param.len() { vv.pv_hdr[v] } else { none } };
         let ha: i64 = { if a < ov.param.len() { ov.hdr[a] } else { none } };
@@ -427,11 +428,16 @@ fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
     }
     if op == IOP_FIELD_SET() {
         let val: i64 = inst.args[1];
-        // A pointer written into a field is never read back (`vc_heap_store_detail`).
-        if w.tys[val as u64] == ITY_PTR() { return true; }
+        let mut term: i64 = w.var_of[val as u64];
+        let mut ty: i64 = w.tys[val as u64];
+        if ty == ITY_PTR() {
+            // The slot holds the address of the object (`vc_overlay`).
+            term = vc_overlay_addr_of(w.memory.overlay, ag, cs.arena, cs.header, cs.assumed, w.obj_of[val as u64], vc_overlay_stored_class(w.memory.overlay, val, vc_agg_is_param(ag, w.obj_of[inst.args[0] as u64])));
+            ty = ITY_I64();
+        }
         let seen: u64 = ag.ps_param.len();
-        vc_agg_write(ag, cs.arena, cs.header, w.obj_of[inst.args[0] as u64], inst.dv, vc_ty_sort(w.tys[val as u64]), w.var_of[val as u64], w.fl.block_pc[bi]);
-        vc_agg_type_symbols(ag, seen, w.tys[val as u64]);
+        vc_agg_write(ag, cs.arena, cs.header, w.obj_of[inst.args[0] as u64], inst.dv, vc_ty_sort(ty), term, w.fl.block_pc[bi]);
+        vc_agg_type_symbols(ag, seen, ty);
         return true;
     }
     if op == IOP_FIELD_GET() && inst.ty == ITY_PTR() {
@@ -448,6 +454,7 @@ fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
         let t: i64 = vc_agg_get(ag, cs.arena, cs.header, w.obj_of[inst.args[0] as u64], inst.dv, vc_ty_sort(inst.ty));
         vc_agg_type_symbols(ag, seen, inst.ty);
         vc_define(w, inst, t);
+        vc_handle_note_loaded(w.memory, -1, inst.ty);
         return true;
     }
     if op == IOP_PHI() && inst.ty == ITY_PTR() {
@@ -883,6 +890,10 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
         }
     } else if vc_is_havoc_map(inst) {
         vc_map_havoc(w.mp, w.ag, cs.arena, cs.header, cs.assumed, w.obj_of[inst.args[0] as u64], bi as i64);
+    } else if vc_is_havoc_field(inst) {
+        let seen: u64 = w.ag.ps_param.len();
+        vc_agg_havoc(w.ag, cs.arena, cs.header, w.obj_of[inst.args[0] as u64], inst.dv, vc_ty_sort(inst.dv2), pc);
+        vc_agg_type_symbols(w.ag, seen, inst.dv2);
     } else if vc_is_unwrap_abort(inst) {
         vc_guard(cs, VC_CLAIM_UNWRAP_NONE(), VC_LABEL_UNWRAP_NONE(), pc, vc_tm_bool_const(cs.arena, false), inst);
     } else if vc_is_unwind_sink(inst) {

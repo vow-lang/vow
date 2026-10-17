@@ -1,0 +1,22 @@
+// TEST: skip-reason unsupported-opcode
+// The element read is of a `Vec` parameter, not a handle, and its pointer is used as an object
+// (`len` of that `String`): it may be the stored `s`, so the function stays `Skipped`.
+module VecPointerStoreParamElementDerefSkipped
+
+struct Bag { names: Vec<String> }
+
+fn first_plus(a: Bag, names: Vec<String>, s: String) -> u64 vow {
+  requires: names.len() > 0
+} {
+  let out: Vec<String> = Vec::new();
+  out.push(s);
+  names[0].len() + a.names.len() + out.len()
+}
+
+fn main() -> i32 [io] {
+  let a: Bag = Bag { names: Vec::new() };
+  let names: Vec<String> = Vec::new();
+  names.push(String::from("x"));
+  print_u64(first_plus(a, names, String::from("a")));
+  0
+}

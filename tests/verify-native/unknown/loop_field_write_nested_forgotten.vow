@@ -1,0 +1,35 @@
+// TEST: category invariant
+// Only the inner loop writes `s.v`; the outer loop's invariant says nothing of it.
+// After `n > 100` outer iterations `s.v` is `n`, so `ensures: s.v == 0` is false,
+// but the run needs more iterations than the largest unwinding bound. The cut must
+// forget `s.v` at the top of the outer header too: an induction that kept `s.v == 0`
+// there would "prove" the false `ensures`.
+module LoopFieldWriteNestedForgotten
+
+struct Counter { v: u64 }
+
+fn bump(s: Counter, n: u64) -> u64 vow {
+  requires: s.v == 0 && n > 100
+  ensures: s.v == 0
+} {
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n
+  } {
+    let mut j: u64 = 0;
+    while j < 1 vow {
+      invariant: j <= 1
+    } {
+      s.v = s.v + 1;
+      j = j + 1;
+    }
+    i = i + 1;
+  }
+  s.v
+}
+
+fn main() -> i32 [io] {
+  let s: Counter = Counter { v: 0 };
+  print_u64(bump(s, 101));
+  0
+}

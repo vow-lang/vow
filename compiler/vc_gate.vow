@@ -250,10 +250,15 @@ fn vc_vec_index_ok(ty: i64) -> bool {
 }
 
 // Operand and result types of a `Vec` call. `get` yields the raw 8-byte slot as
-// `i64`; the lowerer narrows it with its own cast.
-fn vc_vec_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
+// `i64`; the lowerer narrows it with its own cast. With `calls` (the check of one
+// function of a call tree, before `vc_inline` flattens it) a write whose receiver is a
+// handle is taken as a write on the object it may resolve to once the callee that
+// builds the struct is inlined (`vc_resolve_ptr_fields`); the gate of the flattened
+// function, which has no `calls`, rejects it when it did not.
+fn vc_vec_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64, calls: bool) -> bool {
     let n: u64 = inst.args.len();
-    let t0: i64 = vc_arg_ty(tys, inst, 0);
+    let mut t0: i64 = vc_arg_ty(tys, inst, 0);
+    if calls && t0 == ITY_I64() && vc_vec_kind_mutates(kind) { t0 = ITY_PTR(); }
     let t1: i64 = vc_arg_ty(tys, inst, 1);
     if kind == VC_VEC_NEW() || kind == VC_STR_NEW() {
         return n == 2 && inst.ty == ITY_PTR() && vc_ty_is_int(t0) && vc_ty_is_int(t1);
@@ -380,8 +385,9 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
     }
     if op == IOP_CALL() {
         if vc_is_unwrap_abort(inst) { return n == 0 && inst.ty == ITY_UNIT(); }
+        if vc_is_havoc(inst) { return n == 0 && inst.dv == VC_SUMMARY_HAVOC_MARK() && vc_scalar_value_ty(inst.ty); }
         let vk: i64 = vc_inst_vec_kind(inst);
-        if vk != VC_VEC_NONE() { return vc_vec_call_ok(inst, tys, vk); }
+        if vk != VC_VEC_NONE() { return vc_vec_call_ok(inst, tys, vk, calls); }
         let mk: i64 = vc_inst_map_kind(inst);
         if mk != VC_MAP_NONE() { return vc_map_call_ok(inst, tys, mk); }
         if vc_inst_scalar_kind(inst) == VC_SCALAR_HASH_U64() {
@@ -533,12 +539,8 @@ fn vc_skip_reason_with(src: IrFunction, calls: bool) -> String {
     if child.len() > 0 {
         return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), child);
     }
-    let stored: String = vc_heap_store_detail(f, tys);
-    if stored.len() > 0 {
-        return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), stored);
-    }
     if has_vec {
-        let elems: String = vc_ptr_store_detail(f, tys);
+        let elems: String = vc_ptr_store_detail(f, tys, calls);
         if elems.len() > 0 {
             return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), elems);
         }

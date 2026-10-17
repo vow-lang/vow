@@ -211,6 +211,21 @@ fn vc_map_state_reason() -> String {
     out
 }
 
+// A counterexample was found in a function whose call tree is decided with a summary standing
+// for a proven callee (`vc_summary`): the summary admits states and results the callee cannot
+// produce, so the counterexample may not be a run and nothing is claimed.
+fn vc_summary_label() -> String { String::from("callee summary") }
+
+fn vc_summary_reason() -> String {
+    let out: String = vc_summary_label();
+    out.push_str(String::from(": a counterexample found with a proven callee summarised by its contract, not by its body, which the verifier cannot tell from a run"));
+    out
+}
+
+fn vc_output_has_summary(raw: String) -> bool {
+    str_find_str(raw, vc_summary_label()) >= 0
+}
+
 fn vc_output_has_unwinding(raw: String) -> bool {
     str_find_str(raw, VC_LABEL_UNWIND()) >= 0
 }

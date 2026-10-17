@@ -1,0 +1,11 @@
+// TEST: error-code UnexpectedToken
+// TEST: error-count 1
+module FnNameKeyword
+
+fn module() -> i64 {
+    0
+}
+
+fn main() -> i32 {
+    0
+}

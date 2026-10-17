@@ -1,0 +1,26 @@
+// TEST: category invariant
+// A pointer stored into a parameter's field on every iteration, past the unwinding bound: the
+// invariant, assumed at the header over a field the cut forgot, is what decides the loop.
+module PtrFieldLoopStoreInvariant
+
+struct Holder { names: Vec<i64>, n: i64 }
+
+fn run(h: Holder, a: Vec<i64>, n: u64) vow {
+  ensures: h.names.len() == a.len()
+} {
+  h.names = a;
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n && h.names.len() == a.len()
+  } {
+    h.names = a;
+    i = i + 1;
+  }
+}
+
+fn main() -> i32 [io] {
+  let h: Holder = Holder { names: Vec::new(), n: 0 };
+  let a: Vec<i64> = Vec::new();
+  run(h, a, 3);
+  0
+}

@@ -1,0 +1,25 @@
+// TEST: summary-expect unknown
+// TEST: summary-baseline failed
+struct S { a: i64, b: i64 }
+
+fn mk(n: i64) -> S {
+    let p1: i64 = n & 255;
+    let p2: i64 = (n / 2) & 255;
+    let p3: i64 = (p1 + p2) & 255;
+    let p4: i64 = (p3 * 3) & 255;
+    let p5: i64 = (p4 + p1) & 255;
+    let p6: i64 = (p5 + p2) & 255;
+    S { a: 5, b: p6 }
+}
+
+fn run(n: i64) -> i64 vow {
+    ensures: result == 7
+} {
+    let s1: S = mk(n);
+    let s2: S = mk(n + 1);
+    let s3: S = mk(n + 2);
+    let s4: S = mk(n + 3);
+    s1.a + s2.a - s3.a - s4.a + 6
+}
+
+fn main() -> i32 { 0 }

@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "total"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: replay-skipped a Vec<String> field of a struct parameter is not rebuilt by replay
+// The sum is the parameter's length plus one: a postcondition of plus two is refuted, so
+// the stored pointer and the handle read are modelled, not skipped.
+module VecPointerStoreHandleReadBuiltVecWrong
+
+struct Bag { names: Vec<String> }
+
+fn total(a: Bag, s: String) -> u64 vow {
+  ensures: result == a.names.len() + 2
+} {
+  let out: Vec<String> = Vec::new();
+  out.push(s);
+  a.names.len() + out.len()
+}
+
+fn main() -> i32 [io] {
+  let a: Bag = Bag { names: Vec::new() };
+  print_u64(total(a, String::from("a")));
+  0
+}

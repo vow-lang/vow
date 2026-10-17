@@ -1,0 +1,22 @@
+// A struct chosen by a branch is stored in a field: a read returns the chosen struct, and a
+// write to it afterwards is seen through the field.
+module PtrFieldPhiStored
+
+struct Inner { a: i64, b: i64 }
+struct Holder { inner: Inner, tag: i64 }
+
+fn chosen(c: bool) -> bool vow {
+  ensures: result
+} {
+  let x: Inner = Inner { a: 1, b: 10 };
+  let y: Inner = Inner { a: 2, b: 20 };
+  let pick: Inner = if c { x } else { y };
+  let h: Holder = Holder { inner: pick, tag: 0 };
+  pick.a = pick.a + 100;
+  (c && h.inner.a == 101 && h.inner.b == 10) || (!c && h.inner.a == 102 && h.inner.b == 20)
+}
+
+fn main() -> i32 [io] {
+  if chosen(true) { print_i64(1); }
+  0
+}

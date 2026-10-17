@@ -1,0 +1,22 @@
+// TEST: counterexample-fn "first_byte"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The first byte stored is 65, not 66.
+module PtrFieldStringReadBackWrong
+
+struct Label { text: String, n: i64 }
+
+fn first_byte() -> bool vow {
+  ensures: result
+} {
+  let s: String = String::new();
+  s.push_byte(65);
+  s.push_byte(66);
+  let l: Label = Label { text: s, n: 0 };
+  l.text.byte_at(0) == 66
+}
+
+fn main() -> i32 [io] {
+  if first_byte() { print_i64(1); }
+  0
+}

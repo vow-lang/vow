@@ -24,6 +24,9 @@ fn VC_PROC_SIGNAL_BASE() -> i64 { -1000 }
 fn VC_TASK_KIND_VERIFY() -> i64 { 0 }
 fn VC_TASK_KIND_VACUITY() -> i64 { 1 }
 fn VC_TASK_KIND_TRIVIAL() -> i64 { 2 }
+// The proof of a callee that summaries may stand for (`vc_summary`): every claim of the
+// function is decided, as for a function with a contract.
+fn VC_TASK_KIND_PROOF() -> i64 { 3 }
 
 // Path the workers are started from: this binary, as invoked.
 fn vc_worker_exe(argv0: String) -> String [read] {

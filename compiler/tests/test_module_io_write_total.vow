@@ -1,0 +1,31 @@
+module TestModuleIoWriteTotal
+
+use ir
+use module_io
+
+// A function id and a local name id the wire format can hold are written as that u32;
+// `write_function` is total over them and keeps the name list in ascending id order.
+
+fn main() -> i32 {
+    let f: IrFunction = ir_function_new(4294967295, String::from("f"), ITY_UNIT(), 0, String::from(""));
+    f.local_names_ids.push(9);
+    f.local_names_strs.push(String::from("b"));
+    f.local_names_ids.push(2);
+    f.local_names_strs.push(String::from("a"));
+    let out: Vec<i64> = Vec::new();
+    write_function(out, f);
+    if out.len() < 4 { return 1; }
+    if out[0] != 255 || out[1] != 255 || out[2] != 255 || out[3] != 255 { return 2; }
+
+    // the ids section is ascending: 2 then 9, each four bytes followed by its string
+    let mut at: u64 = 0;
+    let mut found: u64 = 0;
+    while at + 9 < out.len() {
+        if out[at] == 2 && out[at + 1] == 0 && out[at + 2] == 0 && out[at + 3] == 0 && out[at + 4] == 1 && out[at + 5] == 97 && out[at + 6] == 9 {
+            found = found + 1;
+        }
+        at = at + 1;
+    }
+    if found != 1 { return 3; }
+    0
+}

@@ -1,0 +1,25 @@
+// A struct with a 128-bit field is built and written inside the loop body. Its
+// field lives in a `WideSlot`; the object is fresh each iteration, so the cut
+// needs no havoc for it and the `invariant` decides the loop.
+module LoopFieldWriteWideAlloc
+
+struct Wide { v: i128, tag: i64 }
+
+fn run(n: u64) -> u64 vow {
+  ensures: result == n
+} {
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n
+  } {
+    let w: Wide = Wide { v: i as i128, tag: 1 };
+    w.v = w.v + 1;
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  print_u64(run(3));
+  0
+}

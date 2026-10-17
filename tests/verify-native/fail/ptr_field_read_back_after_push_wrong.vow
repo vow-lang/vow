@@ -1,7 +1,8 @@
-// TEST: skip-reason unsupported-opcode
-// The model keeps no object in a field: a Vec stored in a struct field that the
-// function reads back stays skipped.
-module HeapPointerFieldReadBack
+// TEST: counterexample-fn "built_len"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The `push` after the store is visible through the field, so the length is not 1.
+module PtrFieldReadBackAfterPushWrong
 
 struct Pair { ids: Vec<i64>, n: i64 }
 
@@ -11,6 +12,7 @@ fn built_len() -> u64 vow {
   let ids: Vec<i64> = Vec::new();
   ids.push(1);
   let p: Pair = Pair { ids: ids, n: 0 };
+  ids.push(2);
   p.ids.len()
 }
 

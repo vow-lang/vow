@@ -1,0 +1,26 @@
+// TEST: summary-expect proven
+// TEST: summary-budget 160
+struct R { pos: i64, end: i64 }
+
+fn bump(r: R, n: i64) -> i64 vow {
+    requires: r.pos >= 0,
+    ensures: r.pos >= 1 && r.pos <= 256
+} {
+    let p1: i64 = n & 255;
+    let p2: i64 = (n / 2) & 255;
+    let p3: i64 = (p1 + p2) & 255;
+    let p4: i64 = (p3 * 3) & 255;
+    let p5: i64 = (p4 + p1) & 255;
+    let p6: i64 = (p5 + p2) & 255;
+    r.pos = (r.pos & 255) + 1 + (p6 - p6);
+    p6
+}
+
+fn run(r: R) -> i64 vow {
+    requires: r.pos >= 0,
+    ensures: r.pos >= 1 && r.pos <= 256
+} {
+    bump(r, 1) + bump(r, 2) + bump(r, 3) + bump(r, 4)
+}
+
+fn main() -> i32 { 0 }

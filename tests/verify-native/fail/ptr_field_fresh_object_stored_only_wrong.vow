@@ -1,0 +1,22 @@
+// TEST: counterexample-fn "reset"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: replay-skipped a Vec/String field of a struct parameter is not rebuilt by replay
+// The stored `String` has two bytes, so a length of three is refuted.
+module PtrFieldFreshObjectStoredOnlyWrong
+
+struct Holder { items: Vec<i64>, name: String }
+
+fn reset(h: Holder) vow {
+  ensures: h.name.len() == 3
+} {
+  h.items = Vec::new();
+  h.name = String::from("hi");
+}
+
+fn main() -> i32 [io] {
+  let h: Holder = Holder { items: Vec::new(), name: String::new() };
+  reset(h);
+  print_u64(h.name.len());
+  0
+}

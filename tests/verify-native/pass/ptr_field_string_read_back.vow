@@ -1,0 +1,19 @@
+// A `String` stored in a field: its length and bytes are read back out of the field.
+module PtrFieldStringReadBack
+
+struct Label { text: String, n: i64 }
+
+fn first_byte() -> bool vow {
+  ensures: result
+} {
+  let s: String = String::new();
+  s.push_byte(65);
+  s.push_byte(66);
+  let l: Label = Label { text: s, n: 0 };
+  l.text.len() == 2 && l.text.byte_at(0) == 65
+}
+
+fn main() -> i32 [io] {
+  if first_byte() { print_i64(1); }
+  0
+}

@@ -1,0 +1,25 @@
+// A stored object next to a read of an enum payload field: the payload's symbol is the one the
+// aggregate model declared, so the model has no undeclared constant.
+module PtrFieldEnumPayloadSymbol
+
+struct Inner { w: i64 }
+struct Holder { items: Vec<i64>, tag: i64 }
+
+fn pick(o: Option<Inner>) -> i64 vow {
+  ensures: result >= 1
+} {
+  let h: Holder = Holder { items: Vec::new(), tag: 0 };
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  h.items = v;
+  let k: i64 = match o {
+    Option::Some(i) => if i.w < 0 { 0 } else if i.w > 100 { 100 } else { i.w },
+    Option::None => 0,
+  };
+  k + (h.items.len() as i64)
+}
+
+fn main() -> i32 [io] {
+  print_i64(pick(Option::None));
+  0
+}

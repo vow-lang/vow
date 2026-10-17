@@ -1,0 +1,23 @@
+// TEST: category invariant
+// The invariant claims a length one too large: it is false on entry, so the loop's base
+// case fails whatever the trip count.
+module StringLoopWrongInvariantLen
+
+fn fill() -> String vow {
+  ensures: result.len() == 100
+} {
+  let s: String = String::new();
+  let mut i: u64 = 0;
+  while i < 100 vow {
+    invariant: i <= 100 && s.len() == i + 1
+  } {
+    s.push_byte(65u8);
+    i = i + 1;
+  }
+  s
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill().len());
+  0
+}

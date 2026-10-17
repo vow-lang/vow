@@ -1,0 +1,20 @@
+// A `Vec` parameter stored into a parameter's field is that `Vec`: a `push` to the
+// parameter is seen through the field.
+module PtrFieldParamStoreIsTheSameVec
+
+struct Holder { items: Vec<i64>, tag: i64 }
+
+fn attach(h: Holder, v: Vec<i64>) -> bool vow {
+  ensures: result
+} {
+  h.items = v;
+  v.push(7);
+  h.items.len() == v.len()
+}
+
+fn main() -> i32 [io] {
+  let h: Holder = Holder { items: Vec::new(), tag: 0 };
+  let v: Vec<i64> = Vec::new();
+  if attach(h, v) { print_i64(1); }
+  0
+}

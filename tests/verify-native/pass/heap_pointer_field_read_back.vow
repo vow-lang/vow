@@ -1,0 +1,19 @@
+// A Vec stored in a struct field and read back: the only store of the field dominates
+// the read, so `p.ids` is that Vec and `p.ids.len()` is its length.
+module HeapPointerFieldReadBack
+
+struct Pair { ids: Vec<i64>, n: i64 }
+
+fn built_len() -> u64 vow {
+  ensures: result == 1
+} {
+  let ids: Vec<i64> = Vec::new();
+  ids.push(1);
+  let p: Pair = Pair { ids: ids, n: 0 };
+  p.ids.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(built_len());
+  0
+}

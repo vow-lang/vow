@@ -1,0 +1,32 @@
+// TEST: category invariant
+// The loop body writes `c.v` only through an uncontracted callee. `ensures:
+// c.v == 0` is false for `n > 0`, but the run needs more iterations than the
+// largest unwinding bound. The cut sees the write after inlining: forgetting
+// nothing there would "prove" the false claim.
+module LoopFieldWriteInlinedWriterForgotten
+
+struct Counter { v: u64 }
+
+fn inc(c: Counter) {
+  c.v = c.v + 1;
+}
+
+fn bump(c: Counter, n: u64) -> u64 vow {
+  requires: c.v == 0 && n > 100
+  ensures: c.v == 0
+} {
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n
+  } {
+    inc(c);
+    i = i + 1;
+  }
+  c.v
+}
+
+fn main() -> i32 [io] {
+  let c: Counter = Counter { v: 0 };
+  print_u64(bump(c, 101));
+  0
+}

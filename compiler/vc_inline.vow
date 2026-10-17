@@ -7,6 +7,7 @@ use vc_strops
 use vc_gate
 use vc_loops
 use vc_unroll
+use vc_ptrfield
 
 // Callee inlining for the native verifier. A call of a user function is spliced
 // into its caller before symbolic execution, so the executor only ever sees one
@@ -32,6 +33,15 @@ fn VC_INLINE_MALFORMED() -> i64 { 2 }
 
 // Instructions in the flattened function, same bound as the unroller's.
 fn VC_INLINE_INST_CAP() -> i64 { VC_UNWIND_INST_CAP() }
+
+// A flattened function above this many instructions is `Skipped` as `inlining-too-large`. The
+// whole call tree is one query set, and its cost grows faster than its size: `read_inst` of
+// `compiler/module_io.vow` (11 031 instructions) is decided in about a minute, `read_function`
+// (23 331) exhausts the 4 GB worker (`VC_WORKER_MEM_KB`) on one bounds claim. Above the
+// bound the answer would be `unknown` after minutes of work, which says no more than the skip
+// and costs the budget of every other function. A bound on size, not on the program; it goes
+// away with callee summaries (#1791).
+fn VC_INLINE_SKIP_INSTS() -> i64 { 16384 }
 
 struct VcInlined {
     f: IrFunction,
@@ -259,7 +269,7 @@ fn vc_map_inst(inst: IrInst, frame: i64, sub: Vec<i64>, vbase: i64, bbase: i64) 
     if id >= 0 { id = vbase + id; }
     let out: IrInst = vc_clone_inst(inst, id, vc_map_args(inst, sub, vbase), dv, dv2);
     if vc_op_frame_marked(inst.op) {
-        out.ds = vc_frame_mark(frame);
+        if !vc_is_assume(inst) { out.ds = vc_frame_mark(frame); }
     } else if vc_frame_in_dv2(inst) {
         out.dv2 = frame + 1;
     }
@@ -422,6 +432,14 @@ fn vc_resolve_str_literals(f: IrFunction, m: IrModule) -> IrFunction {
     g
 }
 
+// `f` as the gate and the executor read it: string literals resolved, and a collection held
+// in a field of a struct the function built named by the object it holds. Every decision
+// about a function (the skip reason of the function and of each callee, the flattened body)
+// goes through this one rewrite, so they cannot disagree.
+fn vc_prepare_for_gate(f: IrFunction, m: IrModule) -> IrFunction {
+    vc_resolve_ptr_fields(vc_resolve_str_literals(f, m))
+}
+
 // True when `g` has a pointer-typed Phi: the only candidate `vc_retype_handle_phis` can change,
 // found without building the type table.
 fn vc_has_ptr_phi(g: IrFunction) -> bool {
@@ -495,7 +513,7 @@ fn vc_inline(f: IrFunction, m: IrModule, cap: i64) -> VcInlined {
     let fns: Vec<IrFunction> = m.functions;
     let frames: VcFrames = vc_frames_new();
     if !vc_has_user_call(f) {
-        return VcInlined { f: vc_resolve_str_literals(f, m), frames: frames, status: VC_INLINE_OK() };
+        return VcInlined { f: vc_prepare_for_gate(f, m), frames: frames, status: VC_INLINE_OK() };
     }
     let idx_of: Vec<i64> = vc_fn_index_table(fns);
     let sizes: Vec<i64> = dom_fill(fns.len(), -1);
@@ -518,7 +536,7 @@ fn vc_inline(f: IrFunction, m: IrModule, cap: i64) -> VcInlined {
     vc_retype_handle_phis(g);
     let mut status: i64 = VC_INLINE_OK();
     if sp.bad { status = VC_INLINE_MALFORMED(); }
-    VcInlined { f: vc_resolve_str_literals(g, m), frames: frames, status: status }
+    VcInlined { f: vc_prepare_for_gate(g, m), frames: frames, status: status }
 }
 
 // True when an argument of type `arg` may stand for a parameter of type `param`:
@@ -570,8 +588,16 @@ fn vc_non_modelable_callee(g: IrFunction, why: String) -> String {
 // `vc_skip_reason` alone. A call tree above the size budget is not skipped: the
 // worker answers `unknown` for it.
 fn vc_module_skip_reason(f: IrFunction, m: IrModule) -> String {
+    vc_module_skip_reason_via(f, m, m, VC_INLINE_SKIP_INSTS())
+}
+
+// The same decision where the flattened body is built from `inl_m`, the module whose
+// summarised callees stand for their bodies (`vc_summary`), and bounded by `budget`
+// instructions. Every check of the call tree itself reads `m`: a summarised callee is
+// still vetted, only its body is not part of the flattened function.
+fn vc_module_skip_reason_via(f: IrFunction, m: IrModule, inl_m: IrModule, budget: i64) -> String {
     if !vc_has_user_call(f) {
-        return vc_skip_reason(vc_resolve_str_literals(f, m));
+        return vc_skip_reason(vc_prepare_for_gate(f, m));
     }
     let fns: Vec<IrFunction> = m.functions;
     let idx_of: Vec<i64> = vc_fn_index_table(fns);
@@ -583,7 +609,7 @@ fn vc_module_skip_reason(f: IrFunction, m: IrModule) -> String {
     if cycle.len() > 0 {
         return vc_reason(VC_SKIP_RECURSION(), cycle);
     }
-    let own: String = vc_skip_reason_calls(vc_resolve_str_literals(f, m));
+    let own: String = vc_skip_reason_calls(vc_prepare_for_gate(f, m));
     if own.len() > 0 { return own; }
     let seen: Vec<i64> = dom_fill(fns.len(), 0);
     let order: Vec<i64> = Vec::new();
@@ -591,7 +617,7 @@ fn vc_module_skip_reason(f: IrFunction, m: IrModule) -> String {
     let mut oi: u64 = 0;
     while oi < order.len() {
         let g: IrFunction = fns[order[oi] as u64];
-        let why: String = vc_skip_reason_calls(vc_resolve_str_literals(g, m));
+        let why: String = vc_skip_reason_calls(vc_prepare_for_gate(g, m));
         if why.len() > 0 { return vc_non_modelable_callee(g, why); }
         oi = oi + 1;
     }
@@ -604,10 +630,18 @@ fn vc_module_skip_reason(f: IrFunction, m: IrModule) -> String {
         if gsig.len() > 0 { return vc_non_modelable_callee(g, gsig); }
         oi = oi + 1;
     }
-    let inl: VcInlined = vc_inline(f, m, VC_INLINE_INST_CAP());
+    let inl: VcInlined = vc_inline(f, inl_m, VC_INLINE_INST_CAP());
     if inl.status == VC_INLINE_TOO_LARGE() { return String::from(""); }
     if inl.status != VC_INLINE_OK() {
         return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), String::from("call target is not in the module"));
+    }
+    let size: i64 = vc_inst_count(inl.f);
+    if size > budget {
+        let detail: String = i64_to_string(size);
+        detail.push_str(String::from(" instructions after inlining, above the "));
+        detail.push_str(i64_to_string(budget));
+        detail.push_str(String::from(" a worker decides within its memory cap"));
+        return vc_reason(VC_SKIP_INLINING_TOO_LARGE(), detail);
     }
     vc_skip_reason(inl.f)
 }

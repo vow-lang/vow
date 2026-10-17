@@ -488,16 +488,20 @@ of this change and stay `Skipped`.
   class even where the source types differ. The weaker alternative (assume a
   field `Vec` is distinct from every `Vec` parameter, as two `Vec` parameters
   are) was rejected: it would prove a property that fails when they are one
-  `Vec`. The model of a pointer written into a `Vec` or into a parameter's
-  field is not built. A pointer written into a field of a fresh struct is
-  admitted as a write with no effect when nothing reads that field back.
+  `Vec`. The model of a pointer written into a `Vec` is not built; the one
+  for a pointer written into a field is the #1704 addendum below.
 - **Induction.** A loop body that writes a Vec (`push`, `set`, `pop`) is cut for
   invariant-based induction (#1645): the cut puts a `__vc_havoc_vec` marker for
   each Vec the loop writes at the top of the header proper, which gives it an
   arbitrary array and an arbitrary length below the capacity mask, as a header Phi
-  gets an arbitrary value (see the addendum below). A function is still not cut
-  when a mutated receiver is a String; bounded unwinding decides such a function
-  alone (a receiver born inside a loop is cut, see the #1726 addendum), and `vc_step_applicable`
+  gets an arbitrary value (see the addendum below). A String the loop writes
+  (`push_str`, `push_byte`, `clear`) is havoced the same way, over the one
+  `(array, length)` slot a String shares with a `Vec`: the length bound is the
+  same capacity mask the runtime keeps for both (a receiver born inside a loop is
+  cut, see the #1726 addendum; a receiver that is a Phi stands for each object it
+  merges, and it is those objects, not the Phi, that are born in the loop or are
+  havoced, so a Phi in the loop that merges a parameter with a fresh object still
+  havocs the parameter), and `vc_step_applicable`
   (k-induction) still refuses a Vec-written loop. A loop that only reads a Vec is
   cut with no marker.
 - **Aliasing.** Two `Vec` parameters are distinct objects, as they are for
@@ -703,8 +707,10 @@ machinery.
   non-catalogue `String` symbols have theirs in `vc_str_unmodeled_reason`. A
   string literal that is mutated (`clear`, a push: the runtime traps on it) is
   outside the model, and a `String` in a struct field, across a call or merged by a
-  Phi is skipped like the `Vec` cases. A loop that writes a String is never cut by
-  induction (`vc_induct_vec_havocs` refuses it).
+  Phi is skipped like the `Vec` cases. A loop that writes a String is cut by
+  induction like one that writes a `Vec` (`vc_induct_vec_havocs`): the marker makes the string's array and length arbitrary
+  at the top of the header, and the grow bit is set only for `push_str` and
+  `push_byte`.
 - **Trusted base.** The binder joins the simplifier of ADR-2026-10-10-2041 in the
   trusted base. The guards: `compiler/tests/test_vc_str.vow` pins the rendered text
   of the binder and of each encoding; `tests/verify-native/pass/string_eq_exact.vow`
@@ -1149,14 +1155,22 @@ Three small rules, each sound for proofs and none a cap or a havoc.
   everything that never looks at the slot: the length, the bounds of every index and the other
   elements. The gate (`vc_ptr_store_detail`, `compiler/vc_ptrstore.vow`) keeps out of the subset
   every function that could: one that reads such an element back with `get`, copies or sorts a
-  `Vec` that holds one, or reads memory through a handle at all (a stored object may be what a
-  loaded handle names). Each is `unsupported-opcode` with its own detail, never a free answer. The
+  `Vec` that holds one, or reads memory through a handle (a stored object may be what a
+  loaded handle names), unless every `Vec` a pointer is stored into is one the function built
+  and no pointer an element read returned is used as an object (the receiver or a further
+  string operand of a `Vec` or `String` operation, or the object of a field access): a `Vec`
+  the function built is no object a loaded handle can name, and the slot is a constant nothing
+  else mentions, so a function that never uses a read pointer as an object cannot tell it from
+  the object. An element read of a parameter `Vec` counts as well as one through a handle. In the check of one function of a call tree, before inlining, a receiver that is a collection read out of a struct field is taken as the `Vec` `vc_resolve_ptr_fields` will name once the callee that builds the struct is inlined (`pass/vec_pointer_store_callee_built_struct.vow`); the check of the flattened function refuses it if that did not happen.
+  Each is `unsupported-opcode` with its own detail, never a free answer. The
   alternative that was rejected is to register the fresh constants as hook variables and let the
   recheck turn a counterexample that reads them into `unknown`: a function the ESBMC path still
   decides would become `unknown` instead of `Skipped`. Pinned by `pass/vec_of_vec_push.vow`,
   `pass/vec_pointer_push_loop.vow`, `pass/vec_pointer_push_param.vow`,
-  `skip/vec_pointer_element_read_back_skipped.vow` and
-  `skip/vec_pointer_store_handle_read_skipped.vow`.
+  `skip/vec_pointer_element_read_back_skipped.vow`, `pass/vec_pointer_store_handle_read_built_vec.vow`,
+  `pass/vec_pointer_store_phi_built_vec.vow`, `skip/vec_pointer_store_param_handle_read_skipped.vow`,
+  `skip/vec_pointer_store_element_deref_skipped.vow` and
+  `skip/vec_pointer_store_param_element_deref_skipped.vow`.
 - **A handle returned where an object is declared is a handle.** The IR types a pointer read out of a
   field or an element `i64`, so `fn name(p: Person) -> String { p.name }` returns a handle from a
   function declared to return an object. The `Return` gate accepts it (`vc_handle_for_object`), and
@@ -1167,6 +1181,28 @@ Three small rules, each sound for proofs and none a cap or a havoc.
   array defined by a quantified assumption over the heap. Pinned by `pass/handle_return_getter.vow`,
   `pass/heap_handle_returned_as_object.vow` (moved out of `skip/`),
   `skip/handle_object_merge_skipped.vow` and the `_wrong` twins.
+- **A field read that has one value is that object (`vc_ptrfield`, #1771).** The IR types a
+  `Vec` or `String` held in a field `i64`, so `b.insts.push(x)` is a write whose receiver is a
+  handle, and the heap model only reads through a handle: its arrays are never stored to, so a
+  write through one would be lost to every later read. When the struct is an allocation (reached
+  through the Phi a call result is after inlining) and exactly one `FieldSet` of the slot may name
+  it, with a pointer value whose store dominates the read, the slot holds that value on every path
+  to the read, and `vc_resolve_ptr_fields` makes the object operand of the `Vec` or `String`
+  operation that value. This is a substitution on the inlined function before the gate: the
+  executor, the loop cut and the counterexample model see an ordinary object. What counts as a
+  store that may name the allocation is deliberately wider than the truth: a store through the
+  allocation or a Phi that merges it, a store through a receiver the rule cannot place, and, once
+  the allocation has been stored into a field, pushed into a collection or passed as a value (so
+  a pointer the function loaded may be it), any store through a pointer that is not a parameter
+  or an allocation. A second such store, a store that does not dominate the read, a
+  pointer value of another type and the field of a parameter (another parameter may be the same
+  object and store the slot too) leave the read a handle, and the write through it `Skipped`, which
+  is the fail-closed answer. The pre-inline gate of one function of a call tree
+  (`calls`) accepts a write through a handle for the same reason, since the struct is built by a
+  callee, and the gate of the flattened function does not. Pinned by `pass/ptr_field_vec_push_via_field.vow`,
+  `pass/ptr_field_vec_loop_len_invariant.vow`, `pass/heap_pointer_field_read_back.vow` (moved out
+  of `skip/`), `skip/ptr_field_reassigned_not_resolved.vow`, the `_wrong` twins and
+  `compiler/tests/test_vc_ptrfield.vow`.
 - **A loop with no `invariant` is also cut, with the clause `true`.** After the bounded rounds end
   open at the largest bound, when the inductive attempt did not prove and some loop has no clause,
   the cut is made again with `ConstBool true; VowInvariant` after each such header's Phis
@@ -1203,3 +1239,51 @@ Three builtins that were `unmodeled-builtin` are opaque total functions of their
   `unknown/string_split_count_opaque.vow` and `fail/string_join_no_parts_wrong.vow`.
 
 `String::from_cstr` and the arena variants remain `unmodeled-builtin` (`vc_str_unmodeled_reason`).
+
+## Addendum: a pointer written into a field (#1704)
+
+A pointer stored into a field used to be admitted only as a write with no effect into a fresh
+allocation that nothing read back; any other store, and any read back, was `Skipped`. A pointer in a
+slot is now its object's 64-bit address, kept in the ordinary scalar slot of `vc_agg`, and the
+overlay of the #1703 addendum reads through it.
+
+- **Why an address and not an object in the slot.** A slot is written under a path condition
+  (`ite(pc, new, old)`), merged by Phis, copied between aliasing parameters and havoced at a loop cut,
+  all for a 64-bit term. An object id in the slot would need the same four mechanisms again for
+  objects, and an object Phi on top. The address reuses them: the IR already types the field read
+  back `i64` (a handle), and a read through a handle is `ite(h == address(o), state of o, ...,
+  array[h])` over the entries of the overlay (`vc_overlay_addr_of`). A merge of two stored objects
+  is an `ite` of two addresses and the read is the `ite` of their states.
+- **Entries.** A parameter that is stored takes its overlay entry (`p<k>_haddr`) even when the
+  function's reads would not have needed one; an object the function allocated takes a free
+  address `o<n>_haddr` on its first store, assumed distinct from every other entry (an allocation is
+  no other object, a parameter or an earlier allocation). A pointer Phi is the `ite` of the
+  addresses of the objects its edges supply. Only parameter entries are listed in a counterexample.
+  The class of an entry (`Vec`, `String`, struct) is the class of the stored value's uses
+  (`vc_overlay_class_table`), so a `String` operation never names a `Vec` entry.
+- **Handles from the given memory are not fresh objects.** A 64-bit term read out of the memory
+  the function was given (a parameter's field symbol, a field or an element read through a handle)
+  is assumed different from the address of every object the function allocates, whichever of the two
+  was introduced first (`vc_overlay_note_loaded`, `vc_overlay_scan_params`). That is a fact about
+  allocation, not a bound: a fresh object is no object that existed before it. Without it a read of
+  a parameter's field before and after a store into a fresh struct could differ, because only the
+  second read would consider the stored object (`ptr_field_loaded_handle_is_not_fresh.vow`).
+- **Absent state.** An object the function allocated has a `Vec` state only in the blocks its
+  creation reaches; the overlay skips an entry whose state is absent in the block of the read
+  (`ptr_field_object_absent_on_other_branch.vow`).
+- **Imprecision, never unsoundness.** Two struct parameters stay possibly one object, so storing one
+  into the other's field can overwrite the slot the parameter has to be (`o.inner = i` with `o` and
+  `i` one object); the fixtures that store a struct into a parameter's field build the stored struct
+  themselves. A pointer's class is the class of its uses, so a stored object that is only ever read
+  through the field is not consulted for a collection read (it reads as the array does).
+- **What stays skipped.** A write through a handle (`h.items.push(1)` where `h.items` is read from
+  memory) and a `Vec` merged by a Phi (#1662) are as before. The `unsupported-opcode` details `pointer
+  written into a field of a value that is not an allocation` and `a field that holds a pointer is read
+  back` are gone.
+- **What this does not unskip.** The `reader_*` functions of `compiler/module_io.vow` store a
+  `String` into the reader (`reader_fail`), `module_encode` and `write_function` read a stored
+  `Vec` back; all eight stop being `Skipped` for that reason and end in `unknown`, `timeout` or a
+  structural counterexample instead, because a loop that writes a struct field is decided by
+  unwinding alone (#1754) and `reader_need` does not say `pos <= buf.len()` (#1755). Until those land
+  the eight functions cannot be proved natively, which is why this change lands only together with a
+  harness that accepts them.

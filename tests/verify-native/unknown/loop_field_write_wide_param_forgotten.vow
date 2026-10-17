@@ -1,0 +1,28 @@
+// TEST: category invariant
+// The loop adds `n` to a 128-bit field, so `ensures: result == 0` is false for
+// `n > 0`, but the run needs more iterations than the largest unwinding bound. A
+// 128-bit field is written through a `WideSlot`: the cut must forget it at the top
+// of the header like any other slot, or an induction would "prove" the false claim.
+module LoopFieldWriteWideParamForgotten
+
+struct Wide { v: i128 }
+
+fn bump(w: Wide, n: u64) -> i128 vow {
+  requires: w.v == 0 && n > 100
+  ensures: result == 0
+} {
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n
+  } {
+    w.v = w.v + 1;
+    i = i + 1;
+  }
+  w.v
+}
+
+fn main() -> i32 [io] {
+  let w: Wide = Wide { v: 0 };
+  if bump(w, 101) == 0 { print_u64(0); }
+  0
+}

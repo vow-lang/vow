@@ -1,0 +1,20 @@
+// A `Vec` stored in a field is the same object afterwards: a `push` after the store
+// is what a read through the field sees.
+module PtrFieldReadBackAfterPush
+
+struct Pair { ids: Vec<i64>, n: i64 }
+
+fn built_len() -> u64 vow {
+  ensures: result == 2
+} {
+  let ids: Vec<i64> = Vec::new();
+  ids.push(1);
+  let p: Pair = Pair { ids: ids, n: 0 };
+  ids.push(2);
+  p.ids.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(built_len());
+  0
+}

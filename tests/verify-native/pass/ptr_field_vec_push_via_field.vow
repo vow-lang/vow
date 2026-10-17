@@ -1,0 +1,21 @@
+// A push through a Vec held in a field of a struct a callee built: the struct is
+// allocated in `block_new` and stored once, so after inlining `b.insts` is that Vec
+// and the push is a write to it, which a later read of the field sees.
+module PtrFieldVecPushViaField
+
+struct Block { id: i64, insts: Vec<i64> }
+
+fn block_new(id: i64) -> Block { Block { id: id, insts: Vec::new() } }
+
+fn fill() -> u64 vow {
+  ensures: result == 1
+} {
+  let b: Block = block_new(7);
+  b.insts.push(1);
+  b.insts.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill());
+  0
+}
