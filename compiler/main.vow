@@ -1945,14 +1945,25 @@ struct NativeEntry {
     pre: i64,
 }
 
-fn native_plan(fns: Vec<IrFunction>, ir_mod: IrModule, vm: IrModule, const_fn_indices: Vec<i64>, task_idx: Vec<i64>, task_names: Vec<String>, cfg: VcSummaryCfg, waves: VcWaveProofs) -> Vec<NativeEntry> {
+// `prev` is the plan made before the waves, or empty: a target it planned keeps its reason where
+// no summary can change it (`vc_module_skip_reason_retrust`). Both plans list the targets in
+// function order, so one cursor into `prev` finds them.
+fn native_plan(fns: Vec<IrFunction>, ir_mod: IrModule, vm: IrModule, const_fn_indices: Vec<i64>, task_idx: Vec<i64>, task_names: Vec<String>, cfg: VcSummaryCfg, waves: VcWaveProofs, prev: Vec<NativeEntry>) -> Vec<NativeEntry> {
     let entries: Vec<NativeEntry> = Vec::new();
     let vfns: Vec<IrFunction> = vm.functions;
+    let replan: bool = prev.len() > 0;
+    let idx_of: Vec<i64> = { if replan { vc_fn_index_table(vfns) } else { Vec::new() } };
+    let sizes: Vec<i64> = { if replan { dom_fill(vfns.len(), -1) } else { Vec::new() } };
+    let mut p: u64 = 0;
     let mut fi: u64 = 0;
     while fi < fns.len() {
         let f: IrFunction = fns[fi];
         if is_verify_target(f, ir_mod, const_fn_indices) {
-            let reason: String = vc_module_skip_reason_trusted(vfns[fi], vm, cfg.trusted, cfg.budget);
+            while p < prev.len() && prev[p].fn_index < fi as i64 { p = p + 1; }
+            let reason: String = {
+                if p < prev.len() && prev[p].fn_index == fi as i64 { vc_module_skip_reason_retrust(vfns, idx_of, sizes, vfns[fi], vm, cfg.trusted, cfg.budget, prev[p].reason) }
+                else { vc_module_skip_reason_trusted(vfns[fi], vm, cfg.trusted, cfg.budget) }
+            };
             let pre: i64 = vc_waves_outcome_of(waves, fi as i64);
             if reason.len() > 0 {
                 entries.push(NativeEntry { fn_index: fi as i64, reason: reason, task: -1, pre: -1 });
@@ -2011,7 +2022,7 @@ fn run_verify_native(argv: Vec<String>, fr: LoweredFrontend, path: String, tctx:
     let budget: i64 = vc_summary_budget();
     let cfg: VcSummaryCfg = VcSummaryCfg { trusted: Vec::new(), budget: budget };
     let mut waves: VcWaveProofs = vc_waves_none();
-    let mut entries: Vec<NativeEntry> = native_plan(fns, ir_mod, vm, const_fn_indices, task_idx, task_names, cfg, waves);
+    let mut entries: Vec<NativeEntry> = native_plan(fns, ir_mod, vm, const_fn_indices, task_idx, task_names, cfg, waves, Vec::new());
     let use_cache: bool = !has_flag(argv, "--no-cache") && timeout_ms > 0;
     let mut cache: VcCache = vc_cache_off();
     let roots: Vec<i64> = native_summary_roots(entries, vm);
@@ -2022,7 +2033,7 @@ fn run_verify_native(argv: Vec<String>, fr: LoweredFrontend, path: String, tctx:
         if waves.fns.len() > 0 {
             task_idx = Vec::new();
             task_names = Vec::new();
-            entries = native_plan(fns, ir_mod, vm, const_fn_indices, task_idx, task_names, cfg, waves);
+            entries = native_plan(fns, ir_mod, vm, const_fn_indices, task_idx, task_names, cfg, waves, entries);
         }
     }
     if use_cache && task_idx.len() > 0 && !vc_cache_on(cache) { cache = vc_cache_resolve(vc_solver_locate()); }
