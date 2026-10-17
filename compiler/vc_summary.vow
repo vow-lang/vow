@@ -12,7 +12,7 @@ use vc_induct_agg
 use vc_inline
 use vc_summary_ens
 
-// Callee summaries for the native verifier (#1791, ADR-2026-10-16-1791). A function whose
+// Callee summaries for the native verifier (#1791, ADR-2026-10-16-1800). A function whose
 // call tree flattens above the inlining budget cannot be decided by inlining all of it, so a
 // callee that was proven on its own stands for its body: the call keeps the callee's
 // `requires` as claims blamed on the caller, havocs exactly what the callee may write and

@@ -68,7 +68,8 @@ decided again in every caller, although the callee was proven on its own.
    code of every clause at every `Return`, between the returned value and the
    `Return`, and gives each instruction the source range of the expression it came
    from; a body never lies inside a clause. `vc_summary_ens` copies the code of
-   each clause out of its first return site (in reverse postorder): the data
+   each clause out of every return site and uses it only when all copies are the same code (a
+   name a `let` of the body shadows reads another value at a later return): the data
    closure of the predicate, with a parameter read mapped to the summary's own and
    the returned value mapped to the summary's unconstrained result, and the
    control flow from the nearest block that dominates the clause to the block
