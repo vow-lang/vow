@@ -362,16 +362,17 @@ fn vc_next_id(cell: Vec<i64>) -> i64 {
     id
 }
 
-// The code of `g` up to its last `requires` is copied into `h`; the block that ends in that
-// clause is returned open, with no terminator, to be continued. A callee without a `requires`
-// has one empty block.
-fn vc_stub_prefix(g: IrFunction, h: IrFunction) -> IrBlock {
+// The code of `g` up to its last `requires` is copied into `h`; the index in `h.blocks` of the
+// block that ends in that clause is returned, the block open, with no terminator, to be
+// continued. A callee without a `requires` has one empty block. The block is not returned itself:
+// pushed into `h` and returned it has two destinations, and region inference then places it in
+// the root region, which no run ever frees.
+fn vc_stub_prefix(g: IrFunction, h: IrFunction) -> u64 {
     let rpo: Vec<i64> = vc_cfg_rpo(g);
     let at: Vec<i64> = vc_last_requires_at(g, rpo);
     if at[0] < 0 {
-        let only: IrBlock = ir_block_new(0);
-        h.blocks.push(only);
-        return only;
+        h.blocks.push(ir_block_new(0));
+        return h.blocks.len() - 1;
     }
     let cut: IrFunction = vc_function_shell(g);
     let open: IrBlock = ir_block_new(g.blocks[at[0] as u64].id);
@@ -391,12 +392,16 @@ fn vc_stub_prefix(g: IrFunction, h: IrFunction) -> IrBlock {
         bi = bi + 1;
     }
     let live: Vec<i64> = vc_cfg_rpo(cut);
+    let mut open_at: u64 = 0;
     let mut k: u64 = 0;
     while k < cut.blocks.len() {
-        if live[k] >= 0 { h.blocks.push(cut.blocks[k]); }
+        if live[k] >= 0 {
+            if k == at[0] as u64 { open_at = h.blocks.len(); }
+            h.blocks.push(cut.blocks[k]);
+        }
         k = k + 1;
     }
-    open
+    open_at
 }
 
 // Appends to `open` a read of every parameter (`arg_new[p]`), a write of an unconstrained value
@@ -435,10 +440,10 @@ fn vc_stub_of(g: IrFunction, e: VcEffects, ens: bool) -> IrFunction {
     next_val.push(dom_max_inst_id(g) + 1);
     let next_blk: Vec<i64> = Vec::new();
     next_blk.push(vc_max_block_id(g) + 1);
-    let open: IrBlock = vc_stub_prefix(g, h);
+    let mut cur: u64 = vc_stub_prefix(g, h);
+    let open: IrBlock = h.blocks[cur];
     let arg_new: Vec<i64> = dom_fill(g.params.len(), -1);
     let res: i64 = vc_stub_head(g, e, open, next_val, arg_new);
-    let mut cur: IrBlock = open;
     if ens {
         let ctx: VcEnsCtx = vc_ens_ctx(g);
         let sites: VcEnsSites = vc_ens_sites(ctx);
@@ -446,20 +451,22 @@ fn vc_stub_of(g: IrFunction, e: VcEffects, ens: bool) -> IrFunction {
         while s < sites.starts.len() {
             let c: VcEns = { if vc_ens_first_site(sites, s) { vc_ens_extract_clause(ctx, sites, s, arg_new, res, next_val, next_blk) } else { vc_ens_failed() } };
             if c.ok {
-                cur.insts.push(ir_inst_new(vc_next_id(next_val), IOP_JUMP(), ITY_UNIT(), Vec::new(), IDATA_JUMP_TARGET(), c.entry, 0, String::from("")));
+                let from: IrBlock = h.blocks[cur];
+                from.insts.push(ir_inst_new(vc_next_id(next_val), IOP_JUMP(), ITY_UNIT(), Vec::new(), IDATA_JUMP_TARGET(), c.entry, 0, String::from("")));
                 let mut b: u64 = 0;
                 while b < c.blocks.len() {
                     h.blocks.push(c.blocks[b]);
                     b = b + 1;
                 }
-                cur = c.exit_blk;
+                cur = h.blocks.len() - 1;
             }
             s = s + 1;
         }
     }
     let ret: Vec<i64> = Vec::new();
     if res >= 0 { ret.push(res); }
-    cur.insts.push(ir_inst_new(vc_next_id(next_val), IOP_RETURN(), ITY_UNIT(), ret, IDATA_NONE(), 0, 0, String::from("")));
+    let last: IrBlock = h.blocks[cur];
+    last.insts.push(ir_inst_new(vc_next_id(next_val), IOP_RETURN(), ITY_UNIT(), ret, IDATA_NONE(), 0, 0, String::from("")));
     h
 }
 
@@ -617,7 +624,7 @@ fn vc_summary_module(f: IrFunction, m: IrModule, trusted: Vec<i64>, budget: i64)
 
 // `vc_module_skip_reason` with the callees in `trusted` summarised where `f` is above `budget`.
 fn vc_module_skip_reason_trusted(f: IrFunction, m: IrModule, trusted: Vec<i64>, budget: i64) -> String {
-    vc_module_skip_reason_via(f, m, vc_summary_module(f, m, trusted, budget).m, budget)
+    String::from(vc_module_skip_reason_via(f, m, vc_summary_module(f, m, trusted, budget).m, budget))
 }
 
 // The same once `trusted` is known, for a caller that decided `before` with nothing trusted: a
