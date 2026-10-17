@@ -1,0 +1,47 @@
+module VecTruncateLen
+
+fn shortened() -> u64 vow {
+  ensures: result == 2
+} {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v.push(2);
+  v.push(3);
+  v.truncate(2);
+  v.len()
+}
+
+fn past_the_end() -> u64 vow {
+  ensures: result == 3
+} {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v.push(2);
+  v.push(3);
+  v.truncate(10);
+  v.len()
+}
+
+fn keeps_prefix() -> i64 vow {
+  ensures: result == 2
+} {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v.push(2);
+  v.push(3);
+  v.truncate(2);
+  v[1]
+}
+
+fn truncate_param(v: Vec<i64>, n: u64) -> u64 vow {
+  ensures: result <= n
+} {
+  v.truncate(n);
+  v.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(shortened() + past_the_end() + keeps_prefix() as u64);
+  print_u64(truncate_param(Vec::new(), 5));
+  0
+}

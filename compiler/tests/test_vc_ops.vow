@@ -102,7 +102,14 @@ fn check_vec_op_table() -> i64 {
     if vc_vec_op_kind(String::from("__vow_vec_sort")) != VC_VEC_SORT() { return 725; }
     if vc_vec_op_kind(String::from("__vow_vec_sort_in_arena")) != VC_VEC_NONE() { return 726; }
     if vc_vec_kind_mutates(VC_VEC_SORT()) { return 727; }
-    if vc_vec_op_kind(String::from("__vow_vec_clear")) != VC_VEC_NONE() { return 716; }
+    if vc_vec_op_kind(String::from("__vow_vec_clear")) != VC_VEC_CLEAR() { return 716; }
+    if vc_vec_op_kind(String::from("__vow_vec_truncate")) != VC_VEC_TRUNCATE() { return 750; }
+    if vc_vec_op_kind(String::from("__vow_vec_clear_in_arena")) != VC_VEC_NONE() { return 751; }
+    if vc_vec_op_kind(String::from("__vow_vec_truncate_in_arena")) != VC_VEC_NONE() { return 752; }
+    if !vc_vec_kind_mutates(VC_VEC_CLEAR()) || !vc_vec_kind_mutates(VC_VEC_TRUNCATE()) { return 753; }
+    if vc_vec_kind_grows(VC_VEC_CLEAR()) || vc_vec_kind_grows(VC_VEC_TRUNCATE()) { return 754; }
+    if !vc_vec_kind_mutates(VC_VEC_PUSH()) || !vc_vec_kind_mutates(VC_VEC_SET()) || !vc_vec_kind_mutates(VC_VEC_POP()) { return 755; }
+    if vc_vec_kind_mutates(VC_VEC_GET()) || vc_vec_kind_mutates(VC_VEC_LEN()) || vc_vec_kind_mutates(VC_VEC_NEW()) || vc_vec_kind_mutates(VC_VEC_NONE()) { return 756; }
     if vc_vec_op_kind(String::from("__vow_vec_from_raw_parts_copy_val")) != VC_STR_FROM_RAW_PARTS() { return 717; }
     if vc_vec_op_kind(String::from("__vow_vec_pin_to_root_val")) != VC_STR_CLONE() { return 720; }
     if vc_vec_op_kind(String::from("__vow_vec_from_raw_parts_copy_val_in_arena")) != VC_VEC_NONE() { return 721; }

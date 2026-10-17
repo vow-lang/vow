@@ -116,7 +116,7 @@ fn check_op_table() -> i64 {
     if vc_vec_op_kind(String::from("__vow_string_contains")) != VC_STR_CONTAINS() { return 15; }
     if vc_vec_op_kind(String::from("__vow_string")) != VC_STR_NONE() { return 16; }
     if vc_vec_op_kind(String::from("__vow_string_")) != VC_STR_NONE() { return 17; }
-    if vc_vec_op_kind(String::from("__vow_vec_clear")) != VC_STR_NONE() { return 18; }
+    if vc_vec_op_kind(String::from("__vow_vec_reserve_in_arena")) != VC_STR_NONE() { return 18; }
     let rest: Vec<String> = Vec::new();
     rest.push(String::from("__vow_string_from_cstr"));
     rest.push(String::from("__vow_string_new_in_arena"));
