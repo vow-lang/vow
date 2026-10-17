@@ -115,4 +115,7 @@ inlined callee was decided again in it, though the callee was proven on its own 
   until they have been tried: one that is not proven costs its callers the shortcut, not their
   decision. A function that went through a wave takes its outcome as its verdict, proven or not.
 - **A checked operator is decided once per site** within a round (`vc_claim_site_known`).
+- **The last unwinding claim of a round is not asked once the round has found every site the
+  inductive proof reaches** (`vc_unwinding_covered`): `sat` leaves the round open, which the proof
+  closes, and `unsat` closes it, with the same sites.
 - **The addresses of stored objects are tagged, not compared** (`vc_overlay_tag_start`).

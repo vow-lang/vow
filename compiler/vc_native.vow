@@ -396,6 +396,15 @@ fn vc_claim_needs_solver(fr: VcFrames, cs: VcClaims, k: u64) -> bool {
     !vc_claim_is_static_sat(cs, k) && !vc_claim_trusted(fr, cs, k)
 }
 
+// True when claim `k` is the last of its round that needs a solver, is a loop's unwinding claim,
+// and the round has found every checked-arithmetic abort the inductive proof reaches (`cover`,
+// empty when there is no such proof). The round is then decided whatever the answer: `sat` leaves
+// it open, which the proof closes, and `unsat` closes it, with the same sites (`vc_verify_function_in`).
+// The query is the one that costs the most, the whole unrolled body behind the loop.
+fn vc_unwinding_covered(ss: VcSession, cs: VcClaims, k: u64, sites: Vec<ParsedArithSite>, cover: Vec<ParsedArithSite>) -> bool {
+    cs.kinds[k] == VC_CLAIM_UNWIND() && ss.last_at == k as i64 && cover.len() > 0 && vc_sites_cover(sites, cover)
+}
+
 // The source site of checked-operator claim `k`: every inlined copy of one operator has the same.
 fn vc_claim_site(f: IrFunction, fr: VcFrames, cs: VcClaims, k: u64) -> ParsedArithSite {
     ParsedArithSite { cause: cs.labels[k], owner: vc_frame_func(fr, cs.frames[k], f.id), ostart: cs.ostarts[k], olen: cs.olens[k] }
@@ -418,7 +427,7 @@ fn vc_claim_site_known(f: IrFunction, fr: VcFrames, cs: VcClaims, k: u64, sites:
 // clause in that mode. `soft` tells whether `g` has a soft claim, and is
 // meaningful only for a round that ran every claim. `hyp` is the hypothesis
 // marking of a step function, empty otherwise.
-fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, hyp: Vec<i64>, sites: Vec<ParsedArithSite>, started: i64, timeout_ms: i64, scratch: String, cache: VcCache, slicing: bool, all_claims: bool, acc: VcClauseAcc, full: bool) -> VcRound [io, read, write] {
+fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, hyp: Vec<i64>, sites: Vec<ParsedArithSite>, started: i64, timeout_ms: i64, scratch: String, cache: VcCache, slicing: bool, all_claims: bool, acc: VcClauseAcc, full: bool, cover: Vec<ParsedArithSite>) -> VcRound [io, read, write] {
     let cs: VcClaims = vc_claims_step(g, fr, f.vows.len() == 0 && !full, hyp);
     if cs.kinds.len() == 0 {
         return vc_round(vc_proven_result(), false, false, -1, false, false);
@@ -426,7 +435,7 @@ fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, hyp: Vec<i64>, sites
     let binder_at: i64 = vc_claims_first_binder(cs);
     let ss: VcSession = vc_session_new(vc_session_wanted(fr, cs, binder_at), binder_at);
     ss.last_at = vc_claims_last_solver(fr, cs);
-    let r: VcRound = vc_run_claims(f, fr, cs, ss, sites, started, timeout_ms, scratch, cache, slicing, all_claims, acc);
+    let r: VcRound = vc_run_claims(f, fr, cs, ss, sites, started, timeout_ms, scratch, cache, slicing, all_claims, acc, cover);
     vc_session_close(ss);
     r
 }
@@ -456,7 +465,7 @@ fn vc_session_wanted(fr: VcFrames, cs: VcClaims, binder_at: i64) -> bool [read] 
 }
 
 // The claims of `cs` in order; `ss` is closed by the caller on every return.
-fn vc_run_claims(f: IrFunction, fr: VcFrames, cs: VcClaims, ss: VcSession, sites: Vec<ParsedArithSite>, started: i64, timeout_ms: i64, scratch: String, cache: VcCache, slicing: bool, all_claims: bool, acc: VcClauseAcc) -> VcRound [io, read, write] {
+fn vc_run_claims(f: IrFunction, fr: VcFrames, cs: VcClaims, ss: VcSession, sites: Vec<ParsedArithSite>, started: i64, timeout_ms: i64, scratch: String, cache: VcCache, slicing: bool, all_claims: bool, acc: VcClauseAcc, cover: Vec<ParsedArithSite>) -> VcRound [io, read, write] {
     let sx: VcSlicer = vc_slicer_new(cs);
     let mut bin: String = String::from("");
     let mut located: bool = false;
@@ -473,6 +482,8 @@ fn vc_run_claims(f: IrFunction, fr: VcFrames, cs: VcClaims, ss: VcSession, sites
         }
         if vc_claim_is_static_sat(cs, k) {
             if vc_note_soft_sat(f, fr, cs, k, sites) { open = true; }
+        } else if vc_unwinding_covered(ss, cs, k, sites, cover) {
+            open = true;
         } else if !vc_claim_trusted(fr, cs, k) && !vc_claim_site_known(f, fr, cs, k, sites) {
             if !located {
                 bin = vc_solver_locate();
@@ -571,7 +582,7 @@ fn vc_cut_attempt(f: IrFunction, c: VcInduct, fr: VcFrames, started: i64, timeou
     }
     let g: IrFunction = c.f;
     let sites: Vec<ParsedArithSite> = Vec::new();
-    let r: VcRound = vc_run_round(f, g, fr, Vec::new(), sites, started, timeout_ms, scratch, cache, slicing, false, vc_clause_acc_new(), full);
+    let r: VcRound = vc_run_round(f, g, fr, Vec::new(), sites, started, timeout_ms, scratch, cache, slicing, false, vc_clause_acc_new(), full, Vec::new());
     vc_round_proves(r, sites)
 }
 
@@ -592,7 +603,7 @@ fn vc_step_attempt(f: IrFunction, closed: IrFunction, fr: VcFrames, bound: i64, 
         return none;
     }
     let sites: Vec<ParsedArithSite> = Vec::new();
-    let r: VcRound = vc_run_round(f, g, fr, u.hyp, sites, started, timeout_ms, scratch, cache, slicing, false, vc_clause_acc_new(), full);
+    let r: VcRound = vc_run_round(f, g, fr, u.hyp, sites, started, timeout_ms, scratch, cache, slicing, false, vc_clause_acc_new(), full, Vec::new());
     vc_round_proves(r, sites)
 }
 
@@ -749,7 +760,9 @@ fn vc_verify_function_in(f: IrFunction, m: IrModule, timeout_ms: i64, scratch: S
         let sites: Vec<ParsedArithSite> = Vec::new();
         let mut round_ms: i64 = timeout_ms;
         if ind.proves && !all_claims { round_ms = vc_refine_ms(started, timeout_ms); }
-        let r: VcRound = vc_run_round(f, g, inl.frames, Vec::new(), sites, started, round_ms, scratch, cache, slicing, all_claims, acc, full);
+        let mut cover: Vec<ParsedArithSite> = Vec::new();
+        if ind.proves && !all_claims && !frozen.ended { cover = ind.sites; }
+        let r: VcRound = vc_run_round(f, g, inl.frames, Vec::new(), sites, started, round_ms, scratch, cache, slicing, all_claims, acc, full, cover);
         if r.ended && !frozen.ended {
             frozen = r;
         }

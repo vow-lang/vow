@@ -8,6 +8,7 @@ use vc_exec
 use vc_ops
 use vc_unroll
 use vc_native
+use vc_session
 use tests.builders
 
 fn args1(a: i64) -> Vec<i64> {
@@ -1060,6 +1061,33 @@ fn check_trusted_frames_skip_their_claims() -> i64 {
     0
 }
 
+// The unwinding claim that ends a round is not asked once the round has found every abort the
+// inductive proof reaches: the proof closes the round either way. Any other claim, or a round
+// without such a proof, asks it.
+fn check_unwinding_claim_covered_by_proof() -> i64 {
+    let cs: VcClaims = vc_claims(vc_unroll(counted_loop(false, false), 1).f);
+    let u: u64 = first_of_kind(cs, VC_CLAIM_UNWIND());
+    if u >= cs.kinds.len() { return 190; }
+    let ss: VcSession = vc_session_new(false, -1);
+    ss.last_at = u as i64;
+    let site: ParsedArithSite = ParsedArithSite { cause: String::from("add"), owner: 7, ostart: 3, olen: 4 };
+    let cover: Vec<ParsedArithSite> = Vec::new();
+    cover.push(site);
+    let found: Vec<ParsedArithSite> = Vec::new();
+    if vc_unwinding_covered(ss, cs, u, found, cover) { return 192; }
+    found.push(site);
+    if !vc_unwinding_covered(ss, cs, u, found, cover) { return 193; }
+    if vc_unwinding_covered(ss, cs, u, found, Vec::new()) { return 194; }
+    ss.last_at = -1;
+    if vc_unwinding_covered(ss, cs, u, found, cover) { return 195; }
+    ss.last_at = u as i64 + 1;
+    if vc_unwinding_covered(ss, cs, u, found, cover) { return 196; }
+    let hard: VcClaims = vc_claims_mode(callee_clause_function(), one_frame(), false);
+    ss.last_at = 1;
+    if hard.kinds[1] == VC_CLAIM_UNWIND() || vc_unwinding_covered(ss, hard, 1, found, cover) { return 197; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_divide_with_requires();
     if r == 0 { r = check_rem_has_only_zero_claim(); }
@@ -1087,6 +1115,7 @@ fn main() -> i32 {
     if r == 0 { r = check_checked_guard_is_assumed_later(); }
     if r == 0 { r = check_known_site_is_not_decided_again(); }
     if r == 0 { r = check_trusted_frames_skip_their_claims(); }
+    if r == 0 { r = check_unwinding_claim_covered_by_proof(); }
     if r == 0 { r = check_shift_claims(); }
     if r == 0 { r = check_casts(); }
     if r == 0 { r = check_constants_are_masked_to_their_width(); }
