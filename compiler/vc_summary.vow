@@ -399,8 +399,9 @@ fn vc_stub_prefix(g: IrFunction, h: IrFunction) -> u64 {
     let mut open_at: u64 = 0;
     let mut k: u64 = 0;
     while k < cut.blocks.len() {
-        if live[k] >= 0 || k == at[0] as u64 {
-            if k == at[0] as u64 { open_at = h.blocks.len(); }
+        let is_open: bool = k == at[0] as u64;
+        if live[k] >= 0 || is_open {
+            if is_open { open_at = h.blocks.len(); }
             h.blocks.push(cut.blocks[k]);
         }
         k = k + 1;
