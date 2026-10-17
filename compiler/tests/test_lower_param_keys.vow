@@ -1,0 +1,60 @@
+module TestLowerParamKeys
+
+use lexer
+use ast
+use diag
+use parser
+use ir
+use lower
+
+// `IrFunction.param_keys` is the head of each parameter's declared type with type aliases
+// resolved; the verifier tells parameters of different heads apart with it (#1802).
+
+fn lower_source(source: String) -> IrModule {
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, diag_ctx_new(), String::from("param_keys.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut item_i: u64 = 0;
+    while item_i < parsed.items.len() {
+        item_files.push(String::from("param_keys.vow"));
+        item_i = item_i + 1;
+    }
+    lower_module_vow(
+        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), item_files
+    )
+}
+
+fn function_named(m: IrModule, name: String) -> IrFunction {
+    let fns: Vec<IrFunction> = m.functions;
+    let mut fi: u64 = 0;
+    while fi < fns.len() {
+        let f: IrFunction = fns[fi];
+        if f.name == name {
+            return f;
+        }
+        fi = fi + 1;
+    }
+    fns[0]
+}
+
+fn check_keys_follow_the_declared_heads() -> i64 {
+    let src: String = String::from("struct Outer { a: i64 }\ntype Same = Outer;\nfn f(o: Outer, s: Same, v: Vec<i64>, t: str, u: String, p: Option<Outer>, n: i64) -> i64 { 0 }\nfn main() -> i32 { 0 }\n");
+    let f: IrFunction = function_named(lower_source(src), String::from("f"));
+    let keys: Vec<String> = f.param_keys;
+    if keys.len() != 7 || keys.len() != f.params.len() { return 1; }
+    if keys[0] != String::from("Outer") { return 2; }
+    if keys[1] != String::from("Outer") { return 3; }
+    if keys[2] != String::from("Vec") { return 4; }
+    if keys[3] != String::from("String") { return 5; }
+    if keys[4] != String::from("String") { return 6; }
+    if keys[5] != String::from("Option") { return 7; }
+    0
+}
+
+fn main() -> i32 {
+    i64_to_i32_wrap(check_keys_follow_the_declared_heads())
+}

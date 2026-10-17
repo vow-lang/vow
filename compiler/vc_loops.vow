@@ -480,6 +480,7 @@ fn vc_function_shell(f: IrFunction) -> IrFunction {
     let g: IrFunction = ir_function_new(f.id, f.name, f.return_ty, f.effects, f.source_file);
     g.params = f.params;
     g.param_names = f.param_names;
+    g.param_keys = f.param_keys;
     g.vows = f.vows;
     g
 }

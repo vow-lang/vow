@@ -96,11 +96,11 @@ fn vc_agg_arg_params(f: IrFunction, n_ids: u64) -> Vec<i64> {
 
 // The ascending indices of the pointer parameters the function reads or writes a
 // field of, or merges in a Phi, when it also writes a field through a parameter
-// or a Phi and there are at least two of them; else none. Parameters of any
-// aggregate type may be the very same object (the caller can pass one value
-// twice), so a write through one is a write through the others whenever they are.
+// or a Phi and there are at least two of them; else none. A caller can pass one
+// value twice, so a write through one is a write through the others whenever they
+// are one object (`vc_agg_alias_params` narrows this to the parameters of one type).
 // A function that writes only objects it allocated needs no identity.
-fn vc_agg_alias_params(f: IrFunction, n_ids: u64) -> Vec<i64> {
+fn vc_agg_alias_marked(f: IrFunction, n_ids: u64) -> Vec<i64> {
     let def_op: Vec<i64> = vc_agg_def_ops(f, n_ids);
     let arg_param: Vec<i64> = vc_agg_arg_params(f, n_ids);
     let marked: Vec<i64> = dom_fill(f.params.len(), 0);
@@ -131,6 +131,46 @@ fn vc_agg_alias_params(f: IrFunction, n_ids: u64) -> Vec<i64> {
         k = k + 1;
     }
     if out.len() < 2 { out.clear(); }
+    out
+}
+
+// The type group of each parameter of `params`: its declared type's head
+// (`IrFunction.param_keys`), or "" for all of them when some head is not known,
+// which makes them one group. Two parameters of different heads are never one object.
+fn vc_agg_alias_keys(f: IrFunction, params: Vec<i64>) -> Vec<String> {
+    let mut known: bool = f.param_keys.len() == f.params.len();
+    let mut i: u64 = 0;
+    while known && i < params.len() {
+        if f.param_keys[params[i] as u64].len() == 0 { known = false; }
+        i = i + 1;
+    }
+    let keys: Vec<String> = Vec::new();
+    i = 0;
+    while i < params.len() {
+        keys.push({ if known { f.param_keys[params[i] as u64] } else { String::from("") } });
+        i = i + 1;
+    }
+    keys
+}
+
+// The pointer parameters that may be one object as another parameter: those of
+// `vc_agg_alias_marked` that share their type group with another of them. A
+// parameter alone in its group has no identity and is no object but its own.
+fn vc_agg_alias_params(f: IrFunction, n_ids: u64) -> Vec<i64> {
+    let marked: Vec<i64> = vc_agg_alias_marked(f, n_ids);
+    let keys: Vec<String> = vc_agg_alias_keys(f, marked);
+    let out: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < marked.len() {
+        let mut j: u64 = 0;
+        let mut mates: i64 = 0;
+        while j < marked.len() {
+            if keys[j] == keys[i] { mates = mates + 1; }
+            j = j + 1;
+        }
+        if mates > 1 { out.push(marked[i]); }
+        i = i + 1;
+    }
     out
 }
 
@@ -245,7 +285,7 @@ fn vc_agg_child_detail(f: IrFunction, n_ids: u64) -> String {
         }
         bi = bi + 1;
     }
-    if vc_agg_alias_params(f, n_ids).len() > 0 {
+    if vc_agg_alias_marked(f, n_ids).len() > 0 {
         return String::from("a pointer read out of a field in a function whose parameters may be one object");
     }
     String::from("")

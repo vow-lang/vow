@@ -1314,6 +1314,18 @@ fn lower_resolve_alias_tid(a: AstArena, tid: i64, alias_names: Vec<String>, alia
     alias_target_tids[index as u64]
 }
 
+// `IrFunction.param_keys` entry of a parameter whose alias-resolved declared type is `tid`: the
+// head of the type (`Outer`, `Vec`, `Option`), with `str` and `String` one head, or "" when the
+// head is not known. Values of different heads are never one object.
+fn lower_param_key(a: AstArena, tid: i64) -> String {
+    if tid == -1 { return String::from(""); }
+    let tag: i64 = type_tag(a, tid);
+    if tag != TY_NAMED() && tag != TY_GENERIC() { return String::from(""); }
+    let head: String = arena_str(a, type_a(a, tid));
+    if head == String::from("str") { return String::from("String"); }
+    head
+}
+
 fn is_scalar_field_type_name(name: String) -> bool {
     name == String::from("i8") || name == String::from("i16") || name == String::from("i32") ||
     name == String::from("i64") || name == String::from("i128") ||
@@ -6137,6 +6149,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
             }
         }
 
+        func.param_keys.push(lower_param_key(a, resolved_ptid));
         ctx.func.local_names_ids.push(arg_id);
         ctx.func.local_names_strs.push(pname);
         lctx_define(ctx, pname, arg_id);
