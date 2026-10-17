@@ -56,6 +56,7 @@ import shutil
 import statistics
 import sys
 import tomllib
+from bisect import bisect_right
 from collections import Counter
 
 import verify_diff
@@ -271,19 +272,29 @@ def attribute(events, rss_series, wall_s):
         elif blocks and PROGRESS_RE.match(line):
             blocks[-1][1] = max(blocks[-1][1], t)
     gaps, peaks, wave_s = {}, {}, {}
+    times = [t for t, _ in rss_series or ()]
+    kbs = [kb for _, kb in rss_series or ()]
 
-    def peak_in(lo, hi, outside_proofs=False):
-        return max(
-            (
-                kb
-                for t, kb in rss_series or ()
-                if lo < t <= hi
-                and not (
-                    outside_proofs and any(plo < t <= phi for _, plo, phi in proofs)
-                )
-            ),
-            default=0,
-        )
+    def peak_in(lo, hi):
+        return max(kbs[bisect_right(times, lo) : bisect_right(times, hi)], default=0)
+
+    windows = []
+    for _, plo, phi in sorted(proofs, key=lambda w: w[1]):
+        if windows and plo <= windows[-1][1]:
+            windows[-1][1] = max(windows[-1][1], phi)
+        else:
+            windows.append([plo, phi])
+
+    def common_peak(lo, hi):
+        """Peak of the samples in `(lo, hi]` outside every proof window."""
+        peak = 0
+        for plo, phi in windows:
+            if plo > lo:
+                peak = max(peak, peak_in(lo, min(plo, hi)))
+            lo = max(lo, phi)
+            if lo >= hi:
+                return peak
+        return max(peak, peak_in(lo, hi))
 
     for name, lo, hi in proofs:
         took = max(0.0, hi - lo)
@@ -303,9 +314,7 @@ def attribute(events, rss_series, wall_s):
         "gap_s": gaps,
         "wave_s": wave_s,
         "peak_kb": peaks,
-        "prelude_peak_kb": peak_in(
-            -1.0, blocks[0][1] if blocks else float("inf"), outside_proofs=True
-        ),
+        "prelude_peak_kb": common_peak(-1.0, blocks[0][1] if blocks else float("inf")),
         "tail_peak_kb": peak_in(previous, float("inf")) if blocks else 0,
     }
 

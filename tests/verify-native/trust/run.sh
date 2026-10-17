@@ -14,8 +14,13 @@ set -uo pipefail
 VOWC="$1"
 shift
 DIR="$(cd "$(dirname "$0")" && pwd)"
-if [ "$#" -eq 0 ]; then set -- "$DIR"/*.vow; fi
+whole_set=0
+if [ "$#" -eq 0 ]; then
+    whole_set=1
+    set -- "$DIR"/*.vow
+fi
 failures=0
+waves_seen=0
 
 summary_of() {
     python3 -c "
@@ -36,23 +41,26 @@ for f in "$@"; do
         *) echo "FAIL trust/$name: missing or unknown '// TEST: trust-expect' directive"; failures=$((failures + 1)); continue ;;
     esac
     errors=()
-    plain=$(summary_of "$("$VOWC" verify --backend native --no-cache "$f" 2>/dev/null)")
-    forced=$(summary_of "$(VOW_VERIFY_TRUST_ROOT_MIN=1 "$VOWC" verify --backend native --no-cache "$f" 2>/dev/null)")
+    plain_err=$(mktemp)
+    forced_err=$(mktemp)
+    plain=$(summary_of "$("$VOWC" verify --backend native --no-cache "$f" 2>"$plain_err")")
+    forced=$(summary_of "$(VOW_VERIFY_TRUST_ROOT_MIN=1 "$VOWC" verify --backend native --no-cache "$f" 2>"$forced_err")")
     case "$plain" in
         "$status"*) ;;
         *) errors+=("default run: expected $status, got '$plain'") ;;
     esac
     [ "$plain" = "$forced" ] || errors+=("trusted run differs from the default one: '$forced' against '$plain'")
-    plain_err=$("$VOWC" verify --backend native --no-cache "$f" 2>&1 >/dev/null)
-    forced_err=$(VOW_VERIFY_TRUST_ROOT_MIN=1 "$VOWC" verify --backend native --no-cache "$f" 2>&1 >/dev/null)
-    [ "$(verdict_lines <<<"$plain_err")" = "$(verdict_lines <<<"$forced_err")" ] ||
+    [ "$(verdict_lines <"$plain_err")" = "$(verdict_lines <"$forced_err")" ] ||
         errors+=("the forced run's verdict lines differ from the default run's")
-    if grep -q '^Proof ' <<<"$plain_err"; then errors+=("the default run printed a wave line"); fi
-    first_wave=$(grep -n -m1 -E '^(Wave|Proof) ' <<<"$forced_err" | cut -d: -f2- | cut -c1-5)
+    if grep -qE '^(Wave|Proof) ' "$plain_err"; then errors+=("the default run printed a wave line"); fi
+    waves=$(grep -cE '^Wave ' "$forced_err")
+    waves_seen=$((waves_seen + waves))
+    first_wave=$(grep -m1 -E '^(Wave|Proof) ' "$forced_err" | cut -c1-5)
     [ -z "$first_wave" ] || [ "$first_wave" = "Wave " ] || errors+=("a Proof line precedes the first Wave line")
-    if grep -E '^Proof ' <<<"$forced_err" | grep -qvE '^Proof [A-Za-z0-9_.:]+: (PROVEN|FAILED|TIMEOUT|UNKNOWN|PANICKED|ERROR)$'; then
+    if grep -E '^Proof ' "$forced_err" | grep -qvE '^Proof [A-Za-z0-9_.:]+: (PROVEN|FAILED|TIMEOUT|UNKNOWN|PANICKED|ERROR)$'; then
         errors+=("a Proof line has an unknown shape")
     fi
+    rm -f "$plain_err" "$forced_err"
     if [ ${#errors[@]} -eq 0 ]; then
         echo "PASS trust/$name"
     else
@@ -60,4 +68,8 @@ for f in "$@"; do
         failures=$((failures + 1))
     fi
 done
+if [ "$whole_set" -eq 1 ] && [ "$waves_seen" -eq 0 ]; then
+    echo "FAIL trust: no forced run printed a Wave line"
+    failures=$((failures + 1))
+fi
 [ "$failures" -eq 0 ]

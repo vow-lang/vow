@@ -75,6 +75,8 @@ fn check_wave_lines() -> i64 {
     if vc_wave_proof_line(String::from("f"), VERIFY_UNKNOWN()) != String::from("Proof f: UNKNOWN") { return 5; }
     if vc_wave_proof_line(String::from("f"), VERIFY_PANICKED()) != String::from("Proof f: PANICKED") { return 6; }
     if vc_wave_proof_line(String::from("f"), VERIFY_ERROR()) != String::from("Proof f: ERROR") { return 7; }
+    if vc_wave_proof_line(String::from("f"), VERIFY_NOT_FOUND()) != String::from("Proof f: ERROR") { return 8; }
+    if vc_wave_proof_line(String::from("f"), VERIFY_PROVEN_IR()) != String::from("Proof f: PROVEN") { return 9; }
     0
 }
 

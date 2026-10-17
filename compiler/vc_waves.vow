@@ -134,8 +134,8 @@ fn vc_waves_outcome_of(p: VcWaveProofs, fi: i64) -> i64 {
 // The wave's progress on stderr, in the family the `verify` progress lines belong to, for
 // `scripts/verify_compiler.py` to attribute the time and the memory of a proof to the function it
 // proves (the proofs run before the first `Verifying` line, and without a line of their own the
-// run books them as common start-up). `Wave R: proving N function(s)...` is printed when round R
-// starts its pool, `Proof <fn>: <WORD>` as each proof of the round is answered. Neither matches
+// run books them as common start-up). `Wave R: proving N function(s)...` is printed when the Rth
+// round that has something to prove starts its pool, `Proof <fn>: <WORD>` as each proof of the round is answered. Neither matches
 // the `  <fn>: <WORD>` verdict lines, so no function gains or loses a verdict.
 fn vc_wave_start_line(round: u64, n: u64) -> String {
     let s: String = String::from("Wave ");
@@ -147,7 +147,7 @@ fn vc_wave_start_line(round: u64, n: u64) -> String {
 }
 
 fn vc_wave_word(status: i64) -> String {
-    if status == VERIFY_PROVEN() { return String::from("PROVEN"); }
+    if status == VERIFY_PROVEN() || status == VERIFY_PROVEN_IR() { return String::from("PROVEN"); }
     if status == VERIFY_FAILED() { return String::from("FAILED"); }
     if status == VERIFY_TIMEOUT() { return String::from("TIMEOUT"); }
     if status == VERIFY_UNKNOWN() { return String::from("UNKNOWN"); }
@@ -184,6 +184,7 @@ fn vc_waves_prove(exe: String, path: String, vm: IrModule, roots: Vec<i64>, jobs
     let proven: Vec<i64> = out.ids;
     let tried: Vec<i64> = Vec::new();
     let mut round: u64 = 0;
+    let mut waves: u64 = 0;
     while round <= fns.len() {
         round = round + 1;
         let want: Vec<i64> = Vec::new();
@@ -226,7 +227,8 @@ fn vc_waves_prove(exe: String, path: String, vm: IrModule, roots: Vec<i64>, jobs
         pool.summaries = proven;
         vc_pool_share_module(pool, vm);
         let said: Vec<i64> = dom_fill(batch.len(), 0);
-        diag_eprintln_best_effort(vc_wave_start_line(round, batch.len()));
+        waves = waves + 1;
+        diag_eprintln_best_effort(vc_wave_start_line(waves, batch.len()));
         while !vc_pool_settled(pool) {
             vc_pool_step(pool);
             vc_waves_say_ready(pool, names, said);
