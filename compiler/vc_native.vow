@@ -366,11 +366,23 @@ fn vc_claim_is_static_sat(cs: VcClaims, k: u64) -> bool {
 // opens the round.
 fn vc_note_soft_sat(f: IrFunction, fr: VcFrames, cs: VcClaims, k: u64, sites: Vec<ParsedArithSite>) -> bool {
     if cs.kinds[k] != VC_CLAIM_ARITH() { return true; }
-    let site: ParsedArithSite = ParsedArithSite { cause: cs.labels[k], owner: vc_frame_func(fr, cs.frames[k], f.id), ostart: cs.ostarts[k], olen: cs.olens[k] };
+    let site: ParsedArithSite = vc_claim_site(f, fr, cs, k);
     if !vc_has_site(sites, site) {
         sites.push(site);
     }
     false
+}
+
+// The source site of checked-operator claim `k`: every inlined copy of one operator has the same.
+fn vc_claim_site(f: IrFunction, fr: VcFrames, cs: VcClaims, k: u64) -> ParsedArithSite {
+    ParsedArithSite { cause: cs.labels[k], owner: vc_frame_func(fr, cs.frames[k], f.id), ostart: cs.ostarts[k], olen: cs.olens[k] }
+}
+
+// True when checked-operator claim `k` has nothing left to decide: its site is already known to
+// abort, so a `sat` answer would only record it again, and any other answer changes no result.
+// Without this every inlined copy of a site costs a solver run.
+fn vc_claim_site_known(f: IrFunction, fr: VcFrames, cs: VcClaims, k: u64, sites: Vec<ParsedArithSite>) -> bool {
+    cs.kinds[k] == VC_CLAIM_ARITH() && vc_has_site(sites, vc_claim_site(f, fr, cs, k))
 }
 
 // One round: the claims of the unrolled function `g` of `f`. `sites` collects
@@ -439,7 +451,7 @@ fn vc_run_claims(f: IrFunction, fr: VcFrames, cs: VcClaims, ss: VcSession, sites
         }
         if vc_claim_is_static_sat(cs, k) {
             if vc_note_soft_sat(f, fr, cs, k, sites) { open = true; }
-        } else {
+        } else if !vc_claim_site_known(f, fr, cs, k, sites) {
             if !located {
                 bin = vc_solver_locate();
                 located = true;
