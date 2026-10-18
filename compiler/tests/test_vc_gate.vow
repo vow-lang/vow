@@ -771,6 +771,15 @@ fn check_param_class() -> i64 {
     if vc_overlay_param_class(f, 4) != 0 { return 5; }
     if vc_overlay_param_class(f, 5) != 0 { return 6; }
     if vc_overlay_param_class(f, -1) != 0 { return 7; }
+    // a parameter's declared class, by the value that reads it
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_PTR(), 2));
+    insts.push(mk_inst_const_i64(2, 0));
+    let g: IrFunction = one_block(String::from("g"), Vec::new(), ITY_I64(), insts);
+    g.param_keys = f.param_keys;
+    let table: Vec<i64> = vc_overlay_declared_table(g, 3);
+    if table[0] != VC_OV_VEC() || table[1] != VC_OV_STRUCT() || table[2] != 0 { return 8; }
     0
 }
 

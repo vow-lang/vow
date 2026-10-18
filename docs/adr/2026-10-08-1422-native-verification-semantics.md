@@ -1285,6 +1285,19 @@ object, the mechanism of #1756, for the functions that do read an element back.
   and tagging it as given memory would make the path infeasible when it is the address of an object the
   function built); and no element read of a `Vec` the function did not store into is used as an object (it
   may equal the address of one the function built).
+- **A parameter stored as a pointer may be another parameter.** Found by review: `fn f(s: Person, t: Person)`
+  that pushes `s` into a `Vec` (or stores it in a field), reads `people[0].age`, writes `t.age` and reads
+  `people[0].age` again was `Verified` while a caller passing one value twice aborts the postcondition. Two
+  defects, both in the stored-parameter path and one of them already in #1756's field model: the alias
+  analysis (`vc_agg_alias_marked`) only looked at parameters a field access names, so a parameter that is
+  only stored was never in a may-alias group; and an entry for a stored parameter that the function never
+  uses as an object had class 0, so the read through the handle fell to the free heap arrays, which a write
+  through the other parameter never reaches. A parameter stored into a field, pushed into a `Vec` or set in
+  one is now marked (`vc_agg_stored_pointer`) and its entry takes the class its declared type says
+  (`vc_overlay_declared_table`, from `IrFunction.param_keys`). Parameters of different types are still never
+  one object. Pinned by `fail/vec_pointer_elem_struct_param_alias_wrong.vow`,
+  `fail/ptr_field_struct_param_alias_wrong.vow` and their `_other_type` passes. Two `Vec` or two `String`
+  parameters that are one value are a separate gap, #1823.
 - **What stays `Skipped`** (`a pointer element is read back`, as before): the elements of a `Vec` parameter
   that also receives a pointer, `outer[i][j]` and any element read of an element (the second `get` has a
   handle for receiver, whose elements the gate cannot tell from given memory), a handle stored in a
