@@ -1,3 +1,4 @@
+// TEST: esbmc-model-artifact fn="f" blame=Callee vow_id=0 "ESBMC places the parameters s (Person) and t (Pet) at the same index of its flat heap, so the write t.age = 5 overwrites s.age; two parameters of different struct types are never one object at run time (the type checker cannot pass one value for both), and the debug build runs f without a violation"
 // A struct parameter stored into a field, and a write through a parameter of another type: two
 // parameters of different types are never one object, so the field read back keeps its age.
 module PtrFieldStructParamOtherType
