@@ -44,6 +44,8 @@ fn two_vec_claims() -> VcClaims {
         vec_len: Vec::new(),
         vec_hdr: Vec::new(),
         vec_wide: Vec::new(),
+        vec_path: Vec::new(),
+        vec_handle: Vec::new(),
     };
     cs.header_lens.push(10);
     cs.model_names.push(String::from("p0_vlen"));
@@ -280,6 +282,69 @@ fn check_pin_leaves_lengths_free() -> i64 {
     0
 }
 
+// A collection a struct parameter holds in a field (`vc_held`) is read through its handle:
+// its elements are `select`s of the shared element array at the handle joined with the index,
+// and they are named after the handle, so two held collections never share a name.
+fn held_vec_claims() -> VcClaims {
+    let cs: VcClaims = two_vec_claims();
+    cs.model_names[1] = String::from("p0f0s64_hl");
+    cs.model_params[1] = 0;
+    cs.model_paths[1] = String::from(".0");
+    cs.model_hdr[1] = 5;
+    cs.model_names.push(String::from("p3_vlen"));
+    cs.model_params.push(3);
+    cs.model_paths.push(String::from(""));
+    cs.model_tys.push(ITY_U64());
+    cs.model_widths.push(64);
+    cs.model_slots.push(VC_SLOT_VEC_LEN());
+    cs.model_hdr.push(20);
+    cs.vec_path.push(String::from(""));
+    cs.vec_path.push(String::from(""));
+    cs.vec_handle.push(String::from(""));
+    cs.vec_handle.push(String::from(""));
+    cs.vec_param.push(0);
+    cs.vec_arr.push(String::from("helem"));
+    cs.vec_len.push(String::from("p0f0s64_hl"));
+    cs.vec_hdr.push(5);
+    cs.vec_wide.push(-1);
+    cs.vec_path.push(String::from(".0"));
+    cs.vec_handle.push(String::from("p0f0s64"));
+    cs
+}
+
+fn check_held_collections_are_read_through_the_handle() -> i64 {
+    let cs: VcClaims = held_vec_claims();
+    let vecs: Vec<i64> = vc_cex_vecs(cs, 0);
+    if vecs.len() != 2 || vecs[0] != 0 || vecs[1] != 2 { return 90; }
+    if vc_claim_model_count(cs, 0) != 2 { return 91; }
+    let s: SmtScript = vc_script_new();
+    let names: Vec<String> = Vec::new();
+    let widths: Vec<i64> = Vec::new();
+    vc_append_vec_projection(cs, vecs, 2, s, names, widths);
+    if names.len() != 4 || names[2] != String::from("p0f0s64_e0") || names[3] != String::from("p0f0s64_e1") { return 92; }
+    let want: String = String::from("(define-fun p0f0s64_e1 () (_ BitVec 64) (select helem (concat p0f0s64 #x0000000000000001)))");
+    if vc_command_text(cs.arena, s, 3) != want { return 93; }
+    if vc_command_text(cs.arena, s, 1) != String::from("(define-fun p0_varr_e1 () (_ BitVec 64) (select p0_varr #x0000000000000001))") { return 94; }
+    // two regular entries and two collections: the answer lists the elements of both
+    if vc_answer_elems_per_vec(cs, 0, answer_with(2 + 8)) != 4 { return 95; }
+    if vc_answer_regular_count(cs, 0, answer_with(2 + 8)) != 2 { return 96; }
+    0
+}
+
+// A held collection's length is a model entry like a parameter's, so the bisection that
+// shrinks the lengths sees it.
+fn check_held_length_counts_for_the_shrink() -> i64 {
+    let cs: VcClaims = held_vec_claims();
+    let a: VcSolverAnswer = answer_with(2);
+    a.values[0] = 3;
+    a.values[1] = 9;
+    if vc_answer_max_vec_len(cs, 0, a) != 9 { return 100; }
+    let s: SmtScript = vc_script_new();
+    vc_pin_model(cs, a, s);
+    if s.kinds.len() != 0 { return 101; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_only_declared_vecs_are_read();
     if r == 0 { r = check_regular_count(); }
@@ -290,5 +355,7 @@ fn main() -> i32 {
     if r == 0 { r = check_empty_projection_keeps_prefixes(); }
     if r == 0 { r = check_max_vec_len(); }
     if r == 0 { r = check_pin_leaves_lengths_free(); }
+    if r == 0 { r = check_held_collections_are_read_through_the_handle(); }
+    if r == 0 { r = check_held_length_counts_for_the_shrink(); }
     i64_to_i32_wrap(r)
 }

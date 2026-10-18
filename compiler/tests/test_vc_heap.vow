@@ -6,6 +6,7 @@ use vc_smt
 use vc_gate
 use vc_ops
 use vc_heap
+use vc_held
 use vc_overlay
 use vc_exec
 use vc_flow
@@ -547,6 +548,61 @@ fn check_tags_cover_late_entries() -> i64 {
     0
 }
 
+// The collection a parameter holds in a field is noted when its length is read: its length
+// is a model entry (`vc_held`) and a symbol of the header, and the element array its class
+// reads is declared by then, so the bounds claim's own prefix carries both.
+fn check_held_collections() -> i64 {
+    let cs: VcClaims = vc_claims(last_op_fn());
+    if cs.vec_handle.len() != 1 || cs.vec_handle[0] != String::from("p0f0s64") { return 90; }
+    if cs.vec_path[0] != String::from(".0") || cs.vec_param[0] != 0 { return 91; }
+    if cs.vec_len[0] != String::from("p0f0s64_hl") || cs.vec_arr[0] != String::from("helem") { return 92; }
+    if vc_claim_model_count(cs, 0) != 3 { return 93; }
+    let j: u64 = 2;
+    if cs.model_names[j] != String::from("p0f0s64_hl") || cs.model_slots[j] != VC_SLOT_VEC_LEN() { return 94; }
+    if cs.model_paths[j] != String::from(".0") || cs.model_tys[j] != ITY_U64() { return 95; }
+    let q: String = query(cs, 0);
+    if !q.contains(String::from("(define-fun p0f0s64_hl () (_ BitVec 64) (select hlen p0f0s64))")) { return 96; }
+    if !q.contains(String::from("(declare-const helem")) { return 97; }
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_field_get(1, ITY_I64(), 0, 0));
+    i.push(mk_inst_call_extern(2, ITY_U64(), args1(1), String::from("__vow_string_len")));
+    i.push(mk_inst_const_i64(3, 0));
+    i.push(mk_inst(4, IOP_GE(), ITY_BOOL(), args2(2, 3)));
+    i.push(mk_vow(5, IOP_VOW_ENS(), 4, 0));
+    i.push(mk_inst_return(6, 2));
+    let text: VcClaims = vc_claims(one_block(String::from("t"), ptr_param(), ITY_U64(), i));
+    if text.vec_handle.len() != 1 || text.vec_arr[0] != String::from("hbyte") { return 98; }
+    if !vc_smt_render(text.arena, text.header).contains(String::from("(declare-const hbyte")) { return 99; }
+    0
+}
+
+// A handle read as both a `Vec` and a `String` has no element type to list, and a handle that
+// is not exactly a field symbol is not noted.
+fn check_held_collections_that_are_not_listed() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_field_get(1, ITY_I64(), 0, 0));
+    i.push(mk_inst_call_extern(2, ITY_U64(), args1(1), String::from("__vow_vec_len")));
+    i.push(mk_inst_call_extern(3, ITY_U64(), args1(1), String::from("__vow_string_len")));
+    i.push(mk_inst(4, IOP_EQ(), ITY_BOOL(), args2(2, 3)));
+    i.push(mk_vow(5, IOP_VOW_ENS(), 4, 0));
+    i.push(mk_inst_return(6, 2));
+    let both: VcClaims = vc_claims(one_block(String::from("t"), ptr_param(), ITY_U64(), i));
+    if both.vec_handle.len() != 0 || both.model_names.len() != 1 { return 100; }
+    let ar: VcArena = vc_arena_new();
+    let hdr: SmtScript = vc_script_new();
+    let fl: VcFlow = vc_flow_new(1, 4);
+    let ag: VcAgg = vc_agg_new(fl);
+    let hp: VcHeap = vc_heap_new();
+    let hd: VcHeld = vc_held_new();
+    let h: i64 = vc_tm_var(ar, String::from("not_a_field"));
+    hp.len_arr = vc_agg_declare(ar, hdr, String::from("hlen"), VC_SORT_ARRAY64());
+    vc_held_note(hd, ag, hp, ar, hdr, h, false);
+    if hd.handle.len() != 0 || hdr.kinds.len() != 1 { return 101; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_handle_reads_accepted();
     if r == 0 { r = check_handle_shapes_rejected(); }
@@ -562,5 +618,7 @@ fn main() -> i32 {
     if r == 0 { r = check_direct_handle_reads(); }
     if r == 0 { r = check_direct_handle_overlays(); }
     if r == 0 { r = check_direct_string_overlay(); }
+    if r == 0 { r = check_held_collections(); }
+    if r == 0 { r = check_held_collections_that_are_not_listed(); }
     i64_to_i32_wrap(r)
 }

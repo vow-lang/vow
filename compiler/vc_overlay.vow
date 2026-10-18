@@ -11,6 +11,7 @@ use vc_agg
 use vc_vec
 use vc_heap
 use vc_wide
+use vc_held
 
 // Parameters that may be the memory a handle names (`vc_heap`). A function that
 // reads memory through a handle and also writes a parameter cannot read the
@@ -104,6 +105,7 @@ fn vc_overlay_new() -> VcOverlay {
 // record and never copy the models. Address metadata stays in declaration order.
 struct VcHandleMemory {
     heap: VcHeap,
+    held: VcHeld,
     overlay: VcOverlay,
     ag: VcAgg,
     vv: VcVec,
@@ -123,7 +125,7 @@ fn vc_handle_memory_new(f: IrFunction, tys: Vec<i64>, ag: VcAgg, vv: VcVec, ar: 
     if vc_heap_overlay_needed(f, tys) {
         vc_overlay_enable(ov, ag, ar, hdr, assumed, vc_overlay_params(f, tys, VC_OV_VEC()), vc_overlay_params(f, tys, VC_OV_STRING()), vc_overlay_params(f, tys, VC_OV_STRUCT()));
     }
-    VcHandleMemory { heap: vc_heap_new(), overlay: ov, ag: ag, vv: vv, ar: ar, header: hdr, assumed: assumed }
+    VcHandleMemory { heap: vc_heap_new(), held: vc_held_new(), overlay: ov, ag: ag, vv: vv, ar: ar, header: hdr, assumed: assumed }
 }
 
 fn vc_handle_memory_used(m: VcHandleMemory) -> bool {
@@ -147,9 +149,11 @@ fn vc_handle_field(m: VcHandleMemory, h: i64, slot: i64, ty: i64) -> i64 {
 }
 
 // The length is observed before the caller records the bounds claim. Reading an
-// element afterwards must not declare its heap array in that earlier prefix.
+// element afterwards must not declare its heap array in that earlier prefix, so a
+// collection held in a field (`vc_held`) declares its element array with the length.
 fn vc_handle_len(m: VcHandleMemory, b: i64, h: i64, inst: IrInst, kind: i64) -> i64 {
     let base: i64 = vc_heap_len(m.heap, m.ar, m.header, m.assumed, h);
+    vc_held_note(m.held, m.ag, m.heap, m.ar, m.header, h, vc_overlay_op_class(inst, kind) == VC_OV_STRING());
     vc_overlay_len(m.overlay, m.ag, m.vv, m.ar, m.header, m.assumed, b, h, vc_overlay_op_class(inst, kind), base)
 }
 

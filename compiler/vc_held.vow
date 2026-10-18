@@ -1,0 +1,141 @@
+module VcHeld
+
+use vc_term
+use vc_smt
+use vc_agg
+use vc_heap
+use vc_query
+
+// Collections a function reads through a field of a parameter (`vc_heap`): the `Vec` or
+// `String` a struct parameter holds in a field. The field's slot is a 64-bit symbol of the
+// aggregate model (the address the function loaded), and `hlen[h]`, `helem[h ++ i]` and
+// `hbyte[h ++ i]` are arrays nothing writes, so a counterexample can read the held collection
+// back: its length and its first `n` elements, like those of a `Vec` or `String` parameter
+// (`vc_vecmodel`). Each such field is noted when the function first measures it, with a
+// symbol for its length, so the length is a model entry of every claim after that read and
+// the element array its class reads is declared in the same prefix. A handle that is not
+// exactly a field symbol (a field of a held struct, an element of a `Vec`, a merge of two
+// fields) is not noted: the counterexample lists nothing for it.
+
+struct VcHeld {
+    handle: Vec<String>,
+    path: Vec<String>,
+    param: Vec<i64>,
+    cls: Vec<i64>,
+    len_name: Vec<String>,
+    arr: Vec<String>,
+    hdr: Vec<i64>,
+}
+
+fn vc_held_new() -> VcHeld {
+    VcHeld {
+        handle: Vec::new(),
+        path: Vec::new(),
+        param: Vec::new(),
+        cls: Vec::new(),
+        len_name: Vec::new(),
+        arr: Vec::new(),
+        hdr: Vec::new(),
+    }
+}
+
+// A handle that is read both as a `Vec` and as a `String` has no element type to list.
+fn VC_HELD_BOTH() -> i64 { 3 }
+
+fn VC_HELD_VEC() -> i64 { 1 }
+
+fn VC_HELD_STRING() -> i64 { 2 }
+
+// Position in the aggregate model of the field symbol `name`, or -1.
+fn vc_held_field_symbol(ag: VcAgg, name: String) -> i64 {
+    let mut i: u64 = 0;
+    while i < ag.ps_name.len() {
+        if ag.ps_name[i] == name && ag.ps_slot[i] >= 0 && ag.ps_sort[i] == 64 { return i as i64; }
+        i = i + 1;
+    }
+    -1
+}
+
+// Notes the handle `h` whose length was just read, as a `String` when `string`. `hp.len_arr`
+// is declared by that read.
+fn vc_held_note(hd: VcHeld, ag: VcAgg, hp: VcHeap, ar: VcArena, hdr: SmtScript, h: i64, string: bool) {
+    if ar.kinds[h as u64] != VC_T_VAR() || ar.named[h as u64] >= 0 { return; }
+    let name: String = vc_term_text(ar, h);
+    let cls: i64 = { if string { VC_HELD_STRING() } else { VC_HELD_VEC() } };
+    let mut i: u64 = 0;
+    while i < hd.handle.len() {
+        if hd.handle[i] == name {
+            hd.cls[i] = hd.cls[i] | cls;
+            return;
+        }
+        i = i + 1;
+    }
+    let ps: i64 = vc_held_field_symbol(ag, name);
+    if ps < 0 { return; }
+    let len_name: String = String::from(name);
+    len_name.push_str(String::from("_hl"));
+    let arr: i64 = { if string { vc_heap_byte_array(hp, ar, hdr) } else { vc_heap_elem_array(hp, ar, hdr) } };
+    hd.handle.push(name);
+    let path: String = String::from(ag.ps_path[ps as u64]);
+    path.push_str(String::from("."));
+    path.push_str(i64_to_string(ag.ps_slot[ps as u64]));
+    hd.path.push(path);
+    hd.param.push(ag.ps_param[ps as u64]);
+    hd.cls.push(cls);
+    hd.len_name.push(len_name);
+    hd.arr.push(vc_term_text(ar, arr));
+    hd.hdr.push(hdr.kinds.len() as i64);
+    vc_script_define_fun(hdr, len_name, 64, vc_tm_app2(ar, VC_OP_SELECT(), hp.len_arr, h));
+}
+
+// Position of the first noted handle at or after `d` that has a single class, or the number
+// of handles when there is none.
+fn vc_held_next_listed(hd: VcHeld, d: u64) -> u64 {
+    let mut i: u64 = d;
+    while i < hd.handle.len() && hd.cls[i] == VC_HELD_BOTH() {
+        i = i + 1;
+    }
+    i
+}
+
+// Adds each listed handle to the claims' `Vec`/`String` collections, after the parameters'
+// own, so the enrichment of a counterexample (`vc_vecmodel`) bounds and lists it like one.
+// The lists of a parameter are copies: the held ones must not reach the vector model's.
+fn vc_held_append_vecs(cs: VcClaims, hd: VcHeld) {
+    let param: Vec<i64> = Vec::new();
+    let arr: Vec<String> = Vec::new();
+    let len: Vec<String> = Vec::new();
+    let hdr: Vec<i64> = Vec::new();
+    let wide: Vec<i64> = Vec::new();
+    let path: Vec<String> = Vec::new();
+    let handle: Vec<String> = Vec::new();
+    let mut i: u64 = 0;
+    while i < cs.vec_param.len() {
+        param.push(cs.vec_param[i]);
+        arr.push(cs.vec_arr[i]);
+        len.push(cs.vec_len[i]);
+        hdr.push(cs.vec_hdr[i]);
+        wide.push({ if i < cs.vec_wide.len() { cs.vec_wide[i] } else { -1 } });
+        path.push(String::from(""));
+        handle.push(String::from(""));
+        i = i + 1;
+    }
+    let mut d: u64 = vc_held_next_listed(hd, 0);
+    while d < hd.handle.len() {
+        param.push(hd.param[d]);
+        arr.push(hd.arr[d]);
+        len.push(hd.len_name[d]);
+        hdr.push(hd.hdr[d]);
+        wide.push(-1);
+        path.push(hd.path[d]);
+        handle.push(hd.handle[d]);
+        d = vc_held_next_listed(hd, d + 1);
+    }
+    cs.vec_param = param;
+    cs.vec_arr = arr;
+    cs.vec_len = len;
+    cs.vec_hdr = hdr;
+    cs.vec_wide = wide;
+    cs.vec_path = path;
+    cs.vec_handle = handle;
+}
