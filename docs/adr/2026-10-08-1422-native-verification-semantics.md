@@ -1064,8 +1064,12 @@ wrap when doubled; an out-of-bounds one is already a refuted obligation and assu
   obligations. The write is a pair of `store`s, the read a `concat` of two `select`s.
 - **Gate.** The call shapes (`push` one operand; `get`/`set` a `Vec` and a 64-bit index; result
   `ptr`) and one shape rule: an address is the target of a `WideSlot` access with slot 0 and nothing
-  else (never a `Phi` or call operand, never a stored value). A wide call on a handle (a `Vec<i128>`
-  held in a struct field) is not modelled by `vc_heap` and stays `Skipped`.
+  else (never a `Phi` or call operand, never a stored value). A `get` on a handle (a `Vec<i128>`
+  held in a struct field, #1613) is modelled by `vc_heap`: the address is the handle and the index
+  (`VcWalk.whandle`), and the `WideSlot` read is the `concat` of two element reads of the heap
+  array at the keys `2i + 1` and `2i`, laid over by the parameters' own state like any element.
+  The bounds obligation is the one-slot `get`'s against `hlen[h]`. Handle memory has no write
+  model, so a `set` or `push` on a handle and a `FieldSet` through such an address stay `Skipped`.
 - **Counterexamples.** A parameter whose elements the function accesses as 128-bit values
   (`VcVec.pv_wide`, `VcClaims.vec_wide`) lists each element as one 128-bit entry in its own type
   (`i128` signed, `u128` unsigned), asked as the `concat` of its two limbs. Replay rebuilds the

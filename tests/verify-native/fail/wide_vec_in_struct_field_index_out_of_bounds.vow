@@ -1,0 +1,22 @@
+// TEST: replay-skipped field 0 is a Vec, which the replay harness cannot build
+// TEST: counterexample-fn "at"
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-blame None
+// TEST: counterexample-violation "index out of bounds"
+// A wide element read through a struct field is bounds-checked against that collection's length.
+module WideVecInStructFieldIndexOutOfBounds
+
+struct Bag { items: Vec<i128> }
+
+fn at(b: Bag, i: u64) -> i128 vow {
+  ensures: result == result
+} {
+  b.items[i]
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new() };
+  b.items.push(3);
+  print_i64(i128_to_i32_wrap(at(b, 0)) as i64);
+  0
+}

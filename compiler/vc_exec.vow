@@ -240,6 +240,9 @@ struct VcWalk {
     wslot: Vec<i64>,
     wobj: Vec<i64>,
     widx: Vec<i64>,
+    // The address of an element of a collection at a handle (`vc_heap`), for the same ids: the
+    // handle term; -1 for every value that is not one. Such an address is only read through.
+    whandle: Vec<i64>,
     // The object of the `Vec` a one-slot `get` read, for every value that read is,
     // and the float type of every value a float was stored into a slot as (`vc_fp`);
     // -1 for every other value. They tell a counterexample which parameters hold floats.
@@ -395,6 +398,10 @@ fn vc_walk_wide_access(w: VcWalk, bi: u64, inst: IrInst) {
     let vv: VcVec = w.vv;
     let b: i64 = bi as i64;
     let r: u64 = inst.args[0] as u64;
+    if w.whandle[r] >= 0 {
+        vc_define(w, inst, vc_handle_wide(w.memory, b, w.whandle[r], w.widx[r]));
+        return;
+    }
     let s: i64 = w.wslot[r];
     let arr: i64 = vc_vec_cur_arr(vv, s, b);
     if inst.op == IOP_FIELD_GET() {
@@ -413,7 +420,7 @@ fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
     let cs: VcClaims = w.cs;
     let ag: VcAgg = w.ag;
     let op: i64 = inst.op;
-    if (op == IOP_FIELD_GET() || op == IOP_FIELD_SET()) && w.wslot[inst.args[0] as u64] >= 0 {
+    if (op == IOP_FIELD_GET() || op == IOP_FIELD_SET()) && (w.wslot[inst.args[0] as u64] >= 0 || w.whandle[inst.args[0] as u64] >= 0) {
         vc_walk_wide_access(w, bi, inst);
         return true;
     }
@@ -606,6 +613,12 @@ fn vc_walk_handle_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64, kind: i64) {
         return;
     }
     let idx: i64 = w.var_of[inst.args[1] as u64];
+    if kind == VC_VEC_GET_WIDE() {
+        vc_guard(cs, VC_CLAIM_VEC_BOUNDS(), VC_LABEL_VEC_BOUNDS(), pc, vc_vec_in_bounds(ar, idx, len), inst);
+        w.whandle[inst.id as u64] = h;
+        w.widx[inst.id as u64] = idx;
+        return;
+    }
     if kind == VC_STR_BYTE_AT() {
         vc_guard(cs, VC_CLAIM_VEC_BOUNDS(), VC_LABEL_STRING_BOUNDS(), pc, vc_vec_in_bounds(ar, idx, len), inst);
         vc_define(w, inst, vc_handle_byte(w.memory, b, h, idx));
@@ -1030,6 +1043,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         wslot: dom_fill(tys.len(), -1),
         wobj: dom_fill(tys.len(), -1),
         widx: dom_fill(tys.len(), -1),
+        whandle: dom_fill(tys.len(), -1),
         elem_obj: dom_fill(tys.len(), -1),
         bits_ty: dom_fill(tys.len(), -1),
         tys: tys,

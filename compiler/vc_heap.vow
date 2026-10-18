@@ -131,6 +131,9 @@ fn vc_heap_field_get_ok(inst: IrInst, base_ty: i64) -> bool {
 // Gate: `len`, an element or a byte read on a handle.
 fn vc_heap_vec_call_ok(inst: IrInst, idx_ty: i64, kind: i64) -> bool {
     if kind == VC_VEC_LEN() { return inst.args.len() == 1 && inst.ty == ITY_U64(); }
+    if kind == VC_VEC_GET_WIDE() {
+        return inst.args.len() == 2 && inst.ty == ITY_PTR() && vc_ty_is_int(idx_ty) && vc_ty_bits(idx_ty) == 64;
+    }
     (kind == VC_VEC_GET() || kind == VC_STR_BYTE_AT()) && inst.args.len() == 2 && inst.ty == ITY_I64()
         && vc_ty_is_int(idx_ty) && vc_ty_bits(idx_ty) == 64
 }
@@ -147,7 +150,7 @@ fn vc_heap_is_read(inst: IrInst, tys: Vec<i64>) -> bool {
     if t0 != ITY_I64() { return false; }
     if inst.op == IOP_FIELD_GET() { return true; }
     let k: i64 = vc_inst_vec_kind(inst);
-    k == VC_VEC_LEN() || k == VC_VEC_GET() || k == VC_STR_BYTE_AT()
+    k == VC_VEC_LEN() || k == VC_VEC_GET() || k == VC_VEC_GET_WIDE() || k == VC_STR_BYTE_AT()
 }
 
 // Marks every Phi that an `Upsilon` of a marked value feeds, until nothing changes.

@@ -54,6 +54,16 @@ fn args1(a: i64) -> Vec<i64> {
     v
 }
 
+fn ptr_tys() -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < 8 {
+        v.push(ITY_PTR());
+        i = i + 1;
+    }
+    v
+}
+
 // 0 vec_new args, 1 vec_new args, 2 vec, 3 push address, 4 value, 5 write, 6 use
 fn address_fn(use_inst: IrInst) -> IrFunction {
     let insts: Vec<IrInst> = Vec::new();
@@ -75,13 +85,48 @@ fn check_ref_table_and_shape() -> i64 {
     let f: IrFunction = address_fn(mk_inst_return(6, 5));
     let refs: Vec<i64> = vc_wide_ref_ids(f, 8);
     if refs[3] != 1 || refs[2] != 0 || refs[4] != 0 || refs[0] != 0 { return 10; }
-    if vc_wide_shape_detail(f, 8).len() != 0 { return 11; }
+    if vc_wide_shape_detail(f, ptr_tys()).len() != 0 { return 11; }
     let as_value: IrFunction = address_fn(mk_inst_return(6, 3));
-    if vc_wide_shape_detail(as_value, 8) != String::from("wide Vec element address used as a value") { return 12; }
+    if vc_wide_shape_detail(as_value, ptr_tys()) != String::from("wide Vec element address used as a value") { return 12; }
     let second_slot: IrFunction = address_fn(mk_inst_field_get_wide(6, ITY_I128(), 3, 1));
-    if vc_wide_shape_detail(second_slot, 8).len() == 0 { return 13; }
+    if vc_wide_shape_detail(second_slot, ptr_tys()).len() == 0 { return 13; }
     let narrow_get: IrFunction = address_fn(mk_inst_field_get(6, ITY_I64(), 3, 0));
-    if vc_wide_shape_detail(narrow_get, 8).len() == 0 { return 14; }
+    if vc_wide_shape_detail(narrow_get, ptr_tys()).len() == 0 { return 14; }
+    0
+}
+
+// 0 index, 1 handle, 2 address of element 0, 3 value, 4 use of the address
+fn handle_fn(use_inst: IrInst) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_const_i64(0, 0));
+    insts.push(mk_inst_arg(1, ITY_I64(), 0));
+    insts.push(mk_inst_call_extern(2, ITY_PTR(), args2(1, 0), String::from("__vow_vec_get_wide_ptr")));
+    insts.push(mk_inst_arg(3, ITY_I128(), 1));
+    insts.push(use_inst);
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let ps: Vec<i64> = Vec::new();
+    ps.push(ITY_I64());
+    ps.push(ITY_I128());
+    mk_function(1, String::from("f"), ps, ITY_UNIT(), blocks)
+}
+
+fn handle_tys() -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(ITY_I64());
+    v.push(ITY_I64());
+    v.push(ITY_PTR());
+    v.push(ITY_I128());
+    v.push(ITY_I128());
+    v
+}
+
+// The address of an element at a handle is read through, never written.
+fn check_handle_address_is_read_only() -> i64 {
+    let rd: IrFunction = handle_fn(mk_inst_field_get_wide(4, ITY_I128(), 2, 0));
+    if vc_wide_shape_detail(rd, handle_tys()).len() != 0 { return 20; }
+    let wr: IrFunction = handle_fn(mk_inst_field_set_wide(4, 2, 0, 3));
+    if vc_wide_shape_detail(wr, handle_tys()) != String::from("write through a wide element address of a collection at a handle") { return 21; }
     0
 }
 
@@ -89,5 +134,6 @@ fn main() -> i32 {
     let mut r: i64 = check_keys_fold_for_a_constant_index();
     if r == 0 { r = check_read_and_write_render(); }
     if r == 0 { r = check_ref_table_and_shape(); }
+    if r == 0 { r = check_handle_address_is_read_only(); }
     i64_to_i32_wrap(r)
 }
