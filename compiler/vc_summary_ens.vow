@@ -363,6 +363,9 @@ fn vc_ens_extract(ctx: VcEnsCtx, bi: u64, ii: u64, arg_new: Vec<i64>, res_id: i6
     let bad: Vec<i64> = Vec::new();
     bad.push(0);
     let out: VcEns = VcEns { ok: true, blocks: Vec::new(), entry: bmap[reg.top] };
+    // The block with the assumption is pushed last, so it is kept apart until the loop is done.
+    // Taking it from `last` in the loop (one variable for either source) puts the copy in the
+    // root region.
     let mut last: IrBlock = ir_block_new(bmap[bi]);
     b = 0;
     while b < nb {
