@@ -78,6 +78,10 @@ fn vc_trust_root_min() -> i64 [read] {
 // The smallest call tree worth a proof of its own under `root_min`.
 fn vc_trust_callee_min(root_min: i64) -> i64 { root_min / 4 }
 
+// The smallest call tree worth a proof of its own when the call tree of the root holds the callee
+// more than once (`vc_trust_repeated`): each copy repeats the claims of the proof.
+fn vc_trust_repeat_min(root_min: i64) -> i64 { root_min / 16 }
+
 // The summaries a verify run uses: the ids of the functions proven on their own (`trusted`)
 // and the inlining budget the run applies (`vc_summary_budget`).
 struct VcSummaryCfg {
