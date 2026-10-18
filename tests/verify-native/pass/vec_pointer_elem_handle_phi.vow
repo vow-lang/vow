@@ -1,0 +1,23 @@
+// Two element reads merged by an `if` are a merge of handles: it names whichever object the
+// chosen slot holds.
+module VecPointerElemHandlePhi
+
+fn choose(c: bool) -> u64 vow {
+  ensures: (c && result == 1) || (!c && result == 2)
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let a: Vec<i64> = Vec::new();
+  a.push(1);
+  let b: Vec<i64> = Vec::new();
+  b.push(1);
+  b.push(2);
+  outer.push(a);
+  outer.push(b);
+  let x: Vec<i64> = if c { outer[0] } else { outer[1] };
+  x.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(choose(true));
+  0
+}

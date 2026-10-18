@@ -1,0 +1,19 @@
+// The slot a pointer was stored into holds the address of the object, so the element read back
+// names the `Vec` that was stored and a read through it is a read of that object (the overlay of
+// `vc_overlay`, as for a pointer stored in a struct field).
+module VecPointerElementReadBack
+
+fn read_back() -> u64 vow {
+  ensures: result == 0
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let inner: Vec<i64> = Vec::new();
+  outer.push(inner);
+  let again: Vec<i64> = outer[0];
+  again.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(read_back());
+  0
+}

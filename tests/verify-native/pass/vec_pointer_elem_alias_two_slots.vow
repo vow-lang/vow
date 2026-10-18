@@ -1,0 +1,21 @@
+// The same `Vec` stored at two indices is one object: a push made through the variable shows in
+// both reads.
+module VecPointerElemAliasTwoSlots
+
+fn same_object() -> u64 vow {
+  ensures: result == 2
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let a: Vec<i64> = Vec::new();
+  outer.push(a);
+  outer.push(a);
+  a.push(5);
+  let x: Vec<i64> = outer[0];
+  let y: Vec<i64> = outer[1];
+  x.len() + y.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(same_object());
+  0
+}

@@ -1,0 +1,26 @@
+// A `Vec` merged by an `if`: both arms are `Vec`s the function built, so the read of the merged
+// one is the object stored in whichever arm ran.
+module VecPointerElemPhiReceiver
+
+fn pick(c: bool) -> u64 vow {
+  ensures: result == 2
+} {
+  let a: Vec<Vec<i64>> = Vec::new();
+  let b: Vec<Vec<i64>> = Vec::new();
+  let wa: Vec<i64> = Vec::new();
+  wa.push(1);
+  wa.push(2);
+  let wb: Vec<i64> = Vec::new();
+  wb.push(1);
+  wb.push(2);
+  a.push(wa);
+  b.push(wb);
+  let v: Vec<Vec<i64>> = if c { a } else { b };
+  let e: Vec<i64> = v[0];
+  e.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(pick(true));
+  0
+}

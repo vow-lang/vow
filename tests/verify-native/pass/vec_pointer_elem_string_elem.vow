@@ -1,0 +1,17 @@
+// A `Vec<String>` element read back is the `String` that was stored.
+module VecPointerElemStringElem
+
+fn first_len() -> u64 vow {
+  ensures: result == 3
+} {
+  let names: Vec<String> = Vec::new();
+  names.push(String::from("ab"));
+  names.push(String::from("xyz"));
+  let second: String = names[1];
+  second.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(first_len());
+  0
+}

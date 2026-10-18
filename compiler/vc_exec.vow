@@ -17,6 +17,7 @@ use vc_heap
 use vc_map
 use vc_mapops
 use vc_overlay
+use vc_ptrstore
 use vc_strops
 use vc_strdeep
 use vc_str
@@ -656,11 +657,16 @@ fn vc_mark_stored_float(w: VcWalk, obj: i64, val: i64) {
     if ft >= 0 { vc_vec_mark_elem(w.vv, w.ag, obj, ft); }
 }
 
-// The 64-bit slot a `push` or `set` stores for value `val`. An object has no address
-// in the model, so its slot is a fresh constant; `vc_ptr_store_detail` keeps every
-// function that could read it back out of the subset.
+// The 64-bit slot a `push` or `set` stores for value `val`. In a function that reads an element
+// back, an object's slot is its address (`vc_overlay_addr_of`), so a read through the element is
+// a read of that object; otherwise nothing looks at the slot and it is a fresh constant
+// (`vc_ptr_store_analyze` keeps every other function out of the subset).
 fn vc_walk_slot_word(w: VcWalk, val: i64) -> i64 {
     let ty: i64 = w.tys[val as u64];
+    if ty == ITY_PTR() && w.memory.overlay.elems {
+        let ov: VcOverlay = w.memory.overlay;
+        return vc_overlay_addr_of(ov, w.ag, w.cs.arena, w.cs.header, w.cs.assumed, w.obj_of[val as u64], vc_overlay_elem_class(ov, val));
+    }
     if ty == ITY_PTR() {
         return vc_agg_declare(w.cs.arena, w.cs.header, vc_vec_fresh_name(w.vv, String::from("pe")), 64);
     }
@@ -1030,7 +1036,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         vc_heap_assume(ar, cs.assumed, group_facts[gi]);
         gi = gi + 1;
     }
-    let memory: VcHandleMemory = vc_handle_memory_new(f, tys, ag, vv, ar, hdr, cs.assumed);
+    let memory: VcHandleMemory = vc_handle_memory_new(f, tys, ag, vv, ar, hdr, cs.assumed, vc_ptr_store_analyze(f, tys, false).addr);
     let w: VcWalk = VcWalk {
         cs: cs,
         fl: fl,

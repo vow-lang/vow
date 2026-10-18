@@ -1,0 +1,26 @@
+// TEST: counterexample-fn "after_pop"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The popped `Vec` is gone: slot 0 holds the two-element one.
+module VecPointerElemPopThenPushWrong
+
+fn after_pop() -> u64 vow {
+  ensures: result == 1
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let a: Vec<i64> = Vec::new();
+  a.push(1);
+  outer.push(a);
+  outer.pop();
+  let b: Vec<i64> = Vec::new();
+  b.push(1);
+  b.push(2);
+  outer.push(b);
+  let top: Vec<i64> = outer[0];
+  top.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(after_pop());
+  0
+}

@@ -1,0 +1,20 @@
+// A `Vec` stored in a `Vec` and read back is the object that was stored: a `push` made after
+// the store is what the read sees, and the length of the element is its own.
+module VecPointerElemLenAfterPush
+
+fn read_back() -> u64 vow {
+  ensures: result == 2
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let inner: Vec<i64> = Vec::new();
+  inner.push(7);
+  outer.push(inner);
+  inner.push(8);
+  let again: Vec<i64> = outer[0];
+  again.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(read_back());
+  0
+}

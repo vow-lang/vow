@@ -1,0 +1,26 @@
+// TEST: counterexample-fn "read_both"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The elements are not swapped: index 0 is the shorter `Vec`.
+module VecPointerElemTwoElementsWrong
+
+fn read_both() -> u64 vow {
+  ensures: result == 12
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let a: Vec<i64> = Vec::new();
+  a.push(1);
+  let b: Vec<i64> = Vec::new();
+  b.push(1);
+  b.push(2);
+  outer.push(a);
+  outer.push(b);
+  let first: Vec<i64> = outer[0];
+  let second: Vec<i64> = outer[1];
+  first.len() + second.len() * 10
+}
+
+fn main() -> i32 [io] {
+  print_u64(read_both());
+  0
+}

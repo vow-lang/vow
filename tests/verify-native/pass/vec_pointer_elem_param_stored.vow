@@ -1,0 +1,18 @@
+// A parameter stored into a `Vec` the function built and read back is that parameter: its length
+// is the one the caller passed.
+module VecPointerElemParamStored
+
+fn wrap(p: Vec<i64>) -> u64 vow {
+  ensures: result == p.len()
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  outer.push(p);
+  let q: Vec<i64> = outer[0];
+  q.len()
+}
+
+fn main() -> i32 [io] {
+  let p: Vec<i64> = Vec::new();
+  print_u64(wrap(p));
+  0
+}

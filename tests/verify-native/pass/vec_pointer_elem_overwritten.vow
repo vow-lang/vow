@@ -1,0 +1,23 @@
+// `set` replaces the element: the old object is no longer reachable through the slot.
+module VecPointerElemOverwritten
+
+fn replaced() -> u64 vow {
+  ensures: result == 3
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let old: Vec<i64> = Vec::new();
+  outer.push(old);
+  let fresh: Vec<i64> = Vec::new();
+  fresh.push(1);
+  fresh.push(2);
+  fresh.push(3);
+  outer[0] = fresh;
+  old.push(9);
+  let now: Vec<i64> = outer[0];
+  now.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(replaced());
+  0
+}

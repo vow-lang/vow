@@ -688,8 +688,9 @@ fn check_vec_ops_rejected() -> i64 {
     0
 }
 
-// A pointer pushed or stored is a slot the model does not read, so a function that never looks
-// at the slot again is inside the subset and one that could is not.
+// A pointer pushed or stored is a fresh constant when nothing looks at the slot again, and the
+// address of its object when the function reads an element of a `Vec` it built; a read of a
+// `Vec` it was given, or a copy, is not in the subset.
 fn check_pointer_elements() -> i64 {
     let none: Vec<IrInst> = Vec::new();
     // let outer = Vec::new(); outer.push(outer)
@@ -705,8 +706,19 @@ fn check_pointer_elements() -> i64 {
     get_insts.push(mk_inst_call_extern(30, ITY_UNIT(), args2(2, 2), String::from("__vow_vec_push_val")));
     get_insts.push(mk_inst_const_i64(31, 0));
     let get: IrFunction = vec_fn_with(String::from("__vow_vec_get_val"), ITY_I64(), args2(2, 31), get_insts);
-    let why: String = vc_skip_reason(get);
-    if why != String::from("unsupported-opcode: a pointer element is read back") { return 3; }
+    // the Vec is built by the function and the pointer is an object it names: the slot holds
+    // its address, so the read is of that object
+    if vc_skip_reason(get).len() != 0 { return 3; }
+    // the same with a Vec parameter: the elements it already holds are memory the caller gave
+    let gp: Vec<IrInst> = Vec::new();
+    gp.push(mk_inst_arg(40, ITY_PTR(), 0));
+    gp.push(mk_inst_call_extern(30, ITY_UNIT(), args2(40, 40), String::from("__vow_vec_push_val")));
+    gp.push(mk_inst_const_i64(31, 0));
+    let gpf: IrFunction = vec_fn_with(String::from("__vow_vec_get_val"), ITY_I64(), args2(40, 31), gp);
+    let gpp: Vec<i64> = Vec::new();
+    gpp.push(ITY_PTR());
+    gpf.params = gpp;
+    if vc_skip_reason(gpf) != String::from("unsupported-opcode: a pointer element is read back") { return 7; }
     // a copy carries the slot along
     let copy: Vec<IrInst> = Vec::new();
     copy.push(mk_inst_call_extern(30, ITY_UNIT(), args2(2, 2), String::from("__vow_vec_push_val")));

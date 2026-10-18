@@ -1,0 +1,25 @@
+// TEST: skip-reason unsupported-opcode
+// A `Vec<Vec<Vec<i64>>>` read two levels down: the second read is of an element, a handle, not of
+// a `Vec` the function stored a pointer into by name, so it stays `Skipped` until the handle's
+// provenance is tracked.
+module VecPointerElemNestedReadSkipped
+
+fn deep() -> u64 vow {
+  ensures: result == 2
+} {
+  let top: Vec<Vec<Vec<i64>>> = Vec::new();
+  let mid: Vec<Vec<i64>> = Vec::new();
+  let leaf: Vec<i64> = Vec::new();
+  leaf.push(1);
+  leaf.push(2);
+  mid.push(leaf);
+  top.push(mid);
+  let m: Vec<Vec<i64>> = top[0];
+  let l: Vec<i64> = m[0];
+  l.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(deep());
+  0
+}

@@ -1,0 +1,19 @@
+// A struct pushed into a `Vec` is read back with its fields.
+module VecPointerElemStructElem
+
+struct Person { age: i64, id: i64 }
+
+fn second_age() -> i64 vow {
+  ensures: result == 30
+} {
+  let people: Vec<Person> = Vec::new();
+  people.push(Person { age: 20, id: 1 });
+  people.push(Person { age: 30, id: 2 });
+  let p: Person = people[1];
+  p.age
+}
+
+fn main() -> i32 [io] {
+  print_i64(second_age());
+  0
+}
