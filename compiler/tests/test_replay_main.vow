@@ -364,6 +364,10 @@ fn check_held_collections() -> i32 [io] {
     if lit_of(String::from("fpairf"), String::from("h.0.0=1,h.0.1=2,h.1=4")) != String::from("HasPair { inner: Pair { lo: 1, hi: 2 }, n: 4 }") { return 345; }
     if index_of(agg(String::from("foptf"), 0, String::from("h.0=0")).reason, String::from("is read through memory")) < 0 { return 346; }
     if lit_of(String::from("foptf"), String::from("h.0.0=1,h.0.1=6,h.1=2")) != String::from("HasOpt { o: Option::Some(6), n: 2 }") { return 347; }
+    let no_addr: ReplayArg = agg(String::from("fhv"), 0, String::from("h.0.len=1,h.0[0]=1"));
+    if index_of(no_addr.reason, String::from("lists its length but not its address")) < 0 { return 349; }
+    let both: String = String::from("b.0=1,b.0.0=1,b.0.1.0=2,b.0.1.1=3,b.1.0=1,b.1.1=6,b.1.2=7");
+    if index_of(agg(String::from("fboth"), 0, both).reason, String::from("is read through memory")) < 0 { return 350; }
     let two: String = String::from("t.0=0,t.0.0=0,t.0.0.len=1,t.0.0[0]=7");
     if index_of(agg(String::from("ftwo"), 0, two).reason, String::from("is read through memory")) < 0 { return 348; }
     0
