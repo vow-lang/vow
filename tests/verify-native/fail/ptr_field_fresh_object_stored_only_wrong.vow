@@ -1,7 +1,6 @@
 // TEST: counterexample-fn "reset"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
-// TEST: replay-skipped a Vec/String field of a struct parameter is not rebuilt by replay
 // The stored `String` has two bytes, so a length of three is refuted.
 module PtrFieldFreshObjectStoredOnlyWrong
 

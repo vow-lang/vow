@@ -166,6 +166,21 @@ fn agg_src() -> String {
     s.push_str(String::from("struct Rec { next: Option<Rec> }\n"));
     s.push_str(String::from("struct Both { a: Option<Pair>, b: Shape }\n"));
     s.push_str(String::from("fn fhv(h: HasVec) -> i64 { 0 }\n"));
+    s.push_str(String::from("struct HasStr { s: String, n: i64 }\n"));
+    s.push_str(String::from("struct HasVs { v: Vec<String> }\n"));
+    s.push_str(String::from("struct HasWide { v: Vec<i128> }\n"));
+    s.push_str(String::from("struct HasFloat { v: Vec<f64> }\n"));
+    s.push_str(String::from("struct HasPair { inner: Pair, n: i64 }\n"));
+    s.push_str(String::from("struct HasOpt { o: Option<i64>, n: i64 }\n"));
+    s.push_str(String::from("struct Two { a: HasVec, b: HasVec }\n"));
+    s.push_str(String::from("fn fstrf(h: HasStr) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fvsf(h: HasVs) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fwidef(h: HasWide) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn ffloatf(h: HasFloat) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fpairf(h: HasPair) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn foptf(h: HasOpt) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn ftwo(t: Two) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn faliasp(v: Vec<i64>, h: HasVec) -> i64 { 0 }\n"));
     s.push_str(String::from("fn frec(r: Rec) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fboth(b: Both) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fh(h: Holder) -> i64 { 0 }\n"));
@@ -259,7 +274,6 @@ fn check_option_result_arg() -> i32 [io] {
 }
 
 fn check_unsupported_args_are_skipped_with_a_reason() -> i32 [io] {
-    if agg(String::from("fhv"), 0, String::from("h.0.len=1,h.0[0]=1")).reason.len() == 0 { return 131; }
     if agg(String::from("ffl32"), 0, String::from("g.0=1")).reason.len() == 0 { return 147; }
     if lit_of(String::from("fop"), String::from("o.0=0")) != String::from("Option::None") { return 146; }
     if agg(String::from("fvs"), 0, String::from("v.len=1")).reason.len() == 0 { return 134; }
@@ -306,7 +320,7 @@ fn check_nested_aggregates() -> i32 [io] {
     if lit_of(String::from("fop"), String::from("o.0=1,o.1.0=7,o.1.1=8")) != String::from("Option::Some(Pair { lo: 7, hi: 8 })") { return 304; }
     if lit_of(String::from("fop"), String::from("o.0=1")) != String::from("Option::Some(Pair { lo: 0, hi: 0 })") { return 305; }
     if agg(String::from("fop"), 0, String::from("o.0=1")).ty_text != String::from("Option<Pair>") { return 306; }
-    if lit_of(String::from("fboth"), String::from("b.0=1,b.0.0=1,b.0.1.0=2,b.0.1.1=3,b.1.0=1,b.1.1=6,b.1.2=7")) != String::from("Both { a: Option::Some(Pair { lo: 2, hi: 3 }), b: Shape::Rect(6, 7) }") { return 307; }
+    if lit_of(String::from("fboth"), String::from("b.0.0=1,b.0.1.0=2,b.0.1.1=3,b.1.0=1,b.1.1=6,b.1.2=7")) != String::from("Both { a: Option::Some(Pair { lo: 2, hi: 3 }), b: Shape::Rect(6, 7) }") { return 307; }
     let out: ReplayArg = agg(String::from("fboth"), 0, String::from("b.1.0=9"));
     if index_of(out.reason, String::from("discriminant 9 outside Shape")) < 0 { return 311; }
     let deep: String = String::from("");
@@ -320,6 +334,38 @@ fn check_nested_aggregates() -> i32 [io] {
     }
     let too_deep: ReplayArg = agg(String::from("frec"), 0, deep);
     if index_of(too_deep.reason, String::from("nested too deep")) < 0 { return 312; }
+    0
+}
+
+fn check_held_collections() -> i32 [io] {
+    let empty: String = String::from("HasVec { v: { let __replay_v: Vec<i64> = Vec::new(); __replay_v } }");
+    if lit_of(String::from("fhv"), String::from("")) != empty { return 331; }
+    let one: String = String::from("HasVec { v: { let __replay_v: Vec<i64> = Vec::new(); __replay_v.push(1); __replay_v } }");
+    if lit_of(String::from("fhv"), String::from("h.0=0,h.0.len=1,h.0[0]=1")) != one { return 332; }
+    let no_len: ReplayArg = agg(String::from("fhv"), 0, String::from("h.0=0"));
+    if index_of(no_len.reason, String::from("does not list its length")) < 0 { return 333; }
+    let alias: ReplayArg = agg(String::from("faliasp"), 1, String::from("v.addr=-2,h.addr=-1,v.len=0,h.0=-2,h.0.len=0"));
+    if index_of(alias.reason, String::from("holds the object of another parameter")) < 0 { return 334; }
+    let owned: String = String::from("v.addr=-2,h.addr=-1,v.len=0,h.0=5,h.0.len=0");
+    if agg(String::from("faliasp"), 1, owned).reason.len() != 0 { return 335; }
+    let text: String = String::from("HasStr { s: { let __replay_s: String = String::from(\"\"); __replay_s.push_byte(97); __replay_s }, n: 3 }");
+    if lit_of(String::from("fstrf"), String::from("h.0=0,h.0.len=1,h.0[0]=97,h.1=3")) != text { return 336; }
+    let blank: String = String::from("HasStr { s: { let __replay_s: String = String::from(\"\"); __replay_s }, n: 0 }");
+    if lit_of(String::from("fstrf"), String::from("")) != blank { return 337; }
+    let vs_empty: String = String::from("HasVs { v: { let __replay_v: Vec<String> = Vec::new(); __replay_v } }");
+    if lit_of(String::from("fvsf"), String::from("h.0=0,h.0.len=0")) != vs_empty { return 338; }
+    if agg(String::from("fvsf"), 0, String::from("h.0=0,h.0.len=1,h.0[0]=0")).reason.len() == 0 { return 339; }
+    if agg(String::from("fwidef"), 0, String::from("h.0=0,h.0.len=1,h.0[0]=5")).reason.len() == 0 { return 340; }
+    if agg(String::from("ffloatf"), 0, String::from("h.0=0,h.0.len=1,h.0[0]=5")).reason.len() == 0 { return 341; }
+    if agg(String::from("fwidef"), 0, String::from("h.0=0,h.0.len=0")).reason.len() != 0 { return 342; }
+    if agg(String::from("fhv"), 0, String::from("h.0=0,h.0.len=9999")).reason.len() == 0 { return 343; }
+    let pair: ReplayArg = agg(String::from("fpairf"), 0, String::from("h.0=0,h.1=4"));
+    if index_of(pair.reason, String::from("is read through memory")) < 0 { return 344; }
+    if lit_of(String::from("fpairf"), String::from("h.0.0=1,h.0.1=2,h.1=4")) != String::from("HasPair { inner: Pair { lo: 1, hi: 2 }, n: 4 }") { return 345; }
+    if index_of(agg(String::from("foptf"), 0, String::from("h.0=0")).reason, String::from("is read through memory")) < 0 { return 346; }
+    if lit_of(String::from("foptf"), String::from("h.0.0=1,h.0.1=6,h.1=2")) != String::from("HasOpt { o: Option::Some(6), n: 2 }") { return 347; }
+    let two: String = String::from("t.0=0,t.0.0=0,t.0.0.len=1,t.0.0[0]=7");
+    if index_of(agg(String::from("ftwo"), 0, two).reason, String::from("is read through memory")) < 0 { return 348; }
     0
 }
 
@@ -532,6 +578,8 @@ fn main() -> i32 [io] {
     if r20 != 0 { return r20; }
     let r21: i32 = check_tag_outside_the_enum();
     if r21 != 0 { return r21; }
+    let r22: i32 = check_held_collections();
+    if r22 != 0 { return r22; }
     let r19: i32 = check_float_vec_elements();
     if r19 != 0 { return r19; }
     0

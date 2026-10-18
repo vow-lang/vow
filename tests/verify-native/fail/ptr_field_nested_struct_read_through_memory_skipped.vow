@@ -1,0 +1,23 @@
+// TEST: replay-skipped a struct held in a field and read through memory has no listed fields
+// TEST: counterexample-fn "get_id"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// `o.inner.id` is read through the address `o.0`: the counterexample lists the address and not the
+// fields of `Inner`. Rebuilding `Inner` from zeros would run the function on a value the model never
+// chose, so the replay reports a skip and not a false `VerifierBug`.
+module PtrFieldNestedStructReadThroughMemorySkipped
+
+struct Inner { id: i64, tag: i64 }
+struct Outer { inner: Inner, n: i64 }
+
+fn get_id(o: Outer) -> i64 vow {
+  ensures: result == 0
+} {
+  o.inner.id
+}
+
+fn main() -> i32 [io] {
+  let o: Outer = Outer { inner: Inner { id: 0, tag: 1 }, n: 2 };
+  print_i64(get_id(o));
+  0
+}

@@ -1,4 +1,3 @@
-// TEST: replay-skipped a Vec held in a struct field is not rebuilt by the replay harness (#1778)
 // TEST: counterexample-fn "last"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
