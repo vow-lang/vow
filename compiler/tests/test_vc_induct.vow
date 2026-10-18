@@ -414,6 +414,28 @@ fn check_vec_written_in_loop() -> i64 {
     0
 }
 
+// A Vec the loop `clear`s or `truncate`s is havocked like one it writes, and since it can
+// end shorter than it began its marker does not say "no shorter".
+fn check_vec_shrunk_in_loop() -> i64 {
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(vec_new_inst(40));
+    let body: Vec<IrInst> = Vec::new();
+    body.push(mk_inst_call_extern(50, ITY_UNIT(), one(40), String::from("__vow_vec_clear")));
+    let cleared: VcInduct = vc_induct_cut(count_up_with(pre, body));
+    if cleared.status != VC_INDUCT_OK() { return 1; }
+    if count_marker(cleared.f, VC_INTERNAL_HAVOC_VEC()) != 1 { return 2; }
+    if block_by_id(cleared.f, 1).insts[1].dv != 0 { return 3; }
+    let pre2: Vec<IrInst> = Vec::new();
+    pre2.push(vec_new_inst(40));
+    let body2: Vec<IrInst> = Vec::new();
+    body2.push(mk_inst_call_extern(50, ITY_UNIT(), pair(40, 0), String::from("__vow_vec_truncate")));
+    let cut: VcInduct = vc_induct_cut(count_up_with(pre2, body2));
+    if cut.status != VC_INDUCT_OK() { return 4; }
+    if count_marker(cut.f, VC_INTERNAL_HAVOC_VEC()) != 1 { return 5; }
+    if block_by_id(cut.f, 1).insts[1].dv != 0 { return 6; }
+    0
+}
+
 // A loop header that opens a region starts with its marker, ahead of the Phis:
 // the havoc of a written Vec lands after the Phis, behind that marker.
 fn check_vec_written_in_region_header() -> i64 {
@@ -814,6 +836,7 @@ fn main() -> i32 {
     if r == 0 { r = check_map_written_in_loop() + 580; if r == 580 { r = 0; } }
     if r == 0 { r = check_map_havoc_refused() + 585; if r == 585 { r = 0; } }
     if r == 0 { r = check_vec_set_pop_in_loop() + 590; if r == 590 { r = 0; } }
+    if r == 0 { r = check_vec_shrunk_in_loop() + 595; if r == 595 { r = 0; } }
     if r == 0 { r = check_agg_written_in_loop() + 600; if r == 600 { r = 0; } }
     if r == 0 { r = check_agg_slots_deduplicated() + 620; if r == 620 { r = 0; } }
     if r == 0 { r = check_agg_param_written_in_loop() + 640; if r == 640 { r = 0; } }

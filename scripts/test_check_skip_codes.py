@@ -37,15 +37,15 @@ class SkipCodeTests(unittest.TestCase):
 
     def test_uncovered_code_is_reported(self):
         out = c.problems(
-            {"alpha", "ir-non-dominating-read"},
-            {"alpha", "ir-non-dominating-read"},
+            {"alpha", "ir-non-dominating-read", "unmodeled-builtin"},
+            {"alpha", "ir-non-dominating-read", "unmodeled-builtin"},
             set(),
         )
         self.assertEqual(len(out), 1)
         self.assertIn("`alpha`", out[0])
 
     def test_exempt_code_needs_no_fixture(self):
-        codes = {"alpha", "ir-non-dominating-read"}
+        codes = {"alpha", "ir-non-dominating-read", "unmodeled-builtin"}
         self.assertEqual(c.problems(codes, codes, {"alpha"}), [])
 
     def test_source_and_adr_must_agree(self):
@@ -56,7 +56,7 @@ class SkipCodeTests(unittest.TestCase):
         self.assertTrue(any("`gamma` is in the ADR" in line for line in out))
 
     def test_fixture_pinning_an_unknown_code_is_reported(self):
-        codes = {"alpha", "ir-non-dominating-read"}
+        codes = {"alpha", "ir-non-dominating-read", "unmodeled-builtin"}
         out = c.problems(codes, codes, {"alpha", "typo"})
         self.assertEqual(len(out), 1)
         self.assertIn("`typo`", out[0])

@@ -225,7 +225,7 @@ fn check_shape_rejections() -> i64 {
     let builtin: Vec<IrInst> = Vec::new();
     builtin.push(mk_inst_arg(0, ITY_PTR(), 0));
     builtin.push(mk_inst_call_extern(1, ITY_U64(), args1(0), String::from("__vow_vec_len")));
-    builtin.push(mk_inst_call_extern(2, ITY_U64(), args1(0), String::from("__vow_vec_clear")));
+    builtin.push(mk_inst_call_extern(2, ITY_U64(), args1(0), String::from("__vow_vec_reserve_in_arena")));
     builtin.push(mk_inst_return(3, 2));
     let to_builtin: IrFunction = one_block(ptr_u64_params(), ITY_U64(), builtin);
     if vc_vec_shape_detail(to_builtin, 8, false) != String::from("Vec passed to an unmodelled builtin") { return 62; }
@@ -334,6 +334,90 @@ fn check_pointer_elements_are_fresh_slots() -> i64 {
     0
 }
 
+// fn f(i: u64) -> i64 { let v = Vec::new(); v.push(1) x pushes; <tail>; v[i] }
+// `tail` is 0 for nothing, 1 for `v.clear()`, 2 for `v.truncate(n)`. Ids are
+// positions, so they are handed out in order.
+fn local_pushes_then(pushes: i64, tail: i64, n: i64) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_U64(), 0));
+    insts.push(mk_inst_const_i64(1, 8));
+    insts.push(mk_inst_const_i64(2, 8));
+    insts.push(mk_inst_call_extern(3, ITY_PTR(), args2(1, 2), String::from("__vow_vec_new")));
+    insts.push(mk_inst_const_i64(4, 1));
+    let mut id: i64 = 5;
+    let mut k: i64 = 0;
+    while k < pushes {
+        insts.push(mk_inst_call_extern(id, ITY_UNIT(), args2(3, 4), String::from("__vow_vec_push_val")));
+        id = id + 1;
+        k = k + 1;
+    }
+    if tail == 1 {
+        insts.push(mk_inst_call_extern(id, ITY_UNIT(), args1(3), String::from("__vow_vec_clear")));
+        id = id + 1;
+    } else if tail == 2 {
+        insts.push(mk_inst_const_i64(id, n));
+        insts.push(mk_inst_call_extern(id + 1, ITY_UNIT(), args2(3, id), String::from("__vow_vec_truncate")));
+        id = id + 2;
+    }
+    insts.push(mk_inst_call_extern(id, ITY_I64(), args2(3, 0), String::from("__vow_vec_get_val")));
+    insts.push(mk_inst_return(id + 1, id));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_U64());
+    one_block(p, ITY_I64(), insts)
+}
+
+// The bounds claim of the final read, rendered: it compares the index with the
+// length the preceding operations left.
+fn read_query(f: IrFunction) -> String {
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return String::from("no single claim"); }
+    render(cs, 0)
+}
+
+fn check_clear_resets_length() -> i64 {
+    let f: IrFunction = local_pushes_then(2, 1, 0);
+    if vc_skip_reason(f).len() != 0 { return 70; }
+    let q: String = read_query(f);
+    if !contains(q, String::from("(bvult p0 #x0000000000000000)")) { return 71; }
+    let before: String = read_query(local_pushes_then(2, 0, 0));
+    if !contains(before, String::from("(bvult p0 #x0000000000000002)")) { return 72; }
+    0
+}
+
+fn check_truncate_shortens() -> i64 {
+    let f: IrFunction = local_pushes_then(3, 2, 2);
+    if vc_skip_reason(f).len() != 0 { return 80; }
+    if !contains(read_query(f), String::from("(bvult p0 #x0000000000000002)")) { return 81; }
+    0
+}
+
+fn check_truncate_is_noop_at_or_past_length() -> i64 {
+    if !contains(read_query(local_pushes_then(3, 2, 10)), String::from("(bvult p0 #x0000000000000003)")) { return 82; }
+    if !contains(read_query(local_pushes_then(3, 2, 3)), String::from("(bvult p0 #x0000000000000003)")) { return 83; }
+    // 2^64 - 1 is an unsigned count: it must not be read as a negative one.
+    if !contains(read_query(local_pushes_then(3, 2, -1)), String::from("(bvult p0 #x0000000000000003)")) { return 84; }
+    0
+}
+
+// fn f(v: Vec<i64>, n: u64, i: u64) -> i64 { v.truncate(n); v[i] }
+fn check_param_truncate_is_unsigned() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_U64(), 1));
+    insts.push(mk_inst_arg(2, ITY_U64(), 2));
+    insts.push(mk_inst_call_extern(3, ITY_UNIT(), args2(0, 1), String::from("__vow_vec_truncate")));
+    insts.push(mk_inst_call_extern(4, ITY_I64(), args2(0, 2), String::from("__vow_vec_get_val")));
+    insts.push(mk_inst_return(5, 4));
+    let p: Vec<i64> = ptr_u64_params();
+    p.push(ITY_U64());
+    let f: IrFunction = one_block(p, ITY_I64(), insts);
+    if vc_skip_reason(f).len() != 0 { return 90; }
+    let q: String = read_query(f);
+    if !contains(q, String::from("bvuge p1 p0_vlen")) { return 91; }
+    if contains(q, String::from("bvsge")) { return 92; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_param_length_is_unconstrained();
     if r == 0 { r = check_pointer_elements_are_fresh_slots(); }
@@ -343,6 +427,10 @@ fn main() -> i32 {
     if r == 0 { r = check_no_vec_stays_bit_vector(); }
     if r == 0 { r = check_frame_travels_in_dv2(); }
     if r == 0 { r = check_shape_rejections(); }
+    if r == 0 { r = check_clear_resets_length(); }
+    if r == 0 { r = check_truncate_shortens(); }
+    if r == 0 { r = check_truncate_is_noop_at_or_past_length(); }
+    if r == 0 { r = check_param_truncate_is_unsigned(); }
     if r == 0 { r = check_float_elements_of_a_parameter(); }
     i64_to_i32_wrap(r)
 }

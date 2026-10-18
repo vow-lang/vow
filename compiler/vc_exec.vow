@@ -716,6 +716,10 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
         vc_define(w, inst, vc_vec_cur_len(vv, s, b));
     } else if kind == VC_VEC_POP() {
         vc_vec_pop(vv, ar, hdr, s, b);
+    } else if kind == VC_VEC_CLEAR() {
+        vc_vec_clear(vv, ar, hdr, s, b);
+    } else if kind == VC_VEC_TRUNCATE() {
+        vc_vec_truncate(vv, ar, hdr, s, b, w.var_of[inst.args[1] as u64]);
     } else if vc_vec_kind_is_wide(kind) {
         vc_walk_wide_call(w, bi, inst, pc, kind, s);
     } else if kind == VC_VEC_PUSH() {

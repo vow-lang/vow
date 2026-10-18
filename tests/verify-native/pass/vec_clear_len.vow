@@ -1,0 +1,42 @@
+module VecClearLen
+
+fn emptied() -> u64 vow {
+  ensures: result == 0
+} {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v.push(2);
+  v.clear();
+  v.len()
+}
+
+fn clear_empty() -> u64 vow {
+  ensures: result == 0
+} {
+  let v: Vec<i64> = Vec::new();
+  v.clear();
+  v.len()
+}
+
+fn refilled() -> i64 vow {
+  ensures: result == 7
+} {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v.clear();
+  v.push(7);
+  v[0]
+}
+
+fn clear_param(v: Vec<i64>) -> u64 vow {
+  ensures: result == 0
+} {
+  v.clear();
+  v.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(emptied() + clear_empty() + clear_param(Vec::new()));
+  print_i64(refilled());
+  0
+}
