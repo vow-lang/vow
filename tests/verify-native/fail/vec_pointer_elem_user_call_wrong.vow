@@ -1,0 +1,24 @@
+// TEST: counterexample-fn "through_call"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The callee reads the object the element names: it holds two values.
+// An element read passed to a user function: the callee is inlined and reads the object.
+module VecPointerElemUserCallWrong
+
+fn size_of(v: Vec<i64>) -> u64 { v.len() }
+
+fn through_call() -> u64 vow {
+  ensures: result == 1
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let a: Vec<i64> = Vec::new();
+  a.push(1);
+  a.push(2);
+  outer.push(a);
+  size_of(outer[0])
+}
+
+fn main() -> i32 [io] {
+  print_u64(through_call());
+  0
+}

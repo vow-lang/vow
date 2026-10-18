@@ -67,7 +67,7 @@ fn VC_OV_MAP() -> i64 { 8 }
 // `loaded` lists the 64-bit terms read out of the memory the function was given (`scanned`
 // is how many of the aggregate model's parameter symbols have been looked at). `tags` is the
 // array of `vc_overlay_tag_start`, -1 until the function allocates an entry. `elems` is true when
-// a pointer stored into a `Vec` is the address of its object (`vc_ptr_store_analyze`) and not a
+// a pointer stored into a `Vec` is the address of its object (`vc_ptr_store_reads_back`) and not a
 // fresh constant.
 struct VcOverlay {
     param: Vec<i64>,

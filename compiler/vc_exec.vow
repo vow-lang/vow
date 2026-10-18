@@ -1036,7 +1036,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         vc_heap_assume(ar, cs.assumed, group_facts[gi]);
         gi = gi + 1;
     }
-    let memory: VcHandleMemory = vc_handle_memory_new(f, tys, ag, vv, ar, hdr, cs.assumed, vc_ptr_store_analyze(f, tys, false).addr);
+    let memory: VcHandleMemory = vc_handle_memory_new(f, tys, ag, vv, ar, hdr, cs.assumed, vc_ptr_store_reads_back(f, tys));
     let w: VcWalk = VcWalk {
         cs: cs,
         fl: fl,
