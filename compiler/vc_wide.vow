@@ -113,6 +113,14 @@ fn vc_wide_read(ar: VcArena, arr: i64, idx: i64) -> i64 {
     vc_tm_app2(ar, VC_OP_CONCAT(), hi, lo)
 }
 
+// The 128-bit value of element `idx` of the collection a struct holds at the address `h`: the
+// two limbs are at the keys `h ++ 2 * idx` and `h ++ 2 * idx + 1` of the array `arr`.
+fn vc_wide_read_held(ar: VcArena, arr: i64, h: i64, idx: i64) -> i64 {
+    let lo: i64 = vc_tm_app2(ar, VC_OP_SELECT(), arr, vc_tm_app2(ar, VC_OP_CONCAT(), h, vc_wide_key(ar, idx, false)));
+    let hi: i64 = vc_tm_app2(ar, VC_OP_SELECT(), arr, vc_tm_app2(ar, VC_OP_CONCAT(), h, vc_wide_key(ar, idx, true)));
+    vc_tm_app2(ar, VC_OP_CONCAT(), hi, lo)
+}
+
 // The array `arr` with element `idx` replaced by the 128-bit term `val`.
 fn vc_wide_write(ar: VcArena, arr: i64, idx: i64, val: i64) -> i64 {
     let lo: i64 = vc_tm_ext(ar, VC_EXT_LOW(), 64, val);

@@ -25,6 +25,7 @@ struct VcHeld {
     len_name: Vec<String>,
     arr: Vec<String>,
     hdr: Vec<i64>,
+    wide: Vec<i64>,
 }
 
 fn vc_held_new() -> VcHeld {
@@ -36,6 +37,7 @@ fn vc_held_new() -> VcHeld {
         len_name: Vec::new(),
         arr: Vec::new(),
         hdr: Vec::new(),
+        wide: Vec::new(),
     }
 }
 
@@ -85,7 +87,21 @@ fn vc_held_note(hd: VcHeld, ag: VcAgg, hp: VcHeap, ar: VcArena, hdr: SmtScript, 
     hd.len_name.push(len_name);
     hd.arr.push(vc_term_text(ar, arr));
     hd.hdr.push(hdr.kinds.len() as i64);
+    hd.wide.push(-1);
     vc_script_define_fun(hdr, len_name, 64, vc_tm_app2(ar, VC_OP_SELECT(), hp.len_arr, h));
+}
+
+// The elements of the held `Vec` at the handle `h` are read as the 128-bit type `ty`: each is
+// two slots of the array, and the counterexample lists it as one value. A handle not noted
+// has no entries to list.
+fn vc_held_mark_wide(hd: VcHeld, ar: VcArena, h: i64, ty: i64) {
+    if ar.kinds[h as u64] != VC_T_VAR() || ar.named[h as u64] >= 0 { return; }
+    let name: String = vc_term_text(ar, h);
+    let mut i: u64 = 0;
+    while i < hd.handle.len() {
+        if hd.handle[i] == name { hd.wide[i] = ty; }
+        i = i + 1;
+    }
 }
 
 // Position of the first noted handle at or after `d` that has a single class, or the number
@@ -102,6 +118,7 @@ fn vc_held_next_listed(hd: VcHeld, d: u64) -> u64 {
 // own, so the enrichment of a counterexample (`vc_vecmodel`) bounds and lists it like one.
 // The lists of a parameter are copies: the held ones must not reach the vector model's.
 fn vc_held_append_vecs(cs: VcClaims, hd: VcHeld) {
+    if vc_held_next_listed(hd, 0) >= hd.handle.len() { return; }
     let param: Vec<i64> = Vec::new();
     let arr: Vec<String> = Vec::new();
     let len: Vec<String> = Vec::new();
@@ -126,7 +143,7 @@ fn vc_held_append_vecs(cs: VcClaims, hd: VcHeld) {
         arr.push(hd.arr[d]);
         len.push(hd.len_name[d]);
         hdr.push(hd.hdr[d]);
-        wide.push(-1);
+        wide.push(hd.wide[d]);
         path.push(hd.path[d]);
         handle.push(hd.handle[d]);
         d = vc_held_next_listed(hd, d + 1);

@@ -414,6 +414,7 @@ fn vc_walk_wide_access(w: VcWalk, bi: u64, inst: IrInst) {
     let b: i64 = bi as i64;
     let r: u64 = inst.args[0] as u64;
     if w.whandle[r] >= 0 {
+        if inst.op == IOP_FIELD_GET() { vc_held_mark_wide(w.memory.held, ar, w.whandle[r], inst.ty); }
         vc_define(w, inst, vc_handle_wide(w.memory, b, w.whandle[r], w.widx[r]));
         return;
     }

@@ -603,6 +603,27 @@ fn check_held_collections_that_are_not_listed() -> i64 {
     0
 }
 
+// A held `Vec` whose element the function reads as a 128-bit integer is listed per element, not
+// per slot: the claims record the element type of the held collection.
+fn check_held_wide_collection() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_arg(1, ITY_U64(), 1));
+    i.push(mk_inst_field_get(2, ITY_I64(), 0, 0));
+    i.push(mk_inst_call_extern(3, ITY_U64(), args1(2), String::from("__vow_vec_len")));
+    i.push(mk_inst_call_extern(4, ITY_PTR(), args2(2, 1), String::from("__vow_vec_get_wide_ptr")));
+    i.push(mk_inst_field_get_wide(5, ITY_I128(), 4, 0));
+    i.push(mk_inst_const_i64(6, 0));
+    i.push(mk_inst(7, IOP_GE(), ITY_BOOL(), args2(3, 6)));
+    i.push(mk_vow(8, IOP_VOW_ENS(), 7, 0));
+    i.push(mk_inst_return(9, 5));
+    let cs: VcClaims = vc_claims(one_block(String::from("w"), ptr_u64_params(), ITY_I128(), i));
+    if cs.vec_handle.len() != 1 || cs.vec_wide.len() != 1 || cs.vec_wide[0] != ITY_I128() { return 102; }
+    let plain: VcClaims = vc_claims(last_op_fn());
+    if plain.vec_wide.len() > 1 || (plain.vec_wide.len() == 1 && plain.vec_wide[0] >= 0) { return 103; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_handle_reads_accepted();
     if r == 0 { r = check_handle_shapes_rejected(); }
@@ -620,5 +641,6 @@ fn main() -> i32 {
     if r == 0 { r = check_direct_string_overlay(); }
     if r == 0 { r = check_held_collections(); }
     if r == 0 { r = check_held_collections_that_are_not_listed(); }
+    if r == 0 { r = check_held_wide_collection(); }
     i64_to_i32_wrap(r)
 }

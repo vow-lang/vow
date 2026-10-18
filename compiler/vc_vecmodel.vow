@@ -127,12 +127,15 @@ fn vc_append_vec_projection(cs: VcClaims, vecs: Vec<i64>, bound: i64, s: SmtScri
         let mut i: i64 = 0;
         while i < bound {
             let name: String = vc_cex_elem_name(cs, vecs[p], i);
-            let mut at: i64 = vc_tm_bv(ar, 64, i, 0);
-            if held.len() > 0 { at = vc_tm_app2(ar, VC_OP_CONCAT(), vc_tm_var(ar, held), at); }
-            let element: i64 = if wide {
-                vc_wide_read(ar, arr, at)
+            let idx: i64 = vc_tm_bv(ar, 64, i, 0);
+            let element: i64 = if wide && held.len() > 0 {
+                vc_wide_read_held(ar, arr, vc_tm_var(ar, held), idx)
+            } else if wide {
+                vc_wide_read(ar, arr, idx)
+            } else if held.len() > 0 {
+                vc_tm_app2(ar, VC_OP_SELECT(), arr, vc_tm_app2(ar, VC_OP_CONCAT(), vc_tm_var(ar, held), idx))
             } else {
-                vc_tm_app2(ar, VC_OP_SELECT(), arr, at)
+                vc_tm_app2(ar, VC_OP_SELECT(), arr, idx)
             };
             vc_script_define_fun(s, name, width, element);
             names.push(name);
