@@ -1,0 +1,29 @@
+// TEST: counterexample-fn "cell"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// The cell at row 1, column 1 is 5, which the postcondition leaves out.
+module VecPointerElemGridSymbolicWrong
+
+fn cell(i: u64, j: u64) -> i64 vow {
+  requires: i < 2 && j < 2
+  ensures: result == 1 || result == 2 || result == 4
+} {
+  let grid: Vec<Vec<i64>> = Vec::new();
+  let r0: Vec<i64> = Vec::new();
+  r0.push(1);
+  r0.push(2);
+  let r1: Vec<i64> = Vec::new();
+  r1.push(4);
+  r1.push(5);
+  grid.push(r0);
+  grid.push(r1);
+  grid[i][j]
+}
+
+fn main() -> i32 [io] {
+  print_i64(cell(0, 0));
+  print_i64(cell(0, 1));
+  print_i64(cell(1, 0));
+  print_i64(cell(1, 1));
+  0
+}

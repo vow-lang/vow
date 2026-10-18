@@ -1,0 +1,21 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The `Vec` in the field is the one stored, so the push made after the store shows: its length is 2.
+module VecPointerElemStructWithVecFieldWrong
+struct Person { age: i64, tags: Vec<i64> }
+fn f() -> u64 vow {
+  ensures: result == 1
+} {
+  let people: Vec<Person> = Vec::new();
+  let t: Vec<i64> = Vec::new();
+  t.push(1);
+  people.push(Person { age: 1, tags: t });
+  t.push(2);
+  let p: Person = people[0];
+  p.tags.len()
+}
+fn main() -> i32 [io] {
+  print_u64(f());
+  0
+}

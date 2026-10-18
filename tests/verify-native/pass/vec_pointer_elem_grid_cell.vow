@@ -1,0 +1,22 @@
+// A matrix built from rows: `grid[1][1]` reads the second element of the second row, a scalar read through the element.
+module VecPointerElemGridCell
+
+fn cell() -> i64 vow {
+  ensures: result == 5
+} {
+  let grid: Vec<Vec<i64>> = Vec::new();
+  let r0: Vec<i64> = Vec::new();
+  r0.push(1);
+  r0.push(2);
+  let r1: Vec<i64> = Vec::new();
+  r1.push(4);
+  r1.push(5);
+  grid.push(r0);
+  grid.push(r1);
+  grid[1][1]
+}
+
+fn main() -> i32 [io] {
+  print_i64(cell());
+  0
+}
