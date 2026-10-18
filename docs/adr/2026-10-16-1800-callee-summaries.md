@@ -114,6 +114,12 @@ inlined callee was decided again in it, though the callee was proven on its own 
   tree is at least a quarter of that, in the waves of `vc_waves`. A callee waits for its needs only
   until they have been tried: one that is not proven costs its callers the shortcut, not their
   decision. A function that went through a wave takes its outcome as its verdict, proven or not.
+  The same function also waits for the callees its inlined call tree holds more than once whose
+  own tree is from a sixteenth of that size up (`vc_trust_repeated`, `vc_trust_repeat_min`): each
+  copy of a small helper repeats the helper's claims. The byte readers of
+  `compiler/module_io.vow` (`reader_read_u8`, `reader_read_u32_le`, `reader_need`) are inlined over
+  and over in `read_inst_data`, whose 55 bounds claims were 1.3 s of one solver session. They are
+  proven once, in the first wave, and the claims of their copies are left to that proof.
 - **A checked operator is decided once per site** within a round (`vc_claim_site_known`).
 - **The last unwinding claim of a round is not asked once the round has found every site the
   inductive proof reaches** (`vc_unwinding_covered`): `sat` leaves the round open, which the proof

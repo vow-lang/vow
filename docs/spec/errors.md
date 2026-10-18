@@ -1557,7 +1557,7 @@ fn remainder(n: u64, d: u64) -> u64 vow {
 ### VerifierBug
 
 **Phase:** Verification (self-hosted `vowc verify --backend native --replay-cex` only)
-**Meaning:** Under the native backend, a counterexample did not replay: the `--mode debug` harness built from its concrete inputs did not reproduce the predicted `VowViolation` (same `vow_id` and blame) or, for a division or remainder abort, the predicted `ArithmeticOverflow` abort, or, for an `unwrap()` abort, the predicted `UnwrapOnNone` abort. The counterexample's `replay` is `"diverged"` or `"aborted"` and `replay_reason` says why. A `"skipped"` replay (a harness limitation such as an unsupported parameter type) never ran and is not reported. The verifier model and the runtime disagree, so this is a defect in the verifier, not in the program. One diagnostic is emitted per such counterexample; the `status` stays `VerifyFailed` and the exit code stays 1.
+**Meaning:** Under the native backend, a counterexample did not replay: the `--mode debug` harness built from its concrete inputs did not reproduce the predicted `VowViolation` (same `vow_id` and blame) or, for a division or remainder abort, the predicted `ArithmeticOverflow` abort, or, for an `unwrap()` abort, the predicted `UnwrapOnNone` abort, or, for a `Vec` index past the end, the predicted `IndexOutOfBounds` abort. The counterexample's `replay` is `"diverged"` or `"aborted"` and `replay_reason` says why. A `"skipped"` replay (a harness limitation such as an unsupported parameter type) never ran and is not reported. The verifier model and the runtime disagree, so this is a defect in the verifier, not in the program. One diagnostic is emitted per such counterexample; the `status` stays `VerifyFailed` and the exit code stays 1.
 
 ```json
 {

@@ -633,6 +633,10 @@ struct VerifyCE {
     var_names: Vec<String>,
     var_values: Vec<String>,
     violation: String,
+    // The verifier-model assertion label behind `violation` ("vec bounds", "string
+    // bounds", ...) when the property is not a contract clause, else "". Not
+    // serialized: `--replay-cex` reads it, because two labels share one violation text.
+    claim: String,
     vow_id: i64,
     source: String,
     source_start: i64,

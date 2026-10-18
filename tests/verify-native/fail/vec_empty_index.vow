@@ -1,4 +1,3 @@
-// TEST: replay-skipped the abort is a bounds check, which the replay harness does not reproduce
 // TEST: counterexample-fn "first"
 // TEST: counterexample-vow-id 4294967293
 // TEST: counterexample-blame None
