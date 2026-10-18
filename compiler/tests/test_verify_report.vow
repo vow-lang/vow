@@ -157,6 +157,7 @@ fn counterexample(vow_id: i64, blame: i64) -> VerifyCE {
         var_names: Vec::new(),
         var_values: Vec::new(),
         violation: String::from("ensures result >= 0"),
+        claim: String::from(""),
         vow_id: vow_id,
         source: String::from("t.vow"),
         source_start: 215,

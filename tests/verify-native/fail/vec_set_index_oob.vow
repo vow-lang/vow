@@ -1,0 +1,21 @@
+// TEST: counterexample-fn "store_at"
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-blame None
+// TEST: counterexample-violation "index out of bounds"
+// A write `v[i] = x` is bounds-checked like a read, and the runtime aborts with
+// IndexOutOfBounds there, so replay confirms the counterexample.
+module VecSetIndexOob
+
+fn store_at(v: Vec<i64>, i: u64, x: i64) vow {
+  ensures: true
+} {
+  v[i] = x;
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  store_at(v, 0, 5);
+  print_i64(v[0]);
+  0
+}
