@@ -711,10 +711,9 @@ fn check_pointer_elements() -> i64 {
     // the Vec is built by the function and the pointer is an object it names: the slot holds
     // its address, so the read is of that object
     if vc_skip_reason(get).len() != 0 { return 3; }
-    let got: VcPtrStores = vc_ptr_store_analyze(get, vc_ty_table(get), false);
-    if !got.addr { return 8; }
+    if !vc_ptr_store_reads_back(get, vc_ty_table(get)) { return 8; }
     // a store nothing reads back keeps the constant
-    if vc_ptr_store_analyze(ptr_push, vc_ty_table(ptr_push), false).addr { return 9; }
+    if vc_ptr_store_reads_back(ptr_push, vc_ty_table(ptr_push)) { return 9; }
     // the same with a Vec parameter: the elements it already holds are memory the caller gave
     let gp: Vec<IrInst> = Vec::new();
     gp.push(mk_inst_arg(40, ITY_PTR(), 0));

@@ -239,7 +239,7 @@ fn vc_handle_for_object(want: i64, have: i64) -> bool {
 
 // A value a `push` or `set` may store: an element (`vc_vec_elem_ok`) or an object
 // (`String`, `Vec`, struct), which the slot holds as a constant or as the address of the object
-// (`vc_ptr_store_analyze` decides, and keeps every function that could mistake it out of the
+// (`vc_ptr_store_detail` decides, and keeps every function that could mistake it out of the
 // subset).
 fn vc_vec_store_ok(ty: i64) -> bool {
     vc_vec_elem_ok(ty) || ty == ITY_PTR()

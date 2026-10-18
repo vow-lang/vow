@@ -77,9 +77,7 @@ struct VcOverlay {
     names: Vec<String>,
     hdr: Vec<i64>,
     class_of: Vec<i64>,
-    built_of: Vec<i64>,
-    declared_of: Vec<i64>,
-    elem_of: Vec<i64>,
+    stored_of: Vec<i64>,
     fresh: i64,
     loaded: Vec<i64>,
     scanned: u64,
@@ -96,9 +94,7 @@ fn vc_overlay_new() -> VcOverlay {
         names: Vec::new(),
         hdr: Vec::new(),
         class_of: Vec::new(),
-        built_of: Vec::new(),
-        declared_of: Vec::new(),
-        elem_of: Vec::new(),
+        stored_of: Vec::new(),
         fresh: 0,
         loaded: Vec::new(),
         scanned: 0,
@@ -127,10 +123,8 @@ fn vc_handle_memory_new(f: IrFunction, tys: Vec<i64>, ag: VcAgg, vv: VcVec, ar: 
     ov.elems = elems;
     if elems || vc_overlay_stores_pointer(f, tys) {
         ov.class_of = vc_overlay_class_table(f, tys);
-        ov.built_of = vc_overlay_built_table(f, tys.len());
-        ov.declared_of = vc_overlay_declared_table(f, tys.len());
+        ov.stored_of = vc_overlay_stored_table(f, tys.len());
     }
-    if elems { ov.elem_of = vc_overlay_elem_table(f, tys.len()); }
     if vc_heap_overlay_needed(f, tys) {
         vc_overlay_enable(ov, ag, ar, hdr, assumed, vc_overlay_params(f, tys, VC_OV_VEC()), vc_overlay_params(f, tys, VC_OV_STRING()), vc_overlay_params(f, tys, VC_OV_STRUCT()));
     }
@@ -334,12 +328,13 @@ fn vc_overlay_built_table(f: IrFunction, n_ids: u64) -> Vec<i64> {
     out
 }
 
-// The class an object stored into a `Vec` is read back as, per value: what `vc_overlay_built_table`
-// gives, a string literal, the `Vec` a `split` returns, a builtin that returns a `Vec` or a `String`
-// by the same kind (`Vec::from_raw_parts_copy`, a clone: both), a pointer parameter as it is
+// The class an object stored into a field or a `Vec` is read back as, per value: what
+// `vc_overlay_built_table` gives, a string literal, the `Vec` that `split` or `hex_decode` returns,
+// a builtin that returns a `Vec` or a `String` by the same kind (`Vec::from_raw_parts_copy`, a
+// clone: both), a pointer parameter as it is
 // declared (`vc_overlay_declared_table`), and a Phi of them. `vc_overlay_class_table` gives an object stored and never used as
 // one no class, and an element read of it would be unconstrained memory.
-fn vc_overlay_elem_table(f: IrFunction, n_ids: u64) -> Vec<i64> {
+fn vc_overlay_stored_table(f: IrFunction, n_ids: u64) -> Vec<i64> {
     let out: Vec<i64> = vc_overlay_built_table(f, n_ids);
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
@@ -349,7 +344,7 @@ fn vc_overlay_elem_table(f: IrFunction, n_ids: u64) -> Vec<i64> {
             let inst: IrInst = blk.insts[ii];
             let k: i64 = vc_inst_vec_kind(inst);
             if inst.id >= 0 && (inst.id as u64) < n_ids {
-                if k == VC_STR_SPLIT() { out[inst.id as u64] = VC_OV_VEC(); }
+                if k == VC_STR_SPLIT() || k == VC_STR_HEX_DECODE() { out[inst.id as u64] = VC_OV_VEC(); }
                 if k == VC_STR_FROM_RAW_PARTS() || k == VC_STR_CLONE() { out[inst.id as u64] = VC_OV_VEC() + VC_OV_STRING(); }
                 if inst.op == IOP_CONST_STR() { out[inst.id as u64] = VC_OV_STRING(); }
             }
@@ -386,23 +381,14 @@ fn vc_overlay_elem_table(f: IrFunction, n_ids: u64) -> Vec<i64> {
     out
 }
 
-// The class an object stored into a field is entered under: the classes it is used as, the class
-// it is declared as when it is a parameter (stored and never used as an object itself, it is read
-// back through a handle all the same), and, when the field belongs to a parameter (whose read back
-// is a read of memory), the class it was built as.
-fn vc_overlay_stored_class(ov: VcOverlay, val: i64, into_param: bool) -> i64 {
-    let mut used: i64 = vc_overlay_class_of(ov, val);
-    if val >= 0 && (val as u64) < ov.declared_of.len() { used = used | ov.declared_of[val as u64]; }
-    if used != 0 || !into_param || val < 0 || (val as u64) >= ov.built_of.len() { return used; }
-    ov.built_of[val as u64]
-}
-
-// The class an object stored into a `Vec` is entered under: the classes it is used as and the
-// class it was built as.
-fn vc_overlay_elem_class(ov: VcOverlay, val: i64) -> i64 {
+// The class an object stored into a field or a `Vec` is entered under: the classes it is used as
+// and the class it is built or declared as (`vc_overlay_stored_table`). An object stored and never
+// used as an operand has no used class, and a read of the field or the element it was stored into
+// would be a read of free memory.
+fn vc_overlay_stored_class(ov: VcOverlay, val: i64) -> i64 {
     let used: i64 = vc_overlay_class_of(ov, val);
-    if val < 0 || (val as u64) >= ov.elem_of.len() { return used; }
-    used | ov.elem_of[val as u64]
+    if val < 0 || (val as u64) >= ov.stored_of.len() { return used; }
+    used | ov.stored_of[val as u64]
 }
 
 // True when some `FieldSet` stores a pointer.

@@ -195,6 +195,16 @@ fn vc_inst_scalar_kind(inst: IrInst) -> i64 {
     VC_SCALAR_NONE()
 }
 
+// The value a pointer store keeps: the stored operand of a `FieldSet`, of a `Vec` `push` and of a
+// `Vec` `set`; -1 for any other instruction. The caller looks at its type.
+fn vc_inst_stored_operand(inst: IrInst) -> i64 {
+    if inst.op == IOP_FIELD_SET() && inst.args.len() == 2 { return inst.args[1]; }
+    let k: i64 = vc_inst_vec_kind(inst);
+    if k == VC_VEC_PUSH() && inst.args.len() == 2 { return inst.args[1]; }
+    if k == VC_VEC_SET() && inst.args.len() == 3 { return inst.args[2]; }
+    -1
+}
+
 // The `Vec` operation an instruction is, or `VC_VEC_NONE`.
 fn vc_inst_vec_kind(inst: IrInst) -> i64 {
     if inst.op != IOP_CALL() || inst.dk != IDATA_CALL_EXTERN() { return VC_VEC_NONE(); }

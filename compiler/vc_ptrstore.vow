@@ -33,32 +33,13 @@ use vc_overlay
 // access on a pointer an element read returned) could turn into a claim about the pushed object.
 // A function with no such use cannot tell.
 
-// The verdict of the gate on a function that stores pointers into `Vec`s: `detail` is "" when
-// the function is inside the subset, else the detail of an `unsupported-opcode` skip. `addr` is
-// true when the slots hold the address of the object (`vc_overlay_addr_of`) and not a fresh
-// constant, which is what a function that reads such a slot back needs.
-struct VcPtrStores {
-    detail: String,
-    addr: bool,
-}
-
-fn vc_ptr_stores_none() -> VcPtrStores {
-    VcPtrStores { detail: String::from(""), addr: false }
-}
-
-fn vc_ptr_stores_refused(detail: String) -> VcPtrStores {
-    VcPtrStores { detail: detail, addr: false }
-}
-
-// "" when no pointer is stored, or none can be read back; else the detail of an
-// `unsupported-opcode` skip.
+// "" when no pointer is stored, or none can be read in a way the model tells from the object
+// that was stored; else the detail of an `unsupported-opcode` skip. A function that reads an element
+// back (`vc_ptr_store_reads_back`) is admitted when `vc_ptr_store_resolvable` says the address model
+// reads it exactly (`vc_walk_slot_word` then stores addresses).
 fn vc_ptr_store_detail(f: IrFunction, tys: Vec<i64>, calls: bool) -> String {
-    vc_ptr_store_analyze(f, tys, calls).detail
-}
-
-fn vc_ptr_store_analyze(f: IrFunction, tys: Vec<i64>, calls: bool) -> VcPtrStores {
     let held: Vec<i64> = vc_ptr_store_held(f, tys);
-    if vc_heap_count_marked(held) == 0 { return vc_ptr_stores_none(); }
+    if vc_heap_count_marked(held) == 0 { return String::from(""); }
     let mut reads: bool = false;
     let mut gets: bool = false;
     let mut bi: u64 = 0;
@@ -70,7 +51,7 @@ fn vc_ptr_store_analyze(f: IrFunction, tys: Vec<i64>, calls: bool) -> VcPtrStore
             let k: i64 = vc_inst_vec_kind(inst);
             if inst.op == IOP_CALL() && inst.args.len() > 0 && held[inst.args[0] as u64] == 1 {
                 if k == VC_VEC_GET() { gets = true; }
-                if k == VC_VEC_SORT() || k == VC_STR_CLONE() { return vc_ptr_stores_refused(String::from("a Vec of pointer elements is copied")); }
+                if k == VC_VEC_SORT() || k == VC_STR_CLONE() { return String::from("a Vec of pointer elements is copied"); }
             }
             if vc_heap_is_read(inst, tys) {
                 reads = true;
@@ -81,12 +62,12 @@ fn vc_ptr_store_analyze(f: IrFunction, tys: Vec<i64>, calls: bool) -> VcPtrStore
     }
     if !gets {
         if reads && !vc_ptr_store_exact(f, held, tys, calls) {
-            return vc_ptr_stores_refused(String::from("a pointer element is stored in a function that reads memory through a handle"));
+            return String::from("a pointer element is stored in a function that reads memory through a handle");
         }
-        return vc_ptr_stores_none();
+        return String::from("");
     }
-    if vc_ptr_store_resolvable(f, held, tys, calls) { return VcPtrStores { detail: String::from(""), addr: true }; }
-    vc_ptr_stores_refused(String::from("a pointer element is read back"))
+    if vc_ptr_store_resolvable(f, held, tys, calls) { return String::from(""); }
+    String::from("a pointer element is read back")
 }
 
 // 1 for every receiver of a pointer store (`push` or `set` of an object), closed over Phis.
@@ -113,7 +94,7 @@ fn vc_ptr_store_held(f: IrFunction, tys: Vec<i64>) -> Vec<i64> {
 }
 
 // True when the function reads an element back out of a `Vec` a pointer is stored into: its slots
-// hold the address of the object (`vc_ptr_store_analyze` has admitted the function on that
+// hold the address of the object (`vc_ptr_store_detail` has admitted the function on that
 // ground). The walk asks this of the unrolled or loop-closed function it executes, which has the
 // instructions of the one the gate checked.
 fn vc_ptr_store_reads_back(f: IrFunction, tys: Vec<i64>) -> bool {
@@ -189,7 +170,8 @@ fn vc_ptr_store_known(f: IrFunction, tys: Vec<i64>, calls: bool) -> Vec<i64> {
 //   - each such `Vec` is one the function created empty (`Vec::new`): every element it holds is
 //     an address the function stored, never one of the memory it was given, which a stored
 //     address is assumed different from (`vc_overlay_tag_start`);
-//   - each pointer stored is a known object with a class (`vc_ptr_store_known`; an object used as
+//   - each pointer stored is a known object with a class (`vc_ptr_store_known`; a `Vec` or `String`
+//     parameter is none of them, since two such parameters may be one value, #1823; an object used as
 //     no `Vec`, `String` or struct, and not built as one, has no state to read back) and nothing
 //     but a pointer is stored (a handle read out of memory is no address the tags know);
 //   - an element read of any other `Vec` is not used as an object, since it may equal the address
@@ -199,7 +181,8 @@ fn vc_ptr_store_resolvable(f: IrFunction, held: Vec<i64>, tys: Vec<i64>, calls: 
     let n_ids: u64 = tys.len();
     let known: Vec<i64> = vc_ptr_store_known(f, tys, calls);
     let classes: Vec<i64> = vc_overlay_class_table(f, tys);
-    let built: Vec<i64> = vc_overlay_elem_table(f, n_ids);
+    let built: Vec<i64> = vc_overlay_stored_table(f, n_ids);
+    let collection: Vec<i64> = vc_ptr_store_collection_params(f, n_ids);
     let foreign: Vec<i64> = dom_fill(n_ids, 0);
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
@@ -217,6 +200,7 @@ fn vc_ptr_store_resolvable(f: IrFunction, held: Vec<i64>, tys: Vec<i64>, calls: 
                     let v: i64 = inst.args[inst.args.len() - 1];
                     if vc_heap_ty(tys, v) != ITY_PTR() || known[v as u64] == 0 { return false; }
                     if known[v as u64] == 1 && classes[v as u64] + built[v as u64] == 0 { return false; }
+                    if collection[v as u64] == 1 { return false; }
                 }
             }
             if inst.op == IOP_CALL() && k == VC_VEC_GET() && inst.id >= 0 && inst.args.len() > 0 && held[inst.args[0] as u64] == 0 {
@@ -239,6 +223,19 @@ fn vc_ptr_store_resolvable(f: IrFunction, held: Vec<i64>, tys: Vec<i64>, calls: 
         bi = bi + 1;
     }
     true
+}
+
+// 1 for every `Vec` or `String` parameter and every Phi that merges one.
+fn vc_ptr_store_collection_params(f: IrFunction, n_ids: u64) -> Vec<i64> {
+    let declared: Vec<i64> = vc_overlay_declared_table(f, n_ids);
+    let out: Vec<i64> = dom_fill(n_ids, 0);
+    let mut v: u64 = 0;
+    while v < n_ids {
+        if (declared[v] & (VC_OV_VEC() | VC_OV_STRING())) != 0 { out[v] = 1; }
+        v = v + 1;
+    }
+    vc_heap_close_over_phis(f, out);
+    out
 }
 
 // True when `inst` reads or writes an object through its first operand: a field access or an
@@ -311,8 +308,7 @@ fn vc_ptr_store_uses_elem(inst: IrInst, elem: Vec<i64>, n_ids: u64) -> bool {
 
 // True when `inst` is a `push` or `set` whose stored value is an object.
 fn vc_ptr_store_value(inst: IrInst, tys: Vec<i64>) -> bool {
-    let k: i64 = vc_inst_vec_kind(inst);
-    if k == VC_VEC_PUSH() && inst.args.len() == 2 { return vc_heap_ty(tys, inst.args[1]) == ITY_PTR(); }
-    if k == VC_VEC_SET() && inst.args.len() == 3 { return vc_heap_ty(tys, inst.args[2]) == ITY_PTR(); }
-    false
+    if inst.op != IOP_CALL() { return false; }
+    let v: i64 = vc_inst_stored_operand(inst);
+    v >= 0 && vc_heap_ty(tys, v) == ITY_PTR()
 }

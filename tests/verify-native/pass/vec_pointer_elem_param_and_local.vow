@@ -1,21 +1,22 @@
-// A parameter `Vec` and a local one stored in the same outer `Vec`: each slot names its own object.
+// A struct parameter and a local struct stored in the same `Vec`: each slot names its own object.
 module VecPointerElemParamAndLocal
 
-fn mix(given: Vec<i64>, k: u64) -> u64 vow {
-  ensures: result == given.len() + 1
+struct Person { age: i64 }
+
+fn mix(given: Person) -> i64 vow {
+  ensures: result == given.age + 1
 } {
-  let outer: Vec<Vec<i64>> = Vec::new();
-  let w: Vec<i64> = Vec::new();
-  w.push(1);
-  outer.push(given);
-  outer.push(w);
-  let a: Vec<i64> = outer[0];
-  let b: Vec<i64> = outer[1];
-  a.len() + b.len()
+  let people: Vec<Person> = Vec::new();
+  let w: Person = Person { age: 1 };
+  people.push(given);
+  people.push(w);
+  let a: Person = people[0];
+  let b: Person = people[1];
+  a.age + b.age
 }
 
 fn main() -> i32 [io] {
-  let g: Vec<i64> = Vec::new();
-  print_u64(mix(g, 0));
+  let g: Person = Person { age: 4 };
+  print_i64(mix(g));
   0
 }

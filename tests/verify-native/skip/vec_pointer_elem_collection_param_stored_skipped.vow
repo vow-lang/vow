@@ -1,0 +1,27 @@
+// TEST: skip-reason unsupported-opcode
+// A `Vec` parameter stored into a `Vec` and read back stays `Skipped`: two `Vec` parameters may be
+// one value (#1823), so a push through `b` shows in the element read back, which the model, that
+// takes the parameters for distinct objects, would not see.
+module VecPointerElemCollectionParamStoredSkipped
+
+fn f(a: Vec<i64>, b: Vec<i64>) -> bool vow {
+  ensures: result
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  outer.push(a);
+  let before: u64 = a.len();
+  b.push(1);
+  let q: Vec<i64> = outer[0];
+  q.len() == before
+}
+
+fn main() -> i32 [io] {
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  if f(a, b) {
+    print_i64(1);
+  } else {
+    print_i64(0);
+  }
+  0
+}

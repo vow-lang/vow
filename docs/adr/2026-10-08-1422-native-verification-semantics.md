@@ -1274,17 +1274,25 @@ object, the mechanism of #1756, for the functions that do read an element back.
   changes its query.
 - **When the address is exact.** The elements of a `Vec` the function created empty (`Vec::new`) are exactly
   what the function stored, and each stored word is the address of an entry with a class (used as a `Vec`,
-  `String` or struct, or built or declared as one: `vc_overlay_built_table`, which also takes the head of a
+  `String` or struct, or built or declared as one: `vc_overlay_stored_table`, which also takes the head of a
   parameter's declared type), so a read through an element names one entry or, in a loop cut, an arbitrary
   address that no entry of the walk's block names and reads the free heap arrays, which only widens the
   states: a `sat` there is never reported (a cut's `sat` is `unknown`) and every bounded round is exact. The
   gate (`vc_ptr_store_resolvable`) states it: every receiver of a pointer store is a `Vec::new` (or a Phi of
   them; a collection read from a struct field is accepted before inlining and checked again after it); every
-  pointer stored is a parameter, an allocation, a literal or a `String`/`Vec` creator with a class, and
+  pointer stored is a struct parameter, an allocation, a literal or a `String`/`Vec` creator with a class
+  (a `Vec` or `String` parameter is refused: two of them may be one value, #1823), and
   nothing else is stored into such a `Vec` (a handle read from another `Vec` is not an address the tags know,
   and tagging it as given memory would make the path infeasible when it is the address of an object the
   function built); and no element read of a `Vec` the function did not store into is used as an object (it
   may equal the address of one the function built).
+- **One class rule for every pointer store.** A pointer stored into a struct field took the classes the
+  object is used as and, for a field of a parameter, the one it was built as; an object stored and never
+  used as an operand had no class, and a read of the field fell to the free heap arrays (found by review: a
+  `String` in a struct pushed into a `Vec` and read back was a false counterexample). A pointer stored into a
+  field and into a `Vec` is now entered under one rule, `vc_overlay_stored_class`: used, built or declared as.
+  It only adds entries, so a query of a function that stores a pointer in a field gains terms (never loses
+  one); the 59 `ptr_field_*`, `heap_*` and `vec_pointer_*` fixtures of `origin/main` report the same JSON.
 - **A parameter stored as a pointer may be another parameter.** Found by review: `fn f(s: Person, t: Person)`
   that pushes `s` into a `Vec` (or stores it in a field), reads `people[0].age`, writes `t.age` and reads
   `people[0].age` again was `Verified` while a caller passing one value twice aborts the postcondition. Two
@@ -1299,8 +1307,9 @@ object, the mechanism of #1756, for the functions that do read an element back.
   `fail/ptr_field_struct_param_alias_wrong.vow` and their `_other_type` passes. Two `Vec` or two `String`
   parameters that are one value are a separate gap, #1823.
 - **What stays `Skipped`** (`a pointer element is read back`, as before): the elements of a `Vec` parameter
-  that also receives a pointer, `outer[i][j]` and any element read of an element (the second `get` has a
-  handle for receiver, whose elements the gate cannot tell from given memory), a handle stored in a
+  that also receives a pointer, an element of an element used as an object (`outer[i][j].len()`: the second
+  `get` has a handle for receiver, whose elements the gate cannot tell from given memory; a scalar
+  `outer[i][j]` is modelled), a `Vec` or `String` parameter stored (#1823), a handle stored in a
   `Vec` of pointers, a pointer stored that is none of the kinds above, and a stored object with no class.
   Copies (`vec_sort`, `pin_to_root`) of a `Vec` that holds a pointer stay `Skipped` (`a Vec of pointer
   elements is copied`).

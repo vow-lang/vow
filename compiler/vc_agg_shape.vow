@@ -95,16 +95,6 @@ fn vc_agg_arg_params(f: IrFunction, n_ids: u64) -> Vec<i64> {
     arg_param
 }
 
-// The value a pointer store keeps: operand 1 of a `FieldSet`, the pushed value of a `Vec` `push`,
-// the stored value of a `Vec` `set`; -1 for any other instruction.
-fn vc_agg_stored_pointer(inst: IrInst) -> i64 {
-    if inst.op == IOP_FIELD_SET() && inst.args.len() == 2 { return inst.args[1]; }
-    let k: i64 = vc_inst_vec_kind(inst);
-    if inst.op == IOP_CALL() && k == VC_VEC_PUSH() && inst.args.len() == 2 { return inst.args[1]; }
-    if inst.op == IOP_CALL() && k == VC_VEC_SET() && inst.args.len() == 3 { return inst.args[2]; }
-    -1
-}
-
 // The ascending indices of the pointer parameters the function reads or writes a
 // field of, or merges in a Phi, when it also writes a field through a parameter
 // or a Phi and there are at least two of them; else none. A caller can pass one
@@ -128,7 +118,7 @@ fn vc_agg_alias_marked(f: IrFunction, n_ids: u64) -> Vec<i64> {
             }
             // A parameter stored as a pointer (into a field, or pushed into or set in a `Vec`) is
             // read back as the address it has, and a write through another parameter reaches it.
-            let stored: i64 = vc_agg_stored_pointer(inst);
+            let stored: i64 = vc_inst_stored_operand(inst);
             if stored >= 0 && (stored as u64) < n_ids && arg_param[stored as u64] >= 0 {
                 marked[arg_param[stored as u64] as u64] = 1;
             }

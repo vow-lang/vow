@@ -1,0 +1,17 @@
+// A `Vec<u8>` a builtin returns (`hex_decode`) pushed into a `Vec` and read back: it is entered as a
+// `Vec`, not as the `String` its creator kind builds, so the read through the element is its own.
+module VecPointerElemHexDecode
+
+fn decoded() -> u64 vow {
+  ensures: result == 2
+} {
+  let outer: Vec<Vec<u8>> = Vec::new();
+  outer.push(hex_decode(String::from("abcd")));
+  let q: Vec<u8> = outer[0];
+  q.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(decoded());
+  0
+}
