@@ -14,6 +14,7 @@ fn sample_ce(source: String) -> VerifyCE {
         var_names: Vec::new(),
         var_values: Vec::new(),
         violation: String::from("ensures result >= 0"),
+        claim: String::from(""),
         vow_id: 1,
         source: source,
         source_start: 215,

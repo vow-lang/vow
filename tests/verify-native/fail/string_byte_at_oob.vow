@@ -1,4 +1,4 @@
-// TEST: replay-skipped the abort is a bounds check, which the replay harness does not reproduce
+// TEST: replay-skipped byte_at past the end returns -1 at runtime, so the replay harness has no abort to confirm
 // TEST: counterexample-fn "unguarded"
 // TEST: counterexample-vow-id 4294967293
 // TEST: counterexample-blame None

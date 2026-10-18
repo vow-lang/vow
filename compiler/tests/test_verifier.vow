@@ -114,6 +114,30 @@ fn check_parse_assert_label_maps_known_labels() -> i64 {
     0
 }
 
+fn check_assert_label_runtime_abort_separates_vec_from_byte_at() -> i64 {
+    if assert_label_runtime_abort(String::from("vec bounds")) != String::from("IndexOutOfBounds") { return 901; }
+    if assert_label_runtime_abort(String::from("string bounds")).len() != 0 { return 902; }
+    if assert_label_runtime_abort(String::from("integer shift count")).len() != 0 { return 903; }
+    if assert_label_runtime_abort(String::from("vec capacity")).len() != 0 { return 904; }
+    if assert_label_runtime_abort(String::from("unwrap-none")) != String::from("UnwrapOnNone") { return 905; }
+    if assert_label_runtime_abort(String::from("division by zero")) != String::from("ArithmeticOverflow") { return 906; }
+    if assert_label_runtime_abort(String::from("division overflow")) != String::from("ArithmeticOverflow") { return 907; }
+    if assert_label_runtime_abort(String::from("")).len() != 0 { return 908; }
+    0
+}
+
+fn check_parse_assert_claim_keeps_the_label_the_description_loses() -> i64 {
+    let vec_out: String = assert_label_output(String::from("vec bounds"));
+    let str_out: String = assert_label_output(String::from("string bounds"));
+    if parse_assert_label(vec_out) != parse_assert_label(str_out) { return 909; }
+    if parse_assert_claim(vec_out) != String::from("vec bounds") { return 910; }
+    if parse_assert_claim(str_out) != String::from("string bounds") { return 911; }
+    if parse_assert_claim(assert_label_output(String::from("vow:0"))).len() != 0 { return 912; }
+    if parse_assert_claim(assert_label_output(String::from("some future guard"))).len() != 0 { return 913; }
+    if parse_assert_claim(String::from("")).len() != 0 { return 914; }
+    0
+}
+
 fn check_parse_assert_label_ignores_vow_and_arith() -> i64 {
     if parse_assert_label(assert_label_output(String::from("vow:0"))).len() != 0 { return 31; }
     if parse_assert_label(assert_label_output(String::from("arith:add:0:0:0"))).len() != 0 { return 32; }
@@ -406,5 +430,9 @@ fn main() -> i32 [io] {
     if r26 != 0 { return i64_to_i32_wrap(r26); }
     let r27: i64 = check_caller_preconditions_projection_demotes_callee_postcondition();
     if r27 != 0 { return i64_to_i32_wrap(r27); }
+    let r28: i64 = check_assert_label_runtime_abort_separates_vec_from_byte_at();
+    if r28 != 0 { return i64_to_i32_wrap(r28); }
+    let r29: i64 = check_parse_assert_claim_keeps_the_label_the_description_loses();
+    if r29 != 0 { return i64_to_i32_wrap(r29); }
     0
 }

@@ -62,6 +62,7 @@ DIRECTIVE_KNOWN_CONTROL_GAP = re.compile(r"^// TEST: known-control-gap (#\d+)$",
 NOT_A_RUNTIME_ABORT = (
     "a shift-count counterexample is a verifier obligation",
     "no runtime abort is predicted for this obligation",
+    "a byte_at counterexample is a verifier obligation",
     "counterexample belongs to a co-emitted callee",
 )
 

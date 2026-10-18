@@ -203,6 +203,8 @@ class ReplayByDesignTest(unittest.TestCase):
             "replay: a shift-count counterexample is a verifier obligation; "
             "the runtime masks the count (8-bit shifts excepted)",
             "replay: no runtime abort is predicted for this obligation",
+            "replay: a byte_at counterexample is a verifier obligation; "
+            "the runtime returns -1 for an index past the end",
             "replay: counterexample belongs to a co-emitted callee; "
             "its inputs are the caller's",
         ):

@@ -957,6 +957,51 @@ run_native sat_zero "$REPLAY_SKIP_SRC" --replay-cex
 expect "replay skipped" "$(field "$RUN_OUT" counterexamples.0.replay)" "skipped"
 expect "skipped replay is not a verifier bug" "$(field "$RUN_OUT" diagnostics.1.error_code)" ""
 
+# a `Vec` index claim replays like a division: the runtime aborts with IndexOutOfBounds
+# for n = 7 (confirmed), and for n = 0, a model the runtime disagrees with, the replay
+# is a verifier bug. A `byte_at` claim carries the same violation text but the runtime
+# returns -1 there, so it is skipped with its own reason and is never a bug.
+REPLAY_VEC_SRC="$TMP_ROOT/replay_vec.vow"
+cat > "$REPLAY_VEC_SRC" <<'SRC'
+module ReplayVec
+
+fn at(n: u64) -> i64 vow {
+  ensures: result == result
+} {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v[n]
+}
+SRC
+run_native sat "$REPLAY_VEC_SRC" --replay-cex
+expect "vec index violation text" "$(field "$RUN_OUT" counterexamples.0.violation)" "index out of bounds"
+expect "vec index replay confirmed" "$(field "$RUN_OUT" counterexamples.0.replay)" "confirmed"
+expect "vec index confirmed is not a bug" "$(field "$RUN_OUT" diagnostics.1.error_code)" ""
+no_leftovers "vec index confirmed"
+
+run_native sat_zero "$REPLAY_VEC_SRC" --replay-cex
+expect "vec index in bounds replay diverged" "$(field "$RUN_OUT" counterexamples.0.replay)" "diverged"
+expect "vec index in bounds is a verifier bug" "$(field "$RUN_OUT" diagnostics.1.error_code)" "VerifierBug"
+no_leftovers "vec index diverged"
+
+REPLAY_BYTE_SRC="$TMP_ROOT/replay_byte.vow"
+cat > "$REPLAY_BYTE_SRC" <<'SRC'
+module ReplayByte
+
+fn at(n: u64) -> i64 vow {
+  ensures: result == result
+} {
+  let s: String = String::from("a");
+  s.byte_at(n)
+}
+SRC
+run_native sat "$REPLAY_BYTE_SRC" --replay-cex
+expect "byte_at violation text" "$(field "$RUN_OUT" counterexamples.0.violation)" "index out of bounds"
+expect "byte_at replay skipped" "$(field "$RUN_OUT" counterexamples.0.replay)" "skipped"
+expect "byte_at skip names the -1 sentinel" "$(field "$RUN_OUT" counterexamples.0.replay_reason)" "replay: a byte_at counterexample is a verifier obligation; the runtime returns -1 for an index past the end"
+expect "byte_at skip is not a bug" "$(field "$RUN_OUT" diagnostics.1.error_code)" ""
+no_leftovers "byte_at skipped"
+
 run_native sat "$REPLAY_SRC"
 expect "no replay without the flag" "$(field "$RUN_OUT" counterexamples.0.replay)" ""
 expect "no bug report without the flag" "$(field "$RUN_OUT" diagnostics.0.error_code)" "VerifierAssertionUnattributed"

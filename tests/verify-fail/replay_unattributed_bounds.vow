@@ -20,6 +20,8 @@
 // synthetic stderr instead (see `classify_replay_run_reports_aborted_when_*`
 // in `vow/src/replay.rs`), since they are pure functions of a string and
 // don't need a live counterexample to exercise.
+// Under `--backend native` the same counterexample replays and is confirmed by the
+// runtime's IndexOutOfBounds abort (#1783); the ESBMC backend still skips it.
 // No `fn main` is present; replay of a file that defines one is covered by replay_confirm_with_main.vow.
 module ReplayUnattributedBounds
 

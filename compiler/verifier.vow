@@ -908,10 +908,9 @@ fn describe_assert_label(label: String) -> String {
     String::from("")
 }
 
-// Parse a verifier-model assertion label that is not a user-authored contract
-// clause, returning the stable description exposed in structured
-// counterexamples. Mirrors `vow_verify::esbmc::extract_assert_label`.
-fn parse_assert_label(output: String) -> String {
+// The verifier-model assertion label of the first violated property that is not a
+// user-authored contract clause (`vec bounds`, `unwrap-none`, ...), or "".
+fn parse_assert_claim(output: String) -> String {
     let lines: Vec<String> = Vec::new();
     split_lines(output, lines);
     let n: u64 = lines.len();
@@ -922,12 +921,35 @@ fn parse_assert_label(output: String) -> String {
         if line == String::from("Violated property:") {
             in_violated = true;
         } else if in_violated {
-            let description: String = describe_assert_label(line);
-            if description.len() > 0 {
-                return description;
+            if describe_assert_label(line).len() > 0 {
+                return line;
             }
         }
         i = i + 1;
+    }
+    String::from("")
+}
+
+// Parse a verifier-model assertion label that is not a user-authored contract
+// clause, returning the stable description exposed in structured
+// counterexamples. Mirrors `vow_verify::esbmc::extract_assert_label`.
+fn parse_assert_label(output: String) -> String {
+    describe_assert_label(parse_assert_claim(output))
+}
+
+// The runtime abort kind a verifier-model assertion label predicts, or "" when the
+// obligation is not a runtime abort. A `Vec` index past the end aborts with
+// `IndexOutOfBounds` in every build mode; a `String.byte_at` past the end returns
+// `-1` and a shift count is masked, so neither predicts an abort.
+fn assert_label_runtime_abort(label: String) -> String {
+    if label == String::from("unwrap-none") {
+        return String::from("UnwrapOnNone");
+    }
+    if label == String::from("division by zero") || label == String::from("division overflow") {
+        return String::from("ArithmeticOverflow");
+    }
+    if label == String::from("vec bounds") {
+        return String::from("IndexOutOfBounds");
     }
     String::from("")
 }
