@@ -1280,8 +1280,8 @@ object, the mechanism of #1756, for the functions that do read an element back.
   gate (`vc_ptr_store_resolvable`) states it: every receiver of a pointer store is a `Vec::new` (or a Phi of
   them; a collection read from a struct field is accepted before inlining and checked again after it); every
   pointer stored is a struct parameter, an allocation, a literal or a `String`/`Vec` creator with a class
-  (a `Vec` or `String` parameter is refused, wherever it is stored, a field included: two of them may be one
-  value, #1823), and
+  (a `Vec` or `String` parameter is refused, stored in a field or a slot, and so is one whose declared
+  type is not recorded: two of them may be one value, #1823), and
   nothing else is stored into such a `Vec` (a handle read from another `Vec` is not an address the tags know,
   and tagging it as given memory would make the path infeasible when it is the address of an object the
   function built); and no element read of a `Vec` the function did not store into is used as an object (it
