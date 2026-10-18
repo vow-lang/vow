@@ -297,6 +297,55 @@ fn check_swap() -> i64 {
     0
 }
 
+fn applies(fns: Vec<IrFunction>, f: IrFunction, budget: i64) -> bool {
+    vc_summary_applies(fns, vc_fn_index_table(fns), dom_fill(fns.len(), -1), f, budget)
+}
+
+fn check_summary_applies() -> i64 {
+    let m: IrModule = module_of(caller_of(6), contracted_writer());
+    let fns: Vec<IrFunction> = m.functions;
+    // above the budget summaries can change what the caller is inlined into, within it they cannot
+    if !applies(fns, fns[0], 100) { return 1; }
+    if applies(fns, fns[0], 100000) { return 2; }
+    if applies(fns, fns[1], 100000) { return 3; }
+    // a function that is not in the module is not asked about
+    let stray: IrFunction = mk_function(9, String::from("stray"), ptr_params2(), ITY_UNIT(), one(mk_block(0, Vec::new())));
+    if applies(fns, stray, 1) { return 4; }
+    0
+}
+
+// The reason the second plan gives is the one a full gate with the summaries gives.
+fn retrust_matches_full(m: IrModule, ids: Vec<i64>, budget: i64) -> bool {
+    let fns: Vec<IrFunction> = m.functions;
+    let idx_of: Vec<i64> = vc_fn_index_table(fns);
+    let mut fi: u64 = 0;
+    while fi < fns.len() {
+        let before: String = vc_module_skip_reason_trusted(fns[fi], m, Vec::new(), budget);
+        let again: String = vc_module_skip_reason_retrust(fns, idx_of, dom_fill(fns.len(), -1), fns[fi], m, ids, budget, before);
+        if again != vc_module_skip_reason_trusted(fns[fi], m, ids, budget) { return false; }
+        fi = fi + 1;
+    }
+    true
+}
+
+fn check_retrust() -> i64 {
+    let m: IrModule = module_of(caller_of(6), contracted_writer());
+    let fns: Vec<IrFunction> = m.functions;
+    let idx_of: Vec<i64> = vc_fn_index_table(fns);
+    let ids: Vec<i64> = Vec::new();
+    ids.push(1);
+    if !retrust_matches_full(m, ids, 100) { return 1; }
+    if !retrust_matches_full(m, ids, 100000) { return 2; }
+    // the caller is too large to inline at 100 and fits once the callee is summarised
+    let big: String = vc_module_skip_reason_trusted(fns[0], m, Vec::new(), 100);
+    if vc_reason_code(big) != VC_SKIP_INLINING_TOO_LARGE() { return 3; }
+    if vc_module_skip_reason_retrust(fns, idx_of, dom_fill(fns.len(), -1), fns[0], m, ids, 100, big).len() != 0 { return 4; }
+    // with nothing trusted nothing can change, and inside the budget the earlier decision stands
+    if vc_module_skip_reason_retrust(fns, idx_of, dom_fill(fns.len(), -1), fns[0], m, Vec::new(), 100, big) != big { return 5; }
+    if vc_module_skip_reason_retrust(fns, idx_of, dom_fill(fns.len(), -1), fns[0], m, ids, 100000, String::from("kept")) != String::from("kept") { return 6; }
+    0
+}
+
 fn vec_len_inst(id: i64, v: i64) -> IrInst {
     mk_inst_call_extern(id, ITY_U64(), args1(v), String::from("__vow_vec_len"))
 }
@@ -382,6 +431,8 @@ fn main() -> i32 {
     if r == 0 { let d: i64 = check_user_havoc_rejected(); if d != 0 { r = 1100 + d; } }
     if r == 0 { let d: i64 = check_inert_without_trust(); if d != 0 { r = 800 + d; } }
     if r == 0 { let d: i64 = check_swap(); if d != 0 { r = 900 + d; } }
+    if r == 0 { let d: i64 = check_summary_applies(); if d != 0 { r = 1300 + d; } }
+    if r == 0 { let d: i64 = check_retrust(); if d != 0 { r = 1400 + d; } }
     if r == 0 { let d: i64 = check_ids_text(); if d != 0 { r = 1000 + d; } }
     if r == 0 { let d: i64 = check_alias_risk_of_collection_parameters(); if d != 0 { r = 1200 + d; } }
     i64_to_i32_wrap(r)

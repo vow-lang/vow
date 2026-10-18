@@ -76,6 +76,7 @@ struct VcAgg {
     ps_path: Vec<String>,
     al_params: Vec<i64>,
     al_ids: Vec<i64>,
+    al_keys: Vec<String>,
     junk: i64,
 }
 
@@ -105,6 +106,7 @@ fn vc_agg_new(fl: VcFlow) -> VcAgg {
         ps_path: Vec::new(),
         al_params: Vec::new(),
         al_ids: Vec::new(),
+        al_keys: Vec::new(),
         junk: 0,
     }
 }
@@ -274,9 +276,11 @@ fn vc_agg_write_phi(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, 
 fn vc_agg_write_aliased(ag: VcAgg, ar: VcArena, hdr: SmtScript, pos: i64, idx: i64, sort: i64, term: i64, pc: i64) {
     let mut i: i64 = 0;
     while i < ag.al_params.len() as i64 {
-        let o: i64 = vc_agg_param(ag, ag.al_params[i as u64]);
-        let at: i64 = { if i == pos { pc } else { vc_flow_and(ag.fl, ar, hdr, pc, vc_agg_same_object(ag, ar, hdr, pos, i)) } };
-        vc_agg_write_one(ag, ar, hdr, o, idx, sort, term, at);
+        if vc_agg_same_group(ag, pos, i) {
+            let o: i64 = vc_agg_param(ag, ag.al_params[i as u64]);
+            let at: i64 = { if i == pos { pc } else { vc_flow_and(ag.fl, ar, hdr, pc, vc_agg_same_object(ag, ar, hdr, pos, i)) } };
+            vc_agg_write_one(ag, ar, hdr, o, idx, sort, term, at);
+        }
         i = i + 1;
     }
 }
@@ -375,10 +379,14 @@ fn vc_agg_child_symbol(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i6
 }
 
 // Declares the identity of each parameter in `params` (ascending indices of the
-// parameters that may be one object), when there is more than one. 8 bits tell
-// up to 256 parameters apart, 64 any more.
-fn vc_agg_enable_alias(ag: VcAgg, ar: VcArena, hdr: SmtScript, params: Vec<i64>) {
-    if params.len() < 2 { return; }
+// parameters that may be one object), when there is more than one; `keys` is the
+// type group of each (`vc_agg_alias_keys`). Returns the Bool terms the caller must
+// assume: the identities of parameters of different groups differ, so equal
+// identities always mean one group. 8 bits tell up to 256 parameters apart, 64
+// any more.
+fn vc_agg_enable_alias(ag: VcAgg, ar: VcArena, hdr: SmtScript, params: Vec<i64>, keys: Vec<String>) -> Vec<i64> {
+    let facts: Vec<i64> = Vec::new();
+    if params.len() < 2 { return facts; }
     let sort: i64 = { if params.len() <= 256 { 8 } else { 64 } };
     let ty: i64 = { if sort == 8 { ITY_U8() } else { ITY_U64() } };
     let mut i: u64 = 0;
@@ -386,8 +394,22 @@ fn vc_agg_enable_alias(ag: VcAgg, ar: VcArena, hdr: SmtScript, params: Vec<i64>)
         ag.al_ids.push(vc_agg_param_symbol(ag, ar, hdr, params[i], VC_ALIAS_SLOT(), sort));
         ag.ps_ty[ag.ps_ty.len() - 1] = ty;
         ag.al_params.push(params[i]);
+        ag.al_keys.push(keys[i]);
+        let mut j: i64 = 0;
+        while j < i as i64 {
+            if !vc_agg_same_group(ag, j, i as i64) {
+                facts.push(vc_tm_app1(ar, VC_OP_NOT(), vc_tm_app2(ar, VC_OP_EQ(), ag.al_ids[j as u64], ag.al_ids[i])));
+            }
+            j = j + 1;
+        }
         i = i + 1;
     }
+    facts
+}
+
+// True when the aliasable parameters at positions `i` and `j` have one type group.
+fn vc_agg_same_group(ag: VcAgg, i: i64, j: i64) -> bool {
+    ag.al_keys[i as u64] == ag.al_keys[j as u64]
 }
 
 // Position of parameter `k` among the aliasable ones, or -1.
@@ -402,6 +424,7 @@ fn vc_agg_alias_pos(ag: VcAgg, k: i64) -> i64 {
 
 // The Bool term "the aliasable parameters at positions `i` and `j` are one object".
 fn vc_agg_same_object(ag: VcAgg, ar: VcArena, hdr: SmtScript, i: i64, j: i64) -> i64 {
+    if !vc_agg_same_group(ag, i, j) { return vc_tm_bool_const(ar, false); }
     vc_flow_name(ag.fl, ar, hdr, VC_SORT_BOOL(), vc_tm_app2(ar, VC_OP_EQ(), ag.al_ids[i as u64], ag.al_ids[j as u64]))
 }
 
@@ -425,8 +448,10 @@ fn vc_agg_param_initial(ag: VcAgg, ar: VcArena, hdr: SmtScript, k: i64, idx: i64
     let mut acc: i64 = vc_agg_own_symbol(ag, ar, hdr, k, idx, sort);
     let mut j: i64 = pos - 1;
     while j >= 0 {
-        let first: i64 = vc_agg_own_symbol(ag, ar, hdr, ag.al_params[j as u64], idx, sort);
-        acc = vc_tm_app3(ar, VC_OP_ITE(), vc_agg_same_object(ag, ar, hdr, j, pos), first, acc);
+        if vc_agg_same_group(ag, j, pos) {
+            let first: i64 = vc_agg_own_symbol(ag, ar, hdr, ag.al_params[j as u64], idx, sort);
+            acc = vc_tm_app3(ar, VC_OP_ITE(), vc_agg_same_object(ag, ar, hdr, j, pos), first, acc);
+        }
         j = j - 1;
     }
     if pos > 0 { vc_flow_name(ag.fl, ar, hdr, sort, acc) } else { acc }

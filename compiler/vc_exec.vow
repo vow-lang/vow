@@ -1006,7 +1006,13 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
     let ag: VcAgg = vc_agg_new(fl);
     let vv: VcVec = vc_vec_new_state(fl, ar, nb);
     vv.content = vc_str_reads_bytes(f);
-    vc_agg_enable_alias(ag, ar, hdr, vc_agg_alias_params(f, tys.len()));
+    let alias_params: Vec<i64> = vc_agg_alias_params(f, tys.len());
+    let group_facts: Vec<i64> = vc_agg_enable_alias(ag, ar, hdr, alias_params, vc_agg_alias_keys(f, alias_params));
+    let mut gi: u64 = 0;
+    while gi < group_facts.len() {
+        vc_heap_assume(ar, cs.assumed, group_facts[gi]);
+        gi = gi + 1;
+    }
     let memory: VcHandleMemory = vc_handle_memory_new(f, tys, ag, vv, ar, hdr, cs.assumed);
     let w: VcWalk = VcWalk {
         cs: cs,

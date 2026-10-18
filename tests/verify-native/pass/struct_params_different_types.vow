@@ -1,0 +1,21 @@
+// TEST: category model-drift
+// TEST: esbmc-model-artifact fn="distinct_ok" blame=Callee vow_id=0 "ESBMC's C model keeps every struct parameter at the same heap slot, so two parameters of different types are one object and the second write overwrites the first; no caller can pass one object for two parameters of different types, so the claim holds at runtime"
+// Two struct parameters of different types are never one object, whatever the function
+// writes (#1802).
+module StructParamsDifferentTypes
+
+struct P { x: i64 }
+struct Q { x: i64 }
+
+fn distinct_ok(p: P, q: Q) -> bool vow {
+  ensures: result
+} {
+  p.x = 1;
+  q.x = 2;
+  p.x == 1 && q.x == 2
+}
+
+fn main() -> i32 [io] {
+  print_i64(if distinct_ok(P { x: 0 }, Q { x: 0 }) { 1 } else { 0 });
+  0
+}

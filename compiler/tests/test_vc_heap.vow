@@ -388,7 +388,8 @@ fn check_direct_handle_overlays() -> i64 {
     let fl: VcFlow = vc_flow_new(2, tys.len());
     let ag: VcAgg = vc_agg_new(fl);
     let vv: VcVec = vc_vec_new_state(fl, ar, 2);
-    vc_agg_enable_alias(ag, ar, hdr, vc_agg_alias_params(f, tys.len()));
+    let alias_params: Vec<i64> = vc_agg_alias_params(f, tys.len());
+    vc_agg_enable_alias(ag, ar, hdr, alias_params, vc_agg_alias_keys(f, alias_params));
     let mem: VcHandleMemory = vc_handle_memory_new(f, tys, ag, vv, ar, hdr, assumed);
     if vc_handle_memory_used(mem) { return 70; }
     let before: u64 = hdr.kinds.len();
@@ -431,7 +432,8 @@ fn check_direct_string_overlay() -> i64 {
     let fl: VcFlow = vc_flow_new(1, tys.len());
     let ag: VcAgg = vc_agg_new(fl);
     let vv: VcVec = vc_vec_new_state(fl, ar, 1);
-    vc_agg_enable_alias(ag, ar, hdr, vc_agg_alias_params(f, tys.len()));
+    let alias_params: Vec<i64> = vc_agg_alias_params(f, tys.len());
+    vc_agg_enable_alias(ag, ar, hdr, alias_params, vc_agg_alias_keys(f, alias_params));
     let mem: VcHandleMemory = vc_handle_memory_new(f, tys, ag, vv, ar, hdr, assumed);
     let h: i64 = vc_tm_var(ar, String::from("h"));
     let idx: i64 = vc_tm_var(ar, String::from("i"));

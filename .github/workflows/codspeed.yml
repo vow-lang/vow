@@ -1,0 +1,45 @@
+name: CodSpeed
+
+# Compiler pipeline benchmarks (vow-codegen/benches/pipeline.rs) measured with
+# CodSpeed's CPU simulation instrument. Results are reported on PRs and tracked
+# on main at https://app.codspeed.io/vow-lang/vow.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Lets CodSpeed trigger backtest runs to build initial history.
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  benchmarks:
+    name: Run benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write # OIDC authentication with CodSpeed
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-codspeed@5.0.3
+      - name: Build the benchmark target(s)
+        run: cargo codspeed build -m simulation -p vow-codegen
+      - name: Run the benchmarks
+        uses: CodSpeedHQ/action@821a40cd6c80e3cfe387caf55668287addd808da # v5.5.0
+        with:
+          mode: simulation
+          run: cargo codspeed run -p vow-codegen

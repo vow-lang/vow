@@ -20,6 +20,8 @@ fn sample_module() -> IrModule {
     f.params.push(ITY_PTR());
     f.param_names.push(String::from("x"));
     f.param_names.push(String::from("p"));
+    f.param_keys.push(String::from(""));
+    f.param_keys.push(String::from("Outer"));
     let entry: IrVowEntry = IrVowEntry {
         id: 3,
         description: String::from("x > 0"),
