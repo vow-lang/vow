@@ -1,0 +1,23 @@
+// TEST: replay-skipped a Vec or String held in a struct field is not rebuilt by the replay harness (#1778)
+// TEST: counterexample-fn "first_byte"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value l.0.len 1
+// TEST: counterexample-value l.0[0] 97
+// The first byte of the String in `l.text` is whatever it is, so it can be 97.
+module HeapStringFieldByteWrong
+
+struct Label { text: String, n: i64 }
+
+fn first_byte(l: Label) -> i64 vow {
+  requires: l.text.len() > 0
+  ensures: result != 97
+} {
+  l.text.byte_at(0)
+}
+
+fn main() -> i32 [io] {
+  let l: Label = Label { text: String::from("a"), n: 1 };
+  print_i64(first_byte(l));
+  0
+}

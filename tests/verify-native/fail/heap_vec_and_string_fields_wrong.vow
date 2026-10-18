@@ -1,0 +1,26 @@
+// TEST: replay-skipped a Vec or String held in a struct field is not rebuilt by the replay harness (#1778)
+// TEST: counterexample-fn "pick"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value r.0.len 1
+// TEST: counterexample-value r.1.len 1
+// TEST: counterexample-value r.0[0] 4
+// TEST: counterexample-value r.1[0] 0
+// A struct that holds a Vec and a String lists each under the path of its own slot.
+module HeapVecAndStringFieldsWrong
+
+struct Rec { items: Vec<i64>, text: String }
+
+fn pick(r: Rec) -> i64 vow {
+  requires: r.items.len() > 0 && r.text.len() > 0 && r.text.byte_at(0) == 0
+  ensures: result != 4
+} {
+  r.items[0] + r.text.byte_at(0)
+}
+
+fn main() -> i32 [io] {
+  let r: Rec = Rec { items: Vec::new(), text: String::from("a") };
+  r.items.push(1);
+  print_i64(pick(r));
+  0
+}

@@ -1,0 +1,27 @@
+// TEST: replay-skipped a Vec held in a struct field is not rebuilt by the replay harness (#1778)
+// TEST: counterexample-fn "second"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value b.0.len 2
+// TEST: counterexample-value b.0[1] 7
+// A held Vec of 128-bit integers lists one entry per element, not one per 64-bit slot: `b.0[1]` is
+// the second element, whose two limbs are the slots 2 and 3 of the array.
+module HeapVecWideFieldSecondElementWrong
+
+struct Bag { items: Vec<i128>, tag: i64 }
+
+fn second(b: Bag) -> i128 vow {
+  requires: b.items.len() > 1u64
+  ensures: result != 7i128
+} {
+  b.items[1]
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i128> = Vec::new();
+  v.push(1i128);
+  v.push(2i128);
+  let b: Bag = Bag { items: v, tag: 0 };
+  let r: i128 = second(b);
+  0
+}

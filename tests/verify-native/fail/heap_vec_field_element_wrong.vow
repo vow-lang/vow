@@ -1,0 +1,24 @@
+// TEST: replay-skipped a Vec held in a struct field is not rebuilt by the replay harness (#1778)
+// TEST: counterexample-fn "first"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value b.0.len 1
+// TEST: counterexample-value b.0[0] 42
+// The first element of the Vec in `b.items` is whatever it is, so it can be 42.
+module HeapVecFieldElementWrong
+
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn first(b: Bag) -> i64 vow {
+  requires: b.items.len() > 0
+  ensures: result != 42
+} {
+  b.items[0]
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), tag: 1 };
+  b.items.push(7);
+  print_i64(first(b));
+  0
+}

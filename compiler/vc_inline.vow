@@ -280,9 +280,12 @@ fn vc_inst_jump(sp: VcSplice, target: i64) -> IrInst {
     ir_inst_new(vc_fresh_val(sp), IOP_JUMP(), ITY_UNIT(), Vec::new(), IDATA_JUMP_TARGET(), target, 0, String::from(""))
 }
 
-// The continuation block of a call: a Unit constant or the result Phi under the
-// call's own id.
-fn vc_new_continuation(sp: VcSplice, blk_id: i64, ret_id: i64, ty: i64) -> IrBlock {
+// Appends the continuation block of a call: a Unit constant or the result Phi under the
+// call's own id. The splice builders hand blocks to each other by their index in `sp.blocks`
+// and never return one: a block that is both returned and pushed into `sp` has two
+// destinations, and region inference then places it in the root region, which no run ever
+// frees.
+fn vc_new_continuation(sp: VcSplice, blk_id: i64, ret_id: i64, ty: i64) {
     let cont: IrBlock = ir_block_new(blk_id);
     if ty == ITY_UNIT() {
         cont.insts.push(ir_inst_new(ret_id, IOP_CONST_UNIT(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from("")));
@@ -290,7 +293,6 @@ fn vc_new_continuation(sp: VcSplice, blk_id: i64, ret_id: i64, ty: i64) -> IrBlo
         cont.insts.push(ir_inst_new(ret_id, IOP_PHI(), ty, Vec::new(), IDATA_NONE(), 0, 0, String::from("")));
     }
     sp.blocks.push(cont);
-    cont
 }
 
 // Values of the callee's parameter reads, mapped to the call's arguments.
@@ -314,9 +316,10 @@ fn vc_param_subst(callee: IrFunction, call: IrInst, sub: Vec<i64>, vbase: i64) -
     out
 }
 
-// Splices the call `call` made from frame `frame`; `cur` is the block it sits
-// in. Returns the continuation block the caller goes on appending to.
-fn vc_splice_call(sp: VcSplice, frame: i64, sub: Vec<i64>, vbase: i64, cur: IrBlock, call: IrInst) -> IrBlock {
+// Splices the call `call` made from frame `frame`; `cur` is the index in `sp.blocks` of the
+// block it sits in. Returns the index of the continuation block the caller goes on appending
+// to.
+fn vc_splice_call(sp: VcSplice, frame: i64, sub: Vec<i64>, vbase: i64, cur: u64, call: IrInst) -> u64 {
     let ci: i64 = vc_callee_index(sp.idx_of, call.dv);
     if ci < 0 || sp.fns[ci as u64].blocks.len() == 0 {
         sp.bad = true;
@@ -338,14 +341,17 @@ fn vc_splice_call(sp: VcSplice, frame: i64, sub: Vec<i64>, vbase: i64, cur: IrBl
     sp.next_blk = cont_id + 1;
     let ret_id: i64 = vc_map_val(sub, vbase, call.id);
     let entry: IrBlock = callee.blocks[0];
-    cur.insts.push(vc_inst_jump(sp, cbbase + entry.id));
+    let from: IrBlock = sp.blocks[cur];
+    from.insts.push(vc_inst_jump(sp, cbbase + entry.id));
     vc_splice_fn(sp, callee, k, csub, cvbase, cbbase, cont_id, ret_id, call.ty == ITY_UNIT());
-    vc_new_continuation(sp, cont_id, ret_id, call.ty)
+    vc_new_continuation(sp, cont_id, ret_id, call.ty);
+    sp.blocks.len() - 1
 }
 
 // A `Return` of a callee copy: feed the call's Phi, then continue after the call.
 // A Unit result has a constant, not a Phi: nothing to feed.
-fn vc_splice_return(sp: VcSplice, cur: IrBlock, inst: IrInst, sub: Vec<i64>, vbase: i64, ret_blk: i64, ret_id: i64, ret_unit: bool) {
+fn vc_splice_return(sp: VcSplice, at: u64, inst: IrInst, sub: Vec<i64>, vbase: i64, ret_blk: i64, ret_id: i64, ret_unit: bool) {
+    let cur: IrBlock = sp.blocks[at];
     if inst.args.len() > 0 && !ret_unit {
         let feed: Vec<i64> = Vec::new();
         feed.push(vc_map_val(sub, vbase, inst.args[0]));
@@ -365,19 +371,21 @@ fn vc_splice_fn(sp: VcSplice, g: IrFunction, frame: i64, sub: Vec<i64>, vbase: i
     let mut bi: u64 = 0;
     while bi < g.blocks.len() {
         let src: IrBlock = g.blocks[bi];
-        let mut cur: IrBlock = ir_block_new(bbase + src.id);
-        sp.blocks.push(cur);
+        sp.blocks.push(ir_block_new(bbase + src.id));
+        let mut at: u64 = sp.blocks.len() - 1;
         let mut ii: u64 = 0;
         while ii < src.insts.len() {
             let inst: IrInst = src.insts[ii];
             if vc_is_user_call(inst) {
-                cur = vc_splice_call(sp, frame, sub, vbase, cur, inst);
+                at = vc_splice_call(sp, frame, sub, vbase, at, inst);
             } else if root {
+                let cur: IrBlock = sp.blocks[at];
                 cur.insts.push(inst);
             } else if inst.op == IOP_RETURN() {
-                vc_splice_return(sp, cur, inst, sub, vbase, ret_blk, ret_id, ret_unit);
+                vc_splice_return(sp, at, inst, sub, vbase, ret_blk, ret_id, ret_unit);
             } else if inst.op != IOP_GET_ARG() {
                 // A parameter read is replaced by the call's argument (`sub`).
+                let cur: IrBlock = sp.blocks[at];
                 cur.insts.push(vc_map_inst(inst, frame, sub, vbase, bbase));
             }
             ii = ii + 1;
@@ -586,9 +594,10 @@ fn vc_non_modelable_callee(g: IrFunction, why: String) -> String {
 // inlined, else "<code>: <detail>": the one decision the driver takes before a
 // function goes to a worker. A function without calls is decided by
 // `vc_skip_reason` alone. A call tree above the size budget is not skipped: the
-// worker answers `unknown` for it.
+// worker answers `unknown` for it. The answer is a copy: the flattened bodies the decision
+// reads are freed when it returns, not kept for as long as the caller keeps the answer.
 fn vc_module_skip_reason(f: IrFunction, m: IrModule) -> String {
-    vc_module_skip_reason_via(f, m, m, VC_INLINE_SKIP_INSTS())
+    String::from(vc_module_skip_reason_via(f, m, m, VC_INLINE_SKIP_INSTS()))
 }
 
 // The same decision where the flattened body is built from `inl_m`, the module whose

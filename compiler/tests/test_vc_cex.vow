@@ -43,6 +43,8 @@ fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
         vec_hdr: Vec::new(),
         map_vars: Vec::new(),
         vec_wide: Vec::new(),
+        vec_path: Vec::new(),
+        vec_handle: Vec::new(),
     };
     cs.kinds.push(kind);
     cs.frames.push(-1);
@@ -625,6 +627,74 @@ fn check_append_unusable_vec_tails() -> i64 {
     0
 }
 
+// A `Vec` a struct parameter holds in slot 0 is a model entry of its own (`v.0.len`) and its
+// elements follow under the path of the slot (`v.0[0]`), after the parameter's own entries.
+fn held_claims() -> VcClaims {
+    let cs: VcClaims = vec_claims();
+    cs.model_names.push(String::from("p1f0s64_hl"));
+    cs.model_params.push(1);
+    cs.model_paths.push(String::from(".0"));
+    cs.model_tys.push(ITY_U64());
+    cs.model_widths.push(64);
+    cs.model_slots.push(VC_SLOT_VEC_LEN());
+    cs.model_hdr.push(4);
+    cs.model_ambig.push(0);
+    cs.vec_param.push(1);
+    cs.vec_arr.push(String::from("helem"));
+    cs.vec_len.push(String::from("p1f0s64_hl"));
+    cs.vec_hdr.push(4);
+    cs.vec_wide.push(-1);
+    cs.vec_path.push(String::from(""));
+    cs.vec_path.push(String::from(".0"));
+    cs.vec_handle.push(String::from(""));
+    cs.vec_handle.push(String::from("p1f0s64"));
+    cs
+}
+
+fn held_answer(own_len: i64, held_len: i64, per: i64) -> VcSolverAnswer {
+    let values: Vec<i64> = Vec::new();
+    values.push(5);
+    values.push(own_len);
+    values.push(held_len);
+    let mut i: i64 = 0;
+    while i < 2 * per {
+        values.push(100 + i);
+        i = i + 1;
+    }
+    let highs: Vec<i64> = Vec::new();
+    let mut h: u64 = 0;
+    while h < values.len() {
+        highs.push(0);
+        h = h + 1;
+    }
+    VcSolverAnswer { verdict: VC_ANS_SAT(), values: values, highs: highs, raw: String::from("") }
+}
+
+fn check_held_collection_contents() -> i64 {
+    let f: IrFunction = vec_fn();
+    let r: VerifyResult = vc_claim_result(f, held_claims(), 0, held_answer(1, 2, 2));
+    if r.var_names.len() != 6 { return 140; }
+    if r.var_names[1] != String::from("v.len") || r.var_values[1] != String::from("1") { return 141; }
+    if r.var_names[2] != String::from("v.0.len") || r.var_values[2] != String::from("2") { return 142; }
+    if r.var_names[3] != String::from("v[0]") || r.var_values[3] != String::from("100") { return 143; }
+    if r.var_names[4] != String::from("v.0[0]") || r.var_values[4] != String::from("102") { return 144; }
+    if r.var_names[5] != String::from("v.0[1]") || r.var_values[5] != String::from("103") { return 145; }
+    // an empty held collection lists no element, a failed enrichment only the length
+    let empty: VerifyResult = vc_claim_result(f, held_claims(), 0, held_answer(0, 0, 1));
+    if empty.var_names.len() != 3 || empty.var_names[2] != String::from("v.0.len") { return 146; }
+    let bare: VerifyResult = vc_claim_result(f, held_claims(), 0, held_answer(1, 2, 0));
+    if bare.var_names.len() != 3 || bare.var_values[2] != String::from("2") { return 147; }
+    // a held collection declared after the claim's prefix is not part of its answer
+    let late: VcClaims = held_claims();
+    late.header_lens[0] = 4;
+    let early: VcSolverAnswer = held_answer(1, 2, 0);
+    early.values.pop();
+    early.highs.pop();
+    let short: VerifyResult = vc_claim_result(f, late, 0, early);
+    if short.var_names.len() != 2 { return 148; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_sat_ensures();
     if r == 0 { r = check_sat_abort_claims(); }
@@ -639,5 +709,6 @@ fn main() -> i32 {
     if r == 0 { r = check_append_mixed_vec_contents(); }
     if r == 0 { r = check_append_visible_vec_contents(); }
     if r == 0 { r = check_append_unusable_vec_tails(); }
+    if r == 0 { r = check_held_collection_contents(); }
     i64_to_i32_wrap(r)
 }

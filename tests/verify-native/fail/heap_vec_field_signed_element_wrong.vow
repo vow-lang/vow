@@ -1,0 +1,24 @@
+// TEST: replay-skipped a Vec held in a struct field is not rebuilt by the replay harness (#1778)
+// TEST: counterexample-fn "first"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value b.0.len 1
+// TEST: counterexample-value b.0[0] -7
+// A narrow signed element prints as the value the program reads, not as its raw 8-byte slot.
+module HeapVecFieldSignedElementWrong
+
+struct Bag { items: Vec<i32>, tag: i64 }
+
+fn first(b: Bag) -> i32 vow {
+  requires: b.items.len() > 0
+  ensures: result != -7
+} {
+  b.items[0]
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), tag: 1 };
+  b.items.push(7);
+  print_i64(first(b) as i64);
+  0
+}

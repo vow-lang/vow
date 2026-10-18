@@ -22,15 +22,15 @@ use vc_loops
 // body reassigned), that leaves its region, or whose shape is not the one above is not copied,
 // and a summary that does not assume a clause is still sound.
 
+// The last of `blocks` is the one that ends in the assumption.
 struct VcEns {
     ok: bool,
     blocks: Vec<IrBlock>,
     entry: i64,
-    exit_blk: IrBlock,
 }
 
 fn vc_ens_failed() -> VcEns {
-    VcEns { ok: false, blocks: Vec::new(), entry: -1, exit_blk: ir_block_new(-1) }
+    VcEns { ok: false, blocks: Vec::new(), entry: -1 }
 }
 
 struct VcEnsCtx {
@@ -362,12 +362,16 @@ fn vc_ens_extract(ctx: VcEnsCtx, bi: u64, ii: u64, arg_new: Vec<i64>, res_id: i6
     }
     let bad: Vec<i64> = Vec::new();
     bad.push(0);
-    let out: VcEns = VcEns { ok: true, blocks: Vec::new(), entry: bmap[reg.top], exit_blk: ir_block_new(bmap[bi]) };
+    let out: VcEns = VcEns { ok: true, blocks: Vec::new(), entry: bmap[reg.top] };
+    // The block with the assumption is pushed last, so it is kept apart until the loop is done.
+    // Taking it from `last` in the loop (one variable for either source) puts the copy in the
+    // root region.
+    let mut last: IrBlock = ir_block_new(bmap[bi]);
     b = 0;
     while b < nb {
         if reg.inside[b] == 1 {
             let src: IrBlock = g.blocks[b];
-            let dst: IrBlock = { if b == bi { out.exit_blk } else { ir_block_new(bmap[b]) } };
+            let dst: IrBlock = ir_block_new(bmap[b]);
             let mut k: u64 = 0;
             let mut done: bool = false;
             while k < src.insts.len() && !done {
@@ -396,11 +400,11 @@ fn vc_ens_extract(ctx: VcEnsCtx, bi: u64, ii: u64, arg_new: Vec<i64>, res_id: i6
                 }
                 k = k + 1;
             }
-            if b != bi { out.blocks.push(dst); }
+            if b != bi { out.blocks.push(dst); } else { last = dst; }
         }
         b = b + 1;
     }
-    out.blocks.push(out.exit_blk);
+    out.blocks.push(last);
     if bad[0] == 1 { return vc_ens_failed(); }
     out
 }

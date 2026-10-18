@@ -22,7 +22,9 @@ use vc_fmt
 // from verification, and when no model of that length exists the first answer
 // stands and the length alone is reported. A string's high element bits and an
 // unread element are arbitrary in the model; every read of the verifier masks them
-// the way the runtime does.
+// the way the runtime does. A `Vec` or `String` a struct parameter holds in a field the
+// function measures (`vc_held`) is one more such collection: its length is a regular model
+// entry and its elements are read through its handle (`vec_handle`).
 
 fn VC_CEX_VEC_MAX() -> i64 { 512 }
 
@@ -88,8 +90,23 @@ fn vc_cex_float_ty(cs: VcClaims, v: i64) -> i64 {
     -1
 }
 
+// The symbol of the address a held collection is at (`vc_held`), "" for a parameter. The lists
+// of a claim built without any held collection may be shorter than `vec_param`.
+fn vc_cex_vec_handle(cs: VcClaims, v: i64) -> String {
+    if (v as u64) < cs.vec_handle.len() { return cs.vec_handle[v as u64]; }
+    String::from("")
+}
+
+// The path from the parameter to the field a held collection is in, `.<slot>` after any
+// `.<child slot>` steps; "" for a parameter.
+fn vc_cex_vec_path(cs: VcClaims, v: i64) -> String {
+    if (v as u64) < cs.vec_path.len() { return cs.vec_path[v as u64]; }
+    String::from("")
+}
+
 fn vc_cex_elem_name(cs: VcClaims, v: i64, i: i64) -> String {
-    let out: String = String::from(cs.vec_arr[v as u64]);
+    let held: String = vc_cex_vec_handle(cs, v);
+    let out: String = { if held.len() > 0 { String::from(held) } else { String::from(cs.vec_arr[v as u64]) } };
     out.push_str(String::from("_e"));
     out.push_str(i64_to_string(i));
     out
@@ -106,13 +123,20 @@ fn vc_append_vec_projection(cs: VcClaims, vecs: Vec<i64>, bound: i64, s: SmtScri
         let arr: i64 = vc_tm_var(ar, cs.vec_arr[vecs[p] as u64]);
         let wide: bool = vc_cex_wide_ty(cs, vecs[p]) >= 0;
         let width: i64 = if wide { 128 } else { 64 };
+        let held: String = vc_cex_vec_handle(cs, vecs[p]);
+        let handle: i64 = { if held.len() > 0 { vc_tm_var(ar, held) } else { -1 } };
         let mut i: i64 = 0;
         while i < bound {
             let name: String = vc_cex_elem_name(cs, vecs[p], i);
-            let element: i64 = if wide {
-                vc_wide_read(ar, arr, vc_tm_bv(ar, 64, i, 0))
+            let idx: i64 = vc_tm_bv(ar, 64, i, 0);
+            let element: i64 = if wide && handle >= 0 {
+                vc_wide_read_held(ar, arr, handle, idx)
+            } else if wide {
+                vc_wide_read(ar, arr, idx)
+            } else if handle >= 0 {
+                vc_tm_app2(ar, VC_OP_SELECT(), arr, vc_tm_app2(ar, VC_OP_CONCAT(), handle, idx))
             } else {
-                vc_tm_app2(ar, VC_OP_SELECT(), arr, vc_tm_bv(ar, 64, i, 0))
+                vc_tm_app2(ar, VC_OP_SELECT(), arr, idx)
             };
             vc_script_define_fun(s, name, width, element);
             names.push(name);
@@ -270,7 +294,8 @@ fn vc_append_vec_answer_contents(f: IrFunction, cs: VcClaims, k: u64, ans: VcSol
     let mut p: u64 = 0;
     while p < vecs.len() {
         let len: i64 = vc_answer_vec_len(cs, ans, n, vecs[p]);
-        let base: String = vc_source_param_name(f, cs.vec_param[vecs[p] as u64]);
+        let base: String = String::from(vc_source_param_name(f, cs.vec_param[vecs[p] as u64]));
+        base.push_str(vc_cex_vec_path(cs, vecs[p]));
         let elem_ty: i64 = vc_cex_float_ty(cs, vecs[p]);
         if elem_ty >= 0 && len as u64 <= per {
             // Which `Vec` holds floats: an integer-valued float and a raw slot are both digits.

@@ -1,0 +1,26 @@
+// TEST: replay-skipped a Vec held in a struct field is not rebuilt by the replay harness (#1778)
+// TEST: counterexample-fn "last"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value o.1.0.len 2
+// TEST: counterexample-value o.1.0[1] 42
+// A Vec held in a struct that an Option holds is named by the path of slots that reaches it.
+module HeapVecFieldInOptionPayloadWrong
+
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn last(o: Option<Bag>) -> i64 vow {
+  ensures: result != 42
+} {
+  match o {
+    Option::Some(b) => {
+      if b.items.len() == 2u64 { b.items[1] } else { 0 }
+    },
+    Option::None => 0,
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(last(Option::None));
+  0
+}
