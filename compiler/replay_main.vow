@@ -372,12 +372,10 @@ fn replay_zero_text(name: String) -> String {
     String::from("0")
 }
 
-// Parameters that are one object with a field of another. When a function reads memory through
-// a field and writes a parameter, the native counterexample lists the address of each `Vec`,
-// `String` and struct parameter as `<param>.addr`, and a field holding such an object lists the
-// address it holds as its own slot (`b.0` for the first field of `b`): equal values are one
-// object. A `Vec` is a reference in Vow, so the harness binds each parameter once and the field
-// names that binding instead of building a second object.
+// A function that reads memory through a field and writes a parameter has the native
+// counterexample list the address of each `Vec`, `String` and struct parameter as `<param>.addr`;
+// a field holding an object lists the address it holds as its own slot (`b.0`), and equal values
+// are one object. The harness binds each parameter once and such a field names the binding.
 struct ReplayObjs {
     addrs: Vec<String>,
     binds: Vec<String>,
@@ -386,8 +384,6 @@ struct ReplayObjs {
     cur: i64,
 }
 
-// True when a field of AST type `tid` holds a `Vec`, a `String` or a struct, the objects a
-// parameter's address can name.
 fn replay_holds_object(m: Module, tid: i64) -> bool {
     let a: AstArena = m.arena;
     if type_tag(a, tid) == TY_GENERIC() { return arena_str(a, type_a(a, tid)) == String::from("Vec"); }
@@ -396,10 +392,9 @@ fn replay_holds_object(m: Module, tid: i64) -> bool {
     name == String::from("String") || replay_find_struct(m, name) >= 0
 }
 
-// One entry per source parameter of `fn_name`: the address the model gave it ("" when it is not
-// a `Vec`, `String` or struct or has none), the harness binding that holds its value (that of the
-// first parameter with the same `.alias` identity, else `__replay_a<i>`), its type text and the
-// index of the first parameter it is one object with (itself when none).
+// Per source parameter of `fn_name`: its address ("" for none), the harness binding of its value
+// (the first parameter's with the same `.alias` identity, else `__replay_a<i>`), its type text and
+// the index of the first parameter it is one object with.
 fn replay_param_objects(m: Module, fn_name: String, names: Vec<String>, vals: Vec<String>) -> ReplayObjs {
     let a: AstArena = m.arena;
     let addrs: Vec<String> = Vec::new();
@@ -437,7 +432,6 @@ fn replay_param_objects(m: Module, fn_name: String, names: Vec<String>, vals: Ve
     ReplayObjs { addrs: addrs, binds: binds, tys: tys, owners: owners, cur: -1 }
 }
 
-// `o` for the value of parameter `pi`, which a field of it cannot name.
 fn replay_objs_at(o: ReplayObjs, pi: i64) -> ReplayObjs {
     ReplayObjs { addrs: o.addrs, binds: o.binds, tys: o.tys, owners: o.owners, cur: pi }
 }
@@ -460,24 +454,27 @@ fn replay_obj_ty(o: ReplayObjs, pi: i64) -> String {
     String::from("")
 }
 
-// Index of the first parameter whose address is the value of slot `key`, or -1 when the slot is
-// not listed or names no parameter.
+// Index of the first parameter whose address is the value of slot `key`; -1 when the slot is not
+// listed or names no parameter, -2 when parameters that are not one object share that address.
 fn replay_held_param(key: String, names: Vec<String>, vals: Vec<String>, objs: ReplayObjs) -> i64 {
     let raw: String = replay_cex_value(names, vals, key);
     if raw.len() == 0 { return -1; }
     let addrs: Vec<String> = objs.addrs;
+    let mut first: i64 = -1;
     let mut i: u64 = 0u64;
     while i < addrs.len() {
-        if addrs[i] == raw { return i as i64; }
+        if addrs[i] == raw {
+            if first < 0 { first = i as i64; }
+            else if replay_obj_owner(objs, i as i64) != replay_obj_owner(objs, first) { return -2; }
+        }
         i = i + 1u64;
     }
-    -1
+    first
 }
 
-// A field of type text `shown` that holds the object of parameter `held`: that parameter's
-// binding. The model does not know types, so a parameter of another type cannot be the object.
-// The parameter being built cannot hold itself: the field would need a value of its own type
-// before that value exists.
+// A field of type text `shown` that holds the object of parameter `held` is that parameter's
+// binding. The model does not know types, so a parameter of another type is no such object. The
+// parameter being built cannot hold itself: its field would need a value before it exists.
 fn replay_alias_field(shown: String, held: i64, objs: ReplayObjs) -> ReplayArg {
     let theirs: String = replay_obj_ty(objs, held);
     if theirs != shown {
@@ -490,11 +487,9 @@ fn replay_alias_field(shown: String, held: i64, objs: ReplayObjs) -> ReplayArg {
     replay_arg_ok_deps(String::from(bind), shown, str3r(bind, String::from(" "), String::from("")))
 }
 
-// Indices of the items whose `let` can be emitted so that each comes after the `let` of every
-// binding its value names. `defs[i]` is the binding item `i` declares ("" for none, so the item
-// is left out) and `uses[i]` the bindings its value names, each followed by a space. Items are
-// emitted lowest index first; fewer indices than items with a binding means two of them need
-// each other.
+// Indices of the items in an order that declares each binding before a value names it. `defs[i]`
+// is the binding item `i` declares ("" for none) and `uses[i]` the bindings its value names, each
+// followed by a space. Fewer indices than declared bindings means items need each other.
 fn replay_let_order(defs: Vec<String>, uses: Vec<String>) -> Vec<i64> {
     let order: Vec<i64> = Vec::new();
     let done: Vec<bool> = Vec::new();
@@ -519,7 +514,22 @@ fn replay_let_order(defs: Vec<String>, uses: Vec<String>) -> Vec<i64> {
     order
 }
 
-// How many items declare a binding.
+fn replay_ordered_lets(lets: Vec<String>, defs: Vec<String>, uses: Vec<String>) -> ReplayArg {
+    let order: Vec<i64> = replay_let_order(defs, uses);
+    if order.len() as i64 != replay_count_defs(defs) || lets.len() != defs.len() {
+        return replay_arg_skip(String::from("parameters hold each other's objects, so no order declares each before it is used"));
+    }
+    let body: String = String::from("");
+    let mut i: u64 = 0u64;
+    while i < order.len() {
+        let k: i64 = order[i];
+        if k < 0 || k >= lets.len() as i64 { return replay_arg_skip(String::from("no order declares each parameter before it is used")); }
+        body.push_str(lets[k as u64]);
+        i = i + 1u64;
+    }
+    replay_arg_ok(body, String::from(""))
+}
+
 fn replay_count_defs(defs: Vec<String>) -> i64 {
     let mut n: i64 = 0;
     let mut i: u64 = 0u64;
@@ -615,6 +625,9 @@ fn replay_nested_arg(m: Module, tid: i64, pname: String, slot: i64, names: Vec<S
     let inner: String = replay_slot_key(pname, slot);
     if replay_holds_object(m, tid) {
         let held: i64 = replay_held_param(inner, names, vals, objs);
+        if held == -2 {
+            return replay_arg_skip(str3r(String::from("field of type `"), shown, String::from("` holds an address that several parameters share without being one object")));
+        }
         if held >= 0 { return replay_alias_field(shown, held, objs); }
     }
     if depth >= REPLAY_MAX_DEPTH() {
@@ -1008,7 +1021,7 @@ fn replay_string_arg(pname: String, names: Vec<String>, vals: Vec<String>) -> Re
 // declared in `m`, rebuilt from the counterexample's `<param>.<slot>` values.
 // `reason` says why it cannot be (nested aggregates, 128-bit fields, references,
 // aliases, an out-of-range discriminant ...); the caller then skips the replay.
-fn replay_agg_arg(m: Module, fn_name: String, pi: i64, names: Vec<String>, vals: Vec<String>, avoid: Vec<i64>) -> ReplayArg {
+fn replay_agg_arg(m: Module, fn_name: String, pi: i64, names: Vec<String>, vals: Vec<String>, avoid: Vec<i64>, all_objs: ReplayObjs) -> ReplayArg {
     let a: AstArena = m.arena;
     let fid: i64 = replay_find_fn_item(m, fn_name);
     if fid < 0 {
@@ -1021,7 +1034,7 @@ fn replay_agg_arg(m: Module, fn_name: String, pi: i64, names: Vec<String>, vals:
     let pname: String = arena_str(a, list_get(a, lid, pi * 4));
     let tid: i64 = list_get(a, lid, pi * 4 + 1);
     let tag: i64 = type_tag(a, tid);
-    let objs: ReplayObjs = replay_objs_at(replay_param_objects(m, fn_name, names, vals), pi);
+    let objs: ReplayObjs = replay_objs_at(all_objs, pi);
     if tag == TY_NAMED() {
         let tname: String = arena_str(a, type_a(a, tid));
         if tname == String::from("String") { return replay_string_arg(pname, names, vals); }

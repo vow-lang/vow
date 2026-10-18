@@ -868,9 +868,9 @@ fn replay_confirm() -> ReplayVerdict {
 // of the replayed function, or the reason it cannot be rebuilt. An aggregate is
 // rebuilt from the native counterexample's `<param>.<slot>` entries via the
 // source declaration; anything else is an i64, u64 or bool taken by name.
-fn replay_param_arg(m: Module, ce: VerifyCE, aggregate: bool, native: bool, pi: i64, pname: String, ty: i64, avoid: Vec<i64>) -> ReplayArg {
+fn replay_param_arg(m: Module, ce: VerifyCE, aggregate: bool, native: bool, pi: i64, pname: String, ty: i64, avoid: Vec<i64>, objs: ReplayObjs) -> ReplayArg {
     if aggregate {
-        return replay_agg_arg(m, ce.function, pi, ce.var_names, ce.var_values, avoid);
+        return replay_agg_arg(m, ce.function, pi, ce.var_names, ce.var_values, avoid, objs);
     }
     let raw: String = replay_cex_value(ce.var_names, ce.var_values, pname);
     if raw.len() == 0 { return replay_arg_skip(String::from("no counterexample value")); }
@@ -942,7 +942,7 @@ fn replay_one_ce(ce: VerifyCE, m: Module, fns: Vec<IrFunction>, path: String, ma
         if !aggregate && !rebuildable {
             return replay_skip(str3(String::from("parameter "), i64_to_string(pi), String::from(": unsupported type (self-hosted v1: scalars only)")));
         }
-        let arg: ReplayArg = replay_param_arg(m, ce, aggregate, native, pi, pname, ty, avoid);
+        let arg: ReplayArg = replay_param_arg(m, ce, aggregate, native, pi, pname, ty, avoid, objs);
         if arg.reason.len() > 0 {
             return replay_skip(str3(String::from("parameter "), pname, str2(String::from(": "), arg.reason)));
         }
@@ -972,16 +972,9 @@ fn replay_one_ce(ce: VerifyCE, m: Module, fns: Vec<IrFunction>, path: String, ma
         call_args.push_str(aname);
         pi = pi + 1;
     }
-    let order: Vec<i64> = replay_let_order(defs, uses);
-    let body: String = String::from("");
-    let mut oi: u64 = 0u64;
-    while oi < order.len() && order[oi] >= 0 && order[oi] < lets.len() as i64 {
-        body.push_str(lets[order[oi] as u64]);
-        oi = oi + 1u64;
-    }
-    if oi < order.len() || order.len() as i64 != replay_count_defs(defs) {
-        return replay_skip(String::from("parameters hold each other's objects, so no order builds them"));
-    }
+    let ordered: ReplayArg = replay_ordered_lets(lets, defs, uses);
+    if ordered.reason.len() > 0 { return replay_skip(ordered.reason); }
+    let body: String = ordered.lit;
     body.push_str(String::from("    "));
     body.push_str(ce.function);
     body.push_str(String::from("("));

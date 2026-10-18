@@ -223,7 +223,8 @@ fn agg_src() -> String {
 
 fn agg_avoiding(fname: String, pi: i64, kv: String, avoid: Vec<i64>) -> ReplayArg [io] {
     let m: Module = parse_src(agg_src());
-    replay_agg_arg(m, fname, pi, kv_part(kv, false), kv_part(kv, true), avoid)
+    let objs: ReplayObjs = replay_param_objects(m, fname, kv_part(kv, false), kv_part(kv, true));
+    replay_agg_arg(m, fname, pi, kv_part(kv, false), kv_part(kv, true), avoid, objs)
 }
 
 fn agg(fname: String, pi: i64, kv: String) -> ReplayArg [io] {
