@@ -1,0 +1,23 @@
+// TEST: skip-reason unsupported-opcode
+// A `String` parameter stored with `set` and read back stays `Skipped`, as a `Vec` parameter does:
+// two `String` parameters may be one value (#1823).
+module VecPointerElemStringParamSetSkipped
+
+fn f(a: String, b: String) -> u64 vow {
+  requires: a.len() == 1 && b.len() == 1
+  ensures: result == 1
+} {
+  let names: Vec<String> = Vec::new();
+  names.push(String::from("x"));
+  names[0] = a;
+  b.push_str(String::from("zz"));
+  let n: String = names[0];
+  n.len()
+}
+
+fn main() -> i32 [io] {
+  let a: String = String::from("a");
+  let b: String = String::from("b");
+  print_u64(f(a, b));
+  0
+}

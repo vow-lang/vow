@@ -1262,8 +1262,7 @@ The first #1663 addendum stores a pointer pushed into a `Vec` as a fresh constan
 subset every function that could look at the slot again. This one gives the slot the address of its
 object, the mechanism of #1756, for the functions that do read an element back.
 
-- **The slot is the object's address.** In a function that reads an element back (`vc_ptr_store_analyze`
-  says `addr`), `push` and `set` of a `String`, `Vec` or struct store `vc_overlay_addr_of` of the object
+- **The slot is the object's address.** In a function that reads an element back (`vc_ptr_store_reads_back`; `vc_ptr_store_detail` admits it), `push` and `set` of a `String`, `Vec` or struct store `vc_overlay_addr_of` of the object
   (`vc_walk_slot_word`): the free 64-bit address its overlay entry has, a parameter's own address for a
   parameter. `get` already returned the slot, typed `i64` (a handle), so `outer[i].len()` is a read through
   a handle: `ite(h == address(o), state of o, ..., array[h])`, at the state of the walk (a `push` made after
@@ -1281,7 +1280,8 @@ object, the mechanism of #1756, for the functions that do read an element back.
   gate (`vc_ptr_store_resolvable`) states it: every receiver of a pointer store is a `Vec::new` (or a Phi of
   them; a collection read from a struct field is accepted before inlining and checked again after it); every
   pointer stored is a struct parameter, an allocation, a literal or a `String`/`Vec` creator with a class
-  (a `Vec` or `String` parameter is refused: two of them may be one value, #1823), and
+  (a `Vec` or `String` parameter is refused, wherever it is stored, a field included: two of them may be one
+  value, #1823), and
   nothing else is stored into such a `Vec` (a handle read from another `Vec` is not an address the tags know,
   and tagging it as given memory would make the path infeasible when it is the address of an object the
   function built); and no element read of a `Vec` the function did not store into is used as an object (it
@@ -1292,7 +1292,7 @@ object, the mechanism of #1756, for the functions that do read an element back.
   `String` in a struct pushed into a `Vec` and read back was a false counterexample). A pointer stored into a
   field and into a `Vec` is now entered under one rule, `vc_overlay_stored_class`: used, built or declared as.
   It only adds entries, so a query of a function that stores a pointer in a field gains terms (never loses
-  one); the 59 `ptr_field_*`, `heap_*` and `vec_pointer_*` fixtures of `origin/main` report the same JSON.
+  one); the 67 `ptr_field_*`, `heap_*` and `vec_pointer_*` fixtures of `origin/main` report the same JSON.
 - **A parameter stored as a pointer may be another parameter.** Found by review: `fn f(s: Person, t: Person)`
   that pushes `s` into a `Vec` (or stores it in a field), reads `people[0].age`, writes `t.age` and reads
   `people[0].age` again was `Verified` while a caller passing one value twice aborts the postcondition. Two
@@ -1301,7 +1301,7 @@ object, the mechanism of #1756, for the functions that do read an element back.
   only stored was never in a may-alias group; and an entry for a stored parameter that the function never
   uses as an object had class 0, so the read through the handle fell to the free heap arrays, which a write
   through the other parameter never reaches. A parameter stored into a field, pushed into a `Vec` or set in
-  one is now marked (`vc_agg_stored_pointer`) and its entry takes the class its declared type says
+  one is now marked (`vc_inst_stored_operand`) and its entry takes the class its declared type says
   (`vc_overlay_declared_table`, from `IrFunction.param_keys`). Parameters of different types are still never
   one object. Pinned by `fail/vec_pointer_elem_struct_param_alias_wrong.vow`,
   `fail/ptr_field_struct_param_alias_wrong.vow` and their `_other_type` passes. Two `Vec` or two `String`

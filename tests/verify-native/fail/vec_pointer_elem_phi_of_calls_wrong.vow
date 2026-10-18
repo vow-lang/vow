@@ -1,0 +1,33 @@
+// TEST: counterexample-fn "pick"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The branch that calls `two` stores the two-element `Vec`, so the answer there is 2, not 1.
+module VecPointerElemPhiOfCallsWrong
+
+fn one() -> Vec<i64> {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v
+}
+
+fn two() -> Vec<i64> {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v.push(2);
+  v
+}
+
+fn pick(c: bool) -> u64 vow {
+  ensures: result == 1
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let x: Vec<i64> = if c { one() } else { two() };
+  outer.push(x);
+  let e: Vec<i64> = outer[0];
+  e.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(pick(true));
+  0
+}

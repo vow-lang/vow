@@ -415,6 +415,13 @@ fn vc_walk_wide_access(w: VcWalk, bi: u64, inst: IrInst) {
     }
 }
 
+// The 64-bit address a pointer store keeps for the object `val` (`vc_overlay_addr_of`), entered under
+// the classes it is used, built or declared as.
+fn vc_walk_store_address(w: VcWalk, val: i64) -> i64 {
+    let ov: VcOverlay = w.memory.overlay;
+    vc_overlay_addr_of(ov, w.ag, w.cs.arena, w.cs.header, w.cs.assumed, w.obj_of[val as u64], vc_overlay_stored_class(ov, val))
+}
+
 // Aggregate instructions: pointers are objects (`obj_of`), never terms; a field
 // read defines a scalar value.
 fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
@@ -440,7 +447,7 @@ fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
         let mut ty: i64 = w.tys[val as u64];
         if ty == ITY_PTR() {
             // The slot holds the address of the object (`vc_overlay`).
-            term = vc_overlay_addr_of(w.memory.overlay, ag, cs.arena, cs.header, cs.assumed, w.obj_of[val as u64], vc_overlay_stored_class(w.memory.overlay, val));
+            term = vc_walk_store_address(w, val);
             ty = ITY_I64();
         }
         let seen: u64 = ag.ps_param.len();
@@ -663,10 +670,7 @@ fn vc_mark_stored_float(w: VcWalk, obj: i64, val: i64) {
 // (`vc_ptr_store_detail` keeps every other function out of the subset).
 fn vc_walk_slot_word(w: VcWalk, val: i64) -> i64 {
     let ty: i64 = w.tys[val as u64];
-    if ty == ITY_PTR() && w.memory.overlay.elems {
-        let ov: VcOverlay = w.memory.overlay;
-        return vc_overlay_addr_of(ov, w.ag, w.cs.arena, w.cs.header, w.cs.assumed, w.obj_of[val as u64], vc_overlay_stored_class(ov, val));
-    }
+    if ty == ITY_PTR() && w.memory.overlay.elems { return vc_walk_store_address(w, val); }
     if ty == ITY_PTR() {
         return vc_agg_declare(w.cs.arena, w.cs.header, vc_vec_fresh_name(w.vv, String::from("pe")), 64);
     }

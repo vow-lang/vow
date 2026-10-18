@@ -1,0 +1,23 @@
+// A callee that pushes a `Vec` it built into its `Vec` parameter and reads it back: inlined, the
+// parameter is the caller's `Vec::new`, so the call tree is modelled.
+module VecPointerElemCalleePushesIntoParam
+
+fn push_new_and_read(o: Vec<Vec<i64>>) -> u64 {
+  let w: Vec<i64> = Vec::new();
+  w.push(1);
+  o.push(w);
+  let e: Vec<i64> = o[0];
+  e.len()
+}
+
+fn caller() -> u64 vow {
+  ensures: result == 1
+} {
+  let o: Vec<Vec<i64>> = Vec::new();
+  push_new_and_read(o)
+}
+
+fn main() -> i32 [io] {
+  print_u64(caller());
+  0
+}
