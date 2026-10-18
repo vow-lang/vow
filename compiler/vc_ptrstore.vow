@@ -170,7 +170,7 @@ fn vc_ptr_store_resolvable(f: IrFunction, held: Vec<i64>, tys: Vec<i64>, calls: 
     let n_ids: u64 = tys.len();
     let known: Vec<i64> = vc_ptr_store_known(f, tys, calls);
     let classes: Vec<i64> = vc_overlay_class_table(f, tys);
-    let built: Vec<i64> = vc_overlay_built_table(f, n_ids);
+    let built: Vec<i64> = vc_overlay_elem_table(f, n_ids);
     let foreign: Vec<i64> = dom_fill(n_ids, 0);
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {

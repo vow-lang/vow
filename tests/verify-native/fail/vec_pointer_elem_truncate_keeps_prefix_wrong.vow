@@ -1,0 +1,27 @@
+// TEST: counterexample-fn "kept"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// `truncate(1)` keeps the first element, whose length is 1, not the second one's.
+// `truncate` keeps the first elements: the object at index 0 is still the one stored there.
+module VecPointerElemTruncateKeepsPrefixWrong
+
+fn kept() -> u64 vow {
+  ensures: result == 2
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let a: Vec<i64> = Vec::new();
+  a.push(1);
+  let b: Vec<i64> = Vec::new();
+  b.push(1);
+  b.push(2);
+  outer.push(a);
+  outer.push(b);
+  outer.truncate(1);
+  let first: Vec<i64> = outer[0];
+  first.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(kept());
+  0
+}

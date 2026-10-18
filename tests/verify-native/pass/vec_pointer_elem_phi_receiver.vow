@@ -22,5 +22,6 @@ fn pick(c: bool) -> u64 vow {
 
 fn main() -> i32 [io] {
   print_u64(pick(true));
+  print_u64(pick(false));
   0
 }

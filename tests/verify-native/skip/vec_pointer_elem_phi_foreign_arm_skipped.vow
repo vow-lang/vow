@@ -1,0 +1,24 @@
+// TEST: skip-reason unsupported-opcode
+// A merge of an element of a `Vec` the function built and one of a `Vec` it was given: the given
+// element may be the address of an object the function built, so using the merge as an object stays
+// `Skipped`.
+module VecPointerElemPhiForeignArmSkipped
+
+fn pick(c: bool, given: Vec<Vec<i64>>) -> u64 vow {
+  requires: given.len() > 0
+} {
+  let mine: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  mine.push(w);
+  let x: Vec<i64> = if c { mine[0] } else { given[0] };
+  x.len()
+}
+
+fn main() -> i32 [io] {
+  let given: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  given.push(w);
+  print_u64(pick(true, given));
+  print_u64(pick(false, given));
+  0
+}
