@@ -9,20 +9,9 @@ use verifier
 use tests.builders
 
 fn padded(id: i64, name: String, pad: i64, callee: i64) -> IrFunction {
-    let i: Vec<IrInst> = Vec::new();
-    let mut n: i64 = 0;
-    while n < pad {
-        i.push(mk_inst_const_i64(n, 1));
-        n = n + 1;
-    }
-    if callee >= 0 {
-        i.push(mk_inst_call_target(n, ITY_UNIT(), Vec::new(), callee));
-        n = n + 1;
-    }
-    i.push(mk_inst_return(n, 0));
-    let b: Vec<IrBlock> = Vec::new();
-    b.push(mk_block(0, i));
-    mk_function(id, name, Vec::new(), ITY_UNIT(), b)
+    let callees: Vec<i64> = Vec::new();
+    if callee >= 0 { callees.push(callee); }
+    calling(id, name, pad, callees)
 }
 
 // leaf (11 instructions) <- mid (53 with the leaf) <- top (155 with both)
@@ -54,6 +43,14 @@ fn calling(id: i64, name: String, pad: i64, callees: Vec<i64>) -> IrFunction {
     mk_function(id, name, Vec::new(), ITY_UNIT(), b)
 }
 
+// The ids among `a` and `b` that are not negative.
+fn list(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    if a >= 0 { v.push(a); }
+    if b >= 0 { v.push(b); }
+    v
+}
+
 fn pair(a: i64, b: i64) -> Vec<i64> {
     let v: Vec<i64> = Vec::new();
     v.push(a);
@@ -76,10 +73,12 @@ fn repeats() -> IrModule {
     mc.push(3);
     mc.push(4);
     fs.push(calling(5, String::from("mid"), 5, mc));
-    let tc: Vec<i64> = Vec::new();
-    tc.push(5);
-    fs.push(calling(6, String::from("top"), 1100, tc));
+    fs.push(calling(6, String::from("top"), 1100, list(5, -1)));
     mk_module(fs)
+}
+
+fn repeated_at(c: VcWaveCtx, fi: u64) -> String {
+    ids_text(vc_trust_repeated(c, fi, vc_trust_reach(c, fi)))
 }
 
 // A callee its root's call tree holds twice or more and whose own tree is from a sixteenth to a
@@ -87,12 +86,73 @@ fn repeats() -> IrModule {
 // bigger is `vc_trust_needs`'s). A root within `root_min` has none (`mid` at the default size).
 fn check_trust_repeated() -> i64 [read] {
     let c: VcWaveCtx = vc_wave_ctx(repeats(), 16384);
-    if ids_text(vc_trust_repeated(c, 4)) != String::from("") { return 1; }
-    if ids_text(vc_trust_repeated(c, 5)) != String::from("1") { return 2; }
+    if repeated_at(c, 4) != String::from("") { return 1; }
+    if repeated_at(c, 5) != String::from("1") { return 2; }
     c.root_min = 400;
-    if ids_text(vc_trust_repeated(c, 4)) != String::from("1") { return 3; }
+    if repeated_at(c, 4) != String::from("1") { return 3; }
     c.root_min = 2000;
-    if ids_text(vc_trust_repeated(c, 5)) != String::from("") { return 4; }
+    if repeated_at(c, 5) != String::from("") { return 4; }
+    0
+}
+
+fn copies_text(c: VcWaveCtx, fi: u64) -> String {
+    let order: Vec<i64> = vc_trust_reach(c, fi);
+    let copies: Vec<i64> = vc_call_copies(c, fi, order);
+    vc_ids_text(copies)
+}
+
+// `x` (71) is called by `a` and `b` (78 each), which the root `top` calls once each: two copies
+// of `x` through two callers, one copy of `a` and `b`.
+fn diamond() -> IrModule {
+    let fs: Vec<IrFunction> = Vec::new();
+    fs.push(padded(1, String::from("x"), 69, -1));
+    fs.push(padded(2, String::from("a"), 5, 1));
+    fs.push(padded(3, String::from("b"), 5, 1));
+    fs.push(calling(4, String::from("top"), 1100, list(2, 3)));
+    mk_module(fs)
+}
+
+// `x` (71) <- `y` (78) <- `top`, which calls `y` twice: the copies of `y` multiply into `x`'s.
+fn nested() -> IrModule {
+    let fs: Vec<IrFunction> = Vec::new();
+    fs.push(padded(1, String::from("x"), 69, -1));
+    fs.push(padded(2, String::from("y"), 5, 1));
+    fs.push(calling(3, String::from("top"), 1100, list(2, 2)));
+    mk_module(fs)
+}
+
+// `y` calls `x` twice and `top` calls `y` once: two copies of `x`, one of `y`.
+fn fanned() -> IrModule {
+    let fs: Vec<IrFunction> = Vec::new();
+    fs.push(padded(1, String::from("x"), 69, -1));
+    fs.push(calling(2, String::from("y"), 5, list(1, 1)));
+    fs.push(calling(3, String::from("top"), 1100, list(2, -1)));
+    mk_module(fs)
+}
+
+// The copies of a callee are counted along the whole call tree: through two callers, through one
+// that is called twice, through one that calls it twice, and a callee called once is not repeated.
+fn check_call_copies() -> i64 [read] {
+    let d: VcWaveCtx = vc_wave_ctx(diamond(), 16384);
+    if copies_text(d, 3) != String::from("2,1,1,1") { return 1; }
+    if repeated_at(d, 3) != String::from("1") { return 2; }
+    let n: VcWaveCtx = vc_wave_ctx(nested(), 16384);
+    if copies_text(n, 2) != String::from("2,2,1") { return 3; }
+    if repeated_at(n, 2) != String::from("1,2") { return 4; }
+    let f: VcWaveCtx = vc_wave_ctx(fanned(), 16384);
+    if copies_text(f, 2) != String::from("2,1,1") { return 5; }
+    if repeated_at(f, 2) != String::from("1") { return 6; }
+    0
+}
+
+// A function above `root_min` waits for the callees `vc_trust_needs` asks for and for the repeated
+// ones, each once; one within it for none.
+fn check_waves_needs_repeated() -> i64 [read] {
+    let c: VcWaveCtx = vc_wave_ctx(repeats(), 16384);
+    let ids: Vec<i64> = vc_waves_needs(c, 5);
+    if ids.len() != 3 { return 1; }
+    if !vc_id_in(ids, 1) || !vc_id_in(ids, 3) || !vc_id_in(ids, 5) { return 2; }
+    if vc_waves_needs(c, 4).len() != 0 { return 3; }
     0
 }
 
@@ -102,7 +162,7 @@ fn ids_text(ids: Vec<i64>) -> String {
 
 fn needs_at(c: VcWaveCtx, fi: u64, root_min: i64) -> String {
     c.root_min = root_min;
-    ids_text(vc_trust_needs(c, fi))
+    ids_text(vc_trust_needs(c, vc_trust_reach(c, fi)))
 }
 
 // A function above `root_min` waits for the callees whose own call tree is at least a quarter of
@@ -146,6 +206,8 @@ fn main() -> i32 [read] {
     let mut r: i64 = check_trust_needs();
     if r == 0 { let d: i64 = check_waves_needs_within_budget(); if d != 0 { r = 100 + d; } }
     if r == 0 { let t: i64 = check_trust_repeated(); if t != 0 { r = 300 + t; } }
+    if r == 0 { let k: i64 = check_call_copies(); if k != 0 { r = 400 + k; } }
+    if r == 0 { let w: i64 = check_waves_needs_repeated(); if w != 0 { r = 500 + w; } }
     if r == 0 { let l: i64 = check_wave_lines(); if l != 0 { r = 200 + l; } }
     i64_to_i32_wrap(r)
 }
