@@ -480,6 +480,7 @@ fn vc_function_shell(f: IrFunction) -> IrFunction {
     let g: IrFunction = ir_function_new(f.id, f.name, f.return_ty, f.effects, f.source_file);
     g.params = f.params;
     g.param_names = f.param_names;
+    g.param_keys = f.param_keys;
     g.vows = f.vows;
     g
 }
@@ -583,18 +584,11 @@ fn vc_values_closing_at(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, defs: VcDe
 
 // One closing step: the function after routing every value of one loop that
 // lands at the first escaping read's block through Phis (one rebuild), or `f`
-// itself (`changed` false) when nothing is left or it cannot be closed.
-fn vc_close_one(f: IrFunction) -> VcClosed {
+// itself (`changed` false) when nothing is left or the read has no landing block to close
+// at. `rpo` and `li` describe the CFG of `f`, which a step leaves as it is (new Phis and
+// Upsilons only); `vc_close_loops` has already rejected a CFG that cannot be closed.
+fn vc_close_step(f: IrFunction, rpo: Vec<i64>, li: VcLoopInfo) -> VcClosed {
     let nb: u64 = f.blocks.len();
-    if nb == 0 {
-        return VcClosed { f: f, changed: false };
-    }
-    let succ: Vec<i64> = dom_successors(f, dom_block_id_table(f));
-    let rpo: Vec<i64> = dom_rpo_numbers(nb, succ);
-    let li: VcLoopInfo = vc_loop_analysis(nb, succ, rpo);
-    if li.irreducible || li.n_loops == 0 || li.max_depth > VC_MAX_LOOP_DEPTH() || li.loop_of_header[0] >= 0 {
-        return VcClosed { f: f, changed: false };
-    }
     let defs: VcDefs = vc_def_table(f, rpo, (dom_max_inst_id(f) + 1) as u64);
     let def_blk: Vec<i64> = defs.blk;
     let mut bi: u64 = 0;
@@ -619,12 +613,23 @@ fn vc_close_one(f: IrFunction) -> VcClosed {
     VcClosed { f: f, changed: false }
 }
 
-// `f` in loop-closed form (see above); `f` itself when it has no escaping read.
+// `f` in loop-closed form (see above); `f` itself when it has no escaping read. The CFG is
+// analysed once: closing a loop adds Phis and Upsilons to blocks and never changes an edge.
 fn vc_close_loops(f: IrFunction) -> IrFunction {
+    let nb: u64 = f.blocks.len();
+    if nb == 0 {
+        return f;
+    }
+    let succ: Vec<i64> = dom_successors(f, dom_block_id_table(f));
+    let rpo: Vec<i64> = dom_rpo_numbers(nb, succ);
+    let li: VcLoopInfo = vc_loop_analysis(nb, succ, rpo);
+    if li.irreducible || li.n_loops == 0 || li.max_depth > VC_MAX_LOOP_DEPTH() || li.loop_of_header[0] >= 0 {
+        return f;
+    }
     let mut cur: IrFunction = f;
     let mut round: i64 = 0;
     while round < VC_MAX_CLOSE_ROUNDS() {
-        let r: VcClosed = vc_close_one(cur);
+        let r: VcClosed = vc_close_step(cur, rpo, li);
         if !r.changed {
             return cur;
         }

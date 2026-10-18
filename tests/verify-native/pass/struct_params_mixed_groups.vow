@@ -1,0 +1,22 @@
+// TEST: category model-drift
+// TEST: esbmc-model-artifact fn="mixed" blame=Callee vow_id=0 "ESBMC's C model keeps every struct parameter at the same heap slot, so a parameter of another type is one object with `p` and the last write wins; no caller can pass one object for two parameters of different types, so the claim holds at runtime"
+// `p` and `p2` have one type and may be one object; `q` has another type and cannot be `p`,
+// so `p.x` is 1 or 2 and never 3 (#1802).
+module StructParamsMixedGroups
+
+struct P { x: i64 }
+struct Q { x: i64 }
+
+fn mixed(p: P, p2: P, q: Q) -> i64 vow {
+  ensures: result == 1 || result == 2
+} {
+  p.x = 1;
+  p2.x = 2;
+  q.x = 3;
+  p.x
+}
+
+fn main() -> i32 [io] {
+  print_i64(mixed(P { x: 0 }, P { x: 0 }, Q { x: 0 }));
+  0
+}

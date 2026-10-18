@@ -241,6 +241,51 @@ fn check_batched_closing() -> i64 {
     0
 }
 
+// A header value of the inner loop read after both loops: it closes at the inner exit (block 5),
+// and the Phi that makes is read after the outer loop, so it closes again at block 6.
+fn escaping_nested() -> IrFunction {
+    let e: Vec<i64> = Vec::new();
+    e.push(1); e.push(-2);
+    e.push(2); e.push(7);
+    e.push(3); e.push(-2);
+    e.push(4); e.push(5);
+    e.push(3); e.push(-2);
+    e.push(1); e.push(6);
+    e.push(-1); e.push(-1);
+    e.push(-1); e.push(-1);
+    let f: IrFunction = cfg(e);
+    let h: IrBlock = f.blocks[3];
+    let term: IrInst = h.insts[0];
+    h.insts[0] = mk_inst_const_i64(500, 3);
+    h.insts.push(term);
+    let x: IrBlock = f.blocks[6];
+    let ret: IrInst = x.insts[1];
+    ret.args[0] = 500;
+    f
+}
+
+fn check_closing_in_two_rounds() -> i64 {
+    let f: IrFunction = escaping_nested();
+    if shape(f) != String::from("loop value used outside its loop") { return 100; }
+    let closed: IrFunction = vc_close_loops(f);
+    if shape(closed).len() != 0 { return 101; }
+    // inner exit: the first Phi and the Upsilon feeding the second; outer exit: the second Phi
+    if closed.blocks[5].insts.len() != f.blocks[5].insts.len() + 2 { return 102; }
+    if closed.blocks[6].insts.len() != f.blocks[6].insts.len() + 1 { return 103; }
+    if closed.blocks[3].insts.len() != f.blocks[3].insts.len() + 1 { return 104; }
+    let phi: IrInst = closed.blocks[6].insts[0];
+    let ret: IrInst = closed.blocks[6].insts[closed.blocks[6].insts.len() - 1];
+    if phi.op != IOP_PHI() || ret.args[0] != phi.id { return 105; }
+    // each Upsilon feeds the value the next Phi closes: the header's constant, then the first Phi
+    let first: IrInst = closed.blocks[5].insts[0];
+    let feed_inner: IrInst = closed.blocks[3].insts[closed.blocks[3].insts.len() - 2];
+    let feed_outer: IrInst = closed.blocks[5].insts[closed.blocks[5].insts.len() - 2];
+    if first.op != IOP_PHI() || feed_inner.op != IOP_UPSILON() || feed_inner.args[0] != 500 || feed_inner.dv != first.id { return 106; }
+    if feed_outer.op != IOP_UPSILON() || feed_outer.args[0] != first.id || feed_outer.dv != phi.id { return 107; }
+    if print_function(vc_close_loops(closed)) != print_function(closed) { return 108; }
+    0
+}
+
 // The exit block is also entered from outside the loop: it cannot be closed.
 fn check_unclosable() -> i64 {
     let f: IrFunction = escaping_exit();
@@ -260,6 +305,7 @@ fn main() -> i32 {
     if r == 0 { r = check_escaping_read(); }
     if r == 0 { r = check_acyclic_has_no_loops(); }
     if r == 0 { r = check_closing(); }
+    if r == 0 { r = check_closing_in_two_rounds(); }
     if r == 0 { r = check_batched_closing(); }
     if r == 0 { r = check_unclosable(); }
     i64_to_i32_wrap(r)

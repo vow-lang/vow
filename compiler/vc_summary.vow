@@ -545,6 +545,17 @@ fn vc_module_with(m: IrModule, fns: Vec<IrFunction>) -> IrModule {
     out
 }
 
+// True when proven callees can change the module `f` is inlined in: `f` is in the module, its call
+// tree has no cycle and is above `budget`. Where it is false `vc_summary_module` is `m` itself,
+// whatever is trusted, so a decision made without summaries stands. `sizes` is the memo of
+// `vc_tree_size`, `dom_fill(fns.len(), -1)` or a table already filled for `budget`.
+fn vc_summary_applies(fns: Vec<IrFunction>, idx_of: Vec<i64>, sizes: Vec<i64>, f: IrFunction, budget: i64) -> bool {
+    let root: i64 = vc_callee_index(idx_of, f.id);
+    if root < 0 { return false; }
+    if vc_call_cycle(fns, idx_of, root).len() > 0 { return false; }
+    vc_body_size(fns, idx_of, sizes, f, budget) > budget
+}
+
 // The module `f` is inlined in: `m` itself unless the call tree of `f` is above `budget`,
 // and then a copy in which each function of `trusted` that `f` reaches and that is itself
 // above `vc_summary_min_insts(budget)` is its summary, when it has one. The callees are taken
@@ -556,11 +567,9 @@ fn vc_summary_module(f: IrFunction, m: IrModule, trusted: Vec<i64>, budget: i64)
     if trusted.len() == 0 { return same; }
     let fns: Vec<IrFunction> = m.functions;
     let idx_of: Vec<i64> = vc_fn_index_table(fns);
-    let root: i64 = vc_callee_index(idx_of, f.id);
-    if root < 0 { return same; }
-    if vc_call_cycle(fns, idx_of, root).len() > 0 { return same; }
     let sizes: Vec<i64> = dom_fill(fns.len(), -1);
-    if vc_body_size(fns, idx_of, sizes, f, budget) <= budget { return same; }
+    if !vc_summary_applies(fns, idx_of, sizes, f, budget) { return same; }
+    let root: i64 = vc_callee_index(idx_of, f.id);
     let seen: Vec<i64> = dom_fill(fns.len(), 0);
     let order: Vec<i64> = Vec::new();
     vc_reachable_callees(fns, idx_of, seen, order, root);
@@ -609,4 +618,12 @@ fn vc_summary_module(f: IrFunction, m: IrModule, trusted: Vec<i64>, budget: i64)
 // `vc_module_skip_reason` with the callees in `trusted` summarised where `f` is above `budget`.
 fn vc_module_skip_reason_trusted(f: IrFunction, m: IrModule, trusted: Vec<i64>, budget: i64) -> String {
     vc_module_skip_reason_via(f, m, vc_summary_module(f, m, trusted, budget).m, budget)
+}
+
+// The same once `trusted` is known, for a caller that decided `before` with nothing trusted: a
+// function no summary can change (`vc_summary_applies`) keeps `before` instead of being gated
+// again, which flattens its whole call tree. `fns`, `idx_of` and `sizes` are those of `m`.
+fn vc_module_skip_reason_retrust(fns: Vec<IrFunction>, idx_of: Vec<i64>, sizes: Vec<i64>, f: IrFunction, m: IrModule, trusted: Vec<i64>, budget: i64, before: String) -> String {
+    if trusted.len() == 0 || !vc_summary_applies(fns, idx_of, sizes, f, budget) { return before; }
+    vc_module_skip_reason_trusted(f, m, trusted, budget)
 }

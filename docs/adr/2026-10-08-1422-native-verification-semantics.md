@@ -1307,10 +1307,10 @@ overlay of the #1703 addendum reads through it.
 - **Absent state.** An object the function allocated has a `Vec` state only in the blocks its
   creation reaches; the overlay skips an entry whose state is absent in the block of the read
   (`ptr_field_object_absent_on_other_branch.vow`).
-- **Imprecision, never unsoundness.** Two struct parameters stay possibly one object, so storing one
-  into the other's field can overwrite the slot the parameter has to be (`o.inner = i` with `o` and
-  `i` one object); the fixtures that store a struct into a parameter's field build the stored struct
-  themselves. A pointer's class is the class of its uses, so a stored object that is only ever read
+- **Imprecision, never unsoundness.** Two struct parameters of one type stay possibly one object, so
+  storing one into the other's field can overwrite the slot the parameter has to be; parameters of
+  different types are never one object (#1802, `IrFunction.param_keys`), so `o.inner = i` with `o: Outer`
+  and `i: Inner` is exact. A pointer's class is the class of its uses, so a stored object that is only ever read
   through the field is not consulted for a collection read (it reads as the array does).
 - **What stays skipped.** A write through a handle (`h.items.push(1)` where `h.items` is read from
   memory) and a `Vec` merged by a Phi (#1662) are as before. The `unsupported-opcode` details `pointer

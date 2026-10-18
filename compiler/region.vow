@@ -253,6 +253,7 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
             name: f.name,
             params: f.params,
             param_names: f.param_names,
+            param_keys: f.param_keys,
             return_ty: f.return_ty,
             effects: f.effects,
             vows: f.vows,

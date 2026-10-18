@@ -267,6 +267,10 @@ struct IrFunction {
     name: String,
     params: Vec<i64>,
     param_names: Vec<String>,
+    // Per parameter, the head of its declared type with type aliases resolved (`Outer`, `Vec`,
+    // `Option`), or "" when it is unknown. Two parameters of different heads cannot be one
+    // object (`vc_agg_alias_params`). Empty where the lowering did not record it.
+    param_keys: Vec<String>,
     return_ty: i64,
     effects: i64,
     vows: Vec<IrVowEntry>,
@@ -372,6 +376,7 @@ fn ir_function_new(id: i64, name: String, return_ty: i64, effects: i64, source_f
         name: name,
         params: Vec::new(),
         param_names: Vec::new(),
+        param_keys: Vec::new(),
         return_ty: return_ty,
         effects: effects,
         vows: Vec::new(),

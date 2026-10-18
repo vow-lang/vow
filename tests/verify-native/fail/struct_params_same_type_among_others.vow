@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "mixed"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// `p` and `p2` have one type, so they may be one object and `p.x` can read `2`; `q` has
+// another type and cannot be `p`, so `3` is not a possible result (#1802).
+module StructParamsSameTypeAmongOthers
+
+struct P { x: i64 }
+struct Q { x: i64 }
+
+fn mixed(p: P, p2: P, q: Q) -> i64 vow {
+  ensures: result == 1 || result == 3
+} {
+  p.x = 1;
+  p2.x = 2;
+  q.x = 3;
+  p.x
+}
+
+fn main() -> i32 [io] {
+  print_i64(mixed(P { x: 0 }, P { x: 0 }, Q { x: 0 }));
+  0
+}
