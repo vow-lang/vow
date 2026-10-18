@@ -98,6 +98,72 @@ fn vc_overlay_new() -> VcOverlay {
     }
 }
 
+// Complete reads through a handle: the never-written heap overlaid with the live
+// parameter state. Bind the walk's shared models once; reads allocate no request
+// record and never copy the models. Address metadata stays in declaration order.
+struct VcHandleMemory {
+    heap: VcHeap,
+    overlay: VcOverlay,
+    ag: VcAgg,
+    vv: VcVec,
+    ar: VcArena,
+    header: SmtScript,
+    assumed: Vec<i64>,
+}
+
+// Aggregate alias identities must already be enabled, before overlay addresses
+// are declared. Heap arrays remain lazy even when an overlay is needed.
+fn vc_handle_memory_new(f: IrFunction, tys: Vec<i64>, ag: VcAgg, vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>) -> VcHandleMemory {
+    let ov: VcOverlay = vc_overlay_new();
+    if vc_overlay_stores_pointer(f, tys) {
+        ov.class_of = vc_overlay_class_table(f, tys);
+        ov.built_of = vc_overlay_built_table(f, tys.len());
+    }
+    if vc_heap_overlay_needed(f, tys) {
+        vc_overlay_enable(ov, ag, ar, hdr, assumed, vc_overlay_params(f, tys, VC_OV_VEC()), vc_overlay_params(f, tys, VC_OV_STRING()), vc_overlay_params(f, tys, VC_OV_STRUCT()));
+    }
+    VcHandleMemory { heap: vc_heap_new(), overlay: ov, ag: ag, vv: vv, ar: ar, header: hdr, assumed: assumed }
+}
+
+fn vc_handle_memory_used(m: VcHandleMemory) -> bool {
+    vc_heap_used(m.heap) || m.overlay.tags >= 0
+}
+
+// A 64-bit value read out of the memory the function was given (`base`, or a parameter field
+// symbol the aggregate model declared for this read) is not the address of an object the
+// function allocated. Only a function that stores a pointer has such addresses.
+fn vc_handle_note_loaded(m: VcHandleMemory, base: i64, ty: i64) {
+    if m.overlay.class_of.len() == 0 || ty != ITY_I64() { return; }
+    vc_overlay_scan_params(m.overlay, m.ag, m.ar, m.assumed);
+    vc_overlay_note_loaded(m.overlay, m.ar, m.assumed, base);
+}
+
+fn vc_handle_field(m: VcHandleMemory, h: i64, slot: i64, ty: i64) -> i64 {
+    let base: i64 = vc_heap_field(m.heap, m.ar, m.header, h, slot, ty);
+    let t: i64 = vc_overlay_field(m.overlay, m.ag, m.ar, m.header, m.assumed, h, slot, ty, base);
+    vc_handle_note_loaded(m, base, ty);
+    t
+}
+
+// The length is observed before the caller records the bounds claim. Reading an
+// element afterwards must not declare its heap array in that earlier prefix.
+fn vc_handle_len(m: VcHandleMemory, b: i64, h: i64, inst: IrInst, kind: i64) -> i64 {
+    let base: i64 = vc_heap_len(m.heap, m.ar, m.header, m.assumed, h);
+    vc_overlay_len(m.overlay, m.ag, m.vv, m.ar, m.header, m.assumed, b, h, vc_overlay_op_class(inst, kind), base)
+}
+
+fn vc_handle_elem(m: VcHandleMemory, b: i64, h: i64, idx: i64) -> i64 {
+    let base: i64 = vc_heap_elem(m.heap, m.ar, m.header, h, idx);
+    let t: i64 = vc_overlay_elem(m.overlay, m.ag, m.vv, m.ar, m.header, m.assumed, b, h, idx, VC_OV_VEC(), false, base);
+    vc_handle_note_loaded(m, base, ITY_I64());
+    t
+}
+
+fn vc_handle_byte(m: VcHandleMemory, b: i64, h: i64, idx: i64) -> i64 {
+    let base: i64 = vc_heap_byte(m.heap, m.ar, m.header, h, idx);
+    vc_overlay_elem(m.overlay, m.ag, m.vv, m.ar, m.header, m.assumed, b, h, idx, VC_OV_STRING(), true, base)
+}
+
 // Marks, in `flags`, every value that a `Vec` operation or a field access names as
 // its object, then closes the marking over Phis in both directions: a Phi and the
 // values it merges are one object.
