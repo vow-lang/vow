@@ -48,6 +48,11 @@ struct VcClaims {
     // Parallel to `vec_param`: the element type of a parameter whose elements are
     // 128-bit integers (`ITY_I128`/`ITY_U128`), else -1.
     vec_wide: Vec<i64>,
+    // Parallel to `vec_param`: "" for a `Vec` or `String` parameter; for a collection a struct
+    // parameter holds in a field, the path to that field (`.1.0`, see `vc_held`), and the symbol
+    // of the address the field holds, whose `helem`/`hbyte` entries the elements are.
+    vec_path: Vec<String>,
+    vec_handle: Vec<String>,
 }
 
 // `model_slots` of the length of a `Vec` or `String` parameter; a scalar

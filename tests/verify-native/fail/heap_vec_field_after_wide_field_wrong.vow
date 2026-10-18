@@ -1,0 +1,24 @@
+// TEST: replay-skipped a Vec held in a struct field is not rebuilt by the replay harness (#1778)
+// TEST: counterexample-fn "first"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value r.2.len 1
+// TEST: counterexample-value r.2[0] -7
+// A 128-bit field takes two slots, so the Vec after it is slot 2 and its signed element is retyped.
+module HeapVecFieldAfterWideFieldWrong
+
+struct Rec { id: i128, items: Vec<i32> }
+
+fn first(r: Rec) -> i32 vow {
+  requires: r.items.len() > 0
+  ensures: result != -7
+} {
+  r.items[0]
+}
+
+fn main() -> i32 [io] {
+  let r: Rec = Rec { id: 1i128, items: Vec::new() };
+  r.items.push(7);
+  print_i64(first(r) as i64);
+  0
+}

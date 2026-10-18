@@ -29,6 +29,7 @@ fn vc_model_symbol_name(f: IrFunction, cs: VcClaims, j: u64) -> String {
     }
     if cs.model_slots[j] == VC_SLOT_VEC_LEN() {
         let named: String = String::from(base);
+        named.push_str(cs.model_paths[j]);
         named.push_str(String::from(".len"));
         return named;
     }

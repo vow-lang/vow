@@ -49,18 +49,73 @@ fn vc_cex_type_elem_name(a: AstArena, tid: i64) -> String {
     String::from("")
 }
 
-// Element type name of parameter `pname` of the function `fn_name` declared in
-// `m`, or "" when there is no such function or parameter.
-fn vc_cex_param_elem_type(m: Module, fn_name: String, pname: String) -> String {
+// Type of the field at slot `slot` of the struct of AST type `tid`, or -1 when `tid` is no
+// struct declared in the program or has no field at that slot (a 128-bit field takes two).
+fn vc_cex_field_type_at(m: Module, tid: i64, slot: i64) -> i64 {
+    let a: AstArena = m.arena;
+    if type_tag(a, tid) != TY_NAMED() { return -1; }
+    let sid: i64 = replay_find_struct(m, arena_str(a, type_a(a, tid)));
+    if sid < 0 { return -1; }
+    let fields_lid: i64 = sdef_fields_lid(a, sid);
+    let n: i64 = list_len(a, fields_lid) / 2;
+    let mut at: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n {
+        let ftid: i64 = list_get(a, fields_lid, i * 2 + 1);
+        if at == slot { return ftid; }
+        at = at + replay_field_slots(a, ftid);
+        i = i + 1;
+    }
+    -1
+}
+
+// Type of the field a counterexample path names: the digits of `<slot>(.<slot>)*` in `path`
+// walk the struct of type `tid` and the structs its fields hold. -1 for a path through an
+// enum, `Option` or `Result` (the variant is not known here) or any other type.
+fn vc_cex_path_type(m: Module, tid: i64, path: String) -> i64 {
+    let mut cur: i64 = tid;
+    let mut slot: i64 = 0;
+    let mut digits: bool = false;
+    let mut i: u64 = 0;
+    while i <= path.len() && cur >= 0 {
+        if i == path.len() || path.byte_at(i) == 46 {
+            if !digits { return -1; }
+            cur = vc_cex_field_type_at(m, cur, slot);
+            slot = 0;
+            digits = false;
+        } else {
+            let b: i64 = path.byte_at(i);
+            if b < 48 || b > 57 { return -1; }
+            slot = slot * 10 + (b - 48);
+            digits = true;
+        }
+        i = i + 1;
+    }
+    cur
+}
+
+// Element type name of the parameter or held collection named `base` (`p`, or `p.<slot>...`
+// for a `Vec` or `String` a struct holds in a field) of the function `fn_name` declared in
+// `m`, or "" when there is no such function, parameter or field.
+fn vc_cex_param_elem_type(m: Module, fn_name: String, base: String) -> String {
     let a: AstArena = m.arena;
     let fid: i64 = replay_find_fn_item(m, fn_name);
     if fid < 0 { return String::from(""); }
+    let mut dot: u64 = 0;
+    while dot < base.len() && base.byte_at(dot) != 46 {
+        dot = dot + 1;
+    }
+    let pname: String = base.substring(0, dot);
     let lid: i64 = fn_params_lid(a, fid);
     let n: i64 = list_len(a, lid) / 4;
     let mut pi: i64 = 0;
     while pi < n {
         if arena_str(a, list_get(a, lid, pi * 4)) == pname {
-            return vc_cex_type_elem_name(a, list_get(a, lid, pi * 4 + 1));
+            let tid: i64 = list_get(a, lid, pi * 4 + 1);
+            if dot == base.len() { return vc_cex_type_elem_name(a, tid); }
+            let held: i64 = vc_cex_path_type(m, tid, base.substring(dot + 1, base.len()));
+            if held < 0 { return String::from(""); }
+            return vc_cex_type_elem_name(a, held);
         }
         pi = pi + 1;
     }

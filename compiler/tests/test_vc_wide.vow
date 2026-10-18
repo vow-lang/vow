@@ -130,10 +130,25 @@ fn check_handle_address_is_read_only() -> i64 {
     0
 }
 
+// An element of a collection a struct holds is at the keys `h ++ 2i` and `h ++ 2i + 1`.
+fn check_held_read_renders() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let s: SmtScript = arr_script(ar, String::from("a"));
+    let arr: i64 = vc_tm_var(ar, String::from("a"));
+    let h: i64 = vc_tm_var(ar, String::from("h"));
+    let idx: i64 = vc_tm_var(ar, String::from("i"));
+    vc_script_define_fun(s, String::from("r"), 128, vc_wide_read_held(ar, arr, h, idx));
+    let text: String = vc_command_text(ar, s, 1);
+    let want: String = String::from("(define-fun r () (_ BitVec 128) (concat (select a (concat h (bvadd (bvadd i i) #x0000000000000001))) (select a (concat h (bvadd i i)))))");
+    if text != want { return 30; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_keys_fold_for_a_constant_index();
     if r == 0 { r = check_read_and_write_render(); }
     if r == 0 { r = check_ref_table_and_shape(); }
     if r == 0 { r = check_handle_address_is_read_only(); }
+    if r == 0 { r = check_held_read_renders(); }
     i64_to_i32_wrap(r)
 }
