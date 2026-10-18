@@ -1,0 +1,21 @@
+// One `Vec` stored in two outer `Vec`s is one object: a push after the stores shows in both reads.
+module VecPointerElemTwoOuters
+
+fn both() -> u64 vow {
+  ensures: result == 2
+} {
+  let o1: Vec<Vec<i64>> = Vec::new();
+  let o2: Vec<Vec<i64>> = Vec::new();
+  let a: Vec<i64> = Vec::new();
+  o1.push(a);
+  o2.push(a);
+  a.push(1);
+  let x: Vec<i64> = o1[0];
+  let y: Vec<i64> = o2[0];
+  x.len() + y.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(both());
+  0
+}

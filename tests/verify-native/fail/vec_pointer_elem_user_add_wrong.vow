@@ -1,0 +1,26 @@
+// TEST: counterexample-fn "caller"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// A callee that pushes a `Vec` into a parameter `Vec`: inlined, the caller's read of the element names the `Vec` it passed. The postcondition names a wrong answer.
+module VecPointerElemUserAddWrong
+
+fn add(o: Vec<Vec<i64>>, v: Vec<i64>) {
+  o.push(v);
+}
+
+fn caller() -> u64 vow {
+  ensures: result == 0
+} {
+  let o: Vec<Vec<i64>> = Vec::new();
+  let v: Vec<i64> = Vec::new();
+  add(o, v);
+  v.push(1);
+  v.push(2);
+  let e: Vec<i64> = o[0];
+  e.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(caller());
+  0
+}

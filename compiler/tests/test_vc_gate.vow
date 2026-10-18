@@ -4,6 +4,8 @@ use ir
 use ir_printer
 use vc_gate
 use vc_ops
+use vc_overlay
+use vc_ptrstore
 use tests.builders
 
 fn args1(a: i64) -> Vec<i64> {
@@ -709,6 +711,10 @@ fn check_pointer_elements() -> i64 {
     // the Vec is built by the function and the pointer is an object it names: the slot holds
     // its address, so the read is of that object
     if vc_skip_reason(get).len() != 0 { return 3; }
+    let got: VcPtrStores = vc_ptr_store_analyze(get, vc_ty_table(get), false);
+    if !got.addr { return 8; }
+    // a store nothing reads back keeps the constant
+    if vc_ptr_store_analyze(ptr_push, vc_ty_table(ptr_push), false).addr { return 9; }
     // the same with a Vec parameter: the elements it already holds are memory the caller gave
     let gp: Vec<IrInst> = Vec::new();
     gp.push(mk_inst_arg(40, ITY_PTR(), 0));
@@ -747,6 +753,24 @@ fn check_pointer_elements() -> i64 {
     pp.push(ITY_I64());
     let pf: IrFunction = one_block(String::from("v"), pp, ITY_I64(), pv);
     if vc_skip_reason(pf) != String::from("unsupported-opcode: a pointer element is stored in a function that reads memory through a handle") { return 6; }
+    0
+}
+
+// The class an overlay entry of a parameter is declared under comes from the head of its type.
+fn check_param_class() -> i64 {
+    let f: IrFunction = ir_function_new(0, String::from("p"), ITY_UNIT(), 0, String::from(""));
+    f.param_keys.push(String::from("Vec"));
+    f.param_keys.push(String::from("String"));
+    f.param_keys.push(String::from("Person"));
+    f.param_keys.push(String::from("HashMap"));
+    f.param_keys.push(String::from(""));
+    if vc_overlay_param_class(f, 0) != VC_OV_VEC() { return 1; }
+    if vc_overlay_param_class(f, 1) != VC_OV_STRING() { return 2; }
+    if vc_overlay_param_class(f, 2) != VC_OV_STRUCT() { return 3; }
+    if vc_overlay_param_class(f, 3) != 0 { return 4; }
+    if vc_overlay_param_class(f, 4) != 0 { return 5; }
+    if vc_overlay_param_class(f, 5) != 0 { return 6; }
+    if vc_overlay_param_class(f, -1) != 0 { return 7; }
     0
 }
 
@@ -899,6 +923,7 @@ fn main() -> i32 {
     if r == 0 { r = check_vec_ops_accepted(); }
     if r == 0 { r = check_vec_ops_rejected(); }
     if r == 0 { r = check_pointer_elements(); }
+    if r == 0 { let c: i64 = check_param_class(); if c != 0 { r = 200 + c; } }
     if r == 0 { r = check_handle_for_object(); }
     if r == 0 { r = check_vec_sort(); }
     if r == 0 { r = check_vec_copy_ops(); }

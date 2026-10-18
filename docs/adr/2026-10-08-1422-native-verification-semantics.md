@@ -1256,6 +1256,51 @@ Three small rules, each sound for proofs and none a cap or a havoc.
   and a wrong postcondition is still refuted by the bounded rounds
   (`fail/loop_without_invariant_cut_wrong.vow`).
 
+## Addendum (#1663): reading a pointer element back (address per object)
+
+The first #1663 addendum stores a pointer pushed into a `Vec` as a fresh constant and keeps out of the
+subset every function that could look at the slot again. This one gives the slot the address of its
+object, the mechanism of #1756, for the functions that do read an element back.
+
+- **The slot is the object's address.** In a function that reads an element back (`vc_ptr_store_analyze`
+  says `addr`), `push` and `set` of a `String`, `Vec` or struct store `vc_overlay_addr_of` of the object
+  (`vc_walk_slot_word`): the free 64-bit address its overlay entry has, a parameter's own address for a
+  parameter. `get` already returned the slot, typed `i64` (a handle), so `outer[i].len()` is a read through
+  a handle: `ite(h == address(o), state of o, ..., array[h])`, at the state of the walk (a `push` made after
+  the store, a later `set`, `pop`, `clear` and `truncate` of the inner object are seen) with the entries of
+  allocated objects distinct from one another and from every term read out of the given memory (the tags of
+  #1805). Nothing new is added to the overlay: an element read is an element read, a field read is a field
+  read. A function that never reads an element back keeps the constant, so nothing that verified before
+  changes its query.
+- **When the address is exact.** The elements of a `Vec` the function created empty (`Vec::new`) are exactly
+  what the function stored, and each stored word is the address of an entry with a class (used as a `Vec`,
+  `String` or struct, or built or declared as one: `vc_overlay_built_table`, which also takes the head of a
+  parameter's declared type), so a read through an element names one entry or, in a loop cut, an arbitrary
+  address that no entry of the walk's block names and reads the free heap arrays, which only widens the
+  states: a `sat` there is never reported (a cut's `sat` is `unknown`) and every bounded round is exact. The
+  gate (`vc_ptr_store_resolvable`) states it: every receiver of a pointer store is a `Vec::new` (or a Phi of
+  them; a collection read from a struct field is accepted before inlining and checked again after it); every
+  pointer stored is a parameter, an allocation, a literal or a `String`/`Vec` creator with a class, and
+  nothing else is stored into such a `Vec` (a handle read from another `Vec` is not an address the tags know,
+  and tagging it as given memory would make the path infeasible when it is the address of an object the
+  function built); and no element read of a `Vec` the function did not store into is used as an object (it
+  may equal the address of one the function built).
+- **What stays `Skipped`** (`a pointer element is read back`, as before): the elements of a `Vec` parameter
+  that also receives a pointer, `outer[i][j]` and any element read of an element (the second `get` has a
+  handle for receiver, whose elements the gate cannot tell from given memory), a handle stored in a
+  `Vec` of pointers, a pointer stored that is none of the kinds above, and a stored object with no class.
+  Copies (`vec_sort`, `pin_to_root`) of a `Vec` that holds a pointer stay `Skipped` (`a Vec of pointer
+  elements is copied`).
+- **Alternatives rejected.** Noting the result of `get` as a loaded term (tag 0) is unsound once a handle
+  can be stored: a value that is the address of an allocated entry would be assumed tag 0 and the path would
+  be infeasible. A quantified fact that every initial element of a parameter `Vec` has tag 0 would lift the
+  parameter restriction but turns the logic into one with quantifiers for every function that stores a
+  pointer; left for a follow-up.
+
+Pinned by `pass/vec_pointer_element_read_back.vow` (moved out of `skip/`) and
+`pass/vec_pointer_elem_*.vow`, their `fail/vec_pointer_elem_*_wrong.vow` twins (each counterexample
+replays at run time) and `skip/vec_pointer_elem_*_skipped.vow`.
+
 ## Addendum (#1654): `replace`, `split` and `join`
 
 Three builtins that were `unmodeled-builtin` are opaque total functions of their operands, sound for proofs and neither a cap nor a havoc.

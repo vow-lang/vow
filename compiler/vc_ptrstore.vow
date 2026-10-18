@@ -9,31 +9,29 @@ use vc_vec
 use vc_overlay
 
 // Gate rule for a pointer stored into a `Vec` (`outer.push(inner)`, `names.push(s)`,
-// `rows[i] = row`). The slot holds the object's address, and the model has no
-// address for an object the function built: `push` and `set` store a fresh
-// 64-bit constant (`vc_exec`), exact for everything that never looks at the slot
-// again, which is what the length, the bounds of the other elements and the
-// returned `Vec` need. A function that could look at it is not modelled:
+// `rows[i] = row`). The slot holds the object's address. When nothing looks at it again, `push`
+// and `set` store a fresh 64-bit constant (`vc_exec`), exact for everything the function can
+// observe: the length, the bounds of the other elements and the returned `Vec`. A function that
+// could look at the slot is one of three cases:
 //
-//   - `get` of a `Vec` that holds a stored pointer returns that constant, and a read
-//     through it (`len`, `get`, `byte_at`, a field) is a read of memory the model does
-//     not tie to the object that was pushed, so it would be free where the runtime has
-//     one answer;
-//   - a copy (`pin_to_root`, `vec_sort`) of such a `Vec` carries the slot along;
-//   - a stored pointer may be reachable through any handle the function loaded (the
-//     `Vec` may be a parameter another handle names), so a function that reads memory
-//     through a handle is left to ESBMC, unless every `Vec` a pointer is stored into is
-//     one the function built and no pointer read out of memory is used as an object.
+//   - it reads an element back (`get` of a `Vec` that holds a stored pointer) and every `Vec` a
+//     pointer is stored into is one it created, so every element is an address it stored: the slot
+//     holds the address of the object (`vc_overlay_addr_of`, the entry of #1756) and a read through
+//     the element is a read of that object, `vc_ptr_store_resolvable`;
+//   - it copies (`pin_to_root`, `vec_sort`) such a `Vec`, which carries the slot along, or reads
+//     back an element of a `Vec` the function was given, which the model cannot tell from a stored
+//     address: `Skipped`;
+//   - it reads memory through a handle (a stored pointer may be reachable through any handle the
+//     function loaded): exact when every `Vec` a pointer is stored into is one the function built
+//     and no pointer read out of memory is used as an object, `vc_ptr_store_exact`; the address
+//     model also covers it (`vc_ptr_store_resolvable`) when the function reads an element back.
 //
-// The exception is exact, not a bound. A `Vec` the function built is no object a handle
-// loaded from the memory it was given can name, and the model makes no pointer visible
-// through one: the slot holds a constant nothing else mentions, so a read of the slot is a
-// value the model leaves free, which only a function that uses that value as an object (a
-// `Vec` operation or a field access on a pointer an element read returned) could turn
-// into a claim about the pushed object. A function with no such use cannot tell.
-//
-// The full model (an address per object, read back through the overlay of
-// `vc_overlay`) is the object-identity work tracked by #1663.
+// The constant is exact, not a bound. A `Vec` the function built is no object a handle loaded
+// from the memory it was given can name, and the model makes no pointer visible through one: the
+// slot holds a constant nothing else mentions, so a read of the slot is a value the model leaves
+// free, which only a function that uses that value as an object (a `Vec` operation or a field
+// access on a pointer an element read returned) could turn into a claim about the pushed object.
+// A function with no such use cannot tell.
 
 // The verdict of the gate on a function that stores pointers into `Vec`s: `detail` is "" when
 // the function is inside the subset, else the detail of an `unsupported-opcode` skip. `addr` is

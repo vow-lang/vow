@@ -1,0 +1,24 @@
+// TEST: counterexample-fn "mix"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// A parameter `Vec` and a local one stored in the same outer `Vec`: each slot names its own object. The postcondition names a wrong answer.
+module VecPointerElemParamAndLocalWrong
+
+fn mix(given: Vec<i64>, k: u64) -> u64 vow {
+  ensures: result == given.len() + 2
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  w.push(1);
+  outer.push(given);
+  outer.push(w);
+  let a: Vec<i64> = outer[0];
+  let b: Vec<i64> = outer[1];
+  a.len() + b.len()
+}
+
+fn main() -> i32 [io] {
+  let g: Vec<i64> = Vec::new();
+  print_u64(mix(g, 0));
+  0
+}

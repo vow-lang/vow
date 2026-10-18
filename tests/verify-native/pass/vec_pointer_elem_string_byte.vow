@@ -1,0 +1,17 @@
+// The element of a `Vec<String>` read back is the `String` stored at that index: its bytes are that text's.
+module VecPointerElemStringByte
+
+fn first_byte() -> i64 vow {
+  ensures: result == 98
+} {
+  let names: Vec<String> = Vec::new();
+  names.push(String::from("a"));
+  names.push(String::from("bc"));
+  let n: String = names[1];
+  n.byte_at(0)
+}
+
+fn main() -> i32 [io] {
+  print_i64(first_byte());
+  0
+}
