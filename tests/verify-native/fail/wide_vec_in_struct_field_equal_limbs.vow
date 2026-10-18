@@ -1,0 +1,24 @@
+// TEST: replay-skipped field 0 is a Vec, which the replay harness cannot build
+// TEST: counterexample-fn "limbs_agree"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// The two limbs of an element read through a struct field are two slots: a model that read
+// one slot twice would prove them equal, and an element whose halves differ refutes it.
+module WideVecInStructFieldEqualLimbs
+
+struct Bag { items: Vec<u128> }
+
+fn limbs_agree(b: Bag) -> bool vow {
+  requires: b.items.len() > 0,
+  ensures: result
+} {
+  let x: u128 = b.items[0];
+  (x >> 64u128) == (x & 18446744073709551615u128)
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new() };
+  b.items.push(1);
+  print_i64(if limbs_agree(b) { 1 } else { 0 });
+  0
+}

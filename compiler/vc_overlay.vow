@@ -10,6 +10,7 @@ use vc_int
 use vc_agg
 use vc_vec
 use vc_heap
+use vc_wide
 
 // Parameters that may be the memory a handle names (`vc_heap`). A function that
 // reads memory through a handle and also writes a parameter cannot read the
@@ -157,6 +158,14 @@ fn vc_handle_elem(m: VcHandleMemory, b: i64, h: i64, idx: i64) -> i64 {
     let t: i64 = vc_overlay_elem(m.overlay, m.ag, m.vv, m.ar, m.header, m.assumed, b, h, idx, VC_OV_VEC(), false, base);
     vc_handle_note_loaded(m, base, ITY_I64());
     t
+}
+
+// The 128-bit element `idx` of the collection at `h`: its two 8-byte slots `2 idx` and `2 idx + 1`
+// (`vc_wide`), each read as a one-slot element.
+fn vc_handle_wide(m: VcHandleMemory, b: i64, h: i64, idx: i64) -> i64 {
+    let lo: i64 = vc_handle_elem(m, b, h, vc_wide_key(m.ar, idx, false));
+    let hi: i64 = vc_handle_elem(m, b, h, vc_wide_key(m.ar, idx, true));
+    vc_tm_app2(m.ar, VC_OP_CONCAT(), hi, lo)
 }
 
 fn vc_handle_byte(m: VcHandleMemory, b: i64, h: i64, idx: i64) -> i64 {

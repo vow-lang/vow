@@ -4,6 +4,7 @@ use ir
 use ir_dominance
 use vc_ops
 use vc_term
+use vc_heap
 
 // Model of the 128-bit elements of a `Vec<i128>` or `Vec<u128>` (`vc_vec`). The runtime
 // keeps such an element in two 8-byte slots, so the lowerer reaches it through the
@@ -38,6 +39,25 @@ fn vc_wide_ref_ids(f: IrFunction, n_ids: u64) -> Vec<i64> {
     out
 }
 
+// 1 for every id a wide `Vec` call defines on a collection at a handle, else 0.
+fn vc_wide_handle_ref_ids(f: IrFunction, tys: Vec<i64>) -> Vec<i64> {
+    let out: Vec<i64> = dom_fill(tys.len(), 0);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.id >= 0 && vc_vec_kind_is_wide(vc_inst_vec_kind(inst)) && inst.args.len() > 0 && vc_heap_ty(tys, inst.args[0]) == ITY_I64() {
+                out[inst.id as u64] = 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    out
+}
+
 // True for an access the model reads or writes an element address through: the
 // first limb pair of the address, as a `FieldGet` result or a `FieldSet` target.
 fn vc_wide_access_ok(inst: IrInst) -> bool {
@@ -45,10 +65,14 @@ fn vc_wide_access_ok(inst: IrInst) -> bool {
 }
 
 // Gate rule: an element address is used only as the target of a `WideSlot` access,
-// never as a value (a `Phi` operand, a call argument, a stored pointer). "" when
-// every use is one, else the detail of an `unsupported-opcode` skip.
-fn vc_wide_shape_detail(f: IrFunction, n_ids: u64) -> String {
+// never as a value (a `Phi` operand, a call argument, a stored pointer). The address of an
+// element of a collection at a handle (`vc_heap`) is only read through: memory the function
+// was given has no write model. "" when every use is one, else the detail of an
+// `unsupported-opcode` skip.
+fn vc_wide_shape_detail(f: IrFunction, tys: Vec<i64>) -> String {
+    let n_ids: u64 = tys.len();
     let refs: Vec<i64> = vc_wide_ref_ids(f, n_ids);
+    let handle_ref: Vec<i64> = vc_wide_handle_ref_ids(f, tys);
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
         let blk: IrBlock = f.blocks[bi];
@@ -61,6 +85,9 @@ fn vc_wide_shape_detail(f: IrFunction, n_ids: u64) -> String {
                 if id >= 0 && (id as u64) < n_ids && refs[id as u64] == 1 {
                     if a != 0 || !vc_wide_access_ok(inst) {
                         return String::from("wide Vec element address used as a value");
+                    }
+                    if inst.op == IOP_FIELD_SET() && handle_ref[id as u64] == 1 {
+                        return String::from("write through a wide element address of a collection at a handle");
                     }
                 }
                 a = a + 1;

@@ -553,7 +553,7 @@ fn vc_skip_reason_with(src: IrFunction, calls: bool) -> String {
         if str_shape.len() > 0 {
             return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), str_shape);
         }
-        let wide_shape: String = vc_wide_shape_detail(f, tys.len());
+        let wide_shape: String = vc_wide_shape_detail(f, tys);
         if wide_shape.len() > 0 {
             return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), wide_shape);
         }

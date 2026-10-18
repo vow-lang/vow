@@ -410,8 +410,8 @@ field or enum payload exactly, as one 128-bit term (it occupies two slots, and a
 narrow field declared after it lives in the shifted slot). A function that
 reads, writes, or pushes a `Vec<i128>` or `Vec<u128>` element is `Skipped`
 under ESBMC (an unsupported `Call extern` opcode); `--backend native` models the
-element of a parameter or local `Vec` exactly as one 128-bit value and skips one
-read through a struct field (`unsupported-opcode`). A call to `parse_i128` or
+element of a parameter, a local `Vec` or one held in a struct field exactly as one
+128-bit value (a write through a struct field is `unsupported-opcode`). A call to `parse_i128` or
 `parse_u128` is `Skipped` under ESBMC, whose 64-bit `Option` model cannot represent the
 result (the native verifier gives the payload its 128 bits and models the call
 as an opaque total function of the string). Contracts over 128-bit parameters

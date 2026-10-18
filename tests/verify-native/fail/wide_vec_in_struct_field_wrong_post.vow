@@ -1,0 +1,24 @@
+// TEST: replay-skipped field 0 is a Vec, which the replay harness cannot build
+// TEST: counterexample-fn "second"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// A wide element read through a struct field is one 128-bit value: the high limb decides
+// the sign, so a non-negative result is refuted by an element below zero.
+module WideVecInStructFieldWrongPost
+
+struct Bag { items: Vec<i128> }
+
+fn second(b: Bag) -> i128 vow {
+  requires: b.items.len() > 1,
+  ensures: result >= 0
+} {
+  b.items[1]
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new() };
+  b.items.push(1);
+  b.items.push(2);
+  print_i64(i128_to_i32_wrap(second(b)) as i64);
+  0
+}

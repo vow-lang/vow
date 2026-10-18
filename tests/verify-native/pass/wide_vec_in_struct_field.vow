@@ -1,0 +1,45 @@
+module WideVecInStructField
+
+struct Bag { items: Vec<i128> }
+struct UBag { items: Vec<u128> }
+
+// A `Vec<i128>` held in a field of a parameter is read through a handle: element `i` is
+// the two 8-byte slots `2i` and `2i + 1`, and a read is bounds-checked like a one-slot one.
+fn first(b: Bag) -> i128 vow {
+  requires: b.items.len() > 0,
+  ensures: result == b.items[0]
+} {
+  b.items[0]
+}
+
+fn sum_pair(b: Bag) -> i128 vow {
+  requires: b.items.len() > 1,
+  ensures: result == b.items[0] + b.items[1]
+} {
+  b.items[0] + b.items[1]
+}
+
+fn limbs_do_not_mix(b: Bag) -> bool vow {
+  requires: b.items.len() > 1,
+  ensures: result
+} {
+  let x: i128 = b.items[0];
+  let y: i128 = b.items[1];
+  b.items[0] == x && b.items[1] == y
+}
+
+fn read_through_a_local_vec_and_a_field(b: UBag, x: u128) -> bool vow {
+  requires: b.items.len() > 0,
+  ensures: result
+} {
+  let v: Vec<u128> = Vec::new();
+  v.push(x);
+  v[0] == x && b.items[0] == b.items[0]
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new() };
+  b.items.push(1);
+  print_i64(i128_to_i32_wrap(first(b)) as i64);
+  0
+}

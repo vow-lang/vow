@@ -1,0 +1,29 @@
+// TEST: stdout "1 1 1 1 1"
+module WideVecStructFieldRead
+
+struct Bag { items: Vec<u128> }
+
+// The layout the native verifier's handle model assumes: element `i` of a `Vec<u128>` held in
+// a struct field is the slots `2i` (low limb) and `2i + 1` (high limb) of the collection.
+fn low(b: Bag, i: u64) -> u128 {
+  b.items[i] & 18446744073709551615u128
+}
+
+fn high(b: Bag, i: u64) -> u128 {
+  b.items[i] >> 64u128
+}
+
+fn main() -> () [io] {
+  let b: Bag = Bag { items: Vec::new() };
+  b.items.push(18446744073709551621u128);
+  b.items.push(340282366920938463444927863358058659840u128 + 7u128);
+  print_i64(if low(b, 0) == 5u128 { 1 } else { 0 });
+  print_str(" ");
+  print_i64(if high(b, 0) == 1u128 { 1 } else { 0 });
+  print_str(" ");
+  print_i64(if low(b, 1) == 7u128 { 1 } else { 0 });
+  print_str(" ");
+  print_i64(if high(b, 1) == 18446744073709551615u128 { 1 } else { 0 });
+  print_str(" ");
+  print_i64(if b.items[0] + b.items[1] == 12u128 { 1 } else { 0 });
+}
