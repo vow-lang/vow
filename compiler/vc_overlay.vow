@@ -643,9 +643,7 @@ fn vc_overlay_field(ov: VcOverlay, ag: VcAgg, ar: VcArena, hdr: SmtScript, assum
     let mut i: u64 = 0;
     while i < ov.addr.len() {
         if (ov.cls[i] & VC_OV_STRUCT()) != 0 && !(loaded && ov.param[i] < 0) {
-            let seen: u64 = ag.ps_param.len();
-            let cell: i64 = vc_agg_get(ag, ar, hdr, vc_overlay_entry_obj(ov, ag, i), slot, vc_ty_sort(ty));
-            vc_agg_type_symbols(ag, seen, ty);
+            let cell: i64 = vc_agg_read_field(ag, ar, hdr, vc_overlay_entry_obj(ov, ag, i), slot, ty);
             acc = vc_tm_app3(ar, VC_OP_ITE(), vc_overlay_hit(ov, ar, i, h), cell, acc);
         }
         i = i + 1;

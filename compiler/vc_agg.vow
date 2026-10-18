@@ -4,6 +4,7 @@ use ir
 use vc_term
 use vc_smt
 use vc_flow
+use vc_int
 
 // Scalarised model of the heap aggregates (structs, enums, `Option`, `Result`)
 // the native verifier reads. A pointer value is an object, and an object is a
@@ -339,8 +340,8 @@ fn vc_agg_symbol_name(k: i64, idx: i64, sort: i64) -> String {
 // Declares the symbol `name` for slot `idx` of the parameter `k` (or of its child
 // object `obj`, whose path from the parameter is `path`) at `sort` and records it
 // (`ps_*`, in declaration order) so a counterexample can read it back: `ps_hdr` is
-// its position in the header, `ps_ty` is filled in by the caller that knows the IR
-// type of the read.
+// its position in the header. Typed field operations fill in `ps_ty` before
+// returning; recursive sort-based operations only declare the symbol.
 fn vc_agg_push_symbol(ag: VcAgg, ar: VcArena, hdr: SmtScript, k: i64, idx: i64, sort: i64, name: String, obj: i64, path: String) -> i64 {
     ag.ps_param.push(k);
     ag.ps_slot.push(idx);
@@ -465,6 +466,28 @@ fn vc_agg_type_symbols(ag: VcAgg, seen: u64, ty: i64) {
         ag.ps_ty[j] = ty;
         j = j + 1;
     }
+}
+
+// Typed field access owns lazy declarations and their counterexample types.
+// Only new symbols take `ty`: cached fields and alias identities keep theirs.
+// The sort-based operations below also serve recursive Phi and alias accesses.
+fn vc_agg_read_field(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, ty: i64) -> i64 {
+    let seen: u64 = ag.ps_param.len();
+    let term: i64 = vc_agg_get(ag, ar, hdr, obj, idx, vc_ty_sort(ty));
+    vc_agg_type_symbols(ag, seen, ty);
+    term
+}
+
+fn vc_agg_write_field(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, ty: i64, term: i64, pc: i64) {
+    let seen: u64 = ag.ps_param.len();
+    vc_agg_write(ag, ar, hdr, obj, idx, vc_ty_sort(ty), term, pc);
+    vc_agg_type_symbols(ag, seen, ty);
+}
+
+fn vc_agg_havoc_field(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, ty: i64, pc: i64) {
+    let seen: u64 = ag.ps_param.len();
+    vc_agg_havoc(ag, ar, hdr, obj, idx, vc_ty_sort(ty), pc);
+    vc_agg_type_symbols(ag, seen, ty);
 }
 
 // Term of slot `idx` of `obj` at `sort` at the current point of the walk. A slot
