@@ -158,11 +158,3 @@ compare_runtime_json() {
         fail "$label" "$result"
     fi
 }
-
-# A fixture may carry `// TEST: known-divergence <issue> "<why>"` to document a
-# tracked Rust-vs-self-hosted runtime divergence (docs/equivalence/README.md).
-# Such a fixture is committed deliberately: it pins a real miscompile so the
-# suite regression-guards the eventual fix. It reports as a loud SKIP rather
-# than a FAIL, and — mirroring verify_eval.py's GAP_FIXED — becomes a hard
-# FAIL once the two compilers agree again, so the directive must be removed in
-# the same PR that fixes the bug instead of silently going stale.

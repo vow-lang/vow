@@ -1,6 +1,13 @@
 # shellcheck shell=bash
 # Sourced by scripts/full_test.sh: shares its globals and helpers; not runnable on its own.
 
+# A fixture may carry `// TEST: known-divergence <issue> "<why>"` to document a
+# tracked Rust-vs-self-hosted runtime divergence (docs/equivalence/README.md).
+# Such a fixture is committed deliberately: it pins a real miscompile so the
+# suite regression-guards the eventual fix. It reports as a loud SKIP rather
+# than a FAIL, and — mirroring verify_eval.py's GAP_FIXED — becomes a hard
+# FAIL once the two compilers agree again, so the directive must be removed in
+# the same PR that fixes the bug instead of silently going stale.
 compare_runtime() {
     local label="$1" rust_bin="$2" self_bin="$3" stdin_file="${4:-}" vow_file="${5:-}"
 
