@@ -30,6 +30,8 @@ on:
     paths:
       - "compiler/**"
       - "tests/verify-native/**"
+      - "vow-runtime/**"
+      - "vow-clif-shim/**"
       - "scripts/check_native_fixtures.sh"
       - "scripts/check_contract_quality.*"
       - "scripts/test_check_native_fixtures.py"

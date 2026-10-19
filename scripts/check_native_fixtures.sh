@@ -157,7 +157,13 @@ print((cx[0].get('values') or {}).get(sys.argv[2], '<absent>') if cx else '<no c
             native_errors+=("counterexample-value ${native_name}: expected '$native_value', got '$native_actual'")
         fi
     done < <(sed -n 's|^// TEST: counterexample-value \([^ ]*\) \(.*\)$|\1 \2|p' "$vow_file")
-    native_replay_json=$(run_vowc verify --backend native --no-cache --replay-cex "$vow_file" 2>/dev/null) || true
+    # The harness writes temporary files next to the fixture under names that depend only on the
+    # function and clause, so concurrent workers replay a private copy.
+    native_replay_dir="$OUT/replay.$native_key"
+    mkdir -p "$native_replay_dir"
+    cp "$vow_file" "$native_replay_dir/"
+    native_replay_json=$(run_vowc verify --backend native --no-cache --replay-cex "$native_replay_dir/$name.vow" 2>/dev/null) || true
+    rm -rf "$native_replay_dir"
     native_replay=$(python3 -c "
 import json, sys
 j = json.loads(sys.argv[1])
@@ -275,25 +281,34 @@ if ! [[ "$jobs" =~ ^[1-9][0-9]*$ ]]; then
     exit 2
 fi
 vowc=$(realpath "$vowc")
-cd "$(dirname "$0")/.."
+self=$(realpath "$0")
+cd "$(dirname "$self")/.."
 
 have_solver=0
 command -v bitwuzla >/dev/null 2>&1 && have_solver=1
 
 out=$(mktemp -d)
-trap 'rm -rf "$out"' EXIT
+workers=""
+cleanup() {
+    if [ -n "$workers" ]; then kill "$workers" 2>/dev/null; fi
+    rm -rf "$out"
+}
+trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
 fixtures=()
+empty_dirs=()
 skipped_contracts=0
 skipped_status=0
 needs_cache_check=0
 IFS=, read -r -a dir_list <<<"$dirs"
 for native_dir in "${dir_list[@]}"; do
+    dir_found=0
     for vow_file in tests/verify-native/"$native_dir"/*.vow; do
         [ -f "$vow_file" ] || continue
+        dir_found=1
         case "$vow_file" in *"$filter"*) ;; *) continue ;; esac
         if [ "$native_dir" != "skip" ] && [ "$have_solver" -eq 0 ]; then
             if [ "$native_dir" = "contracts" ]; then skipped_contracts=1; else skipped_status=1; fi
@@ -302,12 +317,17 @@ for native_dir in "${dir_list[@]}"; do
         case "$native_dir" in skip|contracts) ;; *) needs_cache_check=1 ;; esac
         fixtures+=("$vow_file")
     done
+    if [ "$dir_found" -eq 0 ]; then empty_dirs+=("$native_dir"); fi
 done
 
 fails=0
 # skip/ fixtures contain only functions outside the subset, so they need no solver and keep
 # guarding "never Verified" even without one. `--require-solver` (CI) turns a missing solver into
 # a failure, so a broken install cannot make the checks vacuous.
+for native_dir in ${empty_dirs[@]+"${empty_dirs[@]}"}; do
+    echo "FAIL verify-native/$native_dir — no fixtures found in tests/verify-native/$native_dir"
+    fails=$((fails + 1))
+done
 solver_missing() {
     if [ "$require_solver" -eq 1 ]; then
         echo "FAIL verify-native/$1 — bitwuzla not on PATH (--require-solver)"
@@ -321,7 +341,7 @@ if [ "$skipped_status" -eq 1 ]; then solver_missing "pass+fail fixtures"; fi
 
 if [ ${#fixtures[@]} -gt 0 ]; then
     printf '%s\0' "${fixtures[@]}" |
-        VOW_ULIMIT_KB="${VOW_ULIMIT_KB:-}" xargs -0 -n1 -P "$jobs" bash "$0" --worker "$vowc" "$out" &
+        VOW_ULIMIT_KB="${VOW_ULIMIT_KB:-}" xargs -0 -n1 -P "$jobs" bash "$self" --worker "$vowc" "$out" &
     workers=$!
     for vow_file in "${fixtures[@]}"; do
         native_dir=$(basename "$(dirname "$vow_file")")
