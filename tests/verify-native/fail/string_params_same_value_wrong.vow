@@ -1,6 +1,7 @@
 // TEST: counterexample-fn "grow"
 // TEST: counterexample-vow-id 1
 // TEST: counterexample-blame Callee
+// TEST: esbmc-model-artifact fn="grow" blame=None vow_id=4294967293 "ESBMC fails its own String capacity assertion on the push_str to q for a q of the 256-byte model limit, before anything about p or the ensures; the runtime has no such limit and ESBMC models p and q as distinct strings, so it cannot see the aliasing failure native reports. A debug-mode replay with distinct p and q, q of 0 to 300 bytes, returns 1 without an abort, and the aliased call aborts on the ensures violation the native counterexample names; a Z3 cross-check of the native queries agrees"
 // The same for two `String` parameters: `main` passes one value for both, so the append to `q`
 // changes the length `p.len()` reads.
 module StringParamsSameValueWrong
