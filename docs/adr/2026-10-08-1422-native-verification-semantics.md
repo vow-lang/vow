@@ -1305,7 +1305,7 @@ object, the mechanism of #1756, for the functions that do read an element back.
   (`vc_overlay_declared_table`, from `IrFunction.param_keys`). Parameters of different types are still never
   one object. Pinned by `fail/vec_pointer_elem_struct_param_alias_wrong.vow`,
   `fail/ptr_field_struct_param_alias_wrong.vow` and their `_other_type` passes. Two `Vec` or two `String`
-  parameters that are one value are a separate gap, #1823.
+  parameters that are one value: ADR-2026-10-19-1700.
 - **What stays `Skipped`** (`a pointer element is read back`, as before): the elements of a `Vec` parameter
   that also receives a pointer, an element of an element used as an object (`outer[i][j].len()`: the second
   `get` has a handle for receiver, whose elements the gate cannot tell from given memory; a scalar
