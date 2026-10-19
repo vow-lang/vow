@@ -130,6 +130,8 @@ class StagedFileTokenTests(unittest.TestCase):
             "docs/spec/grammar.md",
             "docs/spec/errors.md",
             "docs/spec/contracts.md",
+            "docs/spec/contracts-methodology.md",
+            "docs/spec/stdlib.md",
             "docs/spec/operations.json",
         ):
             self.stage(name, b"x" * 20_001)
@@ -152,7 +154,7 @@ class StagedFileTokenTests(unittest.TestCase):
             "compiler/env.vow",
             "compiler/tests/catalogue_facts.vow",
             "vow/src/skill.rs",
-            "docs/spec/stdlib.md",
+            "docs/spec/examples.md",
             "docs/spec/src/cli/010-commands.md",
             "docs/spec/src/operations.json/010-print_str.part",
         )
