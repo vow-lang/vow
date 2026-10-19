@@ -23,6 +23,14 @@ Two separate scripts walk `tests/run/*.vow` and other `tests/*` directories, and
 So a `// TEST: stderr "..."` line on a `tests/run/*.vow` or `tests/debug/*.vow` fixture is checked
 by CI; on a `tests/error/*.vow` fixture it is enforced only when a developer runs
 `tests/run_tests.sh` locally.
+The `tests/verify-native/` directives (`counterexample-*`, `unknown-reason`, `replay-skipped`,
+`skip-reason`, `contract-*`, `warning`) and the weak-contract gate are checked at pull-request time
+too, by `.github/workflows/native-fixtures.yml`, which runs `scripts/check_native_fixtures.sh` and
+`scripts/check_contract_quality.sh` (and the `summary/` and `trust/` runners). `full_test.sh`
+Sections 4g and 8c keep their own copies of those loops, and
+`scripts/test_check_native_fixtures.py` fails when the directives they read differ, so change both.
+Run `scripts/check_native_fixtures.sh [--filter <path substring>] [--jobs N] build/vowc` before
+pushing a fixture. The rest of `full_test.sh` is still post-merge only (`full-test.yml`).
 Before claiming a directive is "never parsed by any harness," grep `tests/*.sh` as well as
 `scripts/*.sh` — the two harnesses live in different directories and cover different directives.
 
