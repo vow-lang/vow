@@ -525,6 +525,14 @@ fn check_map_params() -> i32 [io] {
     0
 }
 
+// A call whose result is linear is wrapped in `drop`, the language's way to discharge it.
+fn check_call_stmt() -> i32 {
+    if replay_call_stmt(String::from("f"), String::from("__replay_a0, 3"), false) != String::from("    f(__replay_a0, 3);\n") { return 701; }
+    if replay_call_stmt(String::from("make"), String::from("0"), true) != String::from("    drop(make(0));\n") { return 702; }
+    if replay_call_stmt(String::from("g"), String::from(""), true) != String::from("    drop(g());\n") { return 703; }
+    0
+}
+
 fn check_value_text_is_validated() -> i32 [io] {
     if agg(String::from("ff"), 0, String::from("f.1=-1")).reason.len() == 0 { return 141; }
     if agg(String::from("fp"), 0, String::from("p.0=abc")).reason.len() == 0 { return 142; }
@@ -736,6 +744,8 @@ fn main() -> i32 [io] {
     if r21 != 0 { return r21; }
     let r60: i32 = check_map_params();
     if r60 != 0 { return r60; }
+    let r70: i32 = check_call_stmt();
+    if r70 != 0 { return r70; }
     let r22: i32 = check_held_collections();
     if r22 != 0 { return r22; }
     let r19: i32 = check_float_vec_elements();

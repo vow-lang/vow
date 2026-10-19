@@ -1176,6 +1176,21 @@ fn replay_map_arg(a: AstArena, tid: i64, pname: String, names: Vec<String>, vals
     replay_arg_ok(lit, shown)
 }
 
+// The statement of the harness that calls `fn_name`. A linear result (a `linear struct`, or an
+// `Option`, `Result` or enum that owns one) carries an obligation that a bare call statement leaves
+// undischarged, so the harness hands it to `drop`, the language's own way to consume a value.
+fn replay_call_stmt(fn_name: String, call_args: String, linear_result: bool) -> String {
+    let out: String = String::from("    ");
+    if linear_result { out.push_str(String::from("drop(")); }
+    out.push_str(fn_name);
+    out.push_str(String::from("("));
+    out.push_str(call_args);
+    out.push_str(String::from(")"));
+    if linear_result { out.push_str(String::from(")")); }
+    out.push_str(String::from(";\n"));
+    out
+}
+
 // Source expression and type for argument `pi` of the function `fn_name`
 // declared in `m`, rebuilt from the counterexample's `<param>.<slot>` values.
 // `reason` says why it cannot be (nested aggregates, 128-bit fields, references,
