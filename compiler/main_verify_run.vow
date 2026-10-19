@@ -1,0 +1,279 @@
+module MainVerifyRun
+
+// `verify --backend native`: every function inside the integer subset is decided
+// by a `verify-worker` subprocess, at most `--verify-jobs` of them, each taking
+// functions from a shared queue, against the module this process lowered (see
+// `vc_pool`). Results are reported in IR order, so the output does not depend on
+// which worker finishes first, and reporting stops at the first function that is
+// not proven, as the sequential driver did.
+fn run_verify_native(argv: Vec<String>, fr: LoweredFrontend, path: String, tctx: TraceCtx) -> i32 [io, read, write] {
+    let checked: CheckedFrontend = fr.checked;
+    let dctx: DiagCtx = checked.dctx;
+    let ir_mod: IrModule = fr.ir_mod;
+    emit_ir_warnings(ir_mod, dctx);
+    let fns: Vec<IrFunction> = ir_mod.functions;
+    let ces: Vec<VerifyCE> = Vec::new();
+    let soft_meta: Vec<String> = Vec::new();
+    let const_fn_indices: Vec<i64> = detect_const_fns(ir_mod);
+    let timeout_ms: i64 = watchdog_ms_for(get_flag_arg(argv, "--timeout"));
+    let jobs: i64 = resolve_verify_jobs(argv);
+    let mut task_idx: Vec<i64> = Vec::new();
+    let mut task_names: Vec<String> = Vec::new();
+    let vm: IrModule = vc_erase_linear(ir_mod);
+    let budget: i64 = vc_summary_budget();
+    let cfg: VcSummaryCfg = VcSummaryCfg { trusted: Vec::new(), budget: budget };
+    let mut waves: VcWaveProofs = vc_waves_none();
+    let mut entries: Vec<NativeEntry> = native_plan(fns, ir_mod, vm, const_fn_indices, task_idx, task_names, cfg, waves, Vec::new());
+    let use_cache: bool = !has_flag(argv, "--no-cache") && timeout_ms > 0;
+    let mut cache: VcCache = vc_cache_off();
+    let roots: Vec<i64> = native_summary_roots(entries, vm);
+    if roots.len() > 0 && timeout_ms > 0 && vc_summaries_enabled() {
+        if use_cache { cache = vc_cache_resolve(vc_solver_locate()); }
+        waves = vc_waves_prove(vc_worker_exe(argv[0]), path, vm, roots, jobs, timeout_ms, budget, cache);
+        cfg.trusted = waves.ids;
+        if waves.fns.len() > 0 {
+            task_idx = Vec::new();
+            task_names = Vec::new();
+            entries = native_plan(fns, ir_mod, vm, const_fn_indices, task_idx, task_names, cfg, waves, entries);
+        }
+    }
+    if use_cache && task_idx.len() > 0 && !vc_cache_on(cache) { cache = vc_cache_resolve(vc_solver_locate()); }
+    let pool: VcPool = vc_pool_new(vc_worker_exe(argv[0]), path, task_idx, task_names, jobs, timeout_ms);
+    pool.cache = cache;
+    pool.summaries = cfg.trusted;
+    vc_pool_share_module(pool, vm);
+    let mut all_proven: bool = true;
+    let mut any_skipped: bool = false;
+    let t_verify: i64 = trace_now(tctx);
+    let mut e: u64 = 0;
+    while e < entries.len() && all_proven {
+        let en: NativeEntry = entries[e];
+        let f: IrFunction = fns[en.fn_index as u64];
+        if en.task < 0 && en.pre < 0 {
+            native_skip_function(f, en.reason, dctx);
+            any_skipped = true;
+            e = e + 1;
+        } else if en.pre >= 0 || vc_pool_ready(pool, en.task as u64) {
+            diag_eprintln_best_effort(str3(String::from("Verifying "), f.name, String::from("...")));
+            let oc: VcOutcome = { if en.pre >= 0 { waves.outcomes[en.pre as u64] } else { pool.results[en.task as u64] } };
+            if native_report_result(f, ir_mod, fr.merged, path, oc, ces, soft_meta, dctx) == 0 {
+                all_proven = false;
+            }
+            e = e + 1;
+        } else {
+            vc_pool_step(pool);
+        }
+    }
+    vc_pool_abort(pool);
+    trace_span(tctx, String::from("verification"), PID_COMPILER(), TID_VERIFY_DRIVER(), t_verify, trace_now(tctx) - t_verify, String::from(""));
+    report_unchecked_calls(fns, ir_mod, const_fn_indices, dctx);
+    let status_str: String = {
+        if !all_proven { String::from("VerifyFailed") }
+        else if any_skipped { String::from("Skipped") }
+        else { String::from("Verified") }
+    };
+    verify_finish(argv, fr.merged, fns, path, replay_main_start(argv, fr, path), dctx, tctx, status_str, ces, soft_meta, !all_proven || any_skipped)
+}
+
+// `verify-worker <source> --worker-budget-ms MS [--worker-clauses]
+// [--worker-module-root DIR] [--worker-ir FILE] [--worker-summaries IDS]
+// [--worker-cache-dir D --worker-solver-id V]` plus
+// either `--worker-session ROOT --worker-id W` or `--worker-index N
+// --worker-name F [--worker-probe vacuity|trivial] [--worker-scratch DIR]`:
+// internal. Decodes the module the parent lowered (`FILE`, see `vc_irwire`) or,
+// when that is not given or cannot be read, lowers the program (against `DIR`
+// when the parent did). A session works through the queue under ROOT (see
+// `vc_queue`), deciding every task it wins and answering each into the queue. The one-function form verifies
+// function N and prints the result in the `vc_worker` wire format. A probe
+// verifies the weak-contract rewrite of the function instead (see `vc_probe`) and
+// never asks for per-clause verdicts. The cache flags name the parent's result
+// cache; without both, the worker asks the solver every time. Exit 3 when the
+// program no longer matches what the parent planned; the parent reports that as a
+// crashed worker.
+fn run_verify_worker(argv: Vec<String>) -> i32 [io, read, write] {
+    let path: String = frontend_path_from_argv(argv, true, String::from("verify-worker"));
+    let budget_ms: i64 = str_to_i64(get_flag_arg(argv, "--worker-budget-ms"));
+    let loaded: Option<IrModule> = worker_module(argv, path);
+    let mut cache: VcCache = vc_cache_off();
+    if has_flag(argv, "--worker-cache-dir") && has_flag(argv, "--worker-solver-id") {
+        cache = VcCache { dir: get_flag_arg(argv, "--worker-cache-dir"), solver_id: get_flag_arg(argv, "--worker-solver-id") };
+    }
+    let clauses: bool = has_flag(argv, "--worker-clauses");
+    let session: String = get_flag_arg(argv, "--worker-session");
+    let tasks: VcQTasks = {
+        if session.len() > 0 {
+            match vc_q_tasks_decode(fs_read(vc_q_tasks_path(session))) {
+                Option::Some(t) => { t },
+                Option::None => { VcQTasks { idx: Vec::new(), names: Vec::new(), kinds: Vec::new() } },
+            }
+        } else {
+            let probe: String = get_flag_arg(argv, "--worker-probe");
+            let kind: i64 = {
+                if probe.len() == 0 { VC_TASK_KIND_VERIFY() }
+                else if probe == "vacuity" { VC_TASK_KIND_VACUITY() }
+                else if probe == "trivial" { VC_TASK_KIND_TRIVIAL() }
+                else { -1 }
+            };
+            let one: VcQTasks = VcQTasks { idx: Vec::new(), names: Vec::new(), kinds: Vec::new() };
+            one.idx.push(str_to_i64(get_flag_arg(argv, "--worker-index")));
+            one.names.push(get_flag_arg(argv, "--worker-name"));
+            one.kinds.push(kind);
+            one
+        }
+    };
+    let have: Vec<IrModule> = worker_module_cell(loaded);
+    let why: String = {
+        if have.len() == 0 || tasks.idx.len() == 0 { String::from("program does not match the planned function table") }
+        else { vc_task_mismatch(have[0].functions, tasks) }
+    };
+    if why.len() > 0 {
+        diag_eprintln_best_effort(str2(String::from("verify-worker: "), why));
+        return 3;
+    }
+    let vm: IrModule = have[0];
+    let cfg: VcSummaryCfg = VcSummaryCfg { trusted: vc_ids_parse(get_flag_arg(argv, "--worker-summaries")), budget: vc_summary_budget() };
+    if session.len() > 0 {
+        return vc_task_session(vm, tasks, session, str_to_i64(get_flag_arg(argv, "--worker-id")), budget_ms, cache, clauses, cfg);
+    }
+    let fns: Vec<IrFunction> = vm.functions;
+    let f: IrFunction = fns[tasks.idx[0] as u64];
+    print_str(vc_wire_encode(vc_task_run(vm, f, tasks.kinds[0], budget_ms, get_flag_arg(argv, "--worker-scratch"), cache, clauses, cfg)));
+    0
+}
+
+// The module a verify worker decides against: the one the parent shared
+// (`--worker-ir`, see `vc_irwire`) when the file is there and decodes, else the
+// program lowered here. `None` when that does not lower cleanly.
+fn worker_module(argv: Vec<String>, path: String) -> Option<IrModule> [io, read, write] {
+    let file: String = get_flag_arg(argv, "--worker-ir");
+    let shared: Option<IrModule> = {
+        if file.len() > 0 { vc_irw_decode(fs_read(file)) } else { Option::None }
+    };
+    match shared {
+        Option::Some(m) => { Option::Some(m) },
+        Option::None => {
+            if file.len() > 0 {
+                diag_eprintln_best_effort(String::from("verify-worker: the shared module cannot be read; lowering the program"));
+            }
+            worker_lower(argv, path)
+        },
+    }
+}
+
+fn worker_module_cell(loaded: Option<IrModule>) -> Vec<IrModule> {
+    let out: Vec<IrModule> = Vec::new();
+    match loaded {
+        Option::Some(m) => { out.push(m); },
+        Option::None => {},
+    }
+    out
+}
+
+fn worker_lower(argv: Vec<String>, path: String) -> Option<IrModule> [io, read, write] {
+    let fr: LoweredFrontend = frontend_lower_path_traced(path, get_flag_arg(argv, "--worker-module-root"), trace_off());
+    let checked: CheckedFrontend = fr.checked;
+    if checked.n_errors > 0 { return Option::None; }
+    Option::Some(vc_erase_linear(fr.ir_mod))
+}
+
+fn run_verify(argv: Vec<String>) -> i32 [io, read, write] {
+    let path: String = frontend_path_from_argv(argv, true, String::from("verify"));
+    let tctx: TraceCtx = {
+        if has_flag(argv, "--perfetto") { trace_new(get_flag_arg(argv, "--perfetto")) }
+        else { trace_off() }
+    };
+    let fr: LoweredFrontend = frontend_lower_path_traced(path, String::from(""), tctx);
+    let checked: CheckedFrontend = fr.checked;
+    let dctx: DiagCtx = checked.dctx;
+    let n_items: i64 = checked.n_items;
+    let n_errors: i64 = checked.n_errors;
+    if diag_ctx_print_all(dctx) == DIAG_EMIT_FAILED() {
+        diag_emit_emission_failure_json(dctx);
+        return 1;
+    }
+    diag_eprintln_best_effort(str4(i64_to_string(n_items), String::from(" items, "), i64_to_string(n_errors), String::from(" errors")));
+    if n_errors > 0 {
+        diag_emit_verify_json(String::from("CompileFailed"), dctx, Vec::new());
+        return 1;
+    }
+    if get_flag_arg(argv, "--backend") == "native" {
+        return run_verify_native(argv, fr, path, tctx);
+    }
+    let max_k_step_str: String = get_flag_arg(argv, "--max-k-step");
+    let max_k_step: String = {
+        if max_k_step_str.len() > 0 { max_k_step_str }
+        else { String::from("50") }
+    };
+    let vec_max: i64 = VOW_VEC_MAX();
+    let string_max: i64 = VOW_STRING_MAX();
+    let hashmap_max: i64 = VOW_HASHMAP_MAX();
+    let btreemap_max: i64 = VOW_BTREEMAP_MAX();
+    let jobs: i64 = resolve_verify_jobs(argv);
+    let use_cache: bool = !has_flag(argv, "--no-cache");
+    let mut solver: String = get_flag_arg(argv, "--solver");
+    let encoding: String = get_flag_arg(argv, "--encoding");
+    let timeout_secs: String = get_flag_arg(argv, "--timeout");
+    if encoding == String::from("ir") {
+        if solver == String::from("boolector") || solver == String::from("bitwuzla") {
+            diag_eprintln_best_effort(String::from("error: --encoding ir requires --solver z3"));
+            return 1;
+        }
+        if solver.len() == 0 || solver == String::from("auto") {
+            solver = String::from("z3");
+        }
+    }
+    let esbmc_bin: String = esbmc_path();
+    if !esbmc_exists(esbmc_bin) {
+        diag_eprintln_best_effort(String::from("error: ESBMC not found; install ESBMC to run verification"));
+        diag_emit_verify_json(String::from("VerifyFailed"), dctx, Vec::new());
+        return 1;
+    }
+    let ir_mod: IrModule = fr.ir_mod;
+    emit_ir_warnings(ir_mod, dctx);
+    let fns: Vec<IrFunction> = ir_mod.functions;
+    let ces: Vec<VerifyCE> = Vec::new();
+    let soft_meta: Vec<String> = Vec::new();
+    let const_fn_indices: Vec<i64> = detect_const_fns(ir_mod);
+    let t_verify: i64 = trace_now(tctx);
+    let outcome: i64 = run_verify_loop_traced(esbmc_bin, fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs, tctx);
+    trace_span(tctx, String::from("verification"), PID_COMPILER(), TID_VERIFY_DRIVER(), t_verify, trace_now(tctx) - t_verify, String::from(""));
+    let status_str: String = {
+        if outcome == 0 { String::from("Verified") }
+        else if outcome == 2 { String::from("Skipped") }
+        else { String::from("VerifyFailed") }
+    };
+    verify_finish(argv, fr.merged, fns, path, replay_main_start(argv, fr, path), dctx, tctx, status_str, ces, soft_meta, outcome != 0)
+}
+
+// Shared tail of `verify`: counterexample selection, replay, trace output and
+// the JSON result. Returns the process exit code.
+fn verify_finish(argv: Vec<String>, m: Module, fns: Vec<IrFunction>, path: String, main_start: i64, dctx: DiagCtx, tctx: TraceCtx, status_str: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, failed: bool) -> i32 [io, read, write] {
+    let native: bool = get_flag_arg(argv, "--backend") == "native";
+    let mut ces_final: Vec<VerifyCE> = Vec::new();
+    let ce_wins: bool = vf_prefers_counterexample(ces, soft_meta, fns);
+    if ce_wins {
+        ces_final = ces;
+    }
+    if has_flag(argv, "--replay-cex") && ces_final.len() > 0 {
+        ces_final = replay_all(ces_final, m, fns, path, main_start, argv[0], native);
+    }
+    let vstatus: String = { if ce_wins { String::from("") } else if soft_meta.len() >= 1 { soft_meta[0] } else { String::from("") } };
+    let vmsg: String = { if ce_wins { String::from("") } else if soft_meta.len() >= 2 { soft_meta[1] } else { String::from("") } };
+    let mut vf_func: String = String::from("");
+    let mut vf_ce: String = String::from("");
+    if status_str == String::from("VerifyFailed") {
+        let legacy: Vec<String> = vf_legacy_fields(ces_final, soft_meta, fns);
+        vf_func = legacy[0];
+        vf_ce = legacy[1];
+    }
+    trace_write(tctx);
+    vf_add_ce_diagnostics(dctx, ces_final);
+    if native {
+        report_verifier_bug_ces(dctx, ces_final);
+    }
+    diag_emit_verify_json_full(status_str, dctx, ces_final, vstatus, vmsg, vf_func, vf_ce);
+    if failed {
+        return 1;
+    }
+    0
+}

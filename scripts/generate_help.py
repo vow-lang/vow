@@ -4,7 +4,9 @@
 Reads docs/spec/grammar.md and docs/spec/cli.md (the canonical specs),
 builds the help JSON structure, and writes it into:
   - vow/src/skill.rs (skill_json raw string literal, skill_human string literal)
-  - compiler/main.vow (skill_json and skill_human as chunked string literals)
+  - compiler/help_text_gen.vow, compiler/skill_text_gen.vow and the shard modules
+    compiler/skill_bundle_NN_gen.vow, compiler/skill_docs_NN_gen.vow (chunked string
+    literals; whole generated files)
 
 The generator lives in the scripts/helpgen/ package; this file is the entry
 point and re-exports the names other scripts and tests import.
@@ -20,24 +22,16 @@ import json
 import sys
 
 import spec_assemble
-from helpgen.config import (
-    CLI,
-    CONTRACTS,
-    GRAMMAR,
-    MAIN_VOW,
-    REPO,
-    SKILL_RS,
-    SKILLS_DIR,
-)
-from helpgen.emit_rust import inject_rust, inject_skill_rust
+from helpgen.config import CLI, CONTRACTS, GRAMMAR, REPO, SKILLS_DIR
 from helpgen.emit_vow import (
     VOW_LITERAL_CHUNK_BYTES,
     _vow_payload_fn,
-    inject_skill_vow,
-    inject_vow,
+    vow_help_files,
+    vow_skill_files,
 )
 from helpgen.human_help import build_help_human
 from helpgen.json_help import build_help_json
+from helpgen.outputs import check_files, collect_files, write_files
 from helpgen.skill_text import (
     SKILL_FRONTMATTER,
     build_skill_bundle,
@@ -58,9 +52,9 @@ __all__ = [
     "build_skill_support_files",
     "extract_table",
     "extract_table_col",
-    "inject_skill_vow",
-    "inject_vow",
     "normalize_option",
+    "vow_help_files",
+    "vow_skill_files",
 ]
 
 
@@ -92,6 +86,14 @@ def main() -> None:
     skill_bundle_md = build_skill_bundle()
     skill_support_files = build_skill_support_files()
 
+    files = collect_files(
+        json_str,
+        human_str,
+        skill_entrypoint_md,
+        skill_bundle_md,
+        skill_support_files,
+    )
+
     if check_only:
         print("Generated JSON is valid.")
         print(f"  types: {len(data['language']['types'])}")
@@ -103,31 +105,21 @@ def main() -> None:
         print(f"  skill_entrypoint: {len(skill_entrypoint_md)} bytes")
         print(f"  skill_bundle: {len(skill_bundle_md)} bytes")
         print(f"  skill_support_files: {len(skill_support_files)}")
-        drift = check_skills_dir(skill_entrypoint_md, skill_support_files)
+        drift = check_files(files) + check_skills_dir(
+            skill_entrypoint_md, skill_support_files
+        )
         if drift:
-            print("\nskills/vow/ drift:")
+            print("\ngenerated file drift:")
             for line in drift:
                 print(f"  {line}")
             print("\nRun scripts/generate_help.py to regenerate.")
             sys.exit(1)
+        print(f"  generated files in sync ({len(files)} files)")
         print(f"  skills/vow/ in sync ({len(skill_support_files) + 1} files)")
         return
 
-    # Inject into Rust
-    new_rs = inject_rust(SKILL_RS, json_str, human_str)
-    new_rs = inject_skill_rust(
-        new_rs, skill_entrypoint_md, skill_bundle_md, skill_support_files
-    )
-    SKILL_RS.write_text(new_rs)
-    print(f"Updated {SKILL_RS}")
-
-    # Inject into self-hosted
-    new_vow = inject_vow(MAIN_VOW, json_str, human_str)
-    new_vow = inject_skill_vow(
-        new_vow, skill_entrypoint_md, skill_bundle_md, skill_support_files
-    )
-    MAIN_VOW.write_text(new_vow)
-    print(f"Updated {MAIN_VOW}")
+    for path in write_files(files):
+        print(f"Updated {path.relative_to(REPO)}")
 
     # Write the checked-in skill mirror that `npx skills add vow-lang/vow` reads.
     write_skills_dir(skill_entrypoint_md, skill_support_files)

@@ -1,0 +1,279 @@
+module MainVerifyNative
+
+fn verify_collect_and_report(
+    esbmc_bin: String, h: i64, tmp_path: String, f: IrFunction, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>,
+    max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
+    vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, t: TraceCtx, dctx: DiagCtx,
+) -> i64 [io, write] {
+    let effective_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
+    let vr0: VerifyResult = verify_collect(h, f, effective_timeout, tmp_path, t);
+    // #585: an `arith:` counterexample reports a checked operator whose abort is
+    // reachable. It is not a contract violation, so it must not fail the run —
+    // but it does hide the contract verdict, because ESBMC reports one violated
+    // property per run and this one fired first. Ask again with the arith
+    // obligations suppressed to get the verdict on returning executions.
+    let arith_site: ParsedArithSite = {
+        if vr0.status == VERIFY_FAILED() { parse_arith_site(vr0.raw_output) }
+        else { parsed_arith_site_none() }
+    };
+    let has_arith: bool = arith_site.cause.len() > 0;
+    let vr: VerifyResult = {
+        if has_arith {
+            verify_function_contracts_only(esbmc_bin, f, ir_mod, max_k_step, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max)
+        } else {
+            vr0
+        }
+    };
+    let st: i64 = vr.status;
+    // The contracts-only run answers this function completely: it ran its own
+    // BV->IR ladder over the suppressed source, so its verdict is final and must
+    // not fall through to the generic fallback below, which would re-emit the
+    // un-suppressed model and retry an obligation IR cannot violate.
+    if has_arith {
+        // The abort is reported only when the contract itself is proved. If the
+        // contract also fails, that failure is the actionable finding; claiming
+        // the abort alongside would be guesswork, since ESBMC never told us
+        // whether the arith obligation held on this second run.
+        if st == VERIFY_PROVEN() || st == VERIFY_PROVEN_IR() {
+            report_arith_overflow(f, ir_mod, path, arith_site, dctx);
+            return 1;
+        }
+        if st == VERIFY_FAILED() {
+            diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": FAILED")));
+            emit_ce_vars(vr);
+            if ces.len() == 0 {
+                ces.push(build_ce_from_result(f, ir_mod, vr, path));
+            }
+            return 0;
+        }
+        if st == VERIFY_TIMEOUT() {
+            return report_bv_timeout(f, String::from(""), soft_meta);
+        }
+        if st == VERIFY_UNKNOWN() {
+            return report_bv_unknown(f, vr.raw_output, String::from(""), soft_meta);
+        }
+        if st == VERIFY_NOT_FOUND() {
+            diag_eprintln_best_effort(String::from("error: ESBMC not found; install ESBMC or use --no-verify"));
+            record_soft_fail(soft_meta, String::from("tool_not_found"), String::from("ESBMC not found"), f.name);
+            return 0;
+        }
+        diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": ERROR")));
+        record_soft_fail(soft_meta, String::from("error"), String::from("ESBMC error during contracts-only verification"), f.name);
+        return 0;
+    }
+    if st == VERIFY_PROVEN() {
+        diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": PROVEN")));
+        // No on-disk cache on self-hosted; see the note above
+        // resolve_auto_bv_solver in verifier.vow.
+        return 1;
+    }
+    if st == VERIFY_PROVEN_IR() {
+        diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": PROVEN (IR)")));
+        return 1;
+    }
+    if st == VERIFY_FAILED() {
+        diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": FAILED")));
+        emit_ce_vars(vr);
+        if ces.len() == 0 {
+            ces.push(build_ce_from_result(f, ir_mod, vr, path));
+        }
+        return 0;
+    }
+    // BV timeout or memlimit exhaustion may retry with IR before failing
+    // (Phase D fallback). Other UNKNOWN outcomes are explicit inconclusive
+    // ESBMC results; do not let an IR proof hide them. Mirrors
+    // run_with_fallback in vow-verify.
+    let try_ir_retry: bool = bv_resource_limited(st, vr.raw_output)
+        && is_auto_encoding(encoding)
+        && resolve_auto_bv_solver(solver) != String::from("bitwuzla");
+    if try_ir_retry {
+        return report_ir_retry_outcome(esbmc_bin, f, ir_mod, max_k_step, use_cache, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, st, vr.raw_output, soft_meta);
+    } else if st == VERIFY_TIMEOUT() {
+        return report_bv_timeout(f, String::from(""), soft_meta);
+    } else if st == VERIFY_UNKNOWN() {
+        return report_bv_unknown(f, vr.raw_output, String::from(""), soft_meta);
+    }
+    if st == VERIFY_NOT_FOUND() {
+        diag_eprintln_best_effort(String::from("error: ESBMC not found; install ESBMC or use --no-verify"));
+        record_soft_fail(soft_meta, String::from("tool_not_found"), String::from("ESBMC not found"), f.name);
+        return 0;
+    }
+    let error_message: String = {
+        if vr.raw_output.len() > 0 { vr.raw_output } else { String::from("unrecognized ESBMC outcome") }
+    };
+    diag_eprintln_best_effort(str5(String::from("  "), f.name, String::from(": ERROR ("), error_message, String::from(")")));
+    record_soft_fail(soft_meta, String::from("error"), error_message, f.name);
+    0
+}
+
+// The file a call made in `caller` is in: the function's own source file (a
+// callee may live in another module), else the root file.
+fn native_call_site_file(caller: IrFunction, path: String) -> String {
+    if caller.source_file.len() > 0 { return caller.source_file; }
+    path
+}
+
+// `ce` with its call sites replaced by the exact chain of inlined calls the
+// native verifier followed to the failing clause, outermost first: the function
+// each call is made in and the range of the call. The argument values the
+// direct-call scan found stay.
+fn native_with_call_chain(ce: VerifyCE, ir_mod: IrModule, oc: VcOutcome, path: String) -> VerifyCE {
+    if oc.chain_funcs.len() == 0 {
+        return ce;
+    }
+    let fns: Vec<String> = Vec::new();
+    let files: Vec<String> = Vec::new();
+    let mut i: u64 = 0;
+    while i < oc.chain_funcs.len() {
+        let fi: i64 = find_ir_function_index_by_id(ir_mod.functions, oc.chain_funcs[i]);
+        if fi < 0 {
+            return ce;
+        }
+        let caller: IrFunction = ir_mod.functions[fi as u64];
+        fns.push(caller.name);
+        files.push(native_call_site_file(caller, path));
+        i = i + 1;
+    }
+    ce.call_site_functions = fns;
+    ce.call_site_files = files;
+    ce.call_site_offsets = oc.chain_starts;
+    ce.call_site_lengths = oc.chain_lens;
+    ce
+}
+
+// Report one native-backend result for `f`. Returns 1 when proven, else 0
+// after recording the counterexample or the soft failure. A proof carries one
+// `ArithOverflowReachable` warning per checked operator whose abort the solver
+// found reachable.
+fn native_report_result(f: IrFunction, ir_mod: IrModule, m: Module, path: String, oc: VcOutcome, ces: Vec<VerifyCE>, soft_meta: Vec<String>, dctx: DiagCtx) -> i64 [io] {
+    let vr: VerifyResult = oc.result;
+    let st: i64 = vr.status;
+    if st == VERIFY_PROVEN() {
+        if oc.sites.len() == 0 {
+            diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": PROVEN")));
+        }
+        let mut si: u64 = 0;
+        while si < oc.sites.len() {
+            report_arith_overflow(f, ir_mod, path, oc.sites[si], dctx);
+            si = si + 1;
+        }
+        return 1;
+    }
+    if st == VERIFY_FAILED() {
+        diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": FAILED")));
+        vc_cex_retype_elements(m, f.name, vr.var_names, vr.var_values);
+        emit_ce_vars(vr);
+        if ces.len() == 0 {
+            ces.push(native_with_call_chain(build_ce_from_result(f, ir_mod, vr, path), ir_mod, oc, path));
+        }
+        return 0;
+    }
+    if st == VERIFY_TIMEOUT() {
+        diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": TIMEOUT")));
+        record_soft_fail(soft_meta, String::from("timeout"), String::from(""), f.name);
+        return 0;
+    }
+    if st == VERIFY_UNKNOWN() {
+        diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": UNKNOWN")));
+        let why: String = {
+            if output_has_memory_limit(vr.raw_output) { memory_limit_reason() }
+            else if vc_output_has_unwinding(vr.raw_output) || vc_output_has_inline_budget(vr.raw_output) || vc_output_has_opaque_hook(vr.raw_output) || vc_output_has_map_state(vr.raw_output) || vc_output_has_summary(vr.raw_output) { vr.raw_output }
+            else { String::from("the solver answered unknown") }
+        };
+        record_soft_fail(soft_meta, String::from("unknown"), why, f.name);
+        return 0;
+    }
+    if st == VERIFY_PANICKED() {
+        diag_eprintln_best_effort(str5(String::from("  "), f.name, String::from(": PANICKED ("), vr.raw_output, String::from(")")));
+        record_soft_fail(soft_meta, String::from("panicked"), vr.raw_output, f.name);
+        return 0;
+    }
+    if st == VERIFY_NOT_FOUND() {
+        diag_eprintln_best_effort(String::from("error: Bitwuzla not found; install Bitwuzla to run native verification"));
+        record_soft_fail(soft_meta, String::from("tool_not_found"), String::from("Bitwuzla not found"), f.name);
+        return 0;
+    }
+    let raw: String = {
+        if vr.raw_output.len() > 0 { vr.raw_output } else { String::from("unrecognized Bitwuzla outcome") }
+    };
+    let detail: String = str_trim(raw);
+    diag_eprintln_best_effort(str5(String::from("  "), f.name, String::from(": ERROR ("), detail, String::from(")")));
+    record_soft_fail(soft_meta, String::from("error"), detail, f.name);
+    0
+}
+
+fn native_skip_function(f: IrFunction, reason: String, dctx: DiagCtx) [io] {
+    diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": SKIPPED (outside the native verifier subset)")));
+    let msg: String = str3(
+        String::from("skipped verification of `"),
+        f.name,
+        str2(String::from("`: "), reason),
+    );
+    let d: Diagnostic = diag_new(SEV_WARNING(), EC_VERIFICATION_SKIPPED(), msg, String::from(""), 0, 0, DIAG_BLAME_NONE());
+    diag_add_hint(d, String::from("the contract is documentary; runtime checks still apply in --mode debug"));
+    diag_ctx_emit(dctx, d);
+}
+
+// One verify target of the native driver, in IR order: skipped with a reason, run as pool task
+// `task`, or decided already by the proofs of the summary waves (`pre`, an index into their
+// outcomes).
+struct NativeEntry {
+    fn_index: i64,
+    reason: String,
+    task: i64,
+    pre: i64,
+}
+
+// `prev` is the plan made before the waves, or empty: a target it planned keeps its reason where
+// no summary can change it (`vc_module_skip_reason_retrust`). Both plans list the targets in
+// function order, so one cursor into `prev` finds them.
+fn native_plan(fns: Vec<IrFunction>, ir_mod: IrModule, vm: IrModule, const_fn_indices: Vec<i64>, task_idx: Vec<i64>, task_names: Vec<String>, cfg: VcSummaryCfg, waves: VcWaveProofs, prev: Vec<NativeEntry>) -> Vec<NativeEntry> {
+    let entries: Vec<NativeEntry> = Vec::new();
+    let vfns: Vec<IrFunction> = vm.functions;
+    let replan: bool = prev.len() > 0;
+    let idx_of: Vec<i64> = { if replan { vc_fn_index_table(vfns) } else { Vec::new() } };
+    let sizes: Vec<i64> = { if replan { dom_fill(vfns.len(), -1) } else { Vec::new() } };
+    let mut p: u64 = 0;
+    let mut fi: u64 = 0;
+    while fi < fns.len() {
+        let f: IrFunction = fns[fi];
+        if is_verify_target(f, ir_mod, const_fn_indices) {
+            while p < prev.len() && prev[p].fn_index < fi as i64 { p = p + 1; }
+            let reason: String = {
+                if p < prev.len() && prev[p].fn_index == fi as i64 { vc_module_skip_reason_retrust(vfns, idx_of, sizes, vfns[fi], vm, cfg.trusted, cfg.budget, prev[p].reason) }
+                else { vc_module_skip_reason_trusted(vfns[fi], vm, cfg.trusted, cfg.budget) }
+            };
+            let pre: i64 = vc_waves_outcome_of(waves, fi as i64);
+            if reason.len() > 0 {
+                entries.push(NativeEntry { fn_index: fi as i64, reason: reason, task: -1, pre: -1 });
+            } else if f.vows.len() > 0 && pre >= 0 {
+                entries.push(NativeEntry { fn_index: fi as i64, reason: String::from(""), task: -1, pre: pre });
+            } else {
+                entries.push(NativeEntry { fn_index: fi as i64, reason: String::from(""), task: task_idx.len() as i64, pre: -1 });
+                task_idx.push(fi as i64);
+                task_names.push(f.name);
+            }
+        }
+        fi = fi + 1;
+    }
+    entries
+}
+
+// Indices of the functions whose decision waits for proofs of other functions (`vc_waves`): the
+// ones the plan skipped as too large to inline, which need summaries, and the ones that will run
+// with a call tree above `vc_trust_root_min`, which skip the claims of the callees proven first.
+fn native_summary_roots(entries: Vec<NativeEntry>, vm: IrModule) -> Vec<i64> [read] {
+    let roots: Vec<i64> = Vec::new();
+    let vfns: Vec<IrFunction> = vm.functions;
+    let idx_of: Vec<i64> = vc_fn_index_table(vfns);
+    let sizes: Vec<i64> = dom_fill(vfns.len(), -1);
+    let root_min: i64 = vc_trust_root_min();
+    let mut e: u64 = 0;
+    while e < entries.len() {
+        let en: NativeEntry = entries[e];
+        if en.task < 0 && en.pre < 0 && vc_reason_code(en.reason) == VC_SKIP_INLINING_TOO_LARGE() { roots.push(en.fn_index); }
+        else if en.task >= 0 && vc_tree_size(vfns, idx_of, sizes, en.fn_index, VC_INLINE_SKIP_INSTS()) > root_min { roots.push(en.fn_index); }
+        e = e + 1;
+    }
+    roots
+}

@@ -141,15 +141,26 @@ def check_c_models(ops: list[dict], routes: list[str]) -> list[str]:
     return problems
 
 
+def _help_source(repo_root: Path, generated: str, legacy: str) -> tuple[str, str]:
+    """The file holding a compiler's embedded help: the generated module, or the
+    older host file when a tree predates the split."""
+    rel = generated if (repo_root / generated).exists() else legacy
+    return rel, (repo_root / rel).read_text()
+
+
 def check_doc_facts(ops: list[dict], repo_root: Path) -> list[str]:
-    """Cross-check each op's doc facts against grammar.md, main.vow and
-    skill.rs. Collects every mismatch instead of failing on the first."""
+    """Cross-check each op's doc facts against grammar.md and the generated help
+    text of both compilers. Collects every mismatch instead of failing on the first."""
     mismatches: list[str] = []
 
     grammar_text = (repo_root / "docs" / "spec" / "grammar.md").read_text()
     table = extract_builtin_signatures_table(grammar_text)
-    main_vow_text = (repo_root / "compiler" / "main.vow").read_text()
-    skill_rs_text = (repo_root / "vow" / "src" / "skill.rs").read_text()
+    vow_rel, main_vow_text = _help_source(
+        repo_root, "compiler/help_text_gen.vow", "compiler/main.vow"
+    )
+    rs_rel, skill_rs_text = _help_source(
+        repo_root, "vow/src/skill_gen/help_text.rs", "vow/src/skill.rs"
+    )
 
     for op in ops:
         name = op["name"]
@@ -166,11 +177,11 @@ def check_doc_facts(ops: list[dict], repo_root: Path) -> list[str]:
 
         skill_rs_line = f'"{name}": "{sig} {eff}"'
         if skill_rs_line not in skill_rs_text:
-            mismatches.append(f"vow/src/skill.rs: missing doc line for '{name}'")
+            mismatches.append(f"{rs_rel}: missing doc line for '{name}'")
 
         escaped_sig = sig.replace("\\", "\\\\").replace('"', '\\"')
         main_vow_line = f'\\"{name}\\": \\"{escaped_sig} {eff}\\"'
         if main_vow_line not in main_vow_text:
-            mismatches.append(f"compiler/main.vow: missing doc line for '{name}'")
+            mismatches.append(f"{vow_rel}: missing doc line for '{name}'")
 
     return mismatches

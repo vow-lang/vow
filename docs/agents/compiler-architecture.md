@@ -56,7 +56,15 @@ All diagnostic output flows through **`vow-diag`**, which every other crate uses
 - `ir.vow`, `ir_printer.vow`, `contract_text.vow`, `lower.vow` — IR lowering and printing (Wave 4); `contract_text.vow` renders contract predicate text identically to `vow-syntax/src/printer.rs`
 - `clif.vow` — Cranelift backend via FFI shims (`vow-clif-shim` crate)
 - `verify_report.vow` — failed-verification report pieces (violated-clause source, call-site argument values, one diagnostic per counterexample) that keep the `vow verify` JSON identical to the Rust driver's
-- `main.vow` — driver with subcommands (`build`, `verify`), flags, structured `--help`
+- `main.vow` — driver entry point: loads the driver modules and dispatches the subcommands
+  (`build`, `verify`, `test`, `contracts`, ...). The driver bodies live in `main_*.vow` modules,
+  one per responsibility (`main_args`, `main_replay`, `main_verify_*`, `main_build`,
+  `main_test*`, `main_skill`, `main_contracts`, ...)
+- `help_text_gen.vow`, `skill_text_gen.vow`, `skill_bundle_NN_gen.vow`, `skill_docs_NN_gen.vow` —
+  whole generated modules holding the embedded `--help` JSON, human help and skill text.
+  `scripts/generate_help.py` writes them from `docs/spec/`; never edit them by hand. A file named
+  `*_gen.vow` is exempt from the authored-file budget (`.gitattributes`), so a generated block never
+  belongs inside a hand-written module
 
 ### Building and running
 

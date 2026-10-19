@@ -1,0 +1,238 @@
+module MainVerifyReport
+
+// Compute (function, counterexample) for the VerifyFailed top-level JSON fields.
+// Precondition: status is VerifyFailed (i.e. ces non-empty OR soft_meta has 3 entries).
+// Mirrors Rust's BuildStatus::VerifyFailed { function, description } shape.
+fn verify_function_index(fns: Vec<IrFunction>, name: String) -> i64 {
+    let mut i: i64 = 0;
+    while i < fns.len() as i64 {
+        let f: IrFunction = fns[i as u64];
+        if f.name == name {
+            return i;
+        }
+        i = i + 1;
+    }
+    9223372036854775807
+}
+
+fn vf_prefers_counterexample(ces: Vec<VerifyCE>, soft_meta: Vec<String>, fns: Vec<IrFunction>) -> bool {
+    if ces.len() == 0 {
+        return false;
+    }
+    if soft_meta.len() < 3 {
+        return true;
+    }
+    let ce: VerifyCE = ces[0];
+    let ce_idx: i64 = verify_function_index(fns, ce.target_function);
+    let soft_idx: i64 = verify_function_index(fns, soft_meta[2]);
+    ce_idx <= soft_idx
+}
+
+fn vf_legacy_fields(ces: Vec<VerifyCE>, soft_meta: Vec<String>, fns: Vec<IrFunction>) -> Vec<String> {
+    let result: Vec<String> = Vec::new();
+    if vf_prefers_counterexample(ces, soft_meta, fns) {
+        let ce: VerifyCE = ces[0];
+        result.push(ce.target_function);
+        result.push(String::from("[Counterexample]"));
+        return result;
+    }
+    if soft_meta.len() >= 3 {
+        let status: String = soft_meta[0];
+        let message: String = soft_meta[1];
+        let func: String = soft_meta[2];
+        result.push(func);
+        let desc: String = String::from("");
+        if status == String::from("timeout") {
+            desc.push_str(String::from("verification timed out"));
+        } else if status == String::from("unknown") {
+            desc.push_str(String::from("verification result unknown: "));
+            desc.push_str(message);
+        } else if status == String::from("error") {
+            desc.push_str(String::from("esbmc error: "));
+            desc.push_str(message);
+        } else if status == String::from("tool_not_found") {
+            if message.len() > 0 {
+                desc.push_str(message);
+            } else {
+                desc.push_str(String::from("ESBMC not found"));
+            }
+        } else {
+            desc.push_str(message);
+        }
+        result.push(desc);
+        return result;
+    }
+    result
+}
+
+// Report a checked operator whose ArithmeticOverflow abort ESBMC proved
+// reachable (#585). A Warning, not a failure: aborting is the operator's
+// specified behaviour, and the contract is still proved for every returning
+// execution. Mirrors `VerifyWarning::ArithOverflow`'s diagnostic in the Rust
+// driver, which `compare_json` holds byte-identical.
+// Attribute the warning to the function the operator actually lives in, which is
+// not always the verify target: a model co-emits its modelable callees, so
+// verifying `caller` can surface a site inside `helper`. Naming the target would
+// report checked arithmetic in a function that contains none, and — because
+// spans are file-relative — point the offset into the wrong file once the callee
+// comes from another module. Falls back to the target when the id resolves to
+// nothing. Mirrors `arith_overflow_warning` in the Rust driver.
+fn arith_owner_index(m: IrModule, owner_id: i64) -> i64 {
+    let fns: Vec<IrFunction> = m.functions;
+    let mut i: i64 = 0;
+    while i < fns.len() as i64 {
+        let f: IrFunction = fns[i as u64];
+        if f.id == owner_id { return i; }
+        i = i + 1;
+    }
+    -1
+}
+
+// True when an identical ArithOverflowReachable diagnostic is already recorded.
+// Compared on rendered identity — same place, same owning function via the
+// message — so the several verify targets that share one site collapse to one.
+fn arith_already_reported(dctx: DiagCtx, owner_name: String, file: String, ostart: i64, olen: i64) -> bool {
+    let ds: Vec<Diagnostic> = dctx.diags;
+    let needle: String = str3(String::from("checked arithmetic in `"), owner_name, String::from("` can abort"));
+    let mut i: u64 = 0;
+    while i < ds.len() {
+        let d: Diagnostic = ds[i];
+        if d.code == EC_ARITH_OVERFLOW_REACHABLE() && d.span_start == ostart &&
+           d.span_len == olen && d.file == file && str_starts_with(d.message, needle) {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn report_arith_overflow(f: IrFunction, ir_mod: IrModule, path: String, site: ParsedArithSite, dctx: DiagCtx) [io] {
+    let idx: i64 = arith_owner_index(ir_mod, site.owner);
+    let fns: Vec<IrFunction> = ir_mod.functions;
+    let owner_name: String = if idx >= 0 { let o: IrFunction = fns[idx as u64]; o.name } else { f.name };
+    let owner_src: String = if idx >= 0 { let o2: IrFunction = fns[idx as u64]; o2.source_file } else { String::from("") };
+    // A function's own source_file is authoritative under multi-module
+    // compilation; `path` is only the entry path the CLI was given.
+    let owner_file: String = if owner_src.len() > 0 { owner_src } else { path };
+    diag_eprintln_best_effort(str3(String::from("  "), owner_name, String::from(": PROVEN (checked arithmetic can abort)")));
+    let msg: String = str3(
+        String::from("checked arithmetic in `"),
+        owner_name,
+        str2(String::from("` can abort: "), arith_cause_description(site.cause)),
+    );
+    // One site can be reported by several verify targets — a model co-emits its
+    // modelable callees, so a site in `helper` surfaces both when verifying
+    // `helper` and when verifying every contracted caller of it. Attributed to
+    // the same owner they are the same diagnostic, so report it once. Mirrors
+    // `dedup_warnings` in the Rust driver, which `compare_json` holds to the
+    // same diagnostic count.
+    if arith_already_reported(dctx, owner_name, owner_file, site.ostart, site.olen) {
+        return;
+    }
+    let d: Diagnostic = diag_new(SEV_WARNING(), EC_ARITH_OVERFLOW_REACHABLE(), msg, owner_file, site.ostart, site.olen, DIAG_BLAME_NONE());
+    diag_add_hint(d, String::from("the contract is proved for every execution that returns; this abort is a separate runtime outcome"));
+    diag_add_hint(d, String::from("constrain the operands in `requires` to rule the abort out, or use the wrapping operator if wrapping is intended"));
+    diag_ctx_emit(dctx, d);
+}
+
+// One zeroed-out model-bounds slot per function: `bounds[fi]` is "" until
+// `verify_start` reports the bounds of the model it sent to ESBMC.
+fn model_bounds_table(n: i64) -> Vec<String> {
+    let table: Vec<String> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n {
+        table.push(String::from(""));
+        i = i + 1;
+    }
+    table
+}
+
+// Report that a proof was obtained from a model restricting collection lengths
+// to the model capacity (the structured "this proof is bounded" Note). A Note,
+// not a failure: the contracts are proved, only for executions within the bound.
+// `bounds` is read off the model that was proved (its `vow:model-bound`
+// markers), so it describes exactly what was checked. Mirrors
+// `CapacityBoundNote` in the Rust driver. `compare_json` only compares
+// diagnostics as a multiset of (error_code, blame); the note text and order are
+// held identical by the ordered-notes parity section of scripts/full_test.sh.
+fn report_capacity_bound(function: String, bounds: String, dctx: DiagCtx) [io] {
+    if bounds.len() == 0 { return; }
+    let msg: String = str5(
+        String::from("proof of `"),
+        function,
+        String::from("` is bounded: only executions within the verifier model capacity were checked ("),
+        bounds,
+        String::from(")"),
+    );
+    let d: Diagnostic = diag_new(SEV_NOTE(), EC_MODEL_CAPACITY_ASSUMED(), msg, String::from(""), 0, 0, DIAG_BLAME_NONE());
+    diag_add_hint(d, String::from("the bound belongs to the bounded model checker, not to the program or its contracts; executions beyond it (longer collections, more struct allocations) were not checked"));
+    diag_add_hint(d, String::from("do not add a length bound to a contract to silence this note; an unbounded verifier removes it without any source change"));
+    diag_ctx_emit(dctx, d);
+}
+
+// Capacity notes describe a completed proof run: they follow every other
+// finding, in function order, and exist only when every function was proved and
+// none was skipped. Shared by `vowc verify` and `vowc build`, mirroring
+// `to_output_with_warnings` in the Rust driver.
+fn report_capacity_notes(fns: Vec<IrFunction>, model_bounds: Vec<String>, dctx: DiagCtx) [io] {
+    let mut ni: i64 = 0;
+    while ni < fns.len() as i64 && ni < model_bounds.len() as i64 {
+        let nf: IrFunction = fns[ni as u64];
+        report_capacity_bound(nf.name, model_bounds[ni as u64], dctx);
+        ni = ni + 1;
+    }
+}
+
+// `suffix` is appended to the stderr verdict ("" or " (BV and IR)"). Timeout
+// carries an empty message to match Rust's None.
+fn report_bv_timeout(f: IrFunction, suffix: String, soft_meta: Vec<String>) -> i64 [io, write] {
+    diag_eprintln_best_effort(str4(String::from("  "), f.name, String::from(": TIMEOUT"), suffix));
+    record_soft_fail(soft_meta, String::from("timeout"), String::from(""), f.name);
+    0
+}
+
+// Unknown carries ESBMC's own explanation.
+fn report_bv_unknown(f: IrFunction, raw_output: String, suffix: String, soft_meta: Vec<String>) -> i64 [io, write] {
+    diag_eprintln_best_effort(str4(String::from("  "), f.name, String::from(": UNKNOWN"), suffix));
+    record_soft_fail(soft_meta, String::from("unknown"), parse_unknown_reason(raw_output), f.name);
+    0
+}
+
+// Retry a resource-limited BV verdict (`st`, `bv_raw`) with --z3 --ir and report
+// the outcome.
+fn report_ir_retry_outcome(
+    esbmc_bin: String, f: IrFunction, ir_mod: IrModule, max_k_step: String, use_cache: bool, timeout_secs: String,
+    vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, st: i64, bv_raw: String, soft_meta: Vec<String>,
+) -> i64 [io, write] {
+    diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": BV inconclusive, retrying with --z3 --ir...")));
+    let vr2: VerifyResult = verify_function_ir_fallback(esbmc_bin, f, ir_mod, max_k_step, use_cache, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+    let st2: i64 = vr2.status;
+    if st2 == VERIFY_PROVEN_IR() {
+        diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": PROVEN (IR)")));
+        return 1;
+    }
+    if st2 == VERIFY_FAILED() {
+        // IR-only counterexamples can be infeasible under BV (no
+        // overflow modeling), so a FAILED here is unsound — surface
+        // the original BV verdict instead. Mirrors solver_strategy's
+        // demote-IR-FAILED rule.
+        if st == VERIFY_TIMEOUT() {
+            return report_bv_timeout(f, String::from(""), soft_meta);
+        }
+        return report_bv_unknown(f, bv_raw, String::from(""), soft_meta);
+    }
+    if st2 == VERIFY_TIMEOUT() {
+        return report_bv_timeout(f, String::from(" (BV and IR)"), soft_meta);
+    }
+    if st2 == VERIFY_UNKNOWN() {
+        return report_bv_unknown(f, vr2.raw_output, String::from(" (BV and IR)"), soft_meta);
+    }
+    if st2 == VERIFY_NOT_FOUND() {
+        diag_eprintln_best_effort(String::from("error: ESBMC not found; install ESBMC or use --no-verify"));
+        record_soft_fail(soft_meta, String::from("tool_not_found"), String::from("ESBMC not found"), f.name);
+        return 0;
+    }
+    diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": ERROR")));
+    record_soft_fail(soft_meta, String::from("error"), String::from("ESBMC error during IR fallback"), f.name);
+    0
+}

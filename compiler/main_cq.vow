@@ -1,0 +1,190 @@
+module MainCq
+
+fn vow_kind_from_desc(desc: String) -> String {
+    if str_starts_with(desc, String::from("requires")) {
+        return String::from("requires");
+    }
+    if str_starts_with(desc, String::from("ensures")) {
+        return String::from("ensures");
+    }
+    if str_starts_with(desc, String::from("invariant")) {
+        return String::from("invariant");
+    }
+    String::from("unknown")
+}
+
+// Static contract-quality classification of a clause by shape (no ESBMC).
+// Mirrors classify_contract_quality in vow/src/main.rs. See
+// docs/spec/contracts-methodology.md for the methodology.
+
+fn cq_byte_is_alpha(b: i64) -> bool {
+    (b >= 65 && b <= 90) || (b >= 97 && b <= 122)
+}
+
+fn cq_has_alpha(s: String) -> bool {
+    let n: u64 = s.len();
+    let mut i: u64 = 0;
+    while i < n {
+        if cq_byte_is_alpha(s.byte_at(i)) {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn cq_is_cast_target(name: String) -> bool {
+    name == String::from("i8") || name == String::from("i16") ||
+    name == String::from("i32") || name == String::from("i64") ||
+    name == String::from("i128") ||
+    name == String::from("u8") || name == String::from("u16") ||
+    name == String::from("u32") || name == String::from("u64") ||
+    name == String::from("u128") ||
+    name == String::from("f32") || name == String::from("f64")
+}
+
+// The text with every cast to a primitive numeric type (` as i64`) removed,
+// trimmed. Mirrors `without_casts` in vow/src/contract_quality.rs.
+//
+// A cast is transparent to shape classification: `0 as u64` bounds a value
+// exactly as `0` does, and `result as i64` names the same value as `result`.
+// Only a primitive numeric type name is stripped, so `x as Foo` is left alone.
+fn cq_without_casts(s: String) -> String {
+    let out: String = String::from("");
+    let mut rest: String = clone_string(s);
+    let marker: String = String::from(" as ");
+    let mut pos: i64 = str_find_str(rest, marker);
+    while pos >= 0 {
+        let n: i64 = rest.len() as i64;
+        let after: String = str_substring(rest, pos + 4, n);
+        let an: u64 = after.len();
+        let mut end: u64 = 0;
+        while end < an {
+            let b: i64 = after.byte_at(end);
+            let is_word: bool = (b >= 48 && b <= 57) || (b >= 65 && b <= 90) ||
+                                (b >= 97 && b <= 122);
+            if !is_word {
+                break;
+            }
+            end = end + 1;
+        }
+        if cq_is_cast_target(after.substring(0, end)) {
+            out.push_str(str_substring(rest, 0, pos));
+            rest = after.substring(end, an);
+        } else {
+            out.push_str(str_substring(rest, 0, pos + 4));
+            rest = after;
+        }
+        pos = str_find_str(rest, marker);
+    }
+    out.push_str(rest);
+    str_trim(out)
+}
+
+fn cq_is_int_literal(s: String) -> bool {
+    let t: String = str_trim(s);
+    let n: u64 = t.len();
+    if n == 0 {
+        return false;
+    }
+    let mut i: u64 = 0;
+    if t.byte_at(0) == 45 {
+        if n == 1 {
+            return false;
+        }
+        i = 1;
+    }
+    while i < n {
+        let b: i64 = t.byte_at(i);
+        if b < 48 || b > 57 {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+// Strip the leading requires/ensures/invariant keyword, leaving the predicate.
+// clause descriptions are formatted as "{kind} {printed_expr}".
+fn cq_predicate(desc: String) -> String {
+    let sp: i64 = str_find_byte(desc, 32);
+    if sp < 0 {
+        return String::from("");
+    }
+    str_trim(str_substring(desc, sp + 1, desc.len() as i64))
+}
+
+fn cq_side_has_ordering(s: String) -> bool {
+    str_contains_byte(s, 60) || str_contains_byte(s, 62)
+}
+
+// Both sides arrive already cast-stripped by cq_is_weak_result_bound, so
+// `result >= 0 as i64` reads exactly as `result >= 0` does here.
+fn cq_weak_sides(lhs: String, rhs: String) -> bool {
+    let l: String = str_trim(lhs);
+    let r: String = str_trim(rhs);
+    if cq_side_has_ordering(l) || cq_side_has_ordering(r) {
+        return false;
+    }
+    let result_s: String = String::from("result");
+    (l == result_s && cq_is_int_literal(r)) || (r == result_s && cq_is_int_literal(l))
+}
+
+// True for a single ordering comparison between `result` and an integer literal.
+fn cq_is_weak_result_bound(raw_pred: String) -> bool {
+    let pred: String = cq_without_casts(raw_pred);
+    if str_find_str(pred, String::from("&&")) >= 0 {
+        return false;
+    }
+    if str_find_str(pred, String::from("||")) >= 0 {
+        return false;
+    }
+    if str_find_str(pred, String::from("==")) >= 0 {
+        return false;
+    }
+    if str_find_str(pred, String::from("!=")) >= 0 {
+        return false;
+    }
+    if str_contains_byte(pred, 40) {
+        return false;
+    }
+    let n: i64 = pred.len() as i64;
+    let p_le: i64 = str_find_str(pred, String::from("<="));
+    if p_le >= 0 {
+        return cq_weak_sides(str_substring(pred, 0, p_le), str_substring(pred, p_le + 2, n));
+    }
+    let p_ge: i64 = str_find_str(pred, String::from(">="));
+    if p_ge >= 0 {
+        return cq_weak_sides(str_substring(pred, 0, p_ge), str_substring(pred, p_ge + 2, n));
+    }
+    let p_lt: i64 = str_find_byte(pred, 60);
+    if p_lt >= 0 {
+        return cq_weak_sides(str_substring(pred, 0, p_lt), str_substring(pred, p_lt + 1, n));
+    }
+    let p_gt: i64 = str_find_byte(pred, 62);
+    if p_gt >= 0 {
+        return cq_weak_sides(str_substring(pred, 0, p_gt), str_substring(pred, p_gt + 1, n));
+    }
+    false
+}
+
+fn cq_classify(kind: String, desc: String) -> String {
+    let pred: String = cq_predicate(desc);
+    if pred.len() == 0 {
+        return String::from("tautological");
+    }
+    if pred == String::from("true") {
+        return String::from("tautological");
+    }
+    // "References no program value" is tested by the absence of an identifier
+    // character, so cast syntax has to come out first: `0 as i64 >= 0` is as
+    // constant as `0 >= 0`, but its `as i64` would otherwise read as a value
+    // reference and hide the tautology.
+    if !cq_has_alpha(cq_without_casts(pred)) {
+        return String::from("tautological");
+    }
+    if kind == String::from("ensures") && cq_is_weak_result_bound(pred) {
+        return String::from("weak");
+    }
+    String::from("substantive")
+}

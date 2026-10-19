@@ -1,0 +1,154 @@
+module MainReplayScan
+
+// A native counterexample whose replay ran and disagreed means the model and
+// the runtime differ: a verifier bug. A `skipped` replay never ran, so it
+// proves nothing and is not reported.
+fn report_verifier_bug_ces(dctx: DiagCtx, ces: Vec<VerifyCE>) [io] {
+    let mut i: u64 = 0;
+    while i < ces.len() {
+        let ce: VerifyCE = ces[i];
+        if ce.replay == String::from("diverged") || ce.replay == String::from("aborted") {
+            let msg: String = str5(String::from("native verifier counterexample for `"), ce.function, String::from("` did not replay ("), ce.replay, String::from(": "));
+            msg.push_str(ce.replay_reason);
+            msg.push_str(String::from(")"));
+            let d: Diagnostic = diag_new(SEV_ERROR(), EC_VERIFIER_BUG(), msg, ce.source, ce.source_start, ce.source_len, DIAG_BLAME_NONE());
+            diag_add_hint(d, String::from("a counterexample that does not reproduce at runtime is a bug in the verifier model; report it"));
+            diag_ctx_emit(dctx, d);
+        }
+        i = i + 1;
+    }
+}
+
+// Verdict for a native abort-claim counterexample: the predicted outcome is the
+// runtime's abort of kind `predicted` (one `ArithmeticOverflow` envelope covers
+// a zero divisor and signed MIN / -1, so it confirms the kind of failure, not
+// the operation).
+fn replay_abort_claim_verdict(scan: ReplayScan, rrc: i64, predicted: String) -> ReplayVerdict {
+    if rrc == RUNTIME_ABORT_EXIT_CODE && scan.abort_kind == predicted {
+        return replay_confirm();
+    }
+    if rrc == 0 {
+        return replay_diverge(str3(String::from("harness exited cleanly; the predicted "), predicted, String::from(" abort did not occur")));
+    }
+    if rrc == RUNTIME_ABORT_EXIT_CODE && scan.abort_kind.len() > 0 {
+        return replay_abort(str4(String::from("runtime aborted with "), scan.abort_kind, String::from(" instead of the predicted "), predicted));
+    }
+    if rrc == RUNTIME_ABORT_EXIT_CODE && scan.violation_line.len() > 0 {
+        return replay_diverge(str2(String::from("runtime fired a VowViolation (a contract was violated by the counterexample inputs) instead of the predicted "), predicted));
+    }
+    replay_diverge(str2(String::from("runtime did not abort with the predicted "), predicted))
+}
+
+// Scans stderr once for both the VowViolation marker (confirm/diverge) and a
+// structured non-VowViolation abort marker (a runtime abort that preempted
+// the predicted VowViolation), so replay_one_ce doesn't walk stderr twice.
+// Classification is keyed off the LAST envelope-bearing line overall (each
+// line's own kind picked via its LAST `"error":"<kind>"` occurrence, mirroring
+// the Rust replay path's right-to-left envelope scan): nothing runs after the
+// runtime writes its final envelope and aborts, so the last matching line —
+// violation or abort — is the event that actually terminated the run, and an
+// earlier line whose debug output happens to look like an envelope must not
+// take precedence over it. Every match overwrites both fields so only the
+// winning line's classification survives.
+fn replay_scan_stderr(err: String) -> ReplayScan {
+    let n: u64 = err.len();
+    let mut start: u64 = 0;
+    let mut i: u64 = 0;
+    let mut violation_line: String = String::from("");
+    let mut abort_kind: String = String::from("");
+    while i <= n {
+        if i == n || err.byte_at(i) == 10 {
+            let line: String = err.substring(start, i);
+            let kind: String = replay_last_error_kind_in_line(line);
+            if kind == String::from("VowViolation") {
+                violation_line = line;
+                abort_kind = String::from("");
+            } else if kind.len() > 0 {
+                abort_kind = kind;
+                violation_line = String::from("");
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    ReplayScan { violation_line: violation_line, abort_kind: abort_kind }
+}
+
+// Extract the kind from the LAST `{"error":"<Kind>"}` marker in one stderr
+// line (rightmost wins), or "" if the line has none. The kind may be
+// "VowViolation" — the caller decides what that means for this line.
+fn replay_last_error_kind_in_line(line: String) -> String {
+    let marker: String = String::from("{\"error\":\"");
+    let n: u64 = line.len();
+    let m: u64 = marker.len();
+    let mut i: u64 = 0;
+    let mut found: String = String::from("");
+    while i + m <= n {
+        let mut matched: bool = true;
+        let mut j: u64 = 0;
+        while j < m {
+            if line.byte_at(i + j) != marker.byte_at(j) {
+                matched = false;
+                break;
+            }
+            j = j + 1;
+        }
+        if matched {
+            let start: u64 = i + m;
+            let mut end: u64 = start;
+            while end < n && line.byte_at(end) != 34 {
+                end = end + 1;
+            }
+            if end > start {
+                found = line.substring(start, end);
+            }
+        }
+        i = i + 1;
+    }
+    found
+}
+
+// Offset of the entry file's own `main`, computed once per run and only when
+// replay is requested; -1 when there is none or replay is off.
+fn replay_main_start(argv: Vec<String>, fr: LoweredFrontend, path: String) -> i64 {
+    if !has_flag(argv, "--replay-cex") { return -1; }
+    replay_entry_main_start(fr.merged, fr.item_files, path)
+}
+
+fn replay_all(ces: Vec<VerifyCE>, m: Module, fns: Vec<IrFunction>, path: String, main_start: i64, argv0: String, native: bool) -> Vec<VerifyCE> [io, read, write] {
+    let out: Vec<VerifyCE> = Vec::new();
+    let mut i: u64 = 0;
+    while i < ces.len() {
+        let ce: VerifyCE = ces[i];
+        let v: ReplayVerdict = replay_one_ce(ce, m, fns, path, main_start, argv0, native);
+        let reason: String = {
+            if v.status == String::from("confirmed") { String::from("") }
+            else { v.reason }
+        };
+        out.push(VerifyCE {
+            function: ce.function,
+            target_function: ce.target_function,
+            var_names: ce.var_names,
+            var_values: ce.var_values,
+            violation: ce.violation,
+            claim: ce.claim,
+            vow_id: ce.vow_id,
+            source: ce.source,
+            source_start: ce.source_start,
+            source_len: ce.source_len,
+            blame: ce.blame,
+            call_site_functions: ce.call_site_functions,
+            call_site_files: ce.call_site_files,
+            call_site_offsets: ce.call_site_offsets,
+            call_site_lengths: ce.call_site_lengths,
+            violating_arg_params: ce.violating_arg_params,
+            violating_arg_values: ce.violating_arg_values,
+            violating_arg_offsets: ce.violating_arg_offsets,
+            violating_arg_lengths: ce.violating_arg_lengths,
+            replay: v.status,
+            replay_reason: reason,
+        });
+        i = i + 1;
+    }
+    out
+}

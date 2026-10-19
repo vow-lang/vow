@@ -1,0 +1,274 @@
+module MainSkill
+
+fn skill_install_dir(root: String) -> String {
+    if root.len() == 0 {
+        return String::from(".claude/skills/vow");
+    }
+    str3(root, String::from("/"), String::from(".claude/skills/vow"))
+}
+
+fn skill_parent_dir(path: String) -> String {
+    match str_rfind_byte(path, 47) {
+        Option::None => String::from(""),
+        Option::Some(k) => path.substring(0, k),
+    }
+}
+
+fn skill_report(emit_errors: bool, prefix: String, path: String) [io] {
+    if emit_errors {
+        diag_eprintln_best_effort(str2(prefix, path));
+    }
+}
+
+// Exclusive reservation: plain `mkdir` (no -p) fails when the name is taken, so
+// concurrent installers never share a directory. Its output is captured, not printed.
+// Only an existing candidate is a name collision worth retrying; any other failure
+// (unwritable parent, no `mkdir`) is final.
+fn skill_reserve_dir(parent: String, stem: String, emit_errors: bool) -> String [io, read] {
+    let mut attempt: i64 = 0;
+    while attempt < 8 {
+        let token: String = str3(int_to_string(time_unix_ms()), String::from("-"), int_to_string(attempt));
+        let candidate: String = str4(parent, String::from("/."), stem, str2(String::from("-"), token));
+        let margs: Vec<String> = Vec::new();
+        margs.push(candidate);
+        let rc: i64 = process_run(String::from("mkdir"), margs);
+        if rc == 0 {
+            return candidate;
+        }
+        if fs_exists(candidate) != 1 {
+            skill_report(emit_errors, String::from("vow skill install: cannot create "), candidate);
+            return String::from("");
+        }
+        attempt = attempt + 1;
+    }
+    skill_report(emit_errors, String::from("vow skill install: cannot create "), str3(parent, String::from("/."), stem));
+    String::from("")
+}
+
+// Support files first, SKILL.md last: a directory holding SKILL.md always holds the
+// files it links to.
+fn skill_write_tree(dir: String, emit_errors: bool) -> bool [io, write] {
+    let mut i: u64 = 0;
+    while i < skill_support_count() {
+        let support_path: String = str3(dir, String::from("/"), skill_support_path(i));
+        let support_parent: String = skill_parent_dir(support_path);
+        if support_parent.len() > 0 {
+            if fs_mkdir(support_parent) != 0 {
+                skill_report(emit_errors, String::from("vow skill install: cannot create "), support_parent);
+                return false;
+            }
+        }
+        if fs_write(support_path, skill_support_content(i)) != 0 {
+            skill_report(emit_errors, String::from("vow skill install: cannot write "), support_path);
+            return false;
+        }
+        i = i + 1;
+    }
+    let path: String = str3(dir, String::from("/"), String::from("SKILL.md"));
+    if fs_write(path, skill_entrypoint()) != 0 {
+        skill_report(emit_errors, String::from("vow skill install: cannot write "), path);
+        return false;
+    }
+    true
+}
+
+// Copies every entry of `from` that `into` does not already hold, so files the installer
+// does not own (local notes, stale files in owned directories) survive the swap while
+// owned files always come from the freshly written stage. `cp -RP` keeps symlinks as links.
+fn skill_carry_over(from: String, into: String, emit_errors: bool) -> bool [io, read] {
+    let entries: Vec<String> = fs_listdir(from);
+    let n: u64 = entries.len();
+    let mut i: u64 = 0;
+    while i < n {
+        let name: String = entries[i];
+        let src: String = str3(from, String::from("/"), name);
+        let dst: String = str3(into, String::from("/"), name);
+        if fs_exists(dst) == 1 || fs_is_symlink(dst) == 1 {
+            if fs_is_dir(src) == 1 && fs_is_symlink(src) != 1 && fs_is_dir(dst) == 1 {
+                if !skill_carry_over(src, dst, emit_errors) {
+                    return false;
+                }
+            }
+        } else {
+            let cargs: Vec<String> = Vec::new();
+            cargs.push(String::from("-RP"));
+            cargs.push(src);
+            cargs.push(dst);
+            if process_run(String::from("cp"), cargs) != 0 {
+                skill_report(emit_errors, String::from("vow skill install: cannot write "), dst);
+                return false;
+            }
+        }
+        i = i + 1;
+    }
+    true
+}
+
+fn skill_carry_foreign(target: String, stage: String, emit_errors: bool) -> bool [io, read] {
+    if fs_is_dir(target) != 1 {
+        return true;
+    }
+    skill_carry_over(target, stage, emit_errors)
+}
+
+// A directory cannot be renamed over a non-empty one, so an existing target is swapped
+// out through a backup and put back when the final rename fails.
+fn skill_commit_stage(parent: String, stage: String, target: String, emit_errors: bool) -> bool [io, read, write] {
+    let cannot_install: String = String::from("vow skill install: cannot install ");
+    if fs_exists(target) != 1 {
+        if fs_rename(stage, target) != 0 {
+            skill_report(emit_errors, cannot_install, target);
+            return false;
+        }
+        return true;
+    }
+    let backup: String = skill_reserve_dir(parent, String::from("vow-backup"), emit_errors);
+    if backup.len() == 0 {
+        return false;
+    }
+    if fs_rename(target, backup) != 0 {
+        fs_remove_dir(backup);
+        skill_report(emit_errors, cannot_install, target);
+        return false;
+    }
+    if fs_rename(stage, target) != 0 {
+        if fs_rename(backup, target) != 0 {
+            skill_report(emit_errors, cannot_install, str3(target, String::from("; previous tree kept at "), backup));
+        } else {
+            skill_report(emit_errors, cannot_install, target);
+        }
+        return false;
+    }
+    fs_remove_dir_all(backup);
+    true
+}
+
+// Builds the tree in a sibling staging directory and renames it into place, so a
+// failure never leaves a SKILL.md that links to missing files. A symlinked target
+// (dotfile managers) is written in place. Returns "" on failure.
+fn install_skill_tree(root: String, emit_errors: bool) -> String [io, read, write] {
+    let dir: String = skill_install_dir(root);
+    let parent: String = skill_parent_dir(dir);
+    let path: String = str3(dir, String::from("/"), String::from("SKILL.md"));
+    if fs_mkdir(parent) != 0 {
+        skill_report(emit_errors, String::from("vow skill install: cannot create "), parent);
+        return String::from("");
+    }
+    if fs_is_symlink(dir) == 1 {
+        if !skill_write_tree(dir, emit_errors) {
+            return String::from("");
+        }
+        return path;
+    }
+    let stage: String = skill_reserve_dir(parent, String::from("vow-install"), emit_errors);
+    if stage.len() == 0 {
+        return String::from("");
+    }
+    if !(skill_write_tree(stage, emit_errors)
+        && skill_carry_foreign(dir, stage, emit_errors)
+        && skill_commit_stage(parent, stage, dir, emit_errors)) {
+        fs_remove_dir_all(stage);
+        return String::from("");
+    }
+    path
+}
+
+// Self-hosted Vow has no getenv builtin, so read $HOME through sh.
+// A shell failure is reported like an unset or empty HOME by the caller.
+fn skill_home_dir() -> String [io] {
+    let pargs: Vec<String> = Vec::new();
+    pargs.push(String::from("-c"));
+    pargs.push(String::from("printf %s \"$HOME\""));
+    let rc: i64 = process_run(String::from("sh"), pargs);
+    if rc != 0 {
+        return String::from("");
+    }
+    process_get_stdout()
+}
+
+fn skill_install_root(local: bool, global: bool) -> String [io, read] {
+    let mut use_local: bool = local;
+    let mut use_global: bool = global;
+    if use_local && use_global {
+        diag_eprintln_best_effort("vow skill install: --local and --global are mutually exclusive");
+        return String::from("");
+    }
+    if !use_local && !use_global {
+        diag_eprintln_best_effort("Install Vow skill locally (./.claude) or globally (~/.claude)? [l/g]: ");
+        let answer: String = string_to_lower(string_trim(stdin_read_line()));
+        if answer == String::from("l") || answer == String::from("local") {
+            use_local = true;
+        } else if answer == String::from("g") || answer == String::from("global") {
+            use_global = true;
+        } else {
+            diag_eprintln_best_effort("vow skill install: stdin closed or unrecognised answer; pass --local or --global");
+            return String::from("");
+        }
+    }
+    if use_local {
+        if fs_is_dir(String::from(".claude")) != 1 {
+            diag_eprintln_best_effort("vow skill install: --local requires a .claude/ directory in the current project");
+            return String::from("");
+        }
+        if fs_exists(String::from(".git")) != 1 {
+            diag_eprintln_best_effort("vow skill install: --local requires the current project to be a git checkout");
+            return String::from("");
+        }
+        return String::from(".");
+    }
+    let home: String = skill_home_dir();
+    if home.len() == 0 {
+        diag_eprintln_best_effort("vow skill install: --global requires $HOME");
+        return String::from("");
+    }
+    home
+}
+
+fn run_skill(argv: Vec<String>) -> i32 [io, read, write] {
+    let mut do_install: bool = false;
+    let do_bundle: bool = has_flag(argv, String::from("--bundle"));
+    if argv.len() >= 3 {
+        let action: String = argv[2];
+        if action == String::from("install") {
+            do_install = true;
+        } else if action == String::from("print") {
+            do_install = false;
+        } else {
+            diag_eprintln_best_effort(str3(String::from("vow skill: unknown action '"), action, String::from("' (expected 'print' or 'install')")));
+            return 1;
+        }
+    }
+    if do_install {
+        if do_bundle {
+            diag_eprintln_best_effort("vow skill install: --bundle is only valid with print");
+            return 1;
+        }
+        let root: String = skill_install_root(has_flag(argv, String::from("--local")), has_flag(argv, String::from("--global")));
+        if root.len() == 0 {
+            return 1;
+        }
+        let path: String = install_skill_tree(root, true);
+        if path.len() == 0 {
+            return 1;
+        }
+        diag_eprintln_best_effort(str2(String::from("installed skill to "), path));
+        return 0;
+    }
+    if do_bundle {
+        print_str(skill_bundle());
+    } else {
+        print_str(skill_entrypoint());
+    }
+    0
+}
+
+fn maybe_auto_install_skill() [io, read, write] {
+    if fs_is_dir(".claude") != 1 {
+        return;
+    }
+    let target: String = ".claude/skills/vow/SKILL.md";
+    if fs_exists(target) == 1 {
+        return;
+    }
+    install_skill_tree(String::from(""), false);
+}
