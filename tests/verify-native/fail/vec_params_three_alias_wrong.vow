@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 3
+// TEST: counterexample-blame Callee
+// Of three `Vec` parameters any pair may be one object: the push through `c` reaches `a` when only
+// those two are, so the clause fails whatever `b` is.
+module VecParamsThreeAliasWrong
+
+fn f(a: Vec<i64>, b: Vec<i64>, c: Vec<i64>) -> u64 vow {
+    requires: a.len() == 0
+    requires: b.len() == 0
+    requires: c.len() == 0
+    ensures: result == 0
+} {
+    c.push(1);
+    a.len() + b.len()
+}
+
+fn main() -> i32 [io] {
+    let x: Vec<i64> = Vec::new();
+    let y: Vec<i64> = Vec::new();
+    print_u64(f(x, y, x));
+    0
+}

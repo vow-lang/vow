@@ -1,0 +1,22 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 3
+// TEST: counterexample-blame Callee
+// An element write through `b` is the element `a[0]` reads when the two are one object.
+module VecParamsSetAliasWrong
+
+fn f(a: Vec<u8>, b: Vec<u8>) -> u8 vow {
+    requires: a.len() == 1
+    requires: b.len() == 1
+    requires: a[0] == 3
+    ensures: result == 3
+} {
+    b[0] = 9;
+    a[0]
+}
+
+fn main() -> i32 [io] {
+    let x: Vec<u8> = Vec::new();
+    x.push(3);
+    print_u64(f(x, x) as u64);
+    0
+}

@@ -1,0 +1,31 @@
+// Two `Vec` parameters of one type may be one object. A clause that holds either way is proven:
+// both pushes happen, so the first parameter is not empty whatever the caller passed.
+module VecParamsAliasSafe
+
+fn both(a: Vec<i64>, b: Vec<i64>) -> u64 vow {
+    requires: a.len() < 10
+    requires: b.len() < 10
+    ensures: result >= 1
+} {
+    a.push(1);
+    b.push(2);
+    a.len()
+}
+
+fn copy_first(dst: Vec<i64>, src: Vec<i64>) -> u64 vow {
+    requires: src.len() > 0
+    requires: dst.len() < 10
+    ensures: result > 0
+} {
+    dst.push(src[0]);
+    dst.len()
+}
+
+fn main() -> i32 [io] {
+    let a: Vec<i64> = Vec::new();
+    let b: Vec<i64> = Vec::new();
+    b.push(3);
+    print_u64(both(a, b));
+    print_u64(copy_first(a, b));
+    0
+}

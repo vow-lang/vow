@@ -1,0 +1,26 @@
+// The invariant and the result are about the object the loop pushes to, so they hold whether or
+// not the other parameter is that object, for a bound that is a parameter: the loop is cut and
+// the push is spread to the other parameter under the identity test.
+module VecParamsLoopAliasSafe
+
+fn fill(a: Vec<i64>, b: Vec<i64>, n: u64) -> u64 vow {
+    requires: a.len() == 0
+    requires: b.len() == 0
+    ensures: result == n
+} {
+    let mut i: u64 = 0;
+    while i < n vow {
+        invariant: i <= n
+        invariant: b.len() == i
+    } {
+        b.push(1);
+        i = i + 1;
+    }
+    b.len()
+}
+
+fn main() -> i32 [io] {
+    let x: Vec<i64> = Vec::new();
+    print_u64(fill(x, x, 1));
+    0
+}

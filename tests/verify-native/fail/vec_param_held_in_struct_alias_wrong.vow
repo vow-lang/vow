@@ -1,0 +1,25 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// A `Vec` parameter stored in a field of a struct the function builds is the same object as
+// another `Vec` parameter when the caller passes one value for both.
+module VecParamHeldInStructAliasWrong
+
+struct Holder { items: Vec<i64> }
+
+fn f(a: Vec<i64>, b: Vec<i64>) -> bool vow {
+    ensures: result
+} {
+    let h: Holder = Holder { items: a };
+    let q0: Vec<i64> = h.items;
+    let before: u64 = q0.len();
+    b.push(1);
+    let q: Vec<i64> = h.items;
+    q.len() == before
+}
+
+fn main() -> i32 [io] {
+    let x: Vec<i64> = Vec::new();
+    if f(x, x) { print_u64(1); } else { print_u64(0); }
+    0
+}

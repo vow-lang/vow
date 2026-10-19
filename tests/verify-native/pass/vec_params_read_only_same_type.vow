@@ -1,0 +1,15 @@
+// Two `Vec` parameters of one type that the function only reads need no identity: a read cannot
+// tell whether they are one object, and the proof does not depend on it.
+module VecParamsReadOnlySameType
+
+fn longer(a: Vec<i64>, b: Vec<i64>) -> bool vow {
+    ensures: result == (a.len() > b.len())
+} {
+    a.len() > b.len()
+}
+
+fn main() -> i32 [io] {
+    let x: Vec<i64> = Vec::new();
+    x.push(1);
+    if longer(x, x) { 1 } else { 0 }
+}

@@ -1,0 +1,28 @@
+// TEST: counterexample-vow-id 3
+// TEST: counterexample-blame Callee
+// TEST: counterexample-fn "fill"
+// The loop pushes through `b`; when the caller passes one value for both, `a` grows with it and
+// the invariant about `a` fails after one iteration.
+module VecParamsLoopAliasWrong
+
+fn fill(a: Vec<i64>, b: Vec<i64>, n: u64) -> u64 vow {
+    requires: a.len() == 0
+    requires: b.len() == 0
+    ensures: result == 0
+} {
+    let mut i: u64 = 0;
+    while i < n vow {
+        invariant: i <= n
+        invariant: a.len() == 0
+    } {
+        b.push(1);
+        i = i + 1;
+    }
+    a.len()
+}
+
+fn main() -> i32 [io] {
+    let x: Vec<i64> = Vec::new();
+    print_u64(fill(x, x, 1));
+    0
+}

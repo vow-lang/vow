@@ -1,0 +1,25 @@
+module LowerKeys
+
+use ast
+
+// `IrFunction.param_keys` entry of a parameter declared as `tid` (aliases resolved): the head of
+// the type, with `str` and `String` one head, and a `Vec` keyed by the head of its element
+// `elem_tid` (aliases resolved, -1 when it has none) so that `Vec<Id>` and `Vec<i64>`, one type
+// under `type Id = i64`, are one key. "" when the head is not known. Different keys are never
+// one object.
+fn lower_param_key(a: AstArena, tid: i64, elem_tid: i64) -> String {
+    if tid == -1 { return String::from(""); }
+    let tag: i64 = type_tag(a, tid);
+    if tag != TY_NAMED() && tag != TY_GENERIC() { return String::from(""); }
+    let head: String = arena_str(a, type_a(a, tid));
+    if head == String::from("str") { return String::from("String"); }
+    if head != String::from("Vec") || tag != TY_GENERIC() { return head; }
+    let key: String = String::from("Vec<");
+    if elem_tid != -1 {
+        let etag: i64 = type_tag(a, elem_tid);
+        let ehead: String = { if etag == TY_NAMED() || etag == TY_GENERIC() { arena_str(a, type_a(a, elem_tid)) } else { String::from("") } };
+        key.push_str({ if ehead == String::from("str") { String::from("String") } else { ehead } });
+    }
+    key.push_str(String::from(">"));
+    key
+}
