@@ -184,17 +184,17 @@ def classify(
     """Classify one fixture from the two verdicts and the corpus ground truth.
 
     `truth` is the corpus-expected status (Verified / VerifyFailed / Skipped);
-    a known soundness gap counts as VerifyFailed. `capacity_reason` is the text
+    a known soundness gap is VerifyFailed. `capacity_reason` is the text
     of the fixture's `esbmc-capacity-artifact` directive and
     `esbmc_capacity_only` says every ESBMC counterexample is its own capacity
     assertion: together they turn "native proves what ESBMC refutes" into an
-    explained extra proof instead of a soundness finding. `model_artifacts`
-    maps the `(fn, blame, vow_id)` of ESBMC counterexamples declared to be
-    ESBMC model artefacts to their reason: it does the same when the corpus
-    labels the fixture `Verified` and every ESBMC counterexample is declared.
+    explained extra proof, not a soundness finding. `model_artifacts`
+    maps the `(fn, blame, vow_id)` of declared ESBMC model artefacts to their
+    reason: the same when the corpus labels the fixture `Verified` and all
+    ESBMC counterexamples are declared; on a `VerifyFailed` fixture both refute,
+    it excuses a declared one native lacks (`compare_cex`).
     `esbmc_skipped` and `native_skipped` are the functions each backend left
-    unanalysed (`skipped_functions`): backends that agree on the verdict but not
-    on which functions they analysed did not do the same work.
+    unanalysed: the same verdict over different functions is different work.
     """
     cls, detail = classify_verdicts(
         truth,
