@@ -5,6 +5,7 @@ use ir_dominance
 use vc_ops
 use vc_strops
 use vc_gate
+use vc_distinct
 use vc_loops
 use vc_unroll
 use vc_ptrfield
@@ -35,9 +36,8 @@ fn VC_INLINE_MALFORMED() -> i64 { 2 }
 fn VC_INLINE_INST_CAP() -> i64 { VC_UNWIND_INST_CAP() }
 
 // A flattened function above this many instructions is `Skipped` as `inlining-too-large`. The
-// whole call tree is one query set, and its cost grows faster than its size: `read_inst` of
-// `compiler/module_io.vow` (11 031 instructions) is decided in about a minute, `read_function`
-// (23 331) exhausts the 4 GB worker (`VC_WORKER_MEM_KB`) on one bounds claim. Above the
+// whole call tree is one query set, and its cost grows faster than its size: `read_function` of
+// `compiler/module_io.vow` (23 331 instructions) exhausts the 4 GB worker on one bounds claim. Above the
 // bound the answer would be `unknown` after minutes of work, which says no more than the skip
 // and costs the budget of every other function. A bound on size, not on the program; it goes
 // away with callee summaries (#1791).
@@ -594,8 +594,7 @@ fn vc_non_modelable_callee(g: IrFunction, why: String) -> String {
 // inlined, else "<code>: <detail>": the one decision the driver takes before a
 // function goes to a worker. A function without calls is decided by
 // `vc_skip_reason` alone. A call tree above the size budget is not skipped: the
-// worker answers `unknown` for it. The answer is a copy: the flattened bodies the decision
-// reads are freed when it returns, not kept for as long as the caller keeps the answer.
+// worker answers `unknown` for it. The answer is a copy: the flattened bodies are freed on return.
 fn vc_module_skip_reason(f: IrFunction, m: IrModule) -> String {
     String::from(vc_module_skip_reason_via(f, m, m, VC_INLINE_SKIP_INSTS()))
 }
@@ -639,6 +638,8 @@ fn vc_module_skip_reason_via(f: IrFunction, m: IrModule, inl_m: IrModule, budget
         if gsig.len() > 0 { return vc_non_modelable_callee(g, gsig); }
         oi = oi + 1;
     }
+    let aliased: String = vc_distinct_detail(fns, idx_of, vc_prepare_for_gate(f, m), order);
+    if aliased.len() > 0 { return aliased; }
     let inl: VcInlined = vc_inline(f, inl_m, VC_INLINE_INST_CAP());
     if inl.status == VC_INLINE_TOO_LARGE() { return String::from(""); }
     if inl.status != VC_INLINE_OK() {

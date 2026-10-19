@@ -1,0 +1,147 @@
+module VcDistinct
+
+use ir
+use ir_dominance
+use vc_ops
+use vc_strops
+use vc_gate
+use vc_loops
+use vc_agg_shape
+use vc_induct_agg
+
+// The distinctness obligation of a call. A function that changes a `Vec` or `String` it was
+// given is proven for parameters that are different objects (`vc_vec`), so a call that passes
+// one object for two of them is outside what its proof says: the caller is at fault. A target
+// that makes such a call is `Skipped` instead of being decided under an assumption that does
+// not hold at the call. Only the calls of the target itself are looked at: a callee's own calls
+// are decided where the callee is a target, and an inlined copy keeps the aliasing exactly.
+// Objects that are different values in the target (its own parameters, its allocations, the
+// elements it loads) are taken for different objects.
+
+fn vc_distinct_is_collection(key: String) -> bool {
+    key == String::from("String") || string_starts_with(key, String::from("Vec")) != 0
+}
+
+// True when a call to the function index `t` has a callee in the module.
+fn vc_distinct_callee(idx_of: Vec<i64>, id: i64) -> i64 {
+    if id < 0 || (id as u64) >= idx_of.len() { return -1; }
+    idx_of[id as u64]
+}
+
+// Per parameter of `g`, 1 when `g` may change the collection it holds: a `Vec` or `String`
+// operation that changes it, or a call that passes it on as a parameter the callee changes
+// (`table[callee]`, filled for the callees first).
+fn vc_distinct_changed(g: IrFunction, idx_of: Vec<i64>, table: Vec<Vec<i64>>) -> Vec<i64> {
+    let n_ids: u64 = (dom_max_inst_id(g) + 1) as u64;
+    let rpo: Vec<i64> = vc_cfg_rpo(g);
+    let src: VcPhiSources = vc_fh_phi_sources(g, rpo, n_ids);
+    let def_op: Vec<i64> = vc_agg_def_ops(g, n_ids);
+    let arg_param: Vec<i64> = vc_agg_arg_params(g, n_ids);
+    let seen: Vec<i64> = dom_fill(n_ids, -1);
+    let out: Vec<i64> = dom_fill(g.params.len(), 0);
+    let mut stamp: i64 = 0;
+    let mut bi: u64 = 0;
+    while bi < g.blocks.len() {
+        if rpo[bi] >= 0 {
+            let blk: IrBlock = g.blocks[bi];
+            let mut ii: u64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                let mut changed: Vec<i64> = Vec::new();
+                if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
+                    let t: i64 = vc_distinct_callee(idx_of, inst.dv);
+                    if t >= 0 { changed = table[t as u64]; }
+                } else if vc_vec_kind_mutates(vc_inst_vec_kind(inst)) && inst.args.len() > 0 {
+                    changed.push(1);
+                }
+                let mut k: u64 = 0;
+                while k < changed.len() && k < inst.args.len() {
+                    if changed[k] == 1 {
+                        stamp = stamp + 1;
+                        let leaves: Vec<i64> = vc_fh_leaves(inst.args[k], src, def_op, seen, stamp);
+                        let mut li: u64 = 0;
+                        while li < leaves.len() {
+                            let l: i64 = leaves[li];
+                            if l >= 0 && (l as u64) < n_ids && arg_param[l as u64] >= 0 { out[arg_param[l as u64] as u64] = 1; }
+                            li = li + 1;
+                        }
+                    }
+                    k = k + 1;
+                }
+                ii = ii + 1;
+            }
+        }
+        bi = bi + 1;
+    }
+    out
+}
+
+// True when the values `a` and `b` may be one object of `f`: a leaf (a value that is not a
+// Phi) that both are.
+fn vc_distinct_share(src: VcPhiSources, def_op: Vec<i64>, seen: Vec<i64>, stamp: i64, a: i64, b: i64) -> bool {
+    let la: Vec<i64> = vc_fh_leaves(a, src, def_op, seen, stamp);
+    let lb: Vec<i64> = vc_fh_leaves(b, src, def_op, seen, stamp + 1);
+    let mut i: u64 = 0;
+    while i < la.len() {
+        if vc_ids_has(lb, la[i]) { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// "" or the reason `f` is skipped: it passes one object for two parameters of a callee that
+// changes one of them. `order` holds the callees of `f` in post-order.
+fn vc_distinct_detail(fns: Vec<IrFunction>, idx_of: Vec<i64>, f: IrFunction, order: Vec<i64>) -> String {
+    let table: Vec<Vec<i64>> = Vec::new();
+    let mut n: u64 = 0;
+    while n < fns.len() {
+        table.push(Vec::new());
+        n = n + 1;
+    }
+    let mut oi: u64 = 0;
+    while oi < order.len() {
+        table[order[oi] as u64] = vc_distinct_changed(fns[order[oi] as u64], idx_of, table);
+        oi = oi + 1;
+    }
+    let n_ids: u64 = (dom_max_inst_id(f) + 1) as u64;
+    let rpo: Vec<i64> = vc_cfg_rpo(f);
+    let src: VcPhiSources = vc_fh_phi_sources(f, rpo, n_ids);
+    let def_op: Vec<i64> = vc_agg_def_ops(f, n_ids);
+    let seen: Vec<i64> = dom_fill(n_ids, -1);
+    let mut stamp: i64 = 0;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        if rpo[bi] >= 0 {
+            let blk: IrBlock = f.blocks[bi];
+            let mut ii: u64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                let t: i64 = { if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() { vc_distinct_callee(idx_of, inst.dv) } else { -1 } };
+                if t >= 0 && table[t as u64].len() > 0 {
+                    let g: IrFunction = fns[t as u64];
+                    let changed: Vec<i64> = table[t as u64];
+                    let mut i: u64 = 0;
+                    while i < inst.args.len() && i < g.param_keys.len() {
+                        let mut j: u64 = i + 1;
+                        while j < inst.args.len() && j < g.param_keys.len() {
+                            if (changed[i] == 1 || changed[j] == 1) && g.param_keys[i] == g.param_keys[j] && vc_distinct_is_collection(g.param_keys[i]) {
+                                stamp = stamp + 2;
+                                if vc_distinct_share(src, def_op, seen, stamp, inst.args[i], inst.args[j]) {
+                                    let detail: String = String::from("call of `");
+                                    detail.push_str(g.name);
+                                    detail.push_str(String::from("` passes one Vec or String for two of its parameters, which its proof takes for different objects (#1823)"));
+                                    return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), detail);
+                                }
+                            }
+                            j = j + 1;
+                        }
+                        i = i + 1;
+                    }
+                }
+                ii = ii + 1;
+            }
+        }
+        bi = bi + 1;
+    }
+    String::from("")
+}
