@@ -1,20 +1,44 @@
 name: CodSpeed
 
 # Compiler pipeline benchmarks (vow-codegen/benches/pipeline.rs) measured with
-# CodSpeed's CPU simulation instrument. Results are reported on PRs and tracked
-# on main at https://app.codspeed.io/vow-lang/vow.
+# CodSpeed's walltime instrument on a CodSpeed Macro Runner: a dedicated
+# bare-metal machine, so base and head always run on identical hardware.
+# Results are reported on PRs and tracked on main at
+# https://app.codspeed.io/vow-lang/vow.
+#
+# Prerequisite: an org admin must allow public repositories in the org's
+# Default runner group (Settings > Actions > Runner groups), or this job stays
+# queued. Keep the runner label fixed: switching it shifts every benchmark.
+# Walltime results are only comparable to a baseline measured on this runner,
+# so the first main run after a label change has no comparison.
+#
+# Only PRs that can move a measurement trigger a run, so a PR that touches no
+# benchmarked code gets no perf verdict. Every main commit runs, so each PR has
+# a baseline at its exact base commit.
 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+    paths:
+      - vow-syntax/**
+      - vow-types/**
+      - vow-ir/**
+      - vow-codegen/**
+      - vow-linker/**
+      - vow-diag/**
+      - Cargo.toml
+      - Cargo.lock
+      - benchmarks/hard/**
+      - .github/workflows/codspeed.yml
   # Lets CodSpeed trigger backtest runs to build initial history.
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Every main commit must finish: it is the baseline later PRs compare against.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -22,8 +46,13 @@ permissions:
 jobs:
   benchmarks:
     name: Run benchmarks
-    runs-on: ubuntu-latest
+    runs-on: codspeed-macro-arm64-graviton-ubuntu-22-04
     timeout-minutes: 30
+    env:
+      # The macro runner ships an old rustup and cargo, and the toolchain action's
+      # `rustup default` fails on it. Selecting the toolchain by variable works
+      # with any rustup.
+      RUSTUP_TOOLCHAIN: 1.99.1
     permissions:
       contents: read
       id-token: write # OIDC authentication with CodSpeed
@@ -31,15 +60,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # An exact version: a floating `stable` changes codegen between a PR's
+      # base and head runs and shows up as a regression.
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # PR runs restore main's cache; saving one per PR only costs upload time.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: cargo-codspeed@5.0.3
       - name: Build the benchmark target(s)
-        run: cargo codspeed build -m simulation -p vow-codegen
+        run: cargo codspeed build -m walltime -p vow-codegen
       - name: Run the benchmarks
         uses: CodSpeedHQ/action@821a40cd6c80e3cfe387caf55668287addd808da # v5.5.0
         with:
-          mode: simulation
+          mode: walltime
           run: cargo codspeed run -p vow-codegen

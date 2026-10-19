@@ -4,21 +4,19 @@ use cranelift_codegen::ir::{
     AbiParam, Block, BlockArg, FuncRef, GlobalValue, InstBuilder, MemFlagsData, Signature,
     StackSlot, StackSlotData, StackSlotKind, TrapCode, Value, types,
 };
-use cranelift_codegen::isa::TargetIsa;
-use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{
     DataDescription, DataId, FuncId as CraneliftFuncId, Linkage, Module as CraneliftModule,
 };
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::sync::Arc;
 use vow_ir::{
     BlockId, FuncId as IrFuncId, Function as IrFunction, HiddenRegionIdx, Inst, InstData, InstId,
     IntegerSignedness, IntegerType, IntegerWidth, Module as IrModule, Opcode, RegionConstraint,
     RegionId, RegionSummary, Ty as IrTy, fresh_arena_base, fresh_arena_variant,
 };
 
+use crate::isa::{make_baseline_isa, make_isa};
 use crate::return_materialization::{
     module_uses_return_materialization, return_source_needs_materialization,
 };
@@ -29,11 +27,24 @@ const WIDE_AGGREGATE_FIELD_MSG: &str = "internal error: a 128-bit value reached 
      (epic #526); lowering must emit the two-slot form, because an 8-byte slot would truncate it \
      or overwrite its neighbour";
 
-pub struct CraneliftBackend;
+pub struct CraneliftBackend {
+    baseline_isa: bool,
+}
 
 impl CraneliftBackend {
     pub fn new() -> Self {
-        Self
+        Self {
+            baseline_isa: false,
+        }
+    }
+
+    /// A backend for the host architecture without CPU feature detection, so
+    /// the generated code and the compile cost do not depend on which CPU the
+    /// process happens to run on. For reproducible benchmarks only: objects
+    /// built this way do not use the host's extensions.
+    #[doc(hidden)]
+    pub fn with_baseline_isa() -> Self {
+        Self { baseline_isa: true }
     }
 }
 
@@ -142,34 +153,8 @@ fn collect_target_block_args(
 }
 
 // ---------------------------------------------------------------------------
-// ISA and type helpers
+// Type helpers
 // ---------------------------------------------------------------------------
-
-fn make_isa(mode: BuildMode) -> Result<Arc<dyn TargetIsa>, CodegenError> {
-    let mut flag_builder = settings::builder();
-    flag_builder
-        .set("use_colocated_libcalls", "false")
-        .map_err(|e| CodegenError::IsaBuild(e.to_string()))?;
-    flag_builder
-        .set("is_pic", "true")
-        .map_err(|e| CodegenError::IsaBuild(e.to_string()))?;
-    // I128 function parameters and returns are gated behind this flag; without
-    // it Cranelift panics as soon as an i128/u128 crosses an ABI boundary.
-    flag_builder
-        .set("enable_llvm_abi_extensions", "true")
-        .map_err(|e| CodegenError::IsaBuild(e.to_string()))?;
-    if mode == BuildMode::Release || mode == BuildMode::Profile {
-        flag_builder
-            .set("opt_level", "speed")
-            .map_err(|e| CodegenError::IsaBuild(e.to_string()))?;
-    }
-    let flags = settings::Flags::new(flag_builder);
-    let isa_builder =
-        cranelift_native::builder().map_err(|e| CodegenError::IsaBuild(e.to_string()))?;
-    isa_builder
-        .finish(flags)
-        .map_err(|e| CodegenError::IsaBuild(e.to_string()))
-}
 
 fn ir_ty_to_cranelift(ty: IrTy) -> Option<types::Type> {
     match ty {
@@ -3255,7 +3240,11 @@ impl Backend for CraneliftBackend {
         mode: BuildMode,
         trace: TraceMode,
     ) -> Result<CompiledObject, CodegenError> {
-        let isa = make_isa(mode)?;
+        let isa = if self.baseline_isa {
+            make_baseline_isa(mode)
+        } else {
+            make_isa(mode)
+        }?;
 
         let obj_builder = ObjectBuilder::new(
             isa.clone(),
@@ -4454,7 +4443,7 @@ mod tests {
 
     #[test]
     fn cranelift_backend_default_impl() {
-        let _ = CraneliftBackend {};
+        let _ = CraneliftBackend::new();
     }
 
     /// Regression for the Codex review on PR #230: `build_signature`

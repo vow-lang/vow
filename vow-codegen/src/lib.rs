@@ -1,4 +1,5 @@
 pub mod cranelift_backend;
+mod isa;
 pub mod linker;
 mod return_materialization;
 
