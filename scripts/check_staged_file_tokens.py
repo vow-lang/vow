@@ -43,7 +43,9 @@ def find_violations(
         # Ratchet: a file already over the limit may change as long as it does
         # not grow, so oversized files shrink as they are touched.
         before = base_size(base_rev, path)
-        if before is not None and before > MAX_BYTES and byte_count <= before:
+        if before is not None and before <= MAX_BYTES:
+            before = None
+        if before is not None and byte_count <= before:
             continue
         # Match Git's usual binary heuristic; assets have no text token budget.
         if b"\0" in git("cat-file", "blob", oid.decode("ascii"))[:8000]:
@@ -136,7 +138,7 @@ def main() -> int:
         file=sys.stderr,
     )
     for path, byte_count, before in violations:
-        was = f" (was {before:,})" if before is not None and before > MAX_BYTES else ""
+        was = f" (was {before:,})" if before is not None else ""
         print(
             f"  {os.fsdecode(path)!r}: {byte_count:,} bytes{was} = "
             f"{byte_count / 4:,.2f} tokens",
