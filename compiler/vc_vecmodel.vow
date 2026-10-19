@@ -104,6 +104,17 @@ fn vc_cex_vec_path(cs: VcClaims, v: i64) -> String {
     String::from("")
 }
 
+// The length symbols of the `HashMap` and `BTreeMap` parameters the query of claim `k` declares.
+fn vc_cex_map_lens(cs: VcClaims, k: u64) -> Vec<String> {
+    let out: Vec<String> = Vec::new();
+    let mut m: u64 = 0;
+    while m < cs.map_len.len() {
+        if cs.map_len_hdr[m] < cs.header_lens[k] { out.push(cs.map_len[m]); }
+        m = m + 1;
+    }
+    out
+}
+
 fn vc_cex_elem_name(cs: VcClaims, v: i64, i: i64) -> String {
     let held: String = vc_cex_vec_handle(cs, v);
     let out: String = { if held.len() > 0 { String::from(held) } else { String::from(cs.vec_arr[v as u64]) } };
@@ -147,8 +158,8 @@ fn vc_append_vec_projection(cs: VcClaims, vecs: Vec<i64>, bound: i64, s: SmtScri
     }
 }
 
-// One ask for the model of claim `k` with every `Vec`/`String` length at most
-// `bound`; the answer carries `bound` elements of each parameter in `vecs` behind
+// One ask for the model of claim `k` with every `Vec`/`String` length, and every map parameter's
+// length (`vc_cex_map_lens`), at most `bound`; the answer carries `bound` elements of each parameter in `vecs` behind
 // the claim's regular values.
 fn vc_ask_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, vecs: Vec<i64>, bound: i64, pin: bool, first: VcSolverAnswer, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
     let ar: VcArena = cs.arena;
@@ -158,6 +169,12 @@ fn vc_ask_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, vecs: Vec
         let len: i64 = vc_tm_var(ar, cs.vec_len[vecs[p] as u64]);
         vc_script_assert(s, vc_tm_app2(ar, VC_OP_BVULE(), len, vc_tm_bv(ar, 64, bound, 0)));
         p = p + 1;
+    }
+    let maps: Vec<String> = vc_cex_map_lens(cs, k);
+    let mut q: u64 = 0;
+    while q < maps.len() {
+        vc_script_assert(s, vc_tm_app2(ar, VC_OP_BVULE(), vc_tm_var(ar, maps[q]), vc_tm_bv(ar, 64, bound, 0)));
+        q = q + 1;
     }
     if pin { vc_pin_model(cs, first, s); }
     vc_script_assert(s, cs.negated_goals[k]);
@@ -207,7 +224,8 @@ fn vc_shrink_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, vecs: 
     best
 }
 
-// The model of claim `k` with the contents of its `Vec` and `String` parameters:
+// The model of claim `k` with the contents of its `Vec` and `String` parameters (and a map
+// parameter's length, bounded and shrunk with theirs, though it has no elements to list):
 // the regular values, then the same number of elements of each parameter of
 // `vc_cex_vecs`, in order (`vc_answer_elems_per_vec`). The lengths are bounded
 // first by 2, then 8, 64 and `VC_CEX_VEC_MAX`, and the first bound that has a
@@ -219,7 +237,7 @@ fn vc_shrink_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, vecs: 
 // and another set of scalars might not.
 fn vc_enrich_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: VcSolverAnswer, pin: bool, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
     let vecs: Vec<i64> = vc_cex_vecs(cs, k);
-    if vecs.len() == 0 { return ans; }
+    if vecs.len() == 0 && vc_cex_map_lens(cs, k).len() == 0 { return ans; }
     let started: i64 = time_micros();
     let mut lo: i64 = -1;
     let mut bound: i64 = 2;

@@ -1,0 +1,19 @@
+// TEST: replay-skipped a map of more than 512 entries is not built by the replay harness
+// TEST: counterexample-fn "len_below_thousand"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The shortest map the claim fails on has 1000 entries, above what the counterexample lists and the
+// harness builds.
+module MapParamLenBeyondReplaySkipped
+
+fn len_below_thousand(m: BTreeMap<i64, i64>) -> u64 vow {
+  ensures: result < 1000
+} {
+  m.len()
+}
+
+fn main() -> i32 [io] {
+  let m: BTreeMap<i64, i64> = BTreeMap::new();
+  print_u64(len_below_thousand(m));
+  0
+}

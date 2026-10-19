@@ -1,4 +1,3 @@
-// TEST: replay-skipped the replay harness rebuilds only scalar parameters, not a map
 // TEST: counterexample-fn "lookup"
 // TEST: counterexample-vow-id 4294967293
 // TEST: counterexample-blame None
