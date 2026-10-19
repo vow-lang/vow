@@ -18,6 +18,7 @@ use vc_heap
 use vc_map
 use vc_mapops
 use vc_overlay
+use vc_handle
 use vc_ptrstore
 use vc_held
 use vc_strops
@@ -692,10 +693,8 @@ fn vc_mark_stored_float(w: VcWalk, obj: i64, val: i64) {
     if ft >= 0 { vc_vec_mark_elem(w.vv, w.ag, obj, ft); }
 }
 
-// The 64-bit slot a `push` or `set` stores for value `val`. In a function that reads an element
-// back, an object's slot is its address (`vc_overlay_addr_of`), so a read through the element is
-// a read of that object; otherwise nothing looks at the slot and it is a fresh constant
-// (`vc_ptr_store_detail` keeps every other function out of the subset).
+// The 64-bit slot a `push` or `set` stores for `val`: an object's address (`vc_overlay_addr_of`) in a
+// function that reads an element back, else a fresh constant nothing looks at (`vc_ptr_store_detail`).
 fn vc_walk_slot_word(w: VcWalk, val: i64) -> i64 {
     let ty: i64 = w.tys[val as u64];
     if ty == ITY_PTR() && w.memory.overlay.elems { return vc_walk_store_address(w, val); }
@@ -782,7 +781,9 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
         let idx: i64 = w.var_of[inst.args[1] as u64];
         vc_guard(cs, VC_CLAIM_VEC_BOUNDS(), VC_LABEL_VEC_BOUNDS(), pc, vc_vec_in_bounds(ar, idx, vc_vec_cur_len(vv, s, b)), inst);
         if kind == VC_VEC_GET() {
-            vc_define(w, inst, vc_tm_app2(ar, VC_OP_SELECT(), vc_vec_cur_arr(vv, s, b), idx));
+            let t: i64 = vc_tm_app2(ar, VC_OP_SELECT(), vc_vec_cur_arr(vv, s, b), idx);
+            vc_define(w, inst, t);
+            vc_overlay_note_elem(w.memory.overlay, t, inst.args[0]);
             w.elem_obj[inst.id as u64] = w.obj_of[inst.args[0] as u64];
         } else {
             vc_mark_stored_float(w, w.obj_of[inst.args[0] as u64], inst.args[2]);

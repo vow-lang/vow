@@ -1,0 +1,35 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: replay-skipped is not rebuilt by replay
+// An element of a `Vec` parameter is memory the caller gave: stored in a field and read back it is a
+// handle no stored object is, and the exact chain of an element of `mine` must not stand for it (#1825).
+module VecPointerElemForeignHandleInFieldWrong
+
+struct Wrap {
+  r: Vec<i64>,
+}
+
+fn f(outer: Vec<Vec<i64>>) -> bool vow {
+  requires: outer.len() >= 1
+  ensures: result
+} {
+  let mine: Vec<Vec<i64>> = Vec::new();
+  let row: Vec<i64> = Vec::new();
+  mine.push(row);
+  let w: Wrap = Wrap { r: outer[0] };
+  w.r.len() == mine[0].len()
+}
+
+fn main() -> i32 [io] {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let first: Vec<i64> = Vec::new();
+  first.push(1);
+  outer.push(first);
+  if f(outer) {
+    print_i64(1);
+  } else {
+    print_i64(0);
+  }
+  0
+}

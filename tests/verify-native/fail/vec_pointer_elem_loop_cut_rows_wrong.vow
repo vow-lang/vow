@@ -1,0 +1,31 @@
+// TEST: counterexample-fn "same"
+// TEST: counterexample-vow-id 2
+// TEST: counterexample-blame Callee
+// The loop carries an invariant, so it is cut and the `Vec` is arbitrary after it: slots 0 and 1
+// hold two different rows (an empty one stored before the loop, one value in the row the loop stores),
+// not both the one row that has a state there. A chain that ended in that row proved the claim (#1825).
+module VecPointerElemLoopCutRowsWrong
+
+fn same(n: i64) -> bool vow {
+  requires: n == 2
+  ensures: result
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let first: Vec<i64> = Vec::new();
+  outer.push(first);
+  let mut i: i64 = 1;
+  while i < n vow {
+    invariant: i >= 1 && i <= n && outer.len() == (i as u64)
+  } {
+    let row: Vec<i64> = Vec::new();
+    row.push(1);
+    outer.push(row);
+    i = i + 1;
+  }
+  outer[0].len() == outer[1].len()
+}
+
+fn main() -> i32 [io] {
+  if same(2) { print_i64(1); } else { print_i64(0); }
+  0
+}
