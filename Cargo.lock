@@ -1301,6 +1301,7 @@ dependencies = [
  "cranelift-object",
  "object 0.40.0",
  "proptest",
+ "target-lexicon",
  "tempfile",
  "vow-diag",
  "vow-ir",

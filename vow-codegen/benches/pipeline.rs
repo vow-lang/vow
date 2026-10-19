@@ -4,8 +4,10 @@
 //! Inputs are real Vow sources checked into the repository:
 //! - the self-contained `benchmarks/hard/*/reference.vow` programs drive the
 //!   full single-file pipeline (they need no module loading);
-//! - large files of the self-hosted compiler under `compiler/` drive the
-//!   lexer and parser on realistic, multi-thousand-line inputs.
+//! - the same programs, repeated into a large synthetic module, drive the lexer
+//!   and parser. The inputs are deliberately not the live `compiler/*.vow`
+//!   sources: those change with every refactor, which would show up as a
+//!   performance change in the benchmark history.
 
 use divan::{Bencher, black_box};
 use vow_codegen::cranelift_backend::CraneliftBackend;
@@ -50,14 +52,10 @@ const PROGRAMS: &[(&str, &str)] = &[
     ),
 ];
 
-/// Large sources from the self-hosted compiler (syntax-level benchmarks only:
-/// they import sibling modules, so they are not type-checked here).
-const COMPILER_SOURCES: &[(&str, &str)] = &[
-    ("lexer", include_str!("../../compiler/lexer.vow")),
-    ("parser", include_str!("../../compiler/parser.vow")),
-    ("checker", include_str!("../../compiler/checker.vow")),
-    ("lower", include_str!("../../compiler/lower.vow")),
-];
+/// Copies of every program in `PROGRAMS` concatenated into one module for the
+/// syntax-level benchmarks (parse only: the repeated items collide, so it is
+/// never type-checked).
+const SYNTAX_COPIES: &[(&str, usize)] = &[("small", 10), ("large", 200)];
 
 const PROGRAM_NAMES: &[&str] = &[
     "stack_push_pop",
@@ -68,7 +66,7 @@ const PROGRAM_NAMES: &[&str] = &[
     "expression_eval",
 ];
 
-const COMPILER_NAMES: &[&str] = &["lexer", "parser", "checker", "lower"];
+const SYNTAX_NAMES: &[&str] = &["small", "large"];
 
 fn lookup(table: &[(&str, &'static str)], name: &str) -> &'static str {
     table
@@ -76,6 +74,16 @@ fn lookup(table: &[(&str, &'static str)], name: &str) -> &'static str {
         .find(|(n, _)| *n == name)
         .map(|(_, src)| *src)
         .unwrap_or_else(|| panic!("unknown bench input {name}"))
+}
+
+fn syntax_input(name: &str) -> String {
+    let copies = SYNTAX_COPIES
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, copies)| *copies)
+        .unwrap_or_else(|| panic!("unknown syntax input {name}"));
+    let unit: String = PROGRAMS.iter().map(|(_, src)| *src).collect();
+    unit.repeat(copies)
 }
 
 struct CollectingEmitter {
@@ -133,16 +141,16 @@ fn typecheck(module: &Module) -> bool {
 mod syntax {
     use super::*;
 
-    #[divan::bench(args = COMPILER_NAMES)]
+    #[divan::bench(args = SYNTAX_NAMES)]
     fn lex(bencher: Bencher, name: &str) {
-        let src = lookup(COMPILER_SOURCES, name);
-        bencher.bench(|| Lexer::new(black_box(src)).tokenize().unwrap());
+        let src = syntax_input(name);
+        bencher.bench(|| Lexer::new(black_box(&src)).tokenize().unwrap());
     }
 
-    #[divan::bench(args = COMPILER_NAMES)]
+    #[divan::bench(args = SYNTAX_NAMES)]
     fn parse(bencher: Bencher, name: &str) {
-        let src = lookup(COMPILER_SOURCES, name);
-        bencher.bench(|| parse_module(black_box(src), FILE));
+        let src = syntax_input(name);
+        bencher.bench(|| parse_module(black_box(&src), FILE));
     }
 }
 
@@ -168,7 +176,7 @@ mod codegen {
     #[divan::bench(args = PROGRAM_NAMES)]
     fn cranelift_debug(bencher: Bencher, name: &str) {
         let ir = check_and_lower(&parse(lookup(PROGRAMS, name)));
-        let backend = CraneliftBackend::new();
+        let backend = CraneliftBackend::with_baseline_isa();
         bencher.bench(|| {
             backend
                 .compile_module(black_box(&ir), BuildMode::Debug, TraceMode::Off)
@@ -179,7 +187,7 @@ mod codegen {
     #[divan::bench(args = PROGRAM_NAMES)]
     fn cranelift_release(bencher: Bencher, name: &str) {
         let ir = check_and_lower(&parse(lookup(PROGRAMS, name)));
-        let backend = CraneliftBackend::new();
+        let backend = CraneliftBackend::with_baseline_isa();
         bencher.bench(|| {
             backend
                 .compile_module(black_box(&ir), BuildMode::Release, TraceMode::Off)
@@ -192,7 +200,7 @@ mod codegen {
 #[divan::bench(args = PROGRAM_NAMES)]
 fn end_to_end(bencher: Bencher, name: &str) {
     let src = lookup(PROGRAMS, name);
-    let backend = CraneliftBackend::new();
+    let backend = CraneliftBackend::with_baseline_isa();
     bencher.bench(|| {
         let module = parse(black_box(src));
         let ir = check_and_lower(&module);
