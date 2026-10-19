@@ -40,6 +40,16 @@ jobs:
           # Both ends of the range have to be present for `git diff base...head`.
           fetch-depth: 0
           persist-credentials: false
+      # Run before path classification: docs-only changes have the same budget.
+      - name: Changed authored-file token budget
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 scripts/check_staged_file_tokens.py --base "$BASE_SHA" --head "$HEAD_SHA"
+      - name: Agent hook and file-budget unit tests
+        run: python3 -m unittest discover -s scripts -p 'test_*hooks.py'
+      - name: Staged and committed file-budget unit tests
+        run: python3 scripts/test_staged_file_tokens.py
       - id: classify
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}

@@ -34,18 +34,43 @@ The native verifier (epic #1398) shells out to `bitwuzla`, which must be on `PAT
 
 ## Development checks
 
-Install the pinned repository hooks once per checkout:
+Provision the pinned repository hooks before starting implementation in a clone
+or worktree:
 
 ```bash
 uv tool install pre-commit
-pre-commit install
+./scripts/ensure-hooks.sh
+./scripts/agent-session.sh --worktree /path/to/vow-worktree claude
+# Or launch Codex in the current worktree:
+./scripts/agent-session.sh codex
 ```
 
-`pre-commit install` only wires up the hook types present in this repo's
-config at the time you run it. If you installed hooks before the
-`commit-msg` stage was added, rerun `pre-commit install` — otherwise your
-checkout keeps linting file contents but silently skips the commit message
-check.
+The installer verifies both `pre-commit` and `commit-msg`, prepares their tool
+environments, and preserves existing hooks. On resume it reuses installed hooks
+without rewriting Git metadata. Linked worktrees share hooks but prepare the
+configuration belonging to the selected worktree. Provision on the host **before**
+read-only mounts and give `PRE_COMMIT_HOME` a writable cache directory. Git 2.43+
+is required for the committed-snapshot attribute check in CI.
+
+Claude Code also provisions on SessionStart and checks readiness before shell
+commands and edits, catching hooks removed after startup. Other agent harnesses
+must launch through `scripts/agent-session.sh`. Resolve setup failures before
+feature work; do not bypass checks with `SKIP`, `--no-verify`, or `core.hooksPath`.
+
+The local hook checks staged authored text files against a **20,000-byte** limit
+(5,000 estimated tokens using bytes/4). It respects partial staging, checks rename
+destinations, and requires splitting existing oversized files when edited.
+Deletions, symlinks, gitlinks and binary assets are skipped. Only whole generated
+outputs and lockfiles explicitly marked `token-limit-ignore` in `.gitattributes`
+are exempt; mixed authored/generated compiler sources are not exempt. CI checks
+committed changes from the merge base, independently of its index and working
+tree, including documentation-only PRs.
+
+Extract cohesive modules, tests, or linked documents, update callers, and re-stage
+all affected files. For Vow code preserve contracts and linear ownership, keep
+Rust and self-hosted compiler changes paired outside the native-verifier
+exception, and retain byte-identical verifier C. See [CLAUDE.md](CLAUDE.md) and
+its linked topic guides for the required validation.
 
 Run every hook against the full repository when changing hook configuration or
 tooling:
