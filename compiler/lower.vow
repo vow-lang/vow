@@ -1314,15 +1314,15 @@ fn lower_resolve_alias_tid(a: AstArena, tid: i64, alias_names: Vec<String>, alia
     alias_target_tids[index as u64]
 }
 
-// `IrFunction.param_keys` entry of a parameter whose alias-resolved declared type is `tid`: the
-// head of the type (`Outer`, `Vec`, `Option`), with `str` and `String` one head, or "" when the
-// head is not known. Values of different heads are never one object.
+// `IrFunction.param_keys` entry: head of the declared type (`Vec<T>` whole, `str` is `String`),
+// "" if unknown. Different keys are never one object.
 fn lower_param_key(a: AstArena, tid: i64) -> String {
     if tid == -1 { return String::from(""); }
     let tag: i64 = type_tag(a, tid);
     if tag != TY_NAMED() && tag != TY_GENERIC() { return String::from(""); }
     let head: String = arena_str(a, type_a(a, tid));
     if head == String::from("str") { return String::from("String"); }
+    if head == String::from("Vec") && tag == TY_GENERIC() { return print_type_text(a, tid); }
     head
 }
 

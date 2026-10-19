@@ -1,0 +1,181 @@
+module VcVecAlias
+
+use ir
+use ir_dominance
+use vc_ops
+use vc_strops
+use vc_term
+use vc_agg
+use vc_agg_shape
+use vc_induct_agg
+use vc_loops
+use vc_overlay
+use vc_vec
+use vc_heap
+
+// Parameters of one `Vec` or `String` type may be one object: a caller can pass one value for
+// two of them, so a change through one is a change of the other. The model gives each such
+// parameter an identity (`vc_agg_enable_alias`) and two are one object exactly when their
+// identities are equal. A function needs identities when it changes a collection it was given
+// and has two collection parameters of one declared type (`Vec<i64>` and `Vec<u8>` are two
+// types); a function that only reads them cannot tell.
+
+// Per parameter, the classes (`VC_OV_VEC`, `VC_OV_STRING`) it is used as an object of by a `Vec` or
+// `String` operation, looking through Phis; one entry more, 1 when some such operation changes
+// a collection that is a parameter.
+fn vc_vecalias_classes(f: IrFunction, n_ids: u64) -> Vec<i64> {
+    let rpo: Vec<i64> = vc_cfg_rpo(f);
+    let src: VcPhiSources = vc_fh_phi_sources(f, rpo, n_ids);
+    let def_op: Vec<i64> = vc_agg_def_ops(f, n_ids);
+    let arg_param: Vec<i64> = vc_agg_arg_params(f, n_ids);
+    let seen: Vec<i64> = dom_fill(n_ids, -1);
+    let cls: Vec<i64> = dom_fill(f.params.len() + 1, 0);
+    let mut stamp: i64 = 0;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        if rpo[bi] >= 0 {
+            let blk: IrBlock = f.blocks[bi];
+            let mut ii: u64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                let k: i64 = vc_inst_vec_kind(inst);
+                if k != VC_VEC_NONE() && inst.args.len() > 0 {
+                    let first: i64 = vc_overlay_op_class(inst, k);
+                    let mut objects: u64 = 1;
+                    if first == VC_OV_STRING() { objects = vc_str_kind_object_operands(k); }
+                    let mut j: u64 = 0;
+                    while j < objects && j < inst.args.len() {
+                        stamp = stamp + 1;
+                        let leaves: Vec<i64> = vc_fh_leaves(inst.args[j], src, def_op, seen, stamp);
+                        let mut li: u64 = 0;
+                        while li < leaves.len() {
+                            let l: i64 = leaves[li];
+                            if l >= 0 && (l as u64) < n_ids && arg_param[l as u64] >= 0 {
+                                let p: u64 = arg_param[l as u64] as u64;
+                                cls[p] = cls[p] | { if j == 0 { first } else { VC_OV_STRING() } };
+                                if j == 0 && vc_vec_kind_mutates(k) { cls[f.params.len()] = 1; }
+                            }
+                            li = li + 1;
+                        }
+                        j = j + 1;
+                    }
+                }
+                ii = ii + 1;
+            }
+        }
+        bi = bi + 1;
+    }
+    cls
+}
+
+// The ascending indices of the `Vec` and `String` parameters that may be one object as another
+// parameter of their declared type, when the function changes a collection that is one of
+// them (or a Phi of them); else none.
+fn vc_vecalias_params(f: IrFunction, n_ids: u64) -> Vec<i64> {
+    let cls: Vec<i64> = vc_vecalias_classes(f, n_ids);
+    let out: Vec<i64> = Vec::new();
+    if cls[f.params.len()] == 0 { return out; }
+    let mut p: u64 = 0;
+    while p < f.params.len() {
+        if cls[p] != 0 { out.push(p as i64); }
+        p = p + 1;
+    }
+    let keys: Vec<String> = vc_agg_alias_keys(f, out);
+    let alone: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < out.len() {
+        let mut mates: u64 = 0;
+        let mut j: u64 = 0;
+        while j < out.len() {
+            if keys[j] == keys[i] { mates = mates + 1; }
+            j = j + 1;
+        }
+        if mates < 2 { alone.push(out[i]); }
+        i = i + 1;
+    }
+    vc_vecalias_without(out, alone)
+}
+
+// `all` without the members of `drop`, in order.
+fn vc_vecalias_without(all: Vec<i64>, drop: Vec<i64>) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < all.len() {
+        if !vc_ids_has(drop, all[i]) { out.push(all[i]); }
+        i = i + 1;
+    }
+    out
+}
+
+// The ascending union of two ascending lists of parameter indices.
+fn vc_vecalias_union(a: Vec<i64>, b: Vec<i64>) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    let mut j: u64 = 0;
+    while i < a.len() || j < b.len() {
+        if j >= b.len() || (i < a.len() && a[i] < b[j]) {
+            out.push(a[i]);
+            i = i + 1;
+        } else if i >= a.len() || b[j] < a[i] {
+            out.push(b[j]);
+            j = j + 1;
+        } else {
+            out.push(a[i]);
+            i = i + 1;
+            j = j + 1;
+        }
+    }
+    out
+}
+
+// Gives the collection parameters among the aliasable ones (`ag.al_params`, identities already
+// declared) their slots, and relates them: parameters of one type group that have equal
+// identities have equal initial contents, and `vc_vec_write` spreads a write to each.
+fn vc_vecalias_enable(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, f: IrFunction, n_ids: u64) {
+    let cls: Vec<i64> = vc_vecalias_classes(f, n_ids);
+    let pos: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < ag.al_params.len() {
+        if cls[ag.al_params[i] as u64] != 0 {
+            vv.al_slot.push(vc_vec_slot(vv, ag, ar, hdr, assumed, vc_agg_param(ag, ag.al_params[i])));
+            pos.push(i as i64);
+        }
+        i = i + 1;
+    }
+    let n: u64 = vv.al_slot.len();
+    let mut a: u64 = 0;
+    while a < n * n {
+        vv.al_same.push(-1);
+        a = a + 1;
+    }
+    a = 0;
+    while a < n {
+        let mut b: u64 = 0;
+        while b < a {
+            if vc_agg_same_group(ag, pos[a], pos[b]) {
+                let same: i64 = vc_agg_same_object(ag, ar, hdr, pos[a], pos[b]);
+                vv.al_same[a * n + b] = same;
+                vv.al_same[b * n + a] = same;
+                let sa: u64 = vv.al_slot[a] as u64;
+                let sb: u64 = vv.al_slot[b] as u64;
+                let equal: i64 = vc_tm_app2(ar, VC_OP_AND(), vc_tm_app2(ar, VC_OP_EQ(), vv.base_arr[sa], vv.base_arr[sb]), vc_tm_app2(ar, VC_OP_EQ(), vv.base_len[sa], vv.base_len[sb]));
+                assumed.push(vc_tm_app2(ar, VC_OP_OR(), vc_tm_app1(ar, VC_OP_NOT(), same), equal));
+            }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+}
+
+// Declares the identity of every aliasable parameter (structs, `Vec`s and `Strings`) and what
+// relates the collection parameters. The facts the identities need go to `assumed`.
+fn vc_vecalias_setup(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, f: IrFunction, n_ids: u64) {
+    let params: Vec<i64> = vc_vecalias_union(vc_agg_alias_params(f, n_ids), vc_vecalias_params(f, n_ids));
+    let facts: Vec<i64> = vc_agg_enable_alias(ag, ar, hdr, params, vc_agg_alias_keys(f, params));
+    let mut i: u64 = 0;
+    while i < facts.len() {
+        vc_heap_assume(ar, assumed, facts[i]);
+        i = i + 1;
+    }
+    vc_vecalias_enable(vv, ag, ar, hdr, assumed, f, n_ids);
+}

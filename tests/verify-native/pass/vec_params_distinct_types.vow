@@ -1,0 +1,31 @@
+// Parameters of different `Vec` types are never one object: the push to `names` leaves the
+// length of `ids` alone.
+module VecParamsDistinctTypes
+
+fn add(ids: Vec<i64>, names: Vec<String>) -> u64 vow {
+    requires: ids.len() == 1
+    requires: names.len() < 10
+    ensures: result == 1
+} {
+    names.push(String::from("x"));
+    ids.len()
+}
+
+fn text(a: String, b: Vec<u8>) -> u64 vow {
+    requires: a.len() == 2
+    requires: b.len() < 10
+    ensures: result == 2
+} {
+    b.push(7);
+    a.len()
+}
+
+fn main() -> i32 [io] {
+    let ids: Vec<i64> = Vec::new();
+    ids.push(1);
+    let names: Vec<String> = Vec::new();
+    print_u64(add(ids, names));
+    let bytes: Vec<u8> = Vec::new();
+    print_u64(text(String::from("ab"), bytes));
+    0
+}

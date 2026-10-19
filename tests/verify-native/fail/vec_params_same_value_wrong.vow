@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "grow"
+// TEST: counterexample-vow-id 2
+// TEST: counterexample-blame Callee
+// The two `Vec` parameters may be one object, as `main` passes one value for both: then the push
+// through `q` is the length `p.len()` reads back, so the clause fails. The counterexample says so
+// as equal identities.
+module VecParamsSameValueWrong
+
+fn grow(p: Vec<i64>, q: Vec<i64>) -> u64 vow {
+    requires: p.len() == 1
+    requires: q.len() < 10
+    ensures: result == 1
+} {
+    q.push(5);
+    p.len()
+}
+
+fn main() -> i32 [io] {
+    let a: Vec<i64> = Vec::new();
+    a.push(7);
+    print_u64(grow(a, a));
+    0
+}

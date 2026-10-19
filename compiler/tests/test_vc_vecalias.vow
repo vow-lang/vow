@@ -1,0 +1,100 @@
+module TestVcVecAlias
+
+use ir
+use vc_ops
+use vc_gate
+use vc_exec
+use vc_smt
+use vc_vecalias
+use verifier
+use tests.builders
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn args2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = args1(a);
+    v.push(b);
+    v
+}
+
+fn two_ptrs() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    p.push(ITY_PTR());
+    p
+}
+
+fn keys2(a: String, b: String) -> Vec<String> {
+    let k: Vec<String> = Vec::new();
+    k.push(a);
+    k.push(b);
+    k
+}
+
+// fn f(a, b) { b.push(1); a.len() == 3 } with `a` and `b` declared as `ka` and `kb`; `mutate`
+// false reads `b.len()` instead of pushing.
+fn two_vecs(ka: String, kb: String, mutate: bool) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_arg(1, ITY_PTR(), 1));
+    i.push(mk_inst_const_i64(2, 1));
+    if mutate {
+        i.push(mk_inst_call_extern(3, ITY_UNIT(), args2(1, 2), String::from("__vow_vec_push_val")));
+    } else {
+        i.push(mk_inst_call_extern(3, ITY_U64(), args1(1), String::from("__vow_vec_len")));
+    }
+    i.push(mk_inst_call_extern(4, ITY_U64(), args1(0), String::from("__vow_vec_len")));
+    i.push(mk_inst_const_i64(5, 3));
+    i.push(mk_inst(6, IOP_EQ(), ITY_BOOL(), args2(4, 5)));
+    i.push(ir_inst_new(7, IOP_VOW_ENS(), ITY_UNIT(), args1(6), IDATA_VOW_ID(), 0, 0, String::from("")));
+    i.push(mk_inst_return(8, 4));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, i));
+    let f: IrFunction = mk_function(1, String::from("f"), two_ptrs(), ITY_U64(), blocks);
+    f.param_keys = keys2(ka, kb);
+    f
+}
+
+fn ids_text(f: IrFunction) -> String {
+    let ids: Vec<i64> = vc_vecalias_params(f, vc_ty_table(f).len());
+    let out: String = String::from("");
+    let mut i: u64 = 0;
+    while i < ids.len() {
+        out.push_str(i64_to_string(ids[i]));
+        out.push_str(String::from(","));
+        i = i + 1;
+    }
+    out
+}
+
+fn check_params_selected() -> i64 {
+    let vi: String = String::from("Vec<i64>");
+    if ids_text(two_vecs(vi, vi, true)) != String::from("0,1,") { return 10; }
+    if ids_text(two_vecs(vi, String::from("Vec<u8>"), true)).len() != 0 { return 11; }
+    if ids_text(two_vecs(vi, String::from("String"), true)).len() != 0 { return 12; }
+    if ids_text(two_vecs(vi, vi, false)).len() != 0 { return 13; }
+    if ids_text(two_vecs(String::from(""), String::from(""), true)) != String::from("0,1,") { return 14; }
+    0
+}
+
+// The write to `b` is a write to `a` when their identities are equal, so the claim can fail.
+fn check_identity_spreads_a_write() -> i64 {
+    let vi: String = String::from("Vec<i64>");
+    let aliased: VcClaims = vc_claims(two_vecs(vi, vi, true));
+    let q: String = vc_smt_render(aliased.arena, vc_claim_script(aliased, 0));
+    if str_find_str(q, String::from("(ite ")) < 0 { return 20; }
+    let apart: VcClaims = vc_claims(two_vecs(vi, String::from("Vec<u8>"), true));
+    let r: String = vc_smt_render(apart.arena, vc_claim_script(apart, 0));
+    if str_find_str(r, String::from("(ite ")) >= 0 { return 21; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_params_selected();
+    if r == 0 { r = check_identity_spreads_a_write(); }
+    i64_to_i32_wrap(r)
+}
