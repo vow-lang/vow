@@ -14,6 +14,12 @@ set -uo pipefail
 # (proven | failed | skipped; default: the same as the expectation) is the verdict of
 # that run, which shows the fixture's outcome is the summary's doing.
 #
+# The summary run prints a `Wave` line on stderr for every round of callee proofs it starts: a
+# `proven` or `unknown` result is the summary's doing, so it must have one. `// TEST: summary-no-waves`
+# (with `// TEST: summary-trust-root-min N`, which lowers the size from which a callee is worth a
+# proof) asserts the opposite: no callee of the function can be summarised, so no proof could change
+# its skip and none is started.
+#
 # Run a third time with the summaries switched off (`VOW_VERIFY_NO_SUMMARIES=1`) at the lowered
 # budget: the function must be `Skipped`, which shows the verdict above is the summary's doing.
 # A fixture whose baseline is `failed` is also run with `--replay-cex` and every counterexample
@@ -38,10 +44,20 @@ for f in "$@"; do
     base=$(sed -n 's|^// TEST: summary-baseline \(.*\)$|\1|p' "$f" | head -1)
     budget=$(sed -n 's|^// TEST: summary-budget \(.*\)$|\1|p' "$f" | head -1)
     [ -n "$budget" ] || budget=60
+    root_min=$(sed -n 's|^// TEST: summary-trust-root-min \(.*\)$|\1|p' "$f" | head -1)
     [ -n "$base" ] || base="$want"
     errors=()
-    json=$(VOW_VERIFY_INLINE_BUDGET="$budget" "$VOWC" verify --backend native --no-cache "$f" 2>/dev/null)
+    err=$(mktemp)
+    json=$(env ${root_min:+VOW_VERIFY_TRUST_ROOT_MIN="$root_min"} VOW_VERIFY_INLINE_BUDGET="$budget" "$VOWC" verify --backend native --no-cache "$f" 2>"$err")
     st=$(status_of "$json")
+    grep -q '^Wave ' "$err" && waved=1 || waved=0
+    rm -f "$err"
+    if grep -q '^// TEST: summary-no-waves' "$f" && [ "$waved" = 1 ]; then
+        errors+=("summary run: a proof wave ran, though no summary can change the skip")
+    fi
+    if { [ "$want" = proven ] || [ "$want" = unknown ]; } && [ "$waved" = 0 ]; then
+        errors+=("summary run: no proof wave ran, though a summary decided the function")
+    fi
     case "$want" in
         proven) [ "$st" = "Verified" ] || errors+=("summary run: expected Verified, got '$st'") ;;
         unknown)

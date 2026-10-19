@@ -1,0 +1,30 @@
+// TEST: summary-expect skipped
+// TEST: summary-baseline proven
+// TEST: summary-trust-root-min 100
+// TEST: summary-no-waves
+// `fill` is a callee worth a proof of its own, but it grows a `Vec` its caller holds, which no summary
+// can stand for. The skip of `run` is the same whatever is proven, so no proof wave starts.
+module CalleeMutatesVecNoWaves
+
+fn fill(v: Vec<i64>, n: i64) {
+    let p1: i64 = n & 255;
+    let p2: i64 = (n / 2) & 255;
+    let p3: i64 = (p1 + p2) & 255;
+    let p4: i64 = (p3 * 3) & 255;
+    let p5: i64 = (p4 + p1) & 255;
+    let p6: i64 = (p5 + p2) & 255;
+    v.push(p6);
+}
+
+fn mid(v: Vec<i64>, n: i64) {
+    fill(v, n); fill(v, n + 1); fill(v, n + 2); fill(v, n + 3);
+}
+
+fn run(v: Vec<i64>) -> i64 vow {
+    ensures: result == 0
+} {
+    mid(v, 1); mid(v, 5); mid(v, 9); mid(v, 13);
+    0
+}
+
+fn main() -> i32 { 0 }

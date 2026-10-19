@@ -26,7 +26,7 @@ fn run_verify_native(argv: Vec<String>, fr: LoweredFrontend, path: String, tctx:
     let mut entries: Vec<NativeEntry> = native_plan(fns, ir_mod, vm, const_fn_indices, task_idx, task_names, cfg, waves, Vec::new());
     let use_cache: bool = !has_flag(argv, "--no-cache") && timeout_ms > 0;
     let mut cache: VcCache = vc_cache_off();
-    let roots: Vec<i64> = native_summary_roots(entries, vm);
+    let roots: Vec<i64> = native_summary_roots(entries, vm, budget);
     if roots.len() > 0 && timeout_ms > 0 && vc_summaries_enabled() {
         if use_cache { cache = vc_cache_resolve(vc_solver_locate()); }
         waves = vc_waves_prove(vc_worker_exe(argv[0]), path, vm, roots, jobs, timeout_ms, budget, cache);
