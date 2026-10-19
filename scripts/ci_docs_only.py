@@ -17,16 +17,18 @@ skip them.
 The classification is deliberately narrow. A path counts as prose only if it is
 a Markdown file outside the two roots that hold Markdown the *build* consumes:
 
-  * `docs/spec/` is the canonical spec, and `scripts/generate_help.py` copies it
-    into the compiler sources -- `vow/src/skill.rs` and `compiler/main.vow` each
-    embed a verbatim copy. `scripts/check_help_coverage.py` fails the suite when
-    `grammar.md` and the generated `--help` drift apart, and the
-    `docs/spec/schemas/*.json` beside it are `include_str!`-ed into `vow-diag`
-    and `vow`, so editing one changes a compiled binary.
+  * `docs/spec/` is the canonical spec. The large documents are assembled from
+    `docs/spec/src/` parts, and `scripts/generate_help.py` turns the spec into
+    generated compiler modules -- `compiler/*_gen.vow` and `vow/src/skill_gen/*.rs`,
+    which the Rust and self-hosted compilers embed in their `--help` and skill
+    text. `scripts/check_help_coverage.py` fails the suite when `grammar.md` and
+    the generated `--help` drift apart, `operations.json` feeds the catalogue
+    projections, and the `docs/spec/schemas/*.json` beside it are `include_str!`-ed
+    into `vow-diag` and `vow`, so editing one changes a compiled binary.
   * `skills/` is the on-disk mirror `generate_help.py` writes for
-    `npx skills add`. A `cargo test` in `vow/src/skill.rs` asserts it matches
-    the compiler-embedded skill byte for byte, so editing a file there alone
-    fails `cargo test`.
+    `npx skills add`. `generate_help.py --check` fails when it differs from the
+    skill text built from the spec, so editing a file there alone fails the
+    generator check that guards the compiler-embedded skill.
 
 Add a root here if another generated mirror of compiler-embedded content is
 ever checked in; a generated file that reads as prose is how this gate would
@@ -68,8 +70,8 @@ import argparse
 import subprocess
 import sys
 
-# Markdown under these prefixes is build input, not documentation: the compiler
-# sources embed a copy, and a test asserts the two agree. See the module
+# Markdown under these prefixes is build input, not documentation: the generated
+# compiler modules embed a copy, and the generator check asserts the two agree. See the module
 # docstring for the specific mechanisms.
 BUILD_INPUT_PREFIXES = ("docs/spec/", "skills/")
 
