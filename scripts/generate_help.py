@@ -29,6 +29,7 @@ from helpgen.emit_vow import (
     vow_help_files,
     vow_skill_files,
 )
+from helpgen.emit_rust import rust_help_files, rust_skill_files
 from helpgen.human_help import build_help_human
 from helpgen.json_help import build_help_json
 from helpgen.outputs import check_files, collect_files, write_files
@@ -53,6 +54,8 @@ __all__ = [
     "extract_table",
     "extract_table_col",
     "normalize_option",
+    "rust_help_files",
+    "rust_skill_files",
     "vow_help_files",
     "vow_skill_files",
 ]

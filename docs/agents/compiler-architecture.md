@@ -64,7 +64,8 @@ All diagnostic output flows through **`vow-diag`**, which every other crate uses
   whole generated modules holding the embedded `--help` JSON, human help and skill text.
   `scripts/generate_help.py` writes them from `docs/spec/`; never edit them by hand. A file named
   `*_gen.vow` is exempt from the authored-file budget (`.gitattributes`), so a generated block never
-  belongs inside a hand-written module
+  belongs inside a hand-written module. The Rust twin is `vow/src/skill_gen/*.rs`, pulled into
+  `vow/src/skill.rs` with `include!` (same rules; its tests live in `vow/src/skill/tests_*.rs`)
 
 ### Building and running
 
