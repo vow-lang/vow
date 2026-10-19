@@ -59,7 +59,9 @@ feature work; do not bypass checks with `SKIP`, `--no-verify`, or `core.hooksPat
 
 The local hook checks staged authored text files against a **20,000-byte** limit
 (5,000 estimated tokens using bytes/4). It respects partial staging, checks rename
-destinations, and requires splitting existing oversized files when edited.
+destinations, and lets an already-oversized file change only if it does not grow
+past its size at the base commit (a ratchet), so large files shrink as they are
+touched. New files and files under the limit must stay at or below the limit.
 Deletions, symlinks, gitlinks and binary assets are skipped. Only whole generated
 outputs and lockfiles explicitly marked `token-limit-ignore` in `.gitattributes`
 are exempt; mixed authored/generated compiler sources are not exempt. CI checks
