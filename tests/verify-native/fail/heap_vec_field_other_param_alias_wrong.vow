@@ -1,9 +1,8 @@
-// TEST: replay-skipped a Vec field that holds another parameter's object is not rebuilt (#1779)
 // TEST: counterexample-fn "count"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
 // `b.items` may be the very Vec `v`; the pushed element then shows in `b.items.len()`.
-module HeapVecFieldOtherParamAliasSkipped
+module HeapVecFieldOtherParamAliasWrong
 
 struct Bag { items: Vec<i64>, tag: i64 }
 
