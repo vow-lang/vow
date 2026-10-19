@@ -173,6 +173,7 @@ fn agg_src() -> String {
     s.push_str(String::from("fn fmapb(m: BTreeMap<bool, bool>) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fmapu(m: HashMap<u8, ()>) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fmapw(m: HashMap<i64, i128>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fmaps(m: HashMap<i8, bool>) -> i64 { 0 }\n"));
     s.push_str(String::from("struct HasStr { s: String, n: i64 }\n"));
     s.push_str(String::from("struct HasVs { v: Vec<String> }\n"));
     s.push_str(String::from("struct HasWide { v: Vec<i128> }\n"));
@@ -501,7 +502,7 @@ fn check_map_params() -> i32 [io] {
     if lit_of(String::from("fmap"), String::from("")) != str2s(head, String::from(" __replay_m }")) { return 602; }
     let two: String = str2s(head, String::from(" __replay_m.insert(5, 7); __replay_m.insert(0, 0); __replay_m }"));
     if lit_of(String::from("fmap"), String::from("m.len=2,m[5]=7,m[-1]=absent")) != two { return 603; }
-    let skip0: String = str2s(head, String::from(" __replay_m.insert(1, 0); __replay_m }"));
+    let skip0: String = str2s(head, String::from(" __replay_m.insert(-1, 0); __replay_m }"));
     if lit_of(String::from("fmap"), String::from("m.len=1,m[0]=absent")) != skip0 { return 604; }
     if agg(String::from("fmap"), 0, String::from("m.len=1,m[0]=absent")).ty_text != String::from("HashMap<i64, i64>") { return 605; }
     let flags: String = String::from("{ let __replay_m: BTreeMap<bool, bool> = BTreeMap::new(); __replay_m.insert(false, false); __replay_m }");
@@ -515,6 +516,12 @@ fn check_map_params() -> i32 [io] {
     if index_of(agg(String::from("fmapu"), 0, String::from("m.len=9999")).reason, String::from("not a length")) < 0 { return 610; }
     if index_of(agg(String::from("fmapw"), 0, String::from("m.len=0")).reason, String::from("is not rebuilt")) < 0 { return 611; }
     if agg(String::from("fmap"), 0, String::from("m.len=1,m[1]=x")).reason.len() == 0 { return 612; }
+    let twice: ReplayArg = agg(String::from("fmaps"), 0, String::from("m.len=2,m[1]=true,m[1]=false"));
+    if index_of(twice.reason, String::from("are one key")) < 0 { return 613; }
+    let signed: String = String::from("{ let __replay_m: HashMap<i8, bool> = HashMap::new(); __replay_m.insert(0, false); __replay_m.insert(-1, false); __replay_m.insert(1, false); __replay_m }");
+    if lit_of(String::from("fmaps"), String::from("m.len=3")) != signed { return 614; }
+    if agg(String::from("fmaps"), 0, String::from("m.len=256")).reason.len() != 0 { return 615; }
+    if agg(String::from("fmaps"), 0, String::from("m.len=257")).reason.len() == 0 { return 616; }
     0
 }
 

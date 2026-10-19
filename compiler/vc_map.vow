@@ -65,6 +65,8 @@ struct VcMap {
     vals: Vec<i64>,
     len: Vec<i64>,
     names: i64,
+    // The header position of the length symbol `vc_map_declare_free` declared last.
+    len_hdr: i64,
     // Per slot: the keys the function used on the map, how wide they are (0 not
     // known, 1 all 64 bits, 2 narrower), and its arbitrary bases (presence array,
     // length, and the number of distinct keys of `qkeys` present in it).
@@ -97,6 +99,7 @@ fn vc_map_new_state(fl: VcFlow, n_blocks: u64) -> VcMap {
         vals: Vec::new(),
         len: Vec::new(),
         names: 0,
+        len_hdr: -1,
         qkeys: Vec::new(),
         key_wide: Vec::new(),
         fb_pres: Vec::new(),
@@ -198,6 +201,7 @@ fn vc_map_declare_free(mp: VcMap, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>
     l_name.push_str(String::from("_mlen"));
     let pres: i64 = vc_agg_declare(ar, hdr, p_name, VC_SORT_ARRAY64());
     let vals: i64 = vc_agg_declare(ar, hdr, v_name, VC_SORT_ARRAY64());
+    mp.len_hdr = hdr.kinds.len() as i64;
     let len: i64 = vc_agg_declare(ar, hdr, l_name, 64);
     assumed.push(vc_tm_app2(ar, VC_OP_BVULT(), len, vc_vec_len_mask(ar)));
     out.push(pres);
@@ -262,21 +266,21 @@ fn vc_map_list_entry(mp: VcMap, hdr: SmtScript, s: i64, name: String, slot: i64,
 // lists the key, whether the parameter's own state has it, and the value slot it holds.
 fn vc_map_list_key(mp: VcMap, ar: VcArena, hdr: SmtScript, s: i64, key: i64, i: u64) {
     if mp.slot_param[s as u64] < 0 { return; }
-    let prefix: String = String::from("p");
-    prefix.push_str(i64_to_string(mp.slot_param[s as u64]));
-    prefix.push_str(String::from("_m"));
-    let tail: String = i64_to_string(i as i64);
     let pres: i64 = vc_tm_app2(ar, VC_OP_SELECT(), mp.base_pres[s as u64], key);
     let vals: i64 = vc_tm_app2(ar, VC_OP_SELECT(), mp.base_vals[s as u64], key);
-    vc_map_list_entry(mp, hdr, s, str3m(prefix, String::from("k"), tail), VC_SLOT_MAP_KEY(), key);
-    vc_map_list_entry(mp, hdr, s, str3m(prefix, String::from("p"), tail), VC_SLOT_MAP_PRES(), pres);
-    vc_map_list_entry(mp, hdr, s, str3m(prefix, String::from("v"), tail), VC_SLOT_MAP_VAL(), vals);
+    vc_map_list_entry(mp, hdr, s, vc_map_entry_symbol(mp.slot_param[s as u64], String::from("k"), i), VC_SLOT_MAP_KEY(), key);
+    vc_map_list_entry(mp, hdr, s, vc_map_entry_symbol(mp.slot_param[s as u64], String::from("p"), i), VC_SLOT_MAP_PRES(), pres);
+    vc_map_list_entry(mp, hdr, s, vc_map_entry_symbol(mp.slot_param[s as u64], String::from("v"), i), VC_SLOT_MAP_VAL(), vals);
 }
 
-fn str3m(a: String, b: String, c: String) -> String {
-    let out: String = String::from(a);
-    out.push_str(b);
-    out.push_str(c);
+// `p<param>_m<kind><i>`: the symbol of the key (`k`), presence word (`p`) or value slot (`v`)
+// of the `i`-th key asked of map parameter `param`.
+fn vc_map_entry_symbol(param: i64, kind: String, i: u64) -> String {
+    let out: String = String::from("p");
+    out.push_str(i64_to_string(param));
+    out.push_str(String::from("_m"));
+    out.push_str(kind);
+    out.push_str(i64_to_string(i as i64));
     out
 }
 
@@ -330,7 +334,7 @@ fn vc_map_slot(mp: VcMap, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i
         mp.ent_name.push(vc_term_text(ar, st[2]));
         mp.ent_param.push(ag.owners[obj as u64]);
         mp.ent_slot.push(VC_SLOT_VEC_LEN());
-        mp.ent_hdr.push(hdr.kinds.len() as i64 - 1);
+        mp.ent_hdr.push(mp.len_hdr);
     }
     s
 }

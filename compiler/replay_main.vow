@@ -1062,6 +1062,20 @@ fn replay_map_entries(pname: String, names: Vec<String>, vals: Vec<String>, keys
     }
 }
 
+// True when a key text of `keys` occurs twice: two slots of one narrow key type that read back as one key.
+fn replay_has_repeat(keys: Vec<String>) -> bool {
+    let mut i: u64 = 1u64;
+    while i < keys.len() {
+        let mut j: u64 = 0u64;
+        while j < i {
+            if keys[i] == keys[j] { return true; }
+            j = j + 1u64;
+        }
+        i = i + 1u64;
+    }
+    false
+}
+
 fn replay_has_key(keys: Vec<String>, key: String) -> bool {
     let mut i: u64 = 0u64;
     while i < keys.len() {
@@ -1071,17 +1085,38 @@ fn replay_has_key(keys: Vec<String>, key: String) -> bool {
     false
 }
 
+// Candidate `c` of the keys of type `kt`: `false` and `true`, 0, 1, 2, ... for an unsigned integer,
+// and 0, -1, 1, -2, ... for a signed one. "" past the end of `bool`.
+fn replay_key_candidate(kt: String, c: i64) -> String {
+    if kt == String::from("bool") {
+        if c == 0 { return String::from("false"); }
+        if c == 1 { return String::from("true"); }
+        return String::from("");
+    }
+    if replay_int_signed(kt) && c % 2 == 1 { return i64_to_string(0 - (c + 1) / 2); }
+    if replay_int_signed(kt) { return i64_to_string(c / 2); }
+    i64_to_string(c)
+}
+
 // The next key of type `kt` after `tried` candidates that `keys` does not hold, as source text,
 // or "" when the key type has none left (`bool` has two, a narrow integer its range).
 fn replay_fresh_key(kt: String, keys: Vec<String>, tried: i64) -> String {
     let mut c: i64 = tried;
     while c < tried + keys.len() as i64 + 2 {
-        let text: String = { if kt == String::from("bool") { if c == 0 { String::from("false") } else if c == 1 { String::from("true") } else { String::from("") } } else { i64_to_string(c) } };
+        let text: String = replay_key_candidate(kt, c);
         if text.len() == 0 || (kt != String::from("bool") && !replay_int_fits(kt, text)) { return String::from(""); }
         if !replay_has_key(keys, text) { return text; }
         c = c + 1;
     }
     String::from("")
+}
+
+fn replay_map_insert(lit: String, key: String, val: String) {
+    lit.push_str(String::from(" __replay_m.insert("));
+    lit.push_str(key);
+    lit.push_str(String::from(", "));
+    lit.push_str(val);
+    lit.push_str(String::from(");"));
 }
 
 // A `HashMap` or `BTreeMap` parameter, built with `new` and one `insert` per key of the listed
@@ -1103,6 +1138,9 @@ fn replay_map_arg(a: AstArena, tid: i64, pname: String, names: Vec<String>, vals
     let keys: Vec<String> = Vec::new();
     let held: Vec<String> = Vec::new();
     replay_map_entries(pname, names, vals, keys, held);
+    if replay_has_repeat(keys) {
+        return replay_arg_skip(str3r(String::from("two keys of `"), pname, String::from("` are one key of the declared key type")));
+    }
     let lit: String = String::from("{ let __replay_m: ");
     lit.push_str(shown);
     lit.push_str(String::from(" = "));
@@ -1117,15 +1155,12 @@ fn replay_map_arg(a: AstArena, tid: i64, pname: String, names: Vec<String>, vals
             let mut v: ReplayArg = replay_arg_ok(String::from("()"), vt);
             if vt != String::from("()") { v = replay_scalar_literal(vt, held[i]); }
             if v.reason.len() > 0 { return v; }
-            lit.push_str(String::from(" __replay_m.insert("));
-            lit.push_str(k.lit);
-            lit.push_str(String::from(", "));
-            lit.push_str(v.lit);
-            lit.push_str(String::from(");"));
+            replay_map_insert(lit, k.lit, v.lit);
             present = present + 1;
         }
         i = i + 1u64;
     }
+    let filler: String = { if vt == String::from("()") { String::from("()") } else { replay_zero_text(vt) } };
     let mut tried: i64 = 0;
     while present < len {
         let fresh: String = replay_fresh_key(kt, keys, tried);
@@ -1133,11 +1168,7 @@ fn replay_map_arg(a: AstArena, tid: i64, pname: String, names: Vec<String>, vals
             return replay_arg_skip(str3r(String::from("the key type `"), kt, String::from("` has too few keys for the length of the map")));
         }
         keys.push(fresh);
-        lit.push_str(String::from(" __replay_m.insert("));
-        lit.push_str(fresh);
-        lit.push_str(String::from(", "));
-        lit.push_str({ if vt == String::from("()") { String::from("()") } else { replay_zero_text(vt) } });
-        lit.push_str(String::from(");"));
+        replay_map_insert(lit, fresh, filler);
         present = present + 1;
         tried = tried + 1;
     }

@@ -158,8 +158,8 @@ fn vc_append_vec_projection(cs: VcClaims, vecs: Vec<i64>, bound: i64, s: SmtScri
     }
 }
 
-// One ask for the model of claim `k` with every `Vec`/`String` length at most
-// `bound`; the answer carries `bound` elements of each parameter in `vecs` behind
+// One ask for the model of claim `k` with every `Vec`/`String` length, and every map parameter's
+// length (`vc_cex_map_lens`), at most `bound`; the answer carries `bound` elements of each parameter in `vecs` behind
 // the claim's regular values.
 fn vc_ask_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, vecs: Vec<i64>, bound: i64, pin: bool, first: VcSolverAnswer, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
     let ar: VcArena = cs.arena;
@@ -224,7 +224,8 @@ fn vc_shrink_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, vecs: 
     best
 }
 
-// The model of claim `k` with the contents of its `Vec` and `String` parameters:
+// The model of claim `k` with the contents of its `Vec` and `String` parameters (and a map
+// parameter's length, bounded and shrunk with theirs, though it has no elements to list):
 // the regular values, then the same number of elements of each parameter of
 // `vc_cex_vecs`, in order (`vc_answer_elems_per_vec`). The lengths are bounded
 // first by 2, then 8, 64 and `VC_CEX_VEC_MAX`, and the first bound that has a

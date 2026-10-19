@@ -98,45 +98,38 @@ fn vc_cex_path_type(m: Module, tid: i64, path: String) -> i64 {
 // for a `Vec` or `String` a struct holds in a field) of the function `fn_name` declared in
 // `m`, or "" when there is no such function, parameter or field.
 fn vc_cex_param_elem_type(m: Module, fn_name: String, base: String) -> String {
-    let a: AstArena = m.arena;
-    let fid: i64 = replay_find_fn_item(m, fn_name);
-    if fid < 0 { return String::from(""); }
     let mut dot: u64 = 0;
     while dot < base.len() && base.byte_at(dot) != 46 {
         dot = dot + 1;
     }
-    let pname: String = base.substring(0, dot);
+    let tid: i64 = vc_cex_param_type(m, fn_name, base.substring(0, dot));
+    if tid < 0 { return String::from(""); }
+    if dot == base.len() { return vc_cex_type_elem_name(m.arena, tid); }
+    let held: i64 = vc_cex_path_type(m, tid, base.substring(dot + 1, base.len()));
+    if held < 0 { return String::from(""); }
+    vc_cex_type_elem_name(m.arena, held)
+}
+
+// AST type of parameter `pname` of the function `fn_name` declared in `m`, or -1.
+fn vc_cex_param_type(m: Module, fn_name: String, pname: String) -> i64 {
+    let a: AstArena = m.arena;
+    let fid: i64 = replay_find_fn_item(m, fn_name);
+    if fid < 0 { return -1; }
     let lid: i64 = fn_params_lid(a, fid);
     let n: i64 = list_len(a, lid) / 4;
     let mut pi: i64 = 0;
     while pi < n {
-        if arena_str(a, list_get(a, lid, pi * 4)) == pname {
-            let tid: i64 = list_get(a, lid, pi * 4 + 1);
-            if dot == base.len() { return vc_cex_type_elem_name(a, tid); }
-            let held: i64 = vc_cex_path_type(m, tid, base.substring(dot + 1, base.len()));
-            if held < 0 { return String::from(""); }
-            return vc_cex_type_elem_name(a, held);
-        }
+        if arena_str(a, list_get(a, lid, pi * 4)) == pname { return list_get(a, lid, pi * 4 + 1); }
         pi = pi + 1;
     }
-    String::from("")
+    -1
 }
 
 // Key and value type names of the map parameter `pname` of `fn_name` (see `replay_map_type_names`).
 fn vc_cex_param_map_types(m: Module, fn_name: String, pname: String) -> Vec<String> {
-    let a: AstArena = m.arena;
-    let fid: i64 = replay_find_fn_item(m, fn_name);
-    if fid < 0 { return Vec::new(); }
-    let lid: i64 = fn_params_lid(a, fid);
-    let n: i64 = list_len(a, lid) / 4;
-    let mut pi: i64 = 0;
-    while pi < n {
-        if arena_str(a, list_get(a, lid, pi * 4)) == pname {
-            return replay_map_type_names(a, list_get(a, lid, pi * 4 + 1));
-        }
-        pi = pi + 1;
-    }
-    Vec::new()
+    let tid: i64 = vc_cex_param_type(m, fn_name, pname);
+    if tid < 0 { return Vec::new(); }
+    replay_map_type_names(m.arena, tid)
 }
 
 // Rewrites entry `j` of a map parameter, named `<param>[<slot>]` with the key as a raw slot, so
