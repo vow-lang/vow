@@ -1,4 +1,5 @@
 // TEST: unknown-reason unconstrained map state
+// TEST: native-gap "the key type of the map is not known, so a failure that depends on the map state is not reported; ESBMC refutes it" #1853
 module MapNarrowParamPresentKeyWrong
 
 // A real run exists (a map holding `-5`), but an `i32` key has 2^32 values, so the length and the

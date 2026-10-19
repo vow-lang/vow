@@ -14,6 +14,8 @@ classifies each fixture:
                 timeout / tool_not_found where ESBMC proves or refutes), drops
                 or re-attributes a counterexample, or refutes a program the
                 corpus labels correct
+  tracked       a `weaker` row the fixture documents with `native-gap "<why>" #N`
+                (scripts/verify_diff_explain.py); reported, never failing
   soundness     native proves a program that ESBMC refutes or the corpus labels
                 incorrect
 
@@ -48,6 +50,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import candidate_isolation
 import verify_eval
+from verify_diff_explain import MATCH, MORE_PRECISE, TRACKED, WEAKER, compare_cex, track
 
 REPO_ROOT = verify_eval.REPO_ROOT
 
@@ -59,13 +62,10 @@ SKIPPED = "skipped"
 INCONCLUSIVE = "inconclusive"
 ERROR = "error"
 
-MATCH = "match"
-MORE_PRECISE = "more_precise"
-WEAKER = "weaker"
 SOUNDNESS = "soundness"
 HARNESS = "harness"
 
-CLASSES = (MATCH, MORE_PRECISE, WEAKER, SOUNDNESS, HARNESS)
+CLASSES = (MATCH, MORE_PRECISE, TRACKED, WEAKER, SOUNDNESS, HARNESS)
 FAILING_CLASSES = (WEAKER, SOUNDNESS)
 
 CONCLUSIVE = (PROVEN, REFUTED)
@@ -92,19 +92,7 @@ WATCHDOG_SLACK = 30
 
 CONTRACTS_RUNS_PER_FUNCTION = 3
 
-# Two directives (parsed by verify_eval.artifact_directives) explain a fixture ESBMC
-# refutes although the native verifier proves it. Without one such a row is a
-# soundness finding.
-#
-#   // TEST: esbmc-capacity-artifact "<why>"
-#       ESBMC refutes only through its own `string`/`vec` capacity assertion: the
-#       property holds for every length the runtime accepts. Needs the evidence of
-#       `capacity_only`: every ESBMC counterexample is a capacity assertion.
-#   // TEST: esbmc-model-artifact fn="<fn>" blame=<B> vow_id=<N> "<why>"
-#       One ESBMC counterexample comes from ESBMC's own model, not from the
-#       program (for example a spurious `string_eq` result). It names the
-#       counterexample, so any other ESBMC refutation of the file stays a
-#       finding, and it only applies where the corpus labels the fixture correct.
+# `esbmc-*-artifact` and `native-gap` directives: docs/verifier-eval-explained.md.
 
 # `// TEST: native-divergence "<why>"` marks a fixture whose `contracts --verify`
 # report lists a clause the native verifier leaves `unknown` where ESBMC says
@@ -180,23 +168,6 @@ def cex_keys(cexes):
     return frozenset((c["fn"], c["blame"], c["vow_id"]) for c in cexes)
 
 
-def compare_cex(esbmc_keys, native_keys):
-    """Return (class, detail) for two refutations of the same fixture."""
-    missing = esbmc_keys - native_keys
-    extra = native_keys - esbmc_keys
-    if missing:
-        return (
-            WEAKER,
-            f"native lacks ESBMC counterexample(s) {sorted(missing, key=repr)}",
-        )
-    if extra:
-        return (
-            MORE_PRECISE,
-            f"native reports extra counterexample(s) {sorted(extra, key=repr)}",
-        )
-    return MATCH, None
-
-
 def classify(
     truth,
     esbmc,
@@ -213,17 +184,17 @@ def classify(
     """Classify one fixture from the two verdicts and the corpus ground truth.
 
     `truth` is the corpus-expected status (Verified / VerifyFailed / Skipped);
-    a known soundness gap counts as VerifyFailed. `capacity_reason` is the text
+    a known soundness gap is VerifyFailed. `capacity_reason` is the text
     of the fixture's `esbmc-capacity-artifact` directive and
     `esbmc_capacity_only` says every ESBMC counterexample is its own capacity
     assertion: together they turn "native proves what ESBMC refutes" into an
-    explained extra proof instead of a soundness finding. `model_artifacts`
-    maps the `(fn, blame, vow_id)` of ESBMC counterexamples declared to be
-    ESBMC model artefacts to their reason: it does the same when the corpus
-    labels the fixture `Verified` and every ESBMC counterexample is declared.
+    explained extra proof, not a soundness finding. `model_artifacts`
+    maps the `(fn, blame, vow_id)` of declared ESBMC model artefacts to their
+    reason: the same when the corpus labels the fixture `Verified` and all
+    ESBMC counterexamples are declared; on a `VerifyFailed` fixture both refute,
+    it excuses a declared one native lacks (`compare_cex`).
     `esbmc_skipped` and `native_skipped` are the functions each backend left
-    unanalysed (`skipped_functions`): backends that agree on the verdict but not
-    on which functions they analysed did not do the same work.
+    unanalysed: the same verdict over different functions is different work.
     """
     cls, detail = classify_verdicts(
         truth,
@@ -324,7 +295,8 @@ def classify_verdicts(
 
     if esbmc == native:
         if native == REFUTED:
-            return compare_cex(esbmc_keys, native_keys)
+            artifacts = model_artifacts if truth == "VerifyFailed" else None
+            return compare_cex(esbmc_keys, native_keys, artifacts)
         return MATCH, None
 
     if esbmc in CONCLUSIVE and native in CONCLUSIVE:
@@ -694,7 +666,7 @@ def classify_outcomes(truth, path, esbmc, native):
     `esbmc-*-artifact` directive explains.
     """
     artifacts = verify_eval.artifact_directives(path)
-    return classify(
+    cls, detail = classify(
         truth,
         esbmc["verdict"],
         native["verdict"],
@@ -707,6 +679,7 @@ def classify_outcomes(truth, path, esbmc, native):
         esbmc["skipped"],
         native["skipped"],
     )
+    return track(cls, detail, native["verdict"], native["verify_status"], path)
 
 
 def diff_fixture(vowc, timeout, sub, exp, command="verify"):

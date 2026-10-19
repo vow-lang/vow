@@ -3,6 +3,7 @@
 // TEST: counterexample-blame Callee
 // TEST: counterexample-value o.1.0.len 2
 // TEST: counterexample-value o.1.0[1] 42
+// TEST: esbmc-model-artifact fn="last" blame=None vow_id=4294967293 "ESBMC reads the Vec field b.items of the Option payload as a fresh value of nondeterministic length at each use, so the test b.items.len() == 2 does not bound b.items[1] and it reports an out-of-bounds read instead of the ensures violation; the native model reads one field as one value. A debug-mode replay of the function over 1 to 300 elements aborts only on the ensures violation the native counterexample names, never with an out-of-bounds read, and a Z3 cross-check of the native queries agrees"
 // A Vec held in a struct that an Option holds is named by the path of slots that reaches it.
 module HeapVecFieldInOptionPayloadWrong
 

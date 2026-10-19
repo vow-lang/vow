@@ -2,6 +2,7 @@
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
 // TEST: counterexample-violation "ensures result == true"
+// TEST: esbmc-model-artifact fn="commutes" blame=None vow_id=4294967293 "ESBMC fails its own String capacity assertion on the push_str calls for operands whose lengths sum past its model limit, before the ensures violation native reports; the runtime has no such limit. A debug-mode replay with equal operands of 0 to 300 bytes returns true without an abort, and unequal operands abort on the ensures violation; a Z3 cross-check of the native queries agrees"
 module StringAppendNotCommutative
 
 // The ground read of a built string keeps the equality exact: swapping the operands

@@ -5,6 +5,7 @@
 // TEST: counterexample-value r.1.len 1
 // TEST: counterexample-value r.0[0] 4
 // TEST: counterexample-value r.1[0] 0
+// TEST: esbmc-model-artifact fn="pick" blame=None vow_id=4294967293 "ESBMC reads the Vec field r.items and the String field r.text as a fresh value of nondeterministic length at each use, so the requires on their lengths does not bound the reads of r.items[0] and r.text.byte_at(0) and it reports an out-of-bounds read instead of the ensures violation; the native model reads one field as one value. A debug-mode replay of the function over 1 to 300 elements aborts only on the ensures violation the native counterexample names, never with an out-of-bounds read, and a Z3 cross-check of the native queries agrees"
 // A struct that holds a Vec and a String lists each under the path of its own slot.
 module HeapVecAndStringFieldsWrong
 

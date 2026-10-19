@@ -1,4 +1,5 @@
 // TEST: skip-reason unsupported-opcode
+// TEST: native-gap "a field written through a pointer element is a write through a handle, so the function is skipped where ESBMC proves it" #1663
 // A field written through an element (`people[0].age = 5`) is a write through a handle: the function
 // stays `Skipped`, so the read after it never sees the old age.
 module VecPointerElemFieldThroughElementSkipped

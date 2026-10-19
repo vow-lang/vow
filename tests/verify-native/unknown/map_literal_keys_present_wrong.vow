@@ -1,4 +1,5 @@
 // TEST: unknown-reason unconstrained map state
+// TEST: native-gap "the key type of the map is not known, so a failure that depends on the map state is not reported; ESBMC refutes it" #1853
 module MapLiteralKeysPresentWrong
 
 // Both keys are literals, which say nothing about the key type, so the failure (a map holding `1`

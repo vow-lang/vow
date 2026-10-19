@@ -1,6 +1,7 @@
 // TEST: counterexample-fn "count"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
+// TEST: esbmc-model-artifact fn="count" blame=None vow_id=4294967293 "ESBMC fails its own Vec capacity assertion on v.push(1) for a parameter v already at its model limit of 128 elements, before the ensures violation native reports (b.items may be v); the runtime has no such limit. A debug-mode replay with v of 0 to 300 elements and b.items distinct pushes without an abort, and the run with b.items the very Vec v aborts on the ensures violation; a Z3 cross-check of the native queries agrees"
 // `b.items` may be the very Vec `v`; the pushed element then shows in `b.items.len()`.
 module HeapVecFieldOtherParamAliasWrong
 

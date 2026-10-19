@@ -172,6 +172,7 @@ every fixture:
 | --- | --- |
 | `match` | Same verdict; when both refute, the same `(function, blame, vow_id)` counterexamples. |
 | `more_precise` | Native concludes where ESBMC does not, reports an extra counterexample, or refutes a program ESBMC proves and the corpus labels incorrect. |
+| `tracked` | A `weaker` row where native declined to decide (`Skipped`/`unknown`) and the fixture says why with `native-gap "<why>" #<issue>`. Always reported; never fails the script. |
 | `weaker` | Native is `Skipped`/`unknown`/`timeout`/`tool_not_found` where ESBMC proves or refutes, drops or re-attributes a counterexample, or refutes a program the corpus labels correct. **Fails the script.** |
 | `soundness` | Native proves a program ESBMC refutes, or one the corpus labels incorrect. **Fails the script.** |
 | `harness` | A backend printed no parseable JSON, so the row says nothing about the verifiers. A backend that hangs (killed at its budget) or dies from a signal is not a `harness` row: it is inconclusive (`verify_status` `timeout` / `crashed`). |
@@ -193,38 +194,11 @@ ESBMC is also inconclusive. File-level status is per module: native reports
 modelable file reads as `weaker` against an ESBMC `Verified` until the subset
 grows.
 
-### ESBMC model artefacts
+### Explained rows
 
-A fixture the native verifier proves and ESBMC refutes is a `soundness` row
-unless the fixture carries a written explanation, a `// TEST:` directive that
-`verify_eval.artifact_directives` parses (fail closed: a malformed or misspelled
-`esbmc-*` directive is an error). `verify_diff.py` and `verify_perf.py` classify
-through one function (`verify_diff.classify_outcomes`), and `verify_eval.py
---backend native` reads the same directives, so the three harnesses agree.
-
-| Directive | Meaning |
-| --- | --- |
-| `// TEST: esbmc-capacity-artifact "<why>"` | ESBMC refutes only through its own `string`/`vec` capacity assertion. Needs the evidence of the run: every ESBMC counterexample is a capacity assertion. |
-| `// TEST: esbmc-model-artifact fn="<fn>" blame=<B> vow_id=<N> "<why>"` | One ESBMC counterexample comes from ESBMC's own model, not from the program (for example its nondeterministic `string_eq`). One directive per counterexample; the row is `more_precise` only when the corpus labels the fixture correct (`Verified`) and every ESBMC counterexample is declared, so any other ESBMC refutation of the file is still a `soundness` finding. |
-
-Add a directive only after the runtime differential
-(`scripts/verifier_runtime.py --backend native`) shows no false proof for the
-fixture, and write the reason as the explanation gate item 1 asks for. The
-fixture's own `main` exercises one input, so for a function with a wider domain
-also run the fixture's functions over many inputs that satisfy their `requires`
-in `--mode debug`, with a deliberately broken contract as a control that must
-abort.
-
-ESBMC's `verify` report names only the first function it refutes, although it
-verifies every function: its stderr lists each `FAILED` one. When a fixture
-has several, declare every one (peel the first off a copy of the file and
-re-run to read the next one's `fn`, `blame` and `vow_id`); the classifier needs
-only the one the report shows, but the others are the evidence that the whole
-file is explained and not just its first refutation. A refutation by ESBMC's own
-`string`/`vec` capacity assertion in a fixture that also has a model artefact is
-declared with `esbmc-model-artifact` and `blame=None vow_id=4294967293` (the
-unattributed property), because `esbmc-capacity-artifact` covers only fixtures
-whose every counterexample is a capacity assertion.
+A fixture's `// TEST:` directives can explain a row that would read as `soundness` or `weaker`:
+`esbmc-capacity-artifact`, `esbmc-model-artifact` and `native-gap`. They are described in
+[verifier-eval-explained.md](verifier-eval-explained.md).
 
 `python3 scripts/verify_diff.py --corpus native --fail-on soundness` is the
 gate for the native corpus: `--corpus native` selects `tests/verify-native/*`
@@ -237,7 +211,7 @@ cannot land with a bare `soundness` row.
 The report is one JSON document (`schema_version`, `summary`, `rows[]` with both
 backends' verdict, `verify_status`, counterexamples and wall-clock seconds) on
 stdout or in `--output FILE`; a human summary of non-`match` rows goes to
-stderr. Exit codes: `0` clean, `1` any `weaker`/`soundness` row (takes precedence), `2`
+stderr. Exit codes: `0` clean, `1` any `weaker`/`soundness` row (not `tracked`; wins over `2`), `2`
 the harness could not run or only found `harness` rows (missing `vowc`, `esbmc`
 or `bitwuzla`, unparseable verifier output, no fixture selected, or an I/O error).
 
