@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import sys
 
+import spec_assemble
 from helpgen.config import (
     CLI,
     CONTRACTS,
@@ -65,6 +66,16 @@ __all__ = [
 
 def main() -> None:
     check_only = "--check" in sys.argv
+
+    # The spec documents the generator reads are assembled from docs/spec/src/.
+    if check_only:
+        stale = spec_assemble.check()
+        if stale:
+            print("\n".join(stale), file=sys.stderr)
+            sys.exit(1)
+    else:
+        for doc in spec_assemble.write_all():
+            print(f"Updated docs/spec/{doc}.md")
 
     grammar = GRAMMAR.read_text()
     cli = CLI.read_text()

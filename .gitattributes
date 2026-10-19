@@ -6,3 +6,8 @@ workflow/uv.lock token-limit-ignore
 CHANGELOG.md token-limit-ignore
 # Generated from docs/spec/ by scripts/generate_help.py.
 skills/vow/** token-limit-ignore
+# Assembled by scripts/spec_assemble.py from the authored parts in docs/spec/src/<doc>/.
+docs/spec/cli.md token-limit-ignore linguist-generated
+docs/spec/grammar.md token-limit-ignore linguist-generated
+docs/spec/errors.md token-limit-ignore linguist-generated
+docs/spec/contracts.md token-limit-ignore linguist-generated
