@@ -46,6 +46,11 @@ class ArtefactOfARefutedFixtureTest(unittest.TestCase):
     def test_an_undeclared_missing_counterexample_stays_weaker(self):
         self.assertEqual(vd.WEAKER, self.classify({ARTEFACT, OTHER}, {REAL})[0])
 
+    def test_an_artefact_in_a_function_native_does_not_refute_stays_weaker(self):
+        self.assertEqual(
+            vd.WEAKER, self.classify({ARTEFACT}, {("other_fn", "Callee", 1)})[0]
+        )
+
     def test_a_declared_counterexample_does_not_excuse_another_one(self):
         self.assertEqual(vd.WEAKER, self.classify({OTHER}, {REAL})[0])
 
@@ -89,6 +94,20 @@ class NativeGapDirectiveTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             ex.native_gap(fixture(self.GAP + self.GAP))
 
+    def test_an_indented_directive_is_read(self):
+        self.assertEqual(
+            ("why", 3), ex.native_gap(fixture('  // TEST: native-gap "why" #3\n'))
+        )
+
+    def test_every_directive_of_the_corpus_is_well_formed(self):
+        root = os.path.join(vd.REPO_ROOT, "tests")
+        found = 0
+        for base, _, names in os.walk(root):
+            for name in names:
+                if name.endswith(".vow") and ex.native_gap(os.path.join(base, name)):
+                    found += 1
+        self.assertGreater(found, 0)
+
     def test_the_directive_name_is_a_word(self):
         self.assertIsNone(ex.native_gap(fixture('// TEST: native-gaps "why" #1\n')))
 
@@ -101,7 +120,7 @@ class TrackTest(unittest.TestCase):
     def test_a_documented_less_conclusive_row_is_tracked(self):
         for native in (vd.SKIPPED, vd.INCONCLUSIVE):
             cls, detail = ex.track(
-                vd.WEAKER, "native is skipped", native, self.documented
+                vd.WEAKER, "native is skipped", native, None, self.documented
             )
             self.assertEqual(vd.TRACKED, cls)
             self.assertIn("#1849", detail)
@@ -109,20 +128,32 @@ class TrackTest(unittest.TestCase):
 
     def test_an_undocumented_row_stays_weaker(self):
         self.assertEqual(
-            (vd.WEAKER, "d"), ex.track(vd.WEAKER, "d", vd.SKIPPED, self.bare)
+            (vd.WEAKER, "d"), ex.track(vd.WEAKER, "d", vd.SKIPPED, None, self.bare)
         )
 
     def test_only_weaker_rows_are_tracked(self):
         for cls in (vd.MATCH, vd.MORE_PRECISE, vd.SOUNDNESS, vd.HARNESS):
             self.assertEqual(
-                (cls, "d"), ex.track(cls, "d", vd.SKIPPED, self.documented)
+                (cls, "d"), ex.track(cls, "d", vd.SKIPPED, None, self.documented)
             )
 
     def test_a_native_refutation_is_never_a_documented_gap(self):
         for native in (vd.REFUTED, vd.PROVEN, vd.ERROR):
             self.assertEqual(
-                (vd.WEAKER, "d"), ex.track(vd.WEAKER, "d", native, self.documented)
+                (vd.WEAKER, "d"),
+                ex.track(vd.WEAKER, "d", native, None, self.documented),
             )
+
+    def test_a_crash_a_panic_an_error_and_a_timeout_are_never_a_documented_gap(self):
+        for status in ("crashed", "panicked", "error", "timeout"):
+            self.assertEqual(
+                (vd.WEAKER, "d"),
+                ex.track(vd.WEAKER, "d", vd.INCONCLUSIVE, status, self.documented),
+            )
+
+    def test_an_unknown_verdict_is_a_documented_gap(self):
+        cls, _ = ex.track(vd.WEAKER, "d", vd.INCONCLUSIVE, "unknown", self.documented)
+        self.assertEqual(vd.TRACKED, cls)
 
     def test_classify_outcomes_tracks_a_documented_skip(self):
         def outcome(verdict):

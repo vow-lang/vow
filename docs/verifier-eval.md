@@ -172,7 +172,7 @@ every fixture:
 | --- | --- |
 | `match` | Same verdict; when both refute, the same `(function, blame, vow_id)` counterexamples. |
 | `more_precise` | Native concludes where ESBMC does not, reports an extra counterexample, or refutes a program ESBMC proves and the corpus labels incorrect. |
-| `tracked` | A `weaker` row where native declined to decide (`Skipped`/`unknown`) and the fixture says why with `native-gap "<why>" #<issue>`. Reported in every run, never fails the script. |
+| `tracked` | A `weaker` row where native declined to decide (`Skipped`/`unknown`) and the fixture says why with `native-gap "<why>" #<issue>`. Always reported; never fails the script. |
 | `weaker` | Native is `Skipped`/`unknown`/`timeout`/`tool_not_found` where ESBMC proves or refutes, drops or re-attributes a counterexample, or refutes a program the corpus labels correct. **Fails the script.** |
 | `soundness` | Native proves a program ESBMC refutes, or one the corpus labels incorrect. **Fails the script.** |
 | `harness` | A backend printed no parseable JSON, so the row says nothing about the verifiers. A backend that hangs (killed at its budget) or dies from a signal is not a `harness` row: it is inconclusive (`verify_status` `timeout` / `crashed`). |
@@ -211,7 +211,7 @@ cannot land with a bare `soundness` row.
 The report is one JSON document (`schema_version`, `summary`, `rows[]` with both
 backends' verdict, `verify_status`, counterexamples and wall-clock seconds) on
 stdout or in `--output FILE`; a human summary of non-`match` rows goes to
-stderr. Exit codes: `0` clean, `1` any `weaker`/`soundness` row (a `tracked` row is neither) (takes precedence), `2`
+stderr. Exit codes: `0` clean, `1` any `weaker`/`soundness` row (not `tracked`; wins over `2`), `2`
 the harness could not run or only found `harness` rows (missing `vowc`, `esbmc`
 or `bitwuzla`, unparseable verifier output, no fixture selected, or an I/O error).
 

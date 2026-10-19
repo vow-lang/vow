@@ -19,12 +19,13 @@ WEAKER = "weaker"
 MATCH = "match"
 TRACKED = "tracked"
 
-# The verdicts a `native-gap` may excuse: native declined to decide. A native
-# refutation of a program the corpus labels correct, or a failed or crashed run,
-# is never a documented gap.
+# What a `native-gap` may excuse: native declined to decide, which is `Skipped`
+# (no `verify_status`) or `unknown`. A native refutation of a program the corpus
+# labels correct, a crash, a panic, an error and a timeout are never a gap.
 LESS_CONCLUSIVE = ("skipped", "inconclusive")
+DECLINED_STATUS = (None, "unknown")
 
-NATIVE_GAP_LINE = re.compile(r"^//\s*TEST:\s*native-gap\b(.*)$", re.MULTILINE)
+NATIVE_GAP_LINE = re.compile(r"^[ \t]*//\s*TEST:\s*native-gap\b(.*)$", re.MULTILINE)
 NATIVE_GAP_BODY = re.compile(r'^\s+"([^"]+)"\s+#(\d+)\s*$')
 
 
@@ -59,9 +60,10 @@ def compare_cex(esbmc_keys, native_keys, artifacts=None):
 
     `artifacts` maps the `(fn, blame, vow_id)` of ESBMC counterexamples declared
     to be ESBMC model artefacts to their reason. A declared counterexample native
-    does not report is not a lost one: native still refutes the program through
-    its own counterexample, so the row is `more_precise`. Any undeclared
-    counterexample native lacks keeps the row `weaker`.
+    does not report is not a lost one when native refutes the same function
+    through its own counterexample: the row is `more_precise`. Any undeclared
+    counterexample native lacks, and a declared one in a function native does
+    not refute, keeps the row `weaker`.
     """
     declared = esbmc_keys & set(artifacts or {})
     missing = esbmc_keys - native_keys - declared
@@ -72,6 +74,11 @@ def compare_cex(esbmc_keys, native_keys, artifacts=None):
             f"native lacks ESBMC counterexample(s) {sorted(missing, key=repr)}",
         )
     lost = declared - native_keys
+    if lost and {k[0] for k in lost} - {k[0] for k in native_keys}:
+        return (
+            WEAKER,
+            f"native does not refute the function(s) of ESBMC's declared artefact(s) {sorted(lost, key=repr)}",
+        )
     if lost:
         reasons = "; ".join(artifacts[k] for k in sorted(lost, key=repr))
         return (
@@ -87,9 +94,13 @@ def compare_cex(esbmc_keys, native_keys, artifacts=None):
     return MATCH, None
 
 
-def track(cls, detail, native_verdict, path):
+def track(cls, detail, native_verdict, native_status, path):
     """`(class, detail)` with a `weaker` row the fixture documents as `tracked`."""
-    if cls != WEAKER or native_verdict not in LESS_CONCLUSIVE:
+    if (
+        cls != WEAKER
+        or native_verdict not in LESS_CONCLUSIVE
+        or native_status not in DECLINED_STATUS
+    ):
         return cls, detail
     gap = native_gap(path)
     if not gap:

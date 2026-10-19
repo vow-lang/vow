@@ -411,9 +411,8 @@ class ReportTest(unittest.TestCase):
 
     def test_summary_counts(self):
         report = vd.build_report("vowc", [fake_row(vd.MATCH), fake_row(vd.WEAKER)])
-        zero = dict.fromkeys(vd.CLASSES, 0)
-        want = {**zero, "total": 2, "match": 1, "weaker": 1}
-        self.assertEqual(want, report["summary"])
+        want = dict(total=2, match=1, more_precise=0, tracked=0, weaker=1)
+        self.assertEqual(dict(want, soundness=0, harness=0), report["summary"])
 
 
 class RunBackendTest(unittest.TestCase):

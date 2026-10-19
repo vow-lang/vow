@@ -50,7 +50,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import candidate_isolation
 import verify_eval
-from verify_diff_explain import TRACKED, compare_cex, track
+from verify_diff_explain import MATCH, MORE_PRECISE, TRACKED, WEAKER, compare_cex, track
 
 REPO_ROOT = verify_eval.REPO_ROOT
 
@@ -62,9 +62,6 @@ SKIPPED = "skipped"
 INCONCLUSIVE = "inconclusive"
 ERROR = "error"
 
-MATCH = "match"
-MORE_PRECISE = "more_precise"
-WEAKER = "weaker"
 SOUNDNESS = "soundness"
 HARNESS = "harness"
 
@@ -95,19 +92,7 @@ WATCHDOG_SLACK = 30
 
 CONTRACTS_RUNS_PER_FUNCTION = 3
 
-# Two directives (parsed by verify_eval.artifact_directives) explain a fixture ESBMC
-# refutes although the native verifier proves it. Without one such a row is a
-# soundness finding.
-#
-#   // TEST: esbmc-capacity-artifact "<why>"
-#       ESBMC refutes only through its own `string`/`vec` capacity assertion: the
-#       property holds for every length the runtime accepts. Needs the evidence of
-#       `capacity_only`: every ESBMC counterexample is a capacity assertion.
-#   // TEST: esbmc-model-artifact fn="<fn>" blame=<B> vow_id=<N> "<why>"
-#       One ESBMC counterexample comes from ESBMC's own model, not from the
-#       program (for example a spurious `string_eq` result). It names the
-#       counterexample, so any other ESBMC refutation of the file stays a
-#       finding, and it only applies where the corpus labels the fixture correct.
+# `esbmc-*-artifact` and `native-gap` directives: docs/verifier-eval-explained.md.
 
 # `// TEST: native-divergence "<why>"` marks a fixture whose `contracts --verify`
 # report lists a clause the native verifier leaves `unknown` where ESBMC says
@@ -694,7 +679,7 @@ def classify_outcomes(truth, path, esbmc, native):
         esbmc["skipped"],
         native["skipped"],
     )
-    return track(cls, detail, native["verdict"], path)
+    return track(cls, detail, native["verdict"], native["verify_status"], path)
 
 
 def diff_fixture(vowc, timeout, sub, exp, command="verify"):

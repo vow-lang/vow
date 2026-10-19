@@ -8,7 +8,7 @@ name: Native fixtures versus ESBMC
 # surfacing at the next full gate run.
 #
 # Only `soundness` rows fail the job (`--fail-on soundness`): the `weaker` rows
-# are tracked by their own issues, and a harness problem (a missing tool, an
+# are tracked by their own issues (`native-gap`, class `tracked`), and a harness problem (a missing tool, an
 # unusable verify result) still exits 2. A separate workflow rather than a job
 # of `native-oracle.yml` because that one deliberately never installs ESBMC, so
 # a native-backend regression cannot hide behind a quiet fallback to it.

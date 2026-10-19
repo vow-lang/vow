@@ -59,8 +59,9 @@ that closes it:
 ```
 
 The reason and the issue number are mandatory, there is at most one per fixture, and a malformed line
-is an error (`verify_diff_explain.native_gap`). The row becomes `tracked`: it stays in every report and
-in the summary count, it does not fail the exit status, and it only applies where native is `Skipped`
-or inconclusive. A native refutation of a program the corpus labels correct, a crash and a native
-verdict that is not weaker are never excused by it. When native starts to decide the fixture the row
-is `match` again and the directive is to be removed with the issue's closing change.
+is an error (`verify_diff_explain.native_gap`; a unit test reads every directive of the corpus). The row
+becomes `tracked`: it stays in every report and in the summary count, it does not fail the exit status,
+and it applies only to `vowc verify` rows where native is `Skipped` or `unknown`. A native refutation of
+a program the corpus labels correct, a crash, a panic, an error, a timeout and a row that is not `weaker`
+are never excused by it. When native starts to decide the fixture the row is `match` again and the
+directive is to be removed with the change that closes the issue.
