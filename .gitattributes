@@ -1,0 +1,8 @@
+# Only complete machine-maintained outputs are exempt. Never exempt authored
+# compiler modules just because they contain a generated block.
+Cargo.lock token-limit-ignore
+bench/uv.lock token-limit-ignore
+workflow/uv.lock token-limit-ignore
+CHANGELOG.md token-limit-ignore
+# Generated from docs/spec/ by scripts/generate_help.py.
+skills/vow/** token-limit-ignore

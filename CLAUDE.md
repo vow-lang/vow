@@ -2,6 +2,42 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Agent session setup
+
+Before implementation, provision and verify this worktree's hooks:
+
+```bash
+./scripts/ensure-hooks.sh
+# Launch an agent after provisioning its selected worktree:
+./scripts/agent-session.sh --worktree /path/to/worktree claude
+./scripts/agent-session.sh codex
+```
+
+Install `pre-commit` with `uv tool install pre-commit` first. Provision from the
+host before mounting Git metadata read-only; set `PRE_COMMIT_HOME` to a writable
+cache. Existing hooks are preserved and chained; provisioned hooks are reused on
+resume. Claude SessionStart provisions hooks and PreToolUse blocks shell/edit
+operations if either hook is missing, disabled, or overridden, including after
+startup. For other agents use the launcher. Do not bypass failures with `SKIP`,
+`--no-verify`, or `core.hooksPath`; repair provisioning before continuing.
+
+Changed authored text files must fit **20,000 bytes** (5,000 estimated tokens at
+bytes/4). The hook checks staged blobs, including partial staging and rename
+destinations. CI checks committed blobs and exemptions from the head revision,
+even for docs-only changes. Existing oversized files must be split when edited.
+Use cohesive Vow modules and explicit `use` declarations, keep semantic contracts
+and ownership intact, and honor dual-compiler and C-emitter parity. Never weaken
+contracts to make splitting or verification easier. Only complete generated
+outputs and lockfiles explicitly listed in `.gitattributes` are exempt; a
+partially generated compiler source file is still authored code.
+
+Read the linked guidance before work in the corresponding area; these files are
+part of the repository instructions:
+
+- [Compiler architecture and self-hosted compiler](docs/agents/compiler-architecture.md)
+- [Operation Catalogue and generation rules](docs/agents/operation-catalogue.md)
+- [Test harnesses, C parity, memory bounds, mutation testing, and benchmarks](docs/agents/validation.md)
+
 ## Language Design Principles
 
 Vow is a language for agents, not humans. New language features should only be added if they meet **all three** criteria:
@@ -53,7 +89,7 @@ message that passes locally cannot fail in CI.
 Install the hooks once per clone — without this the local gate is simply absent:
 
 ```bash
-pre-commit install --install-hooks   # installs both pre-commit and commit-msg hooks
+./scripts/ensure-hooks.sh   # installs/verifies both hooks and prepares environments
 ```
 
 Rules that are easy to get wrong:
@@ -188,334 +224,3 @@ scripts/bootstrap.sh --skip-cargo                 # rebuild build/vowc
 ```
 
 The staleness detector `scripts/check_help_coverage.py` (run in `full_test.sh`) will catch drift between `grammar.md` and `--help`.
-
-## Operation Catalogue
-
-`docs/spec/operations.json` is the Operation Catalogue: the single checked, hand-edited source of
-runtime-symbol, ABI, return-shape, and doc facts for the Builtin Operations in its `operations` array
-(the print, filesystem, stdin/args/stderr, process, hash, environment and query/utility builtins; epic
-#375), plus the top-level `arena_routes` list and the `excluded` section. It is deliberately narrower than
-`vow-types/src/env.rs::builtin_free_fn_signatures()` — that table (and its self-hosted counterpart in
-`compiler/env.vow`) remains the single source for signature/effects and is never read or replaced by
-this catalogue; the entry's `doc_signature`/`effects` are copies checked against `grammar.md` and the
-help text, not a second source. `cargo test -p vow-types` and
-`build/vowc test compiler/ --filter test_op_catalogue_env` compare them with both type-checker tables, via
-fact tables generated into `vow-types/src/env.rs` and `compiler/tests/catalogue_facts.vow`. They sit
-between their own `// GENERATE:OPERATION_FACTS:START` / `:END` markers, separate from the
-`GENERATE:OPERATIONS` pair below, and `generate_operations.py --check` fails when they are stale.
-
-Where the shipped catalogue departs from the epic's PRD (docs checked rather than generated, lookup
-functions rather than typed Rust records, the `c_model`/`verifier_model` split, the exclusion list),
-[ADR-2026-10-13-1048](docs/adr/2026-10-13-1048-operation-catalogue-prd-amendments.md) records the
-amendment and the check that enforces its replacement.
-
-`scripts/generate_operations.py` regenerates and validates the catalogue's projections:
-
-```bash
-python3 scripts/generate_operations.py          # regenerate all projections
-python3 scripts/generate_operations.py --check  # validate without writing (CI-gating)
-```
-
-It splices generated lookup functions between `// GENERATE:OPERATIONS:START` / `:END` markers — the
-same marker convention `scripts/generate_help.py` uses for `// GENERATE:SKILL_*` — into:
-
-- `vow-ir/src/lower/mod.rs` (`catalogue_builtin_to_runtime`)
-- `vow-codegen/src/cranelift_backend.rs` and `vow-clif-shim/src/lib.rs` (`catalogue_extern_sig`)
-- `compiler/lower.vow` (`catalogue_builtin_to_extern`, `catalogue_builtin_ret_ty`)
-- `compiler/vc_ops.vow` (`catalogue_verifier_known`, the native verifier's
-  builtin model keyed by runtime symbol; `generate_operations.py` fails when an entry has no `verifier_model`
-  or an effectful entry is `known`;
-  `known` alone does not make a call verifiable until the executor encodes calls)
-- `vow-verify/src/c_emitter.rs` and `compiler/c_emitter.vow` (`catalogue_c_model_known`, the ESBMC C
-  model's known-symbol set, from the `c_model` field: `base` knows the runtime symbol, `base_and_arena`
-  also its `_in_arena` variant, `unmodeled` neither; required on every pure (`[]`) entry, and only a pure
-  entry can be known. It is separate from `verifier_model` on purpose: a `known` native entry changes
-  the native skip code of every caller, and the C model goes away with the ESBMC path in epic #1398, P6.
-  The hand-written `is_known_builtin` lists keep only what is not catalogued)
-- `vow-ir/src/region.rs`, `vow-clif-shim/src/lib.rs` and `compiler/ir.vow` (the `arena_routes` section, a
-  plain list of the base symbols of every fresh-aggregate builtin; the variant is always
-  `<symbol>_in_arena`. Rust gets the `FRESH_ARENA_VARIANTS` table with hand-written lookups over it, Vow
-  gets the `fresh_arena_base_extern` decision tree, and `fresh_arena_variant_extern` strips the suffix)
-
-A call's result shape tag (`String`, `Vec` or `Option<T>` heap aggregate, which `pin_to_root` and the
-arena inference read) is derived from the entry's documented return type, not stored: the Rust
-`catalogue_builtin_result_tag` and the self-hosted `catalogue_builtin_result_tag` are generated, and
-`arena_routing: heap_fresh` only records (and the generator validates) that the symbol has an
-`_in_arena` variant in `arena_routes`. Every op returning a `String`, `Vec` or `Option` must declare
-`arena_routing` (`heap_fresh` exactly when its symbol is a route; otherwise `none` plus a free-text
-`arena_routing_reason` saying why the heap result has no arena variant; the ADR above lists today's one, `stdin_read_line`),
-and `--check` fails on any disagreement. `i64_to_string`,
-`string_matches_literal_at` (its literal operand lowers specially) and the narrowing intrinsics stay
-hand-written.
-
-`docs/spec/grammar.md`'s Builtin Function Signatures table and the generated help-JSON in
-`compiler/main.vow`/`vow/src/skill.rs` are **checked against** the catalogue (not generated from it) —
-`--check` fails if any drift (`check_doc_facts` compares each entry's signature and effects with the
-grammar.md row and with the `skill.rs` and `main.vow` help lines).
-
-`c_model` (ESBMC C model, parity until epic #1398 P6) and `verifier_model` (native verifier, exempt
-from parity) are separate per-entry fields, and only pure entries may be known to either.
-Builtins the type-checker tables hold that the catalogue deliberately does not describe (narrowing-conversion
-families and the saturating `u8` operations, `__vow_clif_*`, `string_matches_literal_at`, the `debug_*` builtins, the
-`i64_to_string` alias) are listed with a reason in the `excluded` section of
-`operations.json`, each entry an explicit `names` list, a `prefix`, or a `contains` plus `suffixes` set
-(no regex). `load_excluded` rejects a missing reason, a malformed matcher and a
-name that is both catalogued and excluded; the vow-types and `test_op_catalogue_env` tests fail on a table entry
-that is neither catalogued nor excluded and on an exclusion that matches no table entry. `pin_to_root` and the
-internal runtime ops are not table entries, so they are documented in the ADR above only.
-
-`load_catalogue` hand-validates every entry beyond the four fields' presence and type: `effects` must
-match `^\[(token(, token)*)?\]$` against the closed vocabulary `{read, write, io, panic, unsafe}`, with
-tokens in alphabetical order (matching `vow-syntax/src/printer.rs`'s `print_effects`, which sorts the
-same way); `doc_signature` must parse as `fn(...) -> Type` with arity and
-per-parameter/return types matching `params`/`return` (`String`/`Vec<...>` both denote `ptr`); the
-`verifier_model` (`known`/`unmodeled`; `main()` rejects an entry without one, and an effectful entry
-marked `known`), the `arena_routing` (`none`/`heap_fresh`; `main()` rejects a heap-returning entry without
-one) and `c_model` (`unmodeled`/`base`/`base_and_arena`; `main()` rejects a pure entry without one)
-fields, when present, must be in their closed sets; a pure `unmodeled` entry must carry a non-empty
-free-text `verifier_skip_reason` (which semantics the native verifier does not model; `main()` rejects
-its absence, and its presence on any other entry); an `Option<T>` return type
-needs a `T` the generator can tag; and any field name not in the recognized set (required or optional)
-is rejected outright, so a misspelled field can never silently defeat its own check. All
-violations across all entries are collected and reported together, not just the first. `main()` never
-lets a bad catalogue surface as a raw Python traceback — a malformed `operations.json` or a rejected
-entry prints a clean message to stderr and exits 1. `scripts/full_test.sh` runs
-`generate_operations.py --check` as its `ops/catalogue-drift` gate (Section 8), alongside CI's
-`ci.yml` step, so staleness is caught locally too, not only on push. The generator's own unit tests
-(`scripts/test_generate_operations.py`) run in both `ci.yml` and `full_test.sh` (gate
-`ops/catalogue-generator-tests`, right after `ops/catalogue-drift`).
-
-All the catalogue slices of epic #375 (#1270–#1275) have merged. Further work on the catalogue should
-add entries, fields and target files to the existing generator rather than inventing a new mechanism.
-
-## Architecture
-
-Vow is a Rust workspace where each crate maps to one compiler pipeline stage. The planned pipeline is:
-
-```
-Source → vow-syntax → vow-types → vow-ir → vow-codegen → executable
-                                       └──→ vow-verify  → proof / counterexample
-```
-
-All diagnostic output flows through **`vow-diag`**, which every other crate uses. It always emits both JSON (for agents) and human-readable text in parallel — this is by design, not a flag.
-
-### Crate responsibilities
-
-- **`vow-syntax`** — lexer, token types, AST, canonical printer, `Span` type. `Span` is the shared source-location primitive used across all crates.
-- **`vow-types`** — type checker and effect checker. Decidable base types only; refinement predicates go to `vow-verify`.
-- **`vow-ir`** — Pizlo-style SSA IR with instruction-value uniformity. Every `Inst` is a value. Phi/Upsilon nodes (not traditional SSA Phi). `InsertionSet` is the standard IR mutation primitive.
-- **`vow-codegen`** — `Backend` trait + Cranelift backend. Debug builds emit runtime vow checks via `__vow_violation`; release builds omit them entirely.
-- **`vow-linker`** — shared platform-specific native library policy used by both linker paths.
-- **`vow-verify`** — ESBMC integration. Extracts verification conditions from IR, invokes ESBMC, maps counterexamples back to source via `Origin` metadata.
-- **`vow-perf`** — fixed complexity-class canonicalization, least-squares classification, and cloned-IR operation-count instrumentation for a separate performance-test artifact. Parser, generator, and CLI integration remain tracked by the performance-guarantees roadmap.
-- **`vow-clif-shim`** — `extern "C"` FFI shims wrapping Cranelift for the self-hosted compiler. The self-hosted `clif.vow` calls these shims to produce native object files directly. Uses stack slots (not SSA) to bypass Cranelift dominance requirements for cross-block references in the self-hosted IR.
-- **`vow-runtime`** — vow violation handler (`__vow_violation`), print helpers (`__vow_string_print`, `__vow_print_i64`), arithmetic overflow handler.
-- **`vow`** — CLI driver (`vowc`). Orchestrates the parallel codegen + verification pipeline. Structured JSON build output.
-- **`vow-diag`** — `Diagnostic`, `ErrorCode`, `Blame` (Caller/Callee), `JsonEmitter`, `HumanEmitter`.
-
-### Key design invariants
-
-- **Line comments only.** `//` comments are stripped at lex time (like whitespace). No block comments (`/* */`). Machine-relevant intent belongs in contracts; comments are for non-semantic rationale.
-- **Canonical form.** The printer is a compiler pass, not a formatter. `parse → print → parse` must be idempotent. Tests enforce this.
-- **Effects are explicit.** Pure functions have empty effect sets. Calling an effectful function from a pure one is a type error. Effect sets are part of every function's type.
-- **Vow blocks have blame.** `requires` violations blame the Caller; `ensures`/`invariant` violations blame the Callee. This is encoded in `vow-diag::Blame`.
-- **Linear types.** `linear struct` values must be consumed exactly once. The type checker tracks this.
-- **Checked arithmetic operators** (`+!`, `-!`, etc.) are distinct token kinds from wrapping arithmetic (`+`, `-`, etc.) — both are in the grammar, not library functions.
-- **VowViolation diagnostic shape.** JSON emitted on violation:
-  `{"error":"VowViolation","vow_id":N,"blame":"Caller"|"Callee","description":"...","values":{"var":val,...}}`
-  The `values` field contains runtime values of all free variables in the predicate. `VowEntry.bindings`
-  in `vow-ir` stores the `(name, InstId)` pairs that drive this capture.
-
-### Span
-
-`Span { start: u32, len: u32 }` lives in `vow-syntax::span` and is the single source-location type. Every AST node and every token carries one.
-
-## Self-Hosted Compiler
-
-`compiler/` contains a complete Vow implementation of the compiler (13 modules). `build/vowc` is the primary compiler binary — a verified fixed point producing byte-identical binaries. The self-hosted compiler has full feature parity with the Rust compiler: subcommands, flags, structured diagnostics, verification pipeline, and parallel codegen+verify.
-
-### Modules
-
-- `span.vow`, `token.vow`, `lexer.vow` — lexer (Wave 1)
-- `ast.vow`, `parser.vow` — parser (Wave 2)
-- `types.vow`, `env.vow`, `checker.vow` — type checker (Wave 3)
-- `ir.vow`, `ir_printer.vow`, `contract_text.vow`, `lower.vow` — IR lowering and printing (Wave 4); `contract_text.vow` renders contract predicate text identically to `vow-syntax/src/printer.rs`
-- `clif.vow` — Cranelift backend via FFI shims (`vow-clif-shim` crate)
-- `verify_report.vow` — failed-verification report pieces (violated-clause source, call-site argument values, one diagnostic per counterexample) that keep the `vow verify` JSON identical to the Rust driver's
-- `main.vow` — driver with subcommands (`build`, `verify`), flags, structured `--help`
-
-### Building and running
-
-```bash
-build/vowc build --no-verify compiler/main.vow -o /tmp/vow_main  # compile self-hosted compiler
-/tmp/vow_main build --no-verify --dump-ir compiler/lexer.vow               # type-check, print IR
-/tmp/vow_main build --no-verify -o /tmp/lexer compiler/lexer.vow            # compile to native binary
-```
-
-The self-hosted compiler supports DFS module loading via `use` declarations.
-
-Compiler unit tests live in `compiler/tests/` and run through the test runner. Run one with
-`build/vowc test compiler/tests/test_region.vow` (the module root is inferred: the nearest ancestor
-of the file that resolves all its `use` declarations, here `compiler/`), or all of them with
-`build/vowc test compiler/`, which runs files concurrently (`--jobs N`, default `min(cpus/2, 8)`,
-backing off under memory/IO pressure) and reports them in sorted order. Use `--filter <stem>` to
-select by file stem.
-
-### Bootstrap triple test
-
-`scripts/concat_vow.sh` merges all compiler modules into a single file (stripping `module`/`use` headers), avoiding the need for module loading.
-
-```bash
-./scripts/concat_vow.sh clif > /tmp/compiler_clif.vow
-./target/release/vow --no-verify /tmp/compiler_clif.vow -o /tmp/compiler_a  # Stage 0: Rust → Binary A
-/tmp/compiler_a build --no-verify -o /tmp/compiler_b /tmp/compiler_clif.vow  # Stage 1: A → B
-/tmp/compiler_b build --no-verify -o /tmp/compiler_c /tmp/compiler_clif.vow  # Stage 2: B → C
-sha256sum /tmp/compiler_b /tmp/compiler_c              # must be identical (binary fixed point)
-```
-
-
-### vow-clif-shim architecture
-
-The shim exposes a medium-granularity FFI API: module-level operations are separate calls
-(`__vow_clif_create`, `__vow_clif_add_string`, `__vow_clif_declare_function`, `__vow_clif_finish`,
-`__vow_clif_link`). Per-function compilation is streamed incrementally —
-`__vow_clif_fn_begin` opens a function, `__vow_clif_fn_block` / `__vow_clif_fn_inst` /
-`__vow_clif_fn_vow` append to it, and `__vow_clif_fn_end` drives Cranelift codegen. The
-shim owns the parallel arrays (ids, ops, types, data kinds, values, strings, args) as
-scratch buffers on `ModuleContext` and reuses them across functions via
-`Vec::clear()` (preserves capacity), eliminating the per-function alloc/realloc churn that
-the previous batched `__vow_clif_compile_function` required. Cranelift `FunctionBuilder`
-still operates on all of this at once, inside `fn_end`.
-
-The shim uses stack slots instead of SSA values for all instruction results. This is necessary
-because the self-hosted IR has cross-block references between sibling branches (e.g., an else
-branch referencing a value from the then branch), which violates Cranelift's SSA dominance
-requirements. Each instruction result is stored in a stack slot; reads load from the slot.
-Each `Phi` also owns a shadow slot: `Upsilon` writes the shadow, and the `Phi` copies it into
-the value slot on block entry so back-edge `Upsilon` groups retain parallel-copy semantics.
-`BTreeMap` (not `HashMap`) is used for `slot_map` to ensure deterministic codegen for binary
-fixed-point reproducibility.
-
-VowVec layout: `{ ptr: *mut u8, len: usize, cap: usize }` = 24 bytes. The shim reads Vec and
-String values directly through this layout. All FFI parameters are `i64` (opaque pointers or values).
-
-### Gotchas
-
-- Chained field access on struct values requires annotated `let` bindings.
-  `e.ts.strs[i]` reads the wrong field index. Use:
-  ```vow
-  let ts: TyStore = e.ts;
-  let s: String = ts.strs[i];
-  ```
-- `__vow_string_eq` returns `i64` (not `bool`) to avoid C ABI mismatch with Rust's 1-byte bool.
-- `lctx_assign` in `lower.vow` does in-place mutation of `scope_vals[i]`. `lctx_restore` only
-  pops entries by vector length — it cannot undo in-place mutations. When lowering if-else,
-  mutation variable values must be explicitly saved before and restored after each branch.
-- Vec indexed assignment (`v[i] = val`) in Vow emits `__vow_vec_set_val(v, i, val)`. Both the
-  Rust IR lowerer and self-hosted `lower.vow` handle EXPR_INDEX on the LHS of assignments.
-
-### Examples
-
-The `examples/` directory contains runnable `.vow` programs:
-- `divide.vow` — `requires: y != 0` (triggers Caller violation when run with `--mode debug`)
-- `hello.vow` — basic IO
-- `bisect.vow` — loop invariant
-- `countdown.vow` — while loop
-
-## Test Harnesses (`scripts/full_test.sh` vs `tests/run_tests.sh`)
-
-Two separate scripts walk `tests/run/*.vow` and other `tests/*` directories, and they check
-**different subsets** of the `// TEST:` directives. Do not assume one implies the other.
-
-- **`scripts/full_test.sh`** is the CI-gating harness (wired via `.github/workflows/full-test.yml`
-  and `promoted-fixtures.yml`). Its `run_promoted_run_tests` (Section 4, over `tests/run/*.vow`)
-  parses and checks `TEST: exit`, `TEST: stdout`, `TEST: stdin[-file]`, `TEST: skip`,
-  `TEST: verify-only`, `TEST: known-divergence`, and `TEST: stderr` (every line is a substring
-  that must occur in the stderr of both compilers' binaries). Section 5 does the same for
-  `tests/debug/*.vow` (debug-mode build, `TEST: exit` defaulting to 134), and Section 4c checks
-  `TEST: counterexample-violation` on `tests/verify-fail/*.vow` for both compilers. **It does not
-  check `TEST: stderr` on `tests/error/*.vow`** — compile-error stderr is not captured there.
-- **`tests/run_tests.sh`** is a separate, local-developer-only harness (not invoked by any
-  `.github/workflows/*.yml`). Its Phase 1 (`tests/run/`), Phase 4 (`tests/debug/`) and Phase 5
-  (`tests/error/`) loops parse and check `TEST: stderr` (substring match against captured
-  stderr, last directive line only), in addition to the directives `full_test.sh` also checks.
-
-So a `// TEST: stderr "..."` line on a `tests/run/*.vow` or `tests/debug/*.vow` fixture is checked
-by CI; on a `tests/error/*.vow` fixture it is enforced only when a developer runs
-`tests/run_tests.sh` locally.
-Before claiming a directive is "never parsed by any harness," grep `tests/*.sh` as well as
-`scripts/*.sh` — the two harnesses live in different directories and cover different directives.
-
-## Verifier C Parity
-
-`vow-verify/src/c_emitter.rs` and `compiler/c_emitter.vow` must hand ESBMC **byte-identical C** for the same program. This rule stays in force until both emitters are deleted (epic #1398, P6). `python3 scripts/parity.py c RUST_BIN SELF_BIN FIXTURE...` proves it: it puts a fake `esbmc` first on `PATH`, runs `verify` with each compiler, and diffs the set of distinct C sources recorded per function (`scripts/parity_c.py`; no real solver needed). `scripts/full_test.sh` Section 2c runs it over every `tests/verify*/` fixture, so any change to either emitter, to the lowering feeding it, or to a model helper that is not mirrored in the other compiler fails CI. To see the C itself, call `parity_c.capture(binary, fixture, shim_dir, capture_dir)` (see `scripts/parity_c.py`), or set `VOW_VERIFY_DEBUG=1` on the Rust compiler (it writes `/tmp/vow-verify-debug/<fn>.c`).
-
-### Memory bounds
-
-`bench/memory/programs/*.vow` carry a `// BENCH: max-rss-kb N` bound on their first line.
-`scripts/check_memory_bounds.py --compiler <vow|vowc>` builds and runs them against either compiler
-and fails when a peak resident set exceeds its bound; `full_test.sh` Section 8a runs it for both
-compilers (Linux only), so an allocation fix is pinned in the Rust and the self-hosted compiler alike.
-`bench/memory/run.sh` is the developer harness (needs GNU `time`, Rust compiler only). Do not run
-`run.sh --record` to add a program: it rewrites every bound; add the program, its annotation and its
-`expected.toml` entry by hand (measured peak + 4096 KiB).
-
-## Mutation Testing (`vowc mutants`)
-
-Mutation testing is integrated into the self-hosted compiler as the `vowc mutants` subcommand. It mutates `compiler/*.vow` (or any `--root` directory), runs a tiered oracle (`scripts/bootstrap.sh --skip-cargo`, then a fast `VOW_FULL_TEST_SKIP_CARGO=1 VOW_FULL_TEST_TIER15_ONLY=1 scripts/full_test.sh` checkpoint, then the full `VOW_FULL_TEST_SKIP_CARGO=1 scripts/full_test.sh` suite), and writes structured JSON output to `mutants.out/` (`mutants.json`, `outcomes.json`, per-status `.txt` lists, plus `diff/<id>.diff` and `logs/<id>.log` per mutant). Stdout carries only a one-line summary.
-
-```bash
-build/vowc mutants list                                                # enumerate sites only
-build/vowc mutants run --shard 0/8 --tier2-budget-secs 9000            # writes ./mutants.out/
-build/vowc mutants run --shard 0/8 --output-dir my-results             # custom output directory
-```
-
-Mutation kinds: `op-flip` (binary operators), `const-flip` (`0`/`1`, `true`/`false`), `body-replace` (function bodies → default value for return type), `contract-weaken` (`requires`/`ensures`/`invariant` clauses → `true`).
-
-Skip-list: `// GENERATE:<NAME>:START`/`:END` blocks and `extern "C" { ... }` blocks are excluded. `test_*.vow` files are filtered before scanning.
-
-**Local-only.** Mutation testing is not wired into CI — a full Tier-2 sweep across `compiler/*.vow` is multi-hour wall-clock and would burn through GitHub Actions budget on every nightly. Run it on the developer machine on whatever cadence suits the project (e.g., before tagging a release, or after a substantial compiler change). To split the work, shard explicitly with `--shard 0/8` etc. and run shards sequentially over multiple sessions; the determinism guarantee means the union of `mutants.out/` across shards is well-defined.
-
-**Track shard progress persistently.** Because shards are explicitly designed to run sequentially across multiple sessions, keep a checklist (e.g. `TASKS.md`) recording which shard indices are done vs. pending, alongside each shard's `mutants.out/` location. Update it as each shard completes so a new session can resume from the right shard instead of re-deriving progress from `mutants.out/` state or guessing.
-
-When a `missed.txt` entry appears, the actionable response is to either (a) write a test that catches the mutation, or (b) file an issue documenting why the mutation is equivalent and out of scope. See `docs/mutants.md` for the full output schema and known limitations.
-
-## Vericoding Benchmark Suite
-
-`benchmarks/` contains 40 verification benchmarks (15 Easy, 15 Medium, 10 Hard; 4 Hard are Stretch).
-Each benchmark has: `spec.md`, `skeleton.vow`, `reference.vow`, `meta.toml`.
-`benchmarks/manifest.toml` lists all benchmarks. 36 non-Stretch references pass `vow verify`.
-
-### Benchmark Runner (`bench/`)
-
-A Python CLI tool (managed by `uv`) that runs frontier LLMs against the benchmark suite.
-
-```bash
-# From repo root (requires uv):
-uv run --project bench bench/run.py validate-references                             # verify all reference.vow files
-uv run --project bench bench/run.py run --model claude-sonnet-5-5 --benchmark E01  # single benchmark
-uv run --project bench bench/run.py run --model claude-sonnet-5-5                  # full suite
-uv run --project bench bench/run.py run --model claude-sonnet-5-5 --resume         # resume partial run
-uv run --project bench bench/run.py report --run-id <id>                            # generate comparison report
-uv run --project bench bench/run.py report                                          # report on most recent run
-
-# Or from bench/:
-cd bench && uv run python run.py run --model claude-sonnet-5-5
-```
-
-**Architecture:** Direct API calls (Anthropic/OpenAI SDKs), not agent tool use. Each benchmark is a single conversation: system prompt (skill docs ~35KB) + spec + skeleton → LLM returns Vow code → `vow verify` → CEGIS loop if needed. Temperature 0.0 for reproducibility.
-
-**Cost confirmation required.** A full-suite `bench/run.py run` (no `--benchmark` filter) calls frontier LLM APIs (Anthropic/OpenAI) across all ~40 benchmarks, with CEGIS retries on top — real, non-trivial API spend. Confirm with the user before starting a full-suite run; a single `--benchmark` run does not need confirmation.
-
-**Files:**
-- `bench/run.py` — CLI entry point (`run`, `report`, `validate-references`)
-- `bench/runner.py` — core CEGIS loop per benchmark
-- `bench/llm.py` — LLM provider abstraction (Anthropic, OpenAI)
-- `bench/verifier.py` — `vow verify` subprocess wrapper
-- `bench/manifest.py` — manifest + meta.toml loader
-- `bench/prompts.py` — system prompt (skill docs) + user prompt templates
-- `bench/report.py` — results → markdown comparison report
-- `bench/config.toml` — model configurations
-- `bench/results/` — gitignored output directory
-
-**Environment variables:** `ANTHROPIC_API_KEY` for Claude models, `OPENAI_API_KEY` for OpenAI models.

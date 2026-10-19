@@ -1,6 +1,16 @@
 default_install_hook_types: [pre-commit, commit-msg]
 
 repos:
+  - repo: local
+    hooks:
+      - id: staged-file-token-limit
+        name: staged authored files fit the 5,000-token budget
+        entry: python3 scripts/check_staged_file_tokens.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
