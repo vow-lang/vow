@@ -1,7 +1,6 @@
 // TEST: counterexample-fn "total"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
-// TEST: replay-skipped a Vec<String> field of a struct parameter is not rebuilt by replay
 // The sum is the parameter's length plus one: a postcondition of plus two is refuted, so
 // the stored pointer and the handle read are modelled, not skipped.
 module VecPointerStoreHandleReadBuiltVecWrong

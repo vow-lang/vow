@@ -1,0 +1,20 @@
+// TEST: counterexample-fn "count"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value n.0.len 0
+// A held Vec of Strings is rebuilt at length 0: there is no element to build.
+module HeapVecOfStringsFieldLenWrong
+
+struct Names { items: Vec<String>, tag: i64 }
+
+fn count(n: Names) -> u64 vow {
+  ensures: result == 7
+} {
+  n.items.len()
+}
+
+fn main() -> i32 [io] {
+  let n: Names = Names { items: Vec::new(), tag: 0 };
+  print_u64(count(n));
+  0
+}

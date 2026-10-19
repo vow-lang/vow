@@ -1,0 +1,20 @@
+// TEST: replay-skipped a Vec field read only as an address has no listed length
+// TEST: counterexample-fn "pass"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The Vec in `b.items` is returned, never measured: the counterexample lists its address and no length.
+module HeapVecFieldReturnedWithoutLengthSkipped
+
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn pass(b: Bag) -> Vec<i64> vow {
+  ensures: b.tag == 7
+} {
+  b.items
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), tag: 7 };
+  let r: Vec<i64> = pass(b);
+  0
+}

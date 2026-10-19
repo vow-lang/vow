@@ -1,7 +1,6 @@
 // TEST: counterexample-fn "name_length"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
-// TEST: replay-skipped a String field is not rebuilt by replay
 module HandleReturnGetterWrong
 
 struct Person { name: String, tags: Vec<String> }
