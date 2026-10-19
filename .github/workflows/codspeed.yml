@@ -12,28 +12,13 @@ name: CodSpeed
 # Walltime results are only comparable to a baseline measured on this runner,
 # so the first main run after a label change has no comparison.
 #
-# Only changes that can move a measurement trigger a run. A PR that touches no
-# benchmarked code would otherwise be compared against a baseline measured on a
-# different runner and report noise as a regression.
+# Only PRs that can move a measurement trigger a run, so a PR that touches no
+# benchmarked code gets no perf verdict. Every main commit runs, so each PR has
+# a baseline at its exact base commit.
 
 on:
   push:
     branches: [main]
-    paths:
-      - vow-syntax/**
-      - vow-types/**
-      - vow-ir/**
-      - vow-codegen/**
-      - vow-linker/**
-      - vow-diag/**
-      - Cargo.toml
-      - Cargo.lock
-      - benchmarks/hard/**
-      - compiler/lexer.vow
-      - compiler/parser.vow
-      - compiler/checker.vow
-      - compiler/lower.vow
-      - .github/workflows/codspeed.yml
   pull_request:
     branches: [main]
     paths:
@@ -46,10 +31,6 @@ on:
       - Cargo.toml
       - Cargo.lock
       - benchmarks/hard/**
-      - compiler/lexer.vow
-      - compiler/parser.vow
-      - compiler/checker.vow
-      - compiler/lower.vow
       - .github/workflows/codspeed.yml
   # Lets CodSpeed trigger backtest runs to build initial history.
   workflow_dispatch:

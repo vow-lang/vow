@@ -43,7 +43,7 @@ fn lower() -> vow_ir::Module {
 #[test]
 fn baseline_isa_backend_emits_an_object_for_every_mode() {
     let ir = lower();
-    for mode in [BuildMode::Debug, BuildMode::Release] {
+    for mode in [BuildMode::Debug, BuildMode::Release, BuildMode::Profile] {
         let object = CraneliftBackend::with_baseline_isa()
             .compile_module(&ir, mode, TraceMode::Off)
             .expect("baseline backend compiles");

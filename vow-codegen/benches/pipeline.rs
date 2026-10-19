@@ -4,8 +4,8 @@
 //! Inputs are real Vow sources checked into the repository:
 //! - the self-contained `benchmarks/hard/*/reference.vow` programs drive the
 //!   full single-file pipeline (they need no module loading);
-//! - the same programs, repeated into a large synthetic module, drive the lexer
-//!   and parser. The inputs are deliberately not the live `compiler/*.vow`
+//! - the same programs, repeated into one large synthetic module, drive the
+//!   lexer and parser. The inputs are deliberately not the live `compiler/*.vow`
 //!   sources: those change with every refactor, which would show up as a
 //!   performance change in the benchmark history.
 
@@ -76,14 +76,26 @@ fn lookup(table: &[(&str, &'static str)], name: &str) -> &'static str {
         .unwrap_or_else(|| panic!("unknown bench input {name}"))
 }
 
-fn syntax_input(name: &str) -> String {
-    let copies = SYNTAX_COPIES
+fn syntax_copies(name: &str) -> usize {
+    SYNTAX_COPIES
         .iter()
         .find(|(n, _)| *n == name)
         .map(|(_, copies)| *copies)
-        .unwrap_or_else(|| panic!("unknown syntax input {name}"));
-    let unit: String = PROGRAMS.iter().map(|(_, src)| *src).collect();
-    unit.repeat(copies)
+        .unwrap_or_else(|| panic!("unknown syntax input {name}"))
+}
+
+/// One module made of `copies` repetitions of every program body. Each
+/// program's own `module` header is dropped: the parser accepts a single header.
+fn syntax_module(copies: usize) -> String {
+    let bodies: String = PROGRAMS
+        .iter()
+        .map(|(_, src)| {
+            let (header, body) = src.split_once('\n').expect("program has a header");
+            assert!(header.starts_with("module "), "unexpected header {header}");
+            body
+        })
+        .collect();
+    format!("module Bench\n{}", bodies.repeat(copies))
 }
 
 struct CollectingEmitter {
@@ -143,13 +155,16 @@ mod syntax {
 
     #[divan::bench(args = SYNTAX_NAMES)]
     fn lex(bencher: Bencher, name: &str) {
-        let src = syntax_input(name);
+        let src = syntax_module(syntax_copies(name));
         bencher.bench(|| Lexer::new(black_box(&src)).tokenize().unwrap());
     }
 
     #[divan::bench(args = SYNTAX_NAMES)]
     fn parse(bencher: Bencher, name: &str) {
-        let src = syntax_input(name);
+        let copies = syntax_copies(name);
+        let src = syntax_module(copies);
+        let per_copy = super::parse(&syntax_module(1)).items.len();
+        assert_eq!(super::parse(&src).items.len(), per_copy * copies);
         bencher.bench(|| parse_module(black_box(&src), FILE));
     }
 }

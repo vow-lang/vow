@@ -16,7 +16,7 @@ use vow_ir::{
     RegionId, RegionSummary, Ty as IrTy, fresh_arena_base, fresh_arena_variant,
 };
 
-use crate::isa::make_isa;
+use crate::isa::{make_baseline_isa, make_isa};
 use crate::return_materialization::{
     module_uses_return_materialization, return_source_needs_materialization,
 };
@@ -3240,7 +3240,11 @@ impl Backend for CraneliftBackend {
         mode: BuildMode,
         trace: TraceMode,
     ) -> Result<CompiledObject, CodegenError> {
-        let isa = make_isa(mode, self.baseline_isa)?;
+        let isa = if self.baseline_isa {
+            make_baseline_isa(mode)
+        } else {
+            make_isa(mode)
+        }?;
 
         let obj_builder = ObjectBuilder::new(
             isa.clone(),
@@ -3618,11 +3622,7 @@ mod tests {
 
         builder.ins().return_(&[]);
         builder.seal_all_blocks();
-        builder.finalize(
-            make_isa(BuildMode::Release, false)
-                .unwrap()
-                .frontend_config(),
-        );
+        builder.finalize(make_isa(BuildMode::Release).unwrap().frontend_config());
         let clif = function.display().to_string();
         assert_eq!(clif.matches("sextend.i64").count(), 2, "{clif}");
         assert_eq!(clif.matches("uextend.i64").count(), 2, "{clif}");
@@ -3670,11 +3670,7 @@ mod tests {
 
         builder.ins().return_(&[]);
         builder.seal_all_blocks();
-        builder.finalize(
-            make_isa(BuildMode::Release, false)
-                .unwrap()
-                .frontend_config(),
-        );
+        builder.finalize(make_isa(BuildMode::Release).unwrap().frontend_config());
     }
 
     /// A narrower value reaching a 128-bit return is extended by the declared
@@ -3712,11 +3708,7 @@ mod tests {
         coerce_return_value(&mut builder, narrow, IrTy::U128);
         builder.ins().return_(&[]);
         builder.seal_all_blocks();
-        builder.finalize(
-            make_isa(BuildMode::Release, false)
-                .unwrap()
-                .frontend_config(),
-        );
+        builder.finalize(make_isa(BuildMode::Release).unwrap().frontend_config());
         let clif = function.display().to_string();
         assert_eq!(clif.matches("sextend.i128").count(), 1, "{clif}");
         assert_eq!(clif.matches("uextend.i128").count(), 1, "{clif}");
@@ -3757,7 +3749,7 @@ mod tests {
     }
 
     fn extern_sig(sym: &str) -> Signature {
-        let isa = make_isa(BuildMode::Release, false).expect("native isa");
+        let isa = make_isa(BuildMode::Release).expect("native isa");
         let obj_builder = ObjectBuilder::new(
             isa,
             b"extern_sig".to_vec(),
@@ -5838,7 +5830,7 @@ mod tests {
     }
 
     fn extern_sig_test_module() -> ObjectModule {
-        let isa = make_isa(BuildMode::Debug, false).unwrap();
+        let isa = make_isa(BuildMode::Debug).unwrap();
         ObjectModule::new(
             ObjectBuilder::new(
                 isa,
