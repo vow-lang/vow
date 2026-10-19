@@ -1,4 +1,5 @@
 // TEST: skip-reason unsupported-opcode
+// TEST: native-gap "the payload of an Option parameter is a collection the model keeps per parameter, so the function is skipped where ESBMC proves it" #1851
 // The payload of an `Option` parameter is a `Vec`: the pointer read out of the
 // field is a collection, which the model keeps per parameter, not per object.
 module OptionVecPayload

@@ -3,6 +3,7 @@
 // TEST: counterexample-blame Callee
 // TEST: counterexample-value r.2.len 1
 // TEST: counterexample-value r.2[0] -7
+// TEST: esbmc-model-artifact fn="first" blame=None vow_id=4294967293 "ESBMC reads the Vec field r.items as a fresh value of nondeterministic length at each use, so the requires r.items.len() > 0 does not bound r.items[0] and it reports an out-of-bounds read instead of the ensures violation; the native model reads one field as one value. A debug-mode replay of the function over 1 to 300 elements aborts only on the ensures violation the native counterexample names, never with an out-of-bounds read, and a Z3 cross-check of the native queries agrees; the runtime cannot build the i128 field (CodegenUnsupported, epic #526), so the replay used the same struct with an i64 id and the 128-bit slot layout is covered by the Z3 cross-check of the real fixture only"
 // A 128-bit field takes two slots, so the Vec after it is slot 2 and its signed element is retyped.
 module HeapVecFieldAfterWideFieldWrong
 

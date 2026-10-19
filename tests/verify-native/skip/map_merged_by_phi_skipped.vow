@@ -1,4 +1,5 @@
 // TEST: skip-reason unsupported-opcode
+// TEST: native-gap "a map merged by a Phi is skipped (unsupported-opcode) where ESBMC proves the claim" #1854
 module MapMergedByPhiSkipped
 
 fn pick(c: i64) -> u64 vow {

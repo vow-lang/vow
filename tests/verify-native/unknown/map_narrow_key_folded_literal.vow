@@ -1,4 +1,5 @@
 // TEST: unknown-reason unconstrained map state
+// TEST: native-gap "a narrow-key map of length 256 is not known to hold every key, so native stays unknown where ESBMC proves it" #1853
 module MapNarrowKeyFoldedLiteral
 
 // True for every real map: an `i8` key has 256 values, and a map of length 256 holds all
