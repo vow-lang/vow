@@ -1,0 +1,19 @@
+// TEST: counterexample-fn "maybe"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// A linear value inside an `Option` the replayed function returns is discharged with `drop` too.
+module LinearOptionReturnWrongPost
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn maybe(fd: i64) -> Option<Handle> vow {
+    ensures: fd < 0
+} {
+    Option::Some(Handle { fd: fd })
+}
+
+fn main() -> i32 {
+    0
+}
