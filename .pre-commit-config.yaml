@@ -11,6 +11,16 @@ repos:
         always_run: true
         stages: [pre-commit]
 
+  - repo: local
+    hooks:
+      - id: spec-parts-assembled
+        name: docs/spec assembled files match docs/spec/src parts
+        entry: python3 scripts/spec_assemble.py --check
+        language: system
+        pass_filenames: false
+        files: ^docs/spec/(src/|(cli|grammar|errors|contracts)\.md$)
+        stages: [pre-commit]
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:

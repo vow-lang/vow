@@ -210,6 +210,11 @@ mandatory for "green locally" claims about the native verifier too.
 
 **Any change to Vow syntax, semantics, types, builtins, operators, effects, or CLI flags MUST include a corresponding update to the relevant `docs/spec/*.md` file.** The spec files are the spec — compiler code implements them, not the other way around. If you add a type, update `grammar.md`. If you change a builtin signature, update `grammar.md`. If you add a CLI flag, update `cli.md`. If you change contract semantics, update `contracts.md`.
 
+`cli.md`, `grammar.md`, `errors.md` and `contracts.md` are assembled files: edit the authored parts in
+`docs/spec/src/<doc>/NN-*.md`, then run `python3 scripts/spec_assemble.py` (`generate_help.py` does it
+too). If you edited an assembled file by mistake, `python3 scripts/spec_assemble.py --import` ports the
+edit into the parts; `--split PART` halves a part that grew past 20,000 bytes.
+
 The Claude Code skill document is embedded in the compiler and generated on demand:
 ```bash
 build/vowc skill print                            # print skill to stdout

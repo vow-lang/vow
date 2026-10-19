@@ -125,6 +125,10 @@ jobs:
         run: python3 scripts/test_generate_help.py
       - name: Spec-surface drift unit tests
         run: python3 scripts/test_spec_surface.py
+      - name: Spec parts assembled and within budget
+        run: python3 scripts/spec_assemble.py --check
+      - name: Spec assembler unit tests
+        run: python3 scripts/test_spec_assemble.py
       - name: Memory-bound gate unit tests
         run: python3 scripts/test_check_memory_bounds.py
       - name: Native skip-code coverage gate

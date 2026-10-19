@@ -126,6 +126,10 @@ class StagedFileTokenTests(unittest.TestCase):
             "CHANGELOG.md",
             "skills/vow/SKILL.md",
             "skills/vow/reference/grammar.md",
+            "docs/spec/cli.md",
+            "docs/spec/grammar.md",
+            "docs/spec/errors.md",
+            "docs/spec/contracts.md",
         ):
             self.stage(name, b"x" * 20_001)
         self.assertEqual(self.run_hook().returncode, 0)
@@ -147,7 +151,8 @@ class StagedFileTokenTests(unittest.TestCase):
             "compiler/env.vow",
             "compiler/tests/catalogue_facts.vow",
             "vow/src/skill.rs",
-            "docs/spec/grammar.md",
+            "docs/spec/stdlib.md",
+            "docs/spec/src/cli/010-commands.md",
             "docs/spec/operations.json",
         )
         for name in paths:
