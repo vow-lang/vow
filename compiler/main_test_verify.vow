@@ -1,4 +1,4 @@
-module MainTest
+module MainTestVerify
 
 fn test_json_escape(s: String) -> String {
     diag_json_escape_str(s)

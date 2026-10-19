@@ -74,6 +74,14 @@ class GeneratedLayoutTests(unittest.TestCase):
         for glob in GENERATED_GLOBS:
             self.assertIn(glob, exempt)
 
+    def test_compiler_modules_are_not_mistaken_for_tests(self):
+        # `vowc test compiler/` runs every test_*.vow and *_test.vow it finds, so a
+        # driver module named like `main_test.vow` would be run as a test.
+        for path in tracked_files():
+            parts = path.split("/")
+            if len(parts) == 2 and parts[0] == "compiler" and path.endswith(".vow"):
+                self.assertFalse(parts[1].endswith("_test.vow"), path)
+
     def test_no_new_authored_file_carries_a_spliced_block(self):
         hosts = {
             p

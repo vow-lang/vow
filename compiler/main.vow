@@ -45,7 +45,7 @@ use main_verify_report
 use main_verify_native
 use main_verify_run
 use main_build
-use main_test
+use main_test_verify
 use main_test_run
 use main_skill
 use main_cq
