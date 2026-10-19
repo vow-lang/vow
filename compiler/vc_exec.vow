@@ -5,6 +5,7 @@ use vc_ops
 use vc_term
 use vc_smt
 use vc_query
+use vc_model
 use vc_int
 use vc_fp
 use vc_gate
@@ -105,12 +106,6 @@ fn vc_value_name(id: i64) -> String {
     out
 }
 
-fn vc_param_name(k: i64) -> String {
-    let out: String = String::from("p");
-    out.push_str(i64_to_string(k));
-    out
-}
-
 // Records the claim that `goal` holds on the paths satisfying `pc`, unless the
 // simplifier already decided it: the negated query is the constant `false`, or
 // `pc => goal` is itself an earlier assumption (the terms are hash-consed, so
@@ -160,102 +155,6 @@ fn vc_assume(cs: VcClaims, pc: i64, t: i64) {
 fn vc_guard(cs: VcClaims, kind: i64, label: String, pc: i64, goal: i64, inst: IrInst) {
     vc_add_claim(cs, kind, -1, label, pc, goal, inst.ostart, inst.olen, vc_frame_of(inst));
     vc_assume(cs, pc, goal);
-}
-
-// Appends the scalar fields of aggregate parameters the walk read (declared
-// lazily, so only now are they all known) after the scalar parameters, with the
-// slot each came from (a symbol's width is its sort: 0 for Bool). A slot read
-// at two sorts is `ambig` in every entry so reporting and replay can tell the
-// symbols apart.
-fn vc_claims_harvest_fields(cs: VcClaims, ag: VcAgg, vv: VcVec, memory: VcHandleMemory, mp: VcMap) {
-    let ov: VcOverlay = memory.overlay;
-    let held: VcHeld = memory.held;
-    let none: i64 = 9223372036854775807;
-    let mut i: u64 = 0;
-    let mut v: u64 = 0;
-    let mut a: u64 = 0;
-    let mut d: u64 = 0;
-    let mut e: u64 = 0;
-    while i < ag.ps_param.len() || v < vv.pv_param.len() || vc_overlay_next_listed(ov, a) < ov.param.len() || vc_held_next_listed(held, d) < held.hdr.len() || e < mp.ent_hdr.len() {
-        a = vc_overlay_next_listed(ov, a);
-        d = vc_held_next_listed(held, d);
-        let hi: i64 = { if i < ag.ps_param.len() { ag.ps_hdr[i] } else { none } };
-        let hv: i64 = { if v < vv.pv_param.len() { vv.pv_hdr[v] } else { none } };
-        let ha: i64 = { if a < ov.param.len() { ov.hdr[a] } else { none } };
-        let hh: i64 = { if d < held.hdr.len() { held.hdr[d] } else { none } };
-        let he: i64 = { if e < mp.ent_hdr.len() { mp.ent_hdr[e] } else { none } };
-        if he < hi && he < hv && he < ha && he < hh {
-            cs.model_names.push(mp.ent_name[e]);
-            cs.model_paths.push(String::from(""));
-            cs.model_params.push(mp.ent_param[e]);
-            cs.model_tys.push(ITY_U64());
-            cs.model_widths.push(64);
-            cs.model_slots.push(mp.ent_slot[e]);
-            cs.model_hdr.push(he);
-            if mp.ent_slot[e] == VC_SLOT_VEC_LEN() {
-                cs.map_len.push(mp.ent_name[e]);
-                cs.map_len_hdr.push(he);
-            }
-            e = e + 1;
-        } else if hh < hi && hh < hv && hh < ha {
-            cs.model_names.push(held.len_name[d]);
-            cs.model_paths.push(held.path[d]);
-            cs.model_params.push(held.param[d]);
-            cs.model_tys.push(ITY_U64());
-            cs.model_widths.push(64);
-            cs.model_slots.push(VC_SLOT_VEC_LEN());
-            cs.model_hdr.push(hh);
-            d = d + 1;
-        } else if hv < hi && hv < ha {
-            cs.model_names.push(vv.pv_len[v]);
-            cs.model_paths.push(String::from(""));
-            cs.model_params.push(vv.pv_param[v]);
-            cs.model_tys.push(ITY_U64());
-            cs.model_widths.push(64);
-            cs.model_slots.push(VC_SLOT_VEC_LEN());
-            cs.model_hdr.push(hv);
-            v = v + 1;
-        } else if ha < hi {
-            cs.model_names.push(ov.names[a]);
-            cs.model_paths.push(String::from(""));
-            cs.model_params.push(ov.param[a]);
-            cs.model_tys.push(ITY_I64());
-            cs.model_widths.push(64);
-            cs.model_slots.push(VC_SLOT_ADDR());
-            cs.model_hdr.push(ha);
-            a = a + 1;
-        } else {
-            cs.model_names.push(ag.ps_name[i]);
-            cs.model_paths.push(ag.ps_path[i]);
-            cs.model_params.push(ag.ps_param[i]);
-            cs.model_tys.push(ag.ps_ty[i]);
-            cs.model_widths.push(ag.ps_sort[i]);
-            cs.model_slots.push(ag.ps_slot[i]);
-            cs.model_hdr.push(hi);
-            i = i + 1;
-        }
-    }
-    cs.vec_param = vv.pv_param;
-    cs.vec_arr = vv.pv_arr;
-    cs.vec_len = vv.pv_len;
-    cs.vec_hdr = vv.pv_hdr;
-    cs.vec_wide = vv.pv_wide;
-    vc_held_append_vecs(cs, held);
-    let mut j: u64 = 0;
-    while j < cs.model_slots.len() {
-        let mut amb: i64 = 0;
-        if cs.model_slots[j] >= 0 {
-            let mut o: u64 = 0;
-            while o < cs.model_slots.len() {
-                if o != j && cs.model_params[o] == cs.model_params[j] && cs.model_paths[o] == cs.model_paths[j] && cs.model_slots[o] == cs.model_slots[j] && cs.model_widths[o] != cs.model_widths[j] {
-                    amb = 1;
-                }
-                o = o + 1;
-            }
-        }
-        cs.model_ambig.push(amb);
-        j = j + 1;
-    }
 }
 
 // Symbolic state shared by the block walk.
@@ -1046,14 +945,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
     let mut pi: u64 = 0;
     while pi < f.params.len() {
         if f.params[pi] == ITY_BOOL() || vc_ty_is_int(f.params[pi]) || vc_ty_is_float(f.params[pi]) {
-            cs.model_hdr.push(hdr.kinds.len() as i64);
-            cs.model_slots.push(-1);
-            vc_script_declare_const(hdr, vc_param_name(pi as i64), vc_ty_sort(f.params[pi]));
-            cs.model_names.push(vc_param_name(pi as i64));
-            cs.model_paths.push(String::from(""));
-            cs.model_params.push(pi as i64);
-            cs.model_tys.push(f.params[pi]);
-            cs.model_widths.push(vc_ty_sort(f.params[pi]));
+            vc_model_declare_scalar(cs, pi as i64, f.params[pi]);
         }
         pi = pi + 1;
     }
@@ -1114,7 +1006,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         }
         oi = oi + 1;
     }
-    vc_claims_harvest_fields(cs, w.ag, w.vv, w.memory, w.mp);
+    vc_model_finish(cs, w.memory, w.mp);
     cs.hook_vars = w.vv.hk_vars;
     cs.map_vars = vc_map_inexact_vars(w.mp);
     vc_script_replace_logic(hdr, vc_logic_name(vc_vec_count(w.vv) > 0 || vc_handle_memory_used(w.memory) || vc_map_count(w.mp) > 0, vc_function_has_float(f, tys), w.vv.quantified));
