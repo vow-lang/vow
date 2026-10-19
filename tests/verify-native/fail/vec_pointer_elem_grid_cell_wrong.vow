@@ -1,0 +1,25 @@
+// TEST: counterexample-fn "cell"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// `grid[1][1]` is 5, the last element of the second row, not 4.
+module VecPointerElemGridCellWrong
+
+fn cell() -> i64 vow {
+  ensures: result == 4
+} {
+  let grid: Vec<Vec<i64>> = Vec::new();
+  let r0: Vec<i64> = Vec::new();
+  r0.push(1);
+  r0.push(2);
+  let r1: Vec<i64> = Vec::new();
+  r1.push(4);
+  r1.push(5);
+  grid.push(r0);
+  grid.push(r1);
+  grid[1][1]
+}
+
+fn main() -> i32 [io] {
+  print_i64(cell());
+  0
+}

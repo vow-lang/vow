@@ -1,0 +1,32 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// A struct parameter pushed into a `Vec` is the object the caller passed, which another parameter of
+// the same type may be too: a write through `t` shows in the element read back, so the age read
+// before the write need not equal the one read after it.
+module VecPointerElemStructParamAliasWrong
+
+struct Person { age: i64 }
+
+fn f(s: Person, t: Person) -> bool vow {
+  ensures: result
+} {
+  let people: Vec<Person> = Vec::new();
+  people.push(s);
+  let before: Person = people[0];
+  let a0: i64 = before.age;
+  t.age = 5;
+  let after: Person = people[0];
+  after.age == a0
+}
+
+fn main() -> i32 [io] {
+  let p: Person = Person { age: 1 };
+  let q: Person = Person { age: 2 };
+  if f(p, q) {
+    print_i64(1);
+  } else {
+    print_i64(0);
+  }
+  0
+}

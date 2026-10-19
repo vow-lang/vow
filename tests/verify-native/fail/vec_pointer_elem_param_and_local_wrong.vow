@@ -1,0 +1,25 @@
+// TEST: counterexample-fn "mix"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The slot 0 object is the parameter, slot 1 the local: the ages add, they are not subtracted.
+module VecPointerElemParamAndLocalWrong
+
+struct Person { age: i64 }
+
+fn mix(given: Person) -> i64 vow {
+  ensures: result == given.age + 1
+} {
+  let people: Vec<Person> = Vec::new();
+  let w: Person = Person { age: 1 };
+  people.push(given);
+  people.push(w);
+  let a: Person = people[0];
+  let b: Person = people[1];
+  a.age - b.age
+}
+
+fn main() -> i32 [io] {
+  let g: Person = Person { age: 4 };
+  print_i64(mix(g));
+  0
+}

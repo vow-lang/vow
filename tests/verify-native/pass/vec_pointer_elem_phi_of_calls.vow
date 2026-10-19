@@ -1,0 +1,32 @@
+// A merge of two user-call results pushed into a `Vec` and read back: after inlining the merge is the
+// pair of `Vec`s the callees build, so the element names whichever the branch built.
+module VecPointerElemPhiOfCalls
+
+fn one() -> Vec<i64> {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v
+}
+
+fn two() -> Vec<i64> {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v.push(2);
+  v
+}
+
+fn pick(c: bool) -> u64 vow {
+  ensures: (c && result == 1) || (!c && result == 2)
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let x: Vec<i64> = if c { one() } else { two() };
+  outer.push(x);
+  let e: Vec<i64> = outer[0];
+  e.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(pick(true));
+  print_u64(pick(false));
+  0
+}

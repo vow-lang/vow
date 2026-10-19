@@ -1,0 +1,22 @@
+// TEST: counterexample-fn "second_age"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// Index 1 is the second person, whose age is 30.
+module VecPointerElemStructElemWrong
+
+struct Person { age: i64, id: i64 }
+
+fn second_age() -> i64 vow {
+  ensures: result == 20
+} {
+  let people: Vec<Person> = Vec::new();
+  people.push(Person { age: 20, id: 1 });
+  people.push(Person { age: 30, id: 2 });
+  let p: Person = people[1];
+  p.age
+}
+
+fn main() -> i32 [io] {
+  print_i64(second_age());
+  0
+}

@@ -1,0 +1,18 @@
+// A struct parameter stored and read back is the parameter: its field is the caller's.
+module VecPointerElemStructParamStored
+
+struct Person { age: i64 }
+
+fn keep(p: Person) -> i64 vow {
+  ensures: result == p.age
+} {
+  let people: Vec<Person> = Vec::new();
+  people.push(p);
+  let q: Person = people[0];
+  q.age
+}
+
+fn main() -> i32 [io] {
+  print_i64(keep(Person { age: 4 }));
+  0
+}

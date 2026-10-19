@@ -1,0 +1,24 @@
+// TEST: skip-reason unsupported-opcode
+// An element of a parameter `Vec` is memory the caller gave: used as an object in a function that
+// also stores pointers it built and reads them back, it may be any address, so the function
+// stays `Skipped`.
+module VecPointerElemForeignElemSkipped
+
+fn mixed(given: Vec<Vec<i64>>) -> u64 vow {
+  requires: given.len() > 0
+} {
+  let mine: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  mine.push(w);
+  let a: Vec<i64> = mine[0];
+  let b: Vec<i64> = given[0];
+  a.len() + b.len()
+}
+
+fn main() -> i32 [io] {
+  let given: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  given.push(w);
+  print_u64(mixed(given));
+  0
+}

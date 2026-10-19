@@ -1,0 +1,21 @@
+// A `Vec<Vec<_>>` held in a field of a struct the function allocated: the push goes to that `Vec` and the read of the field's element sees it.
+module VecPointerElemStructField
+
+struct Table { rows: Vec<Vec<i64>> }
+
+fn fill() -> u64 vow {
+  ensures: result == 2
+} {
+  let t: Table = Table { rows: Vec::new() };
+  let r: Vec<i64> = Vec::new();
+  r.push(1);
+  r.push(2);
+  t.rows.push(r);
+  let q: Vec<i64> = t.rows[0];
+  q.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill());
+  0
+}

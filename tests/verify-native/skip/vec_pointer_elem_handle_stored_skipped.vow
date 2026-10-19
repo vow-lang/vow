@@ -1,0 +1,23 @@
+// TEST: skip-reason unsupported-opcode
+// An element read of another `Vec` is a handle, not an address the tags know: storing it into
+// a `Vec` of pointers and reading it back stays `Skipped`.
+module VecPointerElemHandleStoredSkipped
+
+fn copy_first(src: Vec<Vec<i64>>) -> u64 vow {
+  requires: src.len() > 0
+} {
+  let dst: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  dst.push(w);
+  dst.push(src[0]);
+  let e: Vec<i64> = dst[1];
+  e.len()
+}
+
+fn main() -> i32 [io] {
+  let src: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  src.push(w);
+  print_u64(copy_first(src));
+  0
+}

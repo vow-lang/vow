@@ -1,0 +1,19 @@
+// A struct holding a `Vec` stored in a `Vec`: the element read back is the struct, and its field is the
+// `Vec` stored in it, which the function pushed to after the store.
+module VecPointerElemStructWithVecField
+struct Person { age: i64, tags: Vec<i64> }
+fn f() -> u64 vow {
+  ensures: result == 2
+} {
+  let people: Vec<Person> = Vec::new();
+  let t: Vec<i64> = Vec::new();
+  t.push(1);
+  people.push(Person { age: 1, tags: t });
+  t.push(2);
+  let p: Person = people[0];
+  p.tags.len()
+}
+fn main() -> i32 [io] {
+  print_u64(f());
+  0
+}

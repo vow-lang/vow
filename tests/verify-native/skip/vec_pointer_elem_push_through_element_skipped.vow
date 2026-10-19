@@ -1,0 +1,21 @@
+// TEST: skip-reason unsupported-opcode
+// A write through the element (`outer[0].push(9)`) is a write through a handle, which the model does
+// not make: the function stays `Skipped`, so the read after it never sees a stale length.
+module VecPointerElemPushThroughElementSkipped
+
+fn grow() -> u64 vow {
+  ensures: result == 2
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let a: Vec<i64> = Vec::new();
+  a.push(1);
+  outer.push(a);
+  outer[0].push(9);
+  let again: Vec<i64> = outer[0];
+  again.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(grow());
+  0
+}

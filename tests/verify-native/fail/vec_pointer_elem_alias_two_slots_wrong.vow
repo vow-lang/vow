@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "same_object"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The two slots name one `Vec`, so the pushed value shows in both and the sum is 2, not 1.
+module VecPointerElemAliasTwoSlotsWrong
+
+fn same_object() -> u64 vow {
+  ensures: result == 1
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let a: Vec<i64> = Vec::new();
+  outer.push(a);
+  outer.push(a);
+  a.push(5);
+  let x: Vec<i64> = outer[0];
+  let y: Vec<i64> = outer[1];
+  x.len() + y.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(same_object());
+  0
+}

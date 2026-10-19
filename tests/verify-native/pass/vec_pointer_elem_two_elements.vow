@@ -1,0 +1,23 @@
+// Two elements are two objects: each read gives the `Vec` that was stored at its index.
+module VecPointerElemTwoElements
+
+fn read_both() -> u64 vow {
+  ensures: result == 21
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let a: Vec<i64> = Vec::new();
+  a.push(1);
+  let b: Vec<i64> = Vec::new();
+  b.push(1);
+  b.push(2);
+  outer.push(a);
+  outer.push(b);
+  let first: Vec<i64> = outer[0];
+  let second: Vec<i64> = outer[1];
+  first.len() + second.len() * 10
+}
+
+fn main() -> i32 [io] {
+  print_u64(read_both());
+  0
+}

@@ -1,7 +1,8 @@
 // TEST: skip-reason unsupported-opcode
-// A `Vec` that holds a stored pointer and is merged with another by an `if`/`else` is still
-// the one that holds it: reading an element back from the merged `Vec` is `Skipped`, as for
-// the `Vec` itself, never a free answer.
+// The `Vec`s merged by the `if`/`else` are parameters: the elements a parameter already holds are
+// memory the caller gave, which the address model cannot tell from the pointer the function stored,
+// so reading an element back from the merged `Vec` stays `Skipped`, never a free answer.
+// (`pass/vec_pointer_elem_phi_receiver.vow` is the same merge of `Vec`s the function built.)
 module VecPointerPhiReadBackSkipped
 
 fn pick(c: bool, a: Vec<Vec<i64>>, b: Vec<Vec<i64>>) -> u64 vow {

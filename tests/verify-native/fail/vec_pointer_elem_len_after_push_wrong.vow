@@ -1,0 +1,22 @@
+// TEST: counterexample-fn "read_back"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The element is the `Vec` that was stored, which holds two values after the second push.
+module VecPointerElemLenAfterPushWrong
+
+fn read_back() -> u64 vow {
+  ensures: result == 1
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let inner: Vec<i64> = Vec::new();
+  inner.push(7);
+  outer.push(inner);
+  inner.push(8);
+  let again: Vec<i64> = outer[0];
+  again.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(read_back());
+  0
+}
