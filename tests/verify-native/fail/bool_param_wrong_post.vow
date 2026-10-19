@@ -1,5 +1,5 @@
 // TEST: counterexample-fn "pick"
-// TEST: counterexample-vow-id 0
+// TEST: counterexample-vow-id 7
 // TEST: counterexample-blame Callee
 // TEST: counterexample-value flag false
 module BoolParamWrongPost
