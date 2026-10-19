@@ -1,0 +1,276 @@
+    {
+      "name": "process_wait",
+      "runtime_symbol": "__vow_process_wait",
+      "params": ["i64"],
+      "return": "i64",
+      "doc_signature": "fn(pid: i64) -> i64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "process_wait_timeout",
+      "runtime_symbol": "__vow_process_wait_timeout",
+      "params": ["i64", "i64"],
+      "return": "i64",
+      "doc_signature": "fn(pid: i64, timeout_ms: i64) -> i64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "process_poll_wait",
+      "runtime_symbol": "__vow_process_poll_wait",
+      "params": ["i64", "i64"],
+      "return": "i64",
+      "doc_signature": "fn(pid: i64, timeout_ms: i64) -> i64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "process_kill",
+      "runtime_symbol": "__vow_process_kill",
+      "params": ["i64"],
+      "return": "i64",
+      "doc_signature": "fn(pid: i64) -> i64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "process_stdout_for",
+      "runtime_symbol": "__vow_process_stdout_for",
+      "params": ["i64"],
+      "return": "ptr",
+      "doc_signature": "fn(pid: i64) -> String",
+      "effects": "[io]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "process_stderr_for",
+      "runtime_symbol": "__vow_process_stderr_for",
+      "params": ["i64"],
+      "return": "ptr",
+      "doc_signature": "fn(pid: i64) -> String",
+      "effects": "[io]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "process_start_piped",
+      "runtime_symbol": "__vow_process_start_piped",
+      "params": ["ptr", "ptr"],
+      "return": "i64",
+      "doc_signature": "fn(cmd: String, args: Vec<String>) -> i64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "process_write_stdin",
+      "runtime_symbol": "__vow_process_write_stdin",
+      "params": ["i64", "ptr"],
+      "return": "i64",
+      "doc_signature": "fn(pid: i64, data: String) -> i64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "process_close_stdin",
+      "runtime_symbol": "__vow_process_close_stdin",
+      "params": ["i64"],
+      "return": "i64",
+      "doc_signature": "fn(pid: i64) -> i64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "process_read_line",
+      "runtime_symbol": "__vow_process_read_line",
+      "params": ["i64", "i64"],
+      "return": "ptr",
+      "doc_signature": "fn(pid: i64, timeout_ms: i64) -> String",
+      "effects": "[io]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "process_read_status",
+      "runtime_symbol": "__vow_process_read_status",
+      "params": ["i64"],
+      "return": "i64",
+      "doc_signature": "fn(pid: i64) -> i64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "hash_u64",
+      "runtime_symbol": "__vow_hash_u64",
+      "params": ["u64"],
+      "return": "u64",
+      "doc_signature": "fn(x: u64) -> u64",
+      "effects": "[]",
+      "verifier_model": "known",
+      "c_model": "unmodeled"
+    },
+    {
+      "name": "hash_str",
+      "runtime_symbol": "__vow_hash_str",
+      "params": ["ptr"],
+      "return": "u64",
+      "doc_signature": "fn(s: String) -> u64",
+      "effects": "[]",
+      "verifier_model": "known",
+      "c_model": "unmodeled"
+    },
+    {
+      "name": "fs_read_status",
+      "runtime_symbol": "__vow_fs_read_status",
+      "params": [],
+      "return": "i64",
+      "doc_signature": "fn() -> i64",
+      "effects": "[read]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "getenv",
+      "runtime_symbol": "__vow_getenv",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(name: String) -> String",
+      "effects": "[read]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "path_lookup",
+      "runtime_symbol": "__vow_path_lookup",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(name: String) -> String",
+      "effects": "[read]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "mktemp_dir",
+      "runtime_symbol": "__vow_mktemp_dir",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(prefix: String) -> String",
+      "effects": "[io]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "memory_root_arena_bytes",
+      "runtime_symbol": "__vow_memory_root_arena_bytes",
+      "params": [],
+      "return": "u64",
+      "doc_signature": "fn() -> u64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "memory_peak_bytes",
+      "runtime_symbol": "__vow_memory_peak_bytes",
+      "params": [],
+      "return": "u64",
+      "doc_signature": "fn() -> u64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "memory_alloc_count_since_start",
+      "runtime_symbol": "__vow_memory_alloc_count_since_start",
+      "params": [],
+      "return": "u64",
+      "doc_signature": "fn() -> u64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "time_unix",
+      "runtime_symbol": "__vow_time_unix",
+      "params": [],
+      "return": "i64",
+      "doc_signature": "fn() -> i64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "time_unix_ms",
+      "runtime_symbol": "__vow_time_unix_ms",
+      "params": [],
+      "return": "i64",
+      "doc_signature": "fn() -> i64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "time_micros",
+      "runtime_symbol": "__vow_time_micros",
+      "params": [],
+      "return": "i64",
+      "doc_signature": "fn() -> i64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "num_cpus",
+      "runtime_symbol": "__vow_num_cpus",
+      "params": [],
+      "return": "i64",
+      "doc_signature": "fn() -> i64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "proc_sample",
+      "runtime_symbol": "__vow_proc_sample",
+      "params": [],
+      "return": "ptr",
+      "doc_signature": "fn() -> String",
+      "effects": "[io]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "gzip_write_file",
+      "runtime_symbol": "__vow_gzip_write_file",
+      "params": ["ptr", "ptr"],
+      "return": "i64",
+      "doc_signature": "fn(path: String, data: String) -> i64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
+      "name": "hex_encode",
+      "runtime_symbol": "__vow_hex_encode",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(data: Vec<u8>) -> String",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "known",
+      "c_model": "unmodeled"
+    },
+    {
+      "name": "hex_decode",
+      "runtime_symbol": "__vow_hex_decode",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(s: String) -> Vec<u8>",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "known",
+      "c_model": "unmodeled"
+    },
+    {
+      "name": "parse_i64",
+      "runtime_symbol": "__vow_string_parse_i64_opt",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(s: String) -> Option<i64>",
+      "effects": "[]",
+      "arena_routing": "heap_fresh",
+      "verifier_model": "known",
+      "c_model": "base_and_arena"
+    },

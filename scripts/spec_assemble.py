@@ -2,7 +2,9 @@
 """Assemble the large spec documents from their authored parts.
 
 docs/spec/<doc>.md for every directory docs/spec/src/<doc>/ is the byte-exact
-concatenation of that directory's parts in file-name order. Edit the parts; the
+concatenation of that directory's parts in file-name order. A directory named with an
+extension (`operations.json`) assembles docs/spec/operations.json from `*.part` text
+fragments, cut between operation entries, and is checked to be valid JSON. Edit the parts; the
 assembled file is generated, committed and exempt from the authored-file budget
 (`token-limit-ignore` in .gitattributes), so every consumer keeps reading the
 same path and embeds the same bytes.
@@ -16,7 +18,7 @@ Usage:
     python3 scripts/spec_assemble.py --check          # fail if one is stale
     python3 scripts/spec_assemble.py --import         # port edits made to an
                                                       # assembled file into parts
-    python3 scripts/spec_assemble.py --init DOC       # split docs/spec/DOC.md
+    python3 scripts/spec_assemble.py --init DOC       # split docs/spec/DOC.md (or operations.json)
     python3 scripts/spec_assemble.py --split PART     # halve an oversized part
 """
 
@@ -24,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import json
 import re
 import sys
 from pathlib import Path
@@ -32,6 +35,7 @@ REPO = Path(__file__).resolve().parent.parent
 SPEC = REPO / "docs" / "spec"
 MAX_PART_BYTES = 20_000
 TARGET_PART_BYTES = 12_000
+TARGET_JSON_BYTES = 8_000
 MIN_PART_BYTES = 5_000
 NUMBER_STEP = 10
 
@@ -47,8 +51,25 @@ def doc_names(spec: Path = SPEC) -> list[str]:
     return sorted(p.name for p in root.iterdir() if p.is_dir())
 
 
+def is_plain(doc: str) -> bool:
+    """A document named without an extension is Markdown; `operations.json` is not."""
+    return "." not in doc
+
+
+def part_suffix(doc: str) -> str:
+    return ".md" if is_plain(doc) else ".part"
+
+
+def target_path(doc: str, spec: Path = SPEC) -> Path:
+    return spec / (f"{doc}.md" if is_plain(doc) else doc)
+
+
+def target_name(doc: str) -> str:
+    return f"docs/spec/{doc}.md" if is_plain(doc) else f"docs/spec/{doc}"
+
+
 def part_paths(doc: str, spec: Path = SPEC) -> list[Path]:
-    return sorted((src_dir(spec) / doc).glob("*.md"))
+    return sorted((src_dir(spec) / doc).glob(f"*{part_suffix(doc)}"))
 
 
 def read_text(path: Path) -> str:
@@ -71,7 +92,7 @@ def write_all(spec: Path = SPEC) -> list[str]:
     """Rewrite each stale assembled file and return the documents it changed."""
     changed = []
     for doc in doc_names(spec):
-        target = spec / f"{doc}.md"
+        target = target_path(doc, spec)
         text = assemble(doc, spec)
         if not target.exists() or read_text(target) != text:
             write_text(target, text)
@@ -83,10 +104,17 @@ def check(spec: Path = SPEC) -> list[str]:
     """Return one message per stale assembled file and per oversized part."""
     problems = []
     for doc in doc_names(spec):
-        target = spec / f"{doc}.md"
+        target = target_path(doc, spec)
+        if target.suffix == ".json":
+            try:
+                json.loads(assemble(doc, spec))
+            except ValueError as error:
+                problems.append(
+                    f"docs/spec/src/{doc}/ does not assemble to JSON: {error}"
+                )
         if not target.exists() or read_text(target) != assemble(doc, spec):
             problems.append(
-                f"docs/spec/{doc}.md is stale: edit docs/spec/src/{doc}/*.md and run "
+                f"{target_name(doc)} is stale: edit docs/spec/src/{doc}/*{part_suffix(doc)} and run "
                 "python3 scripts/spec_assemble.py (python3 scripts/spec_assemble.py "
                 "--import ports edits already made to the assembled file)"
             )
@@ -105,7 +133,7 @@ def import_doc(doc: str, spec: Path = SPEC) -> bool:
     old = [line for part in parts for line in part]
     owner = [i for i, part in enumerate(parts) for _ in part]
     starts = [sum(len(p) for p in parts[:i]) for i in range(len(parts))]
-    new_text = read_text(spec / f"{doc}.md")
+    new_text = read_text(target_path(doc, spec))
     new = new_text.splitlines(keepends=True)
     if old == new:
         return False
@@ -129,7 +157,7 @@ def import_doc(doc: str, spec: Path = SPEC) -> bool:
     for path, lines in zip(paths, parts):
         write_text(path, "".join(lines))
     if assemble(doc, spec) != new_text:
-        raise ValueError(f"could not port docs/spec/{doc}.md into its parts")
+        raise ValueError(f"could not port {target_name(doc)} into its parts")
     return True
 
 
@@ -148,6 +176,15 @@ def slug(lines: list[str]) -> str:
     return name or "section"
 
 
+def json_slug(lines: list[str]) -> str:
+    """Name a JSON part after its first operation, `meta` when it has none."""
+    for line in lines:
+        match = re.match(r'\s+"name": "(\w+)"', line)
+        if match:
+            return match.group(1)[:36]
+    return "meta"
+
+
 def line_bytes(lines: list[str]) -> int:
     return sum(len(line.encode("utf-8")) for line in lines)
 
@@ -162,8 +199,14 @@ def fence_flags(lines: list[str]) -> list[bool]:
     return flags
 
 
-def pick_cut(lines: list[str], start: int, target: int) -> int:
-    """Index where the next part begins; lines[start:cut] fits the byte target."""
+def pick_cut(
+    lines: list[str], start: int, target: int, structured: bool = False
+) -> int:
+    """Index where the next part begins; lines[start:cut] fits the byte target.
+
+    Markdown prefers a cut before a heading, then before a blank line, never inside a
+    fenced block. A structured (JSON) document cuts before an operation entry.
+    """
     fenced = fence_flags(lines)
     best = {"heading": None, "blank": None, "any": None}
     size = 0
@@ -173,6 +216,10 @@ def pick_cut(lines: list[str], start: int, target: int) -> int:
         if size > target and best["any"] is not None:
             break
         best["any"] = cut
+        if structured:
+            if lines[cut].startswith("    {") and size >= MIN_PART_BYTES:
+                best["heading"] = cut
+            continue
         if lines[cut].strip() != "" or fenced[cut] or size < MIN_PART_BYTES:
             continue
         best["blank"] = cut
@@ -185,39 +232,48 @@ def pick_cut(lines: list[str], start: int, target: int) -> int:
     return len(lines)
 
 
-def split_lines(lines: list[str], target: int = TARGET_PART_BYTES) -> list[list[str]]:
+def split_lines(
+    lines: list[str], target: int = TARGET_PART_BYTES, structured: bool = False
+) -> list[list[str]]:
     parts, start = [], 0
-    while line_bytes(lines[start:]) > MAX_PART_BYTES:
-        cut = pick_cut(lines, start, target)
+    limit = target * 3 // 2 if structured else MAX_PART_BYTES
+    while line_bytes(lines[start:]) > limit:
+        cut = pick_cut(lines, start, target, structured)
         parts.append(lines[start:cut])
         start = cut
     parts.append(lines[start:])
     return parts
 
 
-def part_name(number: int, lines: list[str], previous: str, taken=()) -> str:
-    name = slug(lines)
+def part_name(
+    number: int, lines: list[str], previous: str, taken=(), suffix: str = ".md"
+) -> str:
+    name = json_slug(lines) if suffix == ".part" else slug(lines)
     if name == "continued":
         name = re.sub(r"-part-\d+$", "", previous)
     unique, count = name, 2
     while unique in taken:
         unique, count = f"{name}-part-{count}", count + 1
-    return f"{number:03d}-{unique}.md"
+    return f"{number:03d}-{unique}{suffix}"
 
 
 def init_doc(doc: str, spec: Path = SPEC) -> list[Path]:
-    """Split docs/spec/<doc>.md into numbered parts under docs/spec/src/<doc>/."""
-    source = spec / f"{doc}.md"
+    """Split the assembled <doc> file into numbered parts under docs/spec/src/<doc>/."""
+    source = target_path(doc, spec)
+    suffix = part_suffix(doc)
     target = src_dir(spec) / doc
     if target.exists() and any(target.iterdir()):
         raise ValueError(f"{target} already holds parts")
     lines = read_text(source).splitlines(keepends=True)
     target.mkdir(parents=True, exist_ok=True)
     written, previous = [], doc
-    for index, part in enumerate(split_lines(lines), start=1):
-        taken = [p.name[4:-3] for p in written]
-        name = part_name(index * NUMBER_STEP, part, previous, taken)
-        previous = name[4:-3]
+    target_bytes = TARGET_PART_BYTES if suffix == ".md" else TARGET_JSON_BYTES
+    for index, part in enumerate(
+        split_lines(lines, target_bytes, suffix == ".part"), 1
+    ):
+        taken = [p.stem[4:] for p in written]
+        name = part_name(index * NUMBER_STEP, part, previous, taken, suffix)
+        previous = name[4 : -len(suffix)]
         path = target / name
         write_text(path, "".join(part))
         written.append(path)
@@ -226,10 +282,10 @@ def init_doc(doc: str, spec: Path = SPEC) -> list[Path]:
 
 def split_part(path: Path) -> list[Path]:
     """Halve one part in place, numbering the second half between its neighbours."""
-    siblings = sorted(path.parent.glob("*.md"))
+    siblings = sorted(path.parent.glob(f"*{path.suffix}"))
     index = siblings.index(path)
     lines = read_text(path).splitlines(keepends=True)
-    cut = pick_cut(lines, 0, line_bytes(lines) // 2)
+    cut = pick_cut(lines, 0, line_bytes(lines) // 2, path.suffix == ".part")
     if cut >= len(lines):
         raise ValueError(f"{path} has no line boundary to split at")
     number = int(path.name[:3])
@@ -239,8 +295,10 @@ def split_part(path: Path) -> list[Path]:
     new_number = (number + later) // 2
     if new_number <= number:
         raise ValueError("no free part number; run --renumber on the document")
-    taken = [p.name[4:-3] for p in siblings]
-    second = path.parent / part_name(new_number, lines[cut:], path.stem[4:], taken)
+    taken = [p.stem[4:] for p in siblings]
+    second = path.parent / part_name(
+        new_number, lines[cut:], path.stem[4:], taken, path.suffix
+    )
     write_text(path, "".join(lines[:cut]))
     write_text(second, "".join(lines[cut:]))
     return [path, second]
@@ -253,7 +311,7 @@ def renumber(doc: str, spec: Path = SPEC) -> None:
         path.rename(path.with_name("tmp-" + path.name))
     if not paths:
         return
-    staged = sorted(paths[0].parent.glob("tmp-*.md"))
+    staged = sorted(paths[0].parent.glob("tmp-*" + paths[0].suffix))
     for index, path in enumerate(staged, start=1):
         path.rename(path.with_name(f"{index * NUMBER_STEP:03d}-{path.name[8:]}"))
 
@@ -276,7 +334,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.import_:
             for doc in doc_names():
                 if import_doc(doc):
-                    print(f"Ported docs/spec/{doc}.md into docs/spec/src/{doc}/")
+                    print(f"Ported {target_name(doc)} into docs/spec/src/{doc}/")
         elif args.init:
             for path in init_doc(args.init):
                 print(f"Wrote {path.relative_to(REPO)}")
@@ -286,7 +344,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.renumber:
             renumber(args.renumber)
         for doc in write_all():
-            print(f"Updated docs/spec/{doc}.md")
+            print(f"Updated {target_name(doc)}")
     except ValueError as error:
         print(error, file=sys.stderr)
         return 1

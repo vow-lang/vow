@@ -18,7 +18,7 @@ repos:
         entry: python3 scripts/spec_assemble.py --check
         language: system
         pass_filenames: false
-        files: ^docs/spec/(src/|(cli|grammar|errors|contracts)\.md$)
+        files: ^docs/spec/(src/|(cli|grammar|errors|contracts)\.md$|operations\.json$)
         stages: [pre-commit]
 
   - repo: https://github.com/pre-commit/pre-commit-hooks

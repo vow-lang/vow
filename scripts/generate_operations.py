@@ -37,6 +37,7 @@ import json
 import sys
 from pathlib import Path
 
+import spec_assemble
 from opsgen.config import REPO
 from opsgen.arena import check_arena_routing, check_runtime_exports, load_arena_routes
 from opsgen.catalogue import c_model_symbols, load_catalogue, result_shape
@@ -136,6 +137,16 @@ def main() -> None:
     repo_root = REPO
     if "--repo-root" in argv:
         repo_root = Path(argv[argv.index("--repo-root") + 1])
+
+    # operations.json is assembled from docs/spec/src/operations.json/*.part.
+    spec_dir = repo_root / "docs" / "spec"
+    if check_only:
+        stale = spec_assemble.check(spec_dir)
+        if stale:
+            print("\n".join(stale), file=sys.stderr)
+            sys.exit(1)
+    else:
+        spec_assemble.write_all(spec_dir)
 
     try:
         ops = load_catalogue(repo_root)

@@ -123,6 +123,41 @@ class SpecAssembleTests(unittest.TestCase):
         names = sorted(p.name for p in self.folder.glob("*.md"))
         self.assertEqual(names, ["010-intro.md", "020-body.md", "030-tail.md"])
 
+    def test_json_document_assembles_from_part_fragments(self):
+        ops = "".join(
+            f'    {{\n      "name": "op{i}",\n      "pad": "{"x" * 90}"\n    }},\n'
+            for i in range(300)
+        )
+        text = (
+            '{\n  "operations": [\n'
+            + ops
+            + '    {"name": "last"}\n  ],\n  "excluded": []\n}\n'
+        )
+        (self.spec / "operations.json").write_text(text)
+        written = spec_assemble.init_doc("operations.json", self.spec)
+        self.assertGreater(len(written), 2)
+        self.assertTrue(all(p.suffix == ".part" for p in written))
+        self.assertTrue(written[1].name.startswith("020-op"), written[1].name)
+        self.assertTrue(written[1].read_text().startswith("    {\n"))
+        self.assertEqual(spec_assemble.assemble("operations.json", self.spec), text)
+        spec_assemble.write_all(self.spec)
+        self.assertEqual(spec_assemble.check(self.spec), [])
+
+    def test_json_check_reports_invalid_assembly_and_import_ports_edit(self):
+        text = '{\n  "operations": [\n    {\n      "name": "a"\n    }\n  ]\n}\n'
+        (self.spec / "operations.json").write_text(text)
+        folder = self.spec / "src" / "operations.json"
+        folder.mkdir()
+        (folder / "010-a.part").write_text(text)
+        spec_assemble.write_all(self.spec)
+        self.assertEqual(spec_assemble.check(self.spec), [])
+        (self.spec / "operations.json").write_text(text.replace('"a"', '"b"'))
+        self.assertTrue(spec_assemble.import_doc("operations.json", self.spec))
+        self.assertIn('"b"', (folder / "010-a.part").read_text())
+        (folder / "010-a.part").write_text(text.replace("}\n  ]", "}\n  ,]"))
+        messages = spec_assemble.check(self.spec)
+        self.assertTrue(any("does not assemble to JSON" in m for m in messages))
+
     def test_repository_assembled_files_are_fresh(self):
         self.assertEqual(spec_assemble.check(), [])
 

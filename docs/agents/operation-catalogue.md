@@ -4,7 +4,9 @@ Paths and commands below are relative to the repository root.
 
 ## Operation Catalogue
 
-`docs/spec/operations.json` is the Operation Catalogue: the single checked, hand-edited source of
+`docs/spec/operations.json` (assembled by `scripts/spec_assemble.py` from the authored text fragments
+`docs/spec/src/operations.json/*.part`; edit the fragments, then run `generate_operations.py`, which assembles
+first) is the Operation Catalogue: the single checked, hand-edited source of
 runtime-symbol, ABI, return-shape, and doc facts for the Builtin Operations in its `operations` array
 (the print, filesystem, stdin/args/stderr, process, hash, environment and query/utility builtins; epic
 #375), plus the top-level `arena_routes` list and the `excluded` section. It is deliberately narrower than
