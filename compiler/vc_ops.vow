@@ -1,5 +1,6 @@
 module VcOps
 
+use catalogue_vc_ops_gen
 use ir
 use ir_dominance
 use vc_fp
@@ -9,7 +10,9 @@ use vc_strops
 // opcodes and runtime builtins the verifier models, and the closed set of
 // `Skipped` reason codes of ADR-2026-10-08-1430. Opcodes are listed here;
 // builtins come from `docs/spec/operations.json` (`verifier_model`) through the
-// generated lookups below. Anything not listed is not modelled: the gate skips
+// generated lookup in catalogue_vc_ops_gen.vow (`catalogue_verifier_known`: a symbol is
+// modelled only when the catalogue lists it as `known`; an `unmodeled` entry and a symbol
+// the catalogue lacks are skipped alike). Anything not listed is not modelled: the gate skips
 // the function, it never guesses.
 
 fn VC_SKIP_FUNCTION_HAS_EFFECTS() -> String { String::from("function-has-effects") }
@@ -340,136 +343,3 @@ fn vc_op_gate_candidate(op: i64) -> bool {
     let model: i64 = vc_op_model(op);
     model == VC_OPM_MODELED() || model == VC_OPM_CALL()
 }
-
-// Builtins are modelled only when `catalogue_verifier_known` lists their runtime
-// symbol; an `unmodeled` entry and a symbol the catalogue lacks are skipped alike.
-
-// GENERATE:OPERATIONS:START
-fn catalogue_verifier_known(sym: String) -> bool {
-    let n: u64 = sym.len();
-    if n == 14 {
-        let c0: i64 = sym.byte_at(11);
-        if c0 == 111 {
-            return sym == String::from("__vow_vec_sort");
-        }
-        if c0 == 115 {
-            return sym == String::from("__vow_hash_str");
-        }
-        if c0 == 117 {
-            return sym == String::from("__vow_hash_u64");
-        }
-    }
-    if n == 16 {
-        let c0: i64 = sym.byte_at(10);
-        if c0 == 100 {
-            return sym == String::from("__vow_hex_decode");
-        }
-        if c0 == 101 {
-            return sym == String::from("__vow_hex_encode");
-        }
-    }
-    if n == 17 {
-        let c0: i64 = sym.byte_at(13);
-        if c0 == 106 {
-            return sym == String::from("__vow_string_join");
-        }
-        if c0 == 116 {
-            return sym == String::from("__vow_string_trim");
-        }
-    }
-    if n == 18 {
-        return sym == String::from("__vow_string_split");
-    }
-    if n == 19 {
-        return sym == String::from("__vow_string_substr");
-    }
-    if n == 20 {
-        let c0: i64 = sym.byte_at(6);
-        if c0 == 112 {
-            return sym == String::from("__vow_parse_f64_bits");
-        }
-        if c0 == 115 {
-            return sym == String::from("__vow_string_replace");
-        }
-    }
-    if n == 21 {
-        let c0: i64 = sym.byte_at(16);
-        if c0 == 95 {
-            return sym == String::from("__vow_format_f64_bits");
-        }
-        if c0 == 108 {
-            return sym == String::from("__vow_string_to_lower");
-        }
-        if c0 == 109 {
-            let c1: i64 = sym.byte_at(18);
-            if c1 == 105 {
-                return sym == String::from("__vow_string_from_i64");
-            }
-            if c1 == 117 {
-                return sym == String::from("__vow_string_from_u64");
-            }
-        }
-        if c0 == 117 {
-            return sym == String::from("__vow_string_to_upper");
-        }
-    }
-    if n == 22 {
-        let c0: i64 = sym.byte_at(18);
-        if c0 == 105 {
-            return sym == String::from("__vow_string_from_i128");
-        }
-        if c0 == 117 {
-            return sym == String::from("__vow_string_from_u128");
-        }
-        if c0 == 119 {
-            return sym == String::from("__vow_string_ends_with");
-        }
-    }
-    if n == 24 {
-        return sym == String::from("__vow_string_starts_with");
-    }
-    if n == 25 {
-        let c0: i64 = sym.byte_at(19);
-        if c0 == 105 {
-            return sym == String::from("__vow_string_parse_i8_opt");
-        }
-        if c0 == 117 {
-            return sym == String::from("__vow_string_parse_u8_opt");
-        }
-    }
-    if n == 26 {
-        let c0: i64 = sym.byte_at(20);
-        if c0 == 49 {
-            let c1: i64 = sym.byte_at(19);
-            if c1 == 105 {
-                return sym == String::from("__vow_string_parse_i16_opt");
-            }
-            if c1 == 117 {
-                return sym == String::from("__vow_string_parse_u16_opt");
-            }
-        }
-        if c0 == 51 {
-            let c1: i64 = sym.byte_at(19);
-            if c1 == 105 {
-                return sym == String::from("__vow_string_parse_i32_opt");
-            }
-            if c1 == 117 {
-                return sym == String::from("__vow_string_parse_u32_opt");
-            }
-        }
-        if c0 == 54 {
-            return sym == String::from("__vow_string_parse_i64_opt");
-        }
-    }
-    if n == 27 {
-        let c0: i64 = sym.byte_at(19);
-        if c0 == 105 {
-            return sym == String::from("__vow_string_parse_i128_opt");
-        }
-        if c0 == 117 {
-            return sym == String::from("__vow_string_parse_u128_opt");
-        }
-    }
-    return false;
-}
-// GENERATE:OPERATIONS:END

@@ -12,11 +12,12 @@ Builtin Operations) and splices generated lookup functions into:
   - vow-clif-shim/src/lib.rs             (catalogue_extern_sig, FRESH_ARENA_VARIANTS)
   - compiler/lower.vow                (catalogue_builtin_to_extern, catalogue_builtin_ret_ty)
   - vow-ir/src/region.rs              (FRESH_ARENA_VARIANTS)
-  - compiler/ir.vow                   (fresh_arena_base_extern)
-  - compiler/vc_ops.vow               (catalogue_verifier_known)
   - vow-verify/src/c_emitter.rs       (catalogue_c_model_known)
   - compiler/c_emitter.vow            (catalogue_c_model_known)
-between `// GENERATE:OPERATIONS:START` / `// GENERATE:OPERATIONS:END` markers.
+between `// GENERATE:OPERATIONS:START` / `// GENERATE:OPERATIONS:END` markers, and writes
+whole generated modules (complete files, exempt from the authored-file budget):
+  - compiler/catalogue_ir_gen.vow     (fresh_arena_base_extern)
+  - compiler/catalogue_vc_ops_gen.vow (catalogue_verifier_known)
 
 It also splices test-only fact tables between `// GENERATE:OPERATION_FACTS:START` /
 `:END` markers (FACT_TARGET_FILES): every op's name, effects and ABI tokens plus the
@@ -24,7 +25,7 @@ catalogue's `excluded` section, which the type-checker tests read to tie
 docs/spec/operations.json to both builtin signature tables.
   - vow-types/src/env.rs              (CATALOGUE_FACTS, EXCLUDED_FACTS; #[cfg(test)])
   - vow-ir/src/lower/mod.rs           (LOWERING_FACTS; #[cfg(test)])
-  - compiler/tests/catalogue_facts.vow (op_facts_all, op_facts_excluded)
+  - compiler/tests/catalogue_facts_gen.vow (op_facts_all, op_facts_excluded; a whole file)
 
 Usage:
     python3 scripts/generate_operations.py          # from repo root
@@ -66,6 +67,7 @@ from opsgen.facts import (
     FACTS_MARKER_END,
     FACTS_MARKER_START,
     FACT_TARGET_FILES,
+    FACT_WHOLE_TARGETS,
     _doc_params,
     check_fact_tables,
     gen_rust_facts_block,
@@ -75,7 +77,12 @@ from opsgen.facts import (
     write_fact_tables,
 )
 from opsgen.markers import MARKER_END, MARKER_START, _replace_between_markers
-from opsgen.projections import TARGET_FILES, check_projections, write_projections
+from opsgen.projections import (
+    TARGET_FILES,
+    WHOLE_FILE_TARGETS,
+    check_projections,
+    write_projections,
+)
 from opsgen.tokens import (
     OPTION_ELEMS,
     PARAM_TOKENS,
@@ -88,12 +95,14 @@ __all__ = [
     "FACTS_MARKER_END",
     "FACTS_MARKER_START",
     "FACT_TARGET_FILES",
+    "FACT_WHOLE_TARGETS",
     "MARKER_END",
     "MARKER_START",
     "OPTION_ELEMS",
     "PARAM_TOKENS",
     "RETURN_TOKENS",
     "TARGET_FILES",
+    "WHOLE_FILE_TARGETS",
     "_doc_params",
     "_doc_type_to_token",
     "_replace_between_markers",
@@ -184,6 +193,8 @@ def main() -> None:
     write_projections(ops, repo_root, routes)
     write_fact_tables(ops, repo_root, excluded)
     for rel_path, _ in TARGET_FILES + FACT_TARGET_FILES:
+        print(f"Updated {rel_path}")
+    for rel_path, _, _ in WHOLE_FILE_TARGETS + FACT_WHOLE_TARGETS:
         print(f"Updated {rel_path}")
 
 

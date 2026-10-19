@@ -168,11 +168,11 @@ class FreshRouteProjectionsTest(unittest.TestCase):
             mismatches = go.check_projections(PRINT_OPS, tmp, ROUTES[:1])
         stale = " ".join(mismatches)
         self.assertIn("region.rs", stale)
-        self.assertIn("ir.vow", stale)
+        self.assertIn("catalogue_ir_gen.vow", stale)
         self.assertIn("vow-clif-shim", stale)
         self.assertNotIn("lower.vow", stale)
         self.assertNotIn("cranelift_backend.rs", stale)
-        self.assertNotIn("vc_ops.vow", stale)
+        self.assertNotIn("catalogue_vc_ops_gen.vow", stale)
 
 
 class VerifierModelDriftTest(unittest.TestCase):
@@ -330,8 +330,8 @@ class VerifierModelDriftTest(unittest.TestCase):
             tmp = Path(d)
             _write_target_fixtures(tmp)
             go.write_projections(ops, tmp, [])
-            spliced = (tmp / "compiler" / "vc_ops.vow").read_text()
-        block = spliced.split("fn vc_op_model() {}\n", 1)[1]
+            spliced = (tmp / "compiler" / "catalogue_vc_ops_gen.vow").read_text()
+        block = spliced.split("module CatalogueVcOpsGen\n\n", 1)[1]
         fn = block.split("\n", 1)[1].rsplit("\n", 1)[0]
         self.assertTrue(_eval_vow_symbol_set(fn, "__vow_pure_probe"))
         for op in KNOWN_OPS:

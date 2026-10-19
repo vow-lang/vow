@@ -22,11 +22,11 @@ class OperationFactTablesTest(unittest.TestCase):
     def test_fact_targets_use_their_own_marker_pair(self):
         self.assertEqual(
             {str(p) for p, _ in go.FACT_TARGET_FILES},
-            {
-                "vow-types/src/env.rs",
-                "vow-ir/src/lower/mod.rs",
-                "compiler/tests/catalogue_facts.vow",
-            },
+            {"vow-types/src/env.rs", "vow-ir/src/lower/mod.rs"},
+        )
+        self.assertEqual(
+            {str(p) for p, _, _ in go.FACT_WHOLE_TARGETS},
+            {"compiler/tests/catalogue_facts_gen.vow"},
         )
         self.assertNotEqual(go.FACTS_MARKER_START, go.MARKER_START)
         self.assertNotEqual(go.FACTS_MARKER_END, go.MARKER_END)
@@ -139,7 +139,7 @@ class OperationFactTablesTest(unittest.TestCase):
             mismatches = go.check_fact_tables(PRINT_OPS, tmp, changed)
         self.assertEqual(len(mismatches), 2)
         self.assertTrue(any("env.rs" in m for m in mismatches))
-        self.assertTrue(any("catalogue_facts.vow" in m for m in mismatches))
+        self.assertTrue(any("catalogue_facts_gen.vow" in m for m in mismatches))
 
     def test_check_goes_stale_when_an_op_changes(self):
         # The lowering table carries only name, symbol, return and tag, so an
@@ -163,12 +163,12 @@ class OperationFactTablesTest(unittest.TestCase):
             tmp = Path(d)
             _write_fact_fixtures(tmp)
             go.write_fact_tables(PRINT_OPS, tmp, EXCLUDED)
-            path = tmp / "compiler/tests/catalogue_facts.vow"
+            path = tmp / "compiler/tests/catalogue_facts_gen.vow"
             path.write_text(path.read_text().replace('"[io]"', '"[]"', 1))
             mismatches = go.check_fact_tables(PRINT_OPS, tmp, EXCLUDED)
         self.assertEqual(
             mismatches,
-            ["compiler/tests/catalogue_facts.vow: spliced fact table is stale"],
+            ["compiler/tests/catalogue_facts_gen.vow: generated fact table is stale"],
         )
 
     def test_missing_marker_raises_instead_of_reporting_clean(self):
@@ -238,7 +238,7 @@ class OperationFactTablesTest(unittest.TestCase):
             r'String::from\("[^"]*"\), String::from\("([^"]+)"\), '
             r'String::from\("[^"]*"\), String::from\("[^"]*"\), '
             r'String::from\("([^"]+)"\), String::from\("([^"]+)"\)\)\)',
-            (REPO_ROOT / "compiler/tests/catalogue_facts.vow").read_text(),
+            (REPO_ROOT / "compiler/tests/catalogue_facts_gen.vow").read_text(),
         )
         ops = go.load_catalogue(REPO_ROOT)
         want = [
@@ -280,14 +280,15 @@ class OperationFactTablesTest(unittest.TestCase):
 
             written, code = self._run_main(tmp)
             self.assertEqual(code, 0)
-            self.assertIn("Updated compiler/tests/catalogue_facts.vow", written)
+            self.assertIn("Updated compiler/tests/catalogue_facts_gen.vow", written)
             checked, code = self._run_main(tmp, "--check")
             self.assertEqual((code, "OK:" in checked), (0, True), checked)
 
-            facts = tmp / "compiler/tests/catalogue_facts.vow"
+            facts = tmp / "compiler/tests/catalogue_facts_gen.vow"
             facts.write_text(facts.read_text().replace("print_u64", "print_u64_X"))
             stale, code = self._run_main(tmp, "--check")
         self.assertEqual(code, 1)
         self.assertIn(
-            "compiler/tests/catalogue_facts.vow: spliced fact table is stale", stale
+            "compiler/tests/catalogue_facts_gen.vow: generated fact table is stale",
+            stale,
         )

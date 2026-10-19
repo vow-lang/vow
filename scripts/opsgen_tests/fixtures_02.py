@@ -463,8 +463,6 @@ def _write_target_fixtures(tmp: Path) -> None:
         ("vow-clif-shim/src/lib.rs", "fn make_extern_sig() {}\n"),
         ("compiler/lower.vow", "fn builtin_to_extern() {}\n"),
         ("vow-ir/src/region.rs", "fn infer_regions() {}\n"),
-        ("compiler/ir.vow", "fn lower_to_ir() {}\n"),
-        ("compiler/vc_ops.vow", "fn vc_op_model() {}\n"),
         ("vow-verify/src/c_emitter.rs", "fn is_known_builtin() {}\n"),
         ("compiler/c_emitter.vow", "fn is_known_builtin() {}\n"),
     ]:

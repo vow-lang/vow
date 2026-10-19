@@ -15,7 +15,8 @@ runtime-symbol, ABI, return-shape, and doc facts for the Builtin Operations in i
 this catalogue; the entry's `doc_signature`/`effects` are copies checked against `grammar.md` and the
 help text, not a second source. `cargo test -p vow-types` and
 `build/vowc test compiler/ --filter test_op_catalogue_env` compare them with both type-checker tables, via
-fact tables generated into `vow-types/src/env.rs` and `compiler/tests/catalogue_facts.vow`. They sit
+fact tables generated into `vow-types/src/env.rs` and the whole generated module
+`compiler/tests/catalogue_facts_gen.vow`. They sit
 between their own `// GENERATE:OPERATION_FACTS:START` / `:END` markers, separate from the
 `GENERATE:OPERATIONS` pair below, and `generate_operations.py --check` fails when they are stale.
 
@@ -32,13 +33,17 @@ python3 scripts/generate_operations.py --check  # validate without writing (CI-g
 ```
 
 It splices generated lookup functions between `// GENERATE:OPERATIONS:START` / `:END` markers — the
-same marker convention `scripts/generate_help.py` uses for `// GENERATE:SKILL_*` (which now sit in whole generated
-modules, `compiler/help_text_gen.vow` and friends) — into:
+same marker convention `scripts/generate_help.py` uses for `// GENERATE:SKILL_*` (now in whole generated modules) — into the files below. Two
+targets are whole generated modules instead (a complete file, `compiler/*_gen.vow`, exempt from the
+authored-file budget, so a catalogue change never edits an authored module): `compiler/catalogue_vc_ops_gen.vow`
+and `compiler/catalogue_ir_gen.vow`. A large host that still carries a splice must be split into authored modules
+plus a generated module the first time a change needs to regenerate it (`scripts/test_generated_layout.py` keeps
+the list of such hosts from growing):
 
 - `vow-ir/src/lower/mod.rs` (`catalogue_builtin_to_runtime`)
 - `vow-codegen/src/cranelift_backend.rs` and `vow-clif-shim/src/lib.rs` (`catalogue_extern_sig`)
 - `compiler/lower.vow` (`catalogue_builtin_to_extern`, `catalogue_builtin_ret_ty`)
-- `compiler/vc_ops.vow` (`catalogue_verifier_known`, the native verifier's
+- `compiler/catalogue_vc_ops_gen.vow` (`catalogue_verifier_known`, loaded by `vc_ops.vow`; the native verifier's
   builtin model keyed by runtime symbol; `generate_operations.py` fails when an entry has no `verifier_model`
   or an effectful entry is `known`;
   `known` alone does not make a call verifiable until the executor encodes calls)
@@ -48,7 +53,7 @@ modules, `compiler/help_text_gen.vow` and friends) — into:
   entry can be known. It is separate from `verifier_model` on purpose: a `known` native entry changes
   the native skip code of every caller, and the C model goes away with the ESBMC path in epic #1398, P6.
   The hand-written `is_known_builtin` lists keep only what is not catalogued)
-- `vow-ir/src/region.rs`, `vow-clif-shim/src/lib.rs` and `compiler/ir.vow` (the `arena_routes` section, a
+- `vow-ir/src/region.rs`, `vow-clif-shim/src/lib.rs` and `compiler/catalogue_ir_gen.vow` (the `arena_routes` section, a
   plain list of the base symbols of every fresh-aggregate builtin; the variant is always
   `<symbol>_in_arena`. Rust gets the `FRESH_ARENA_VARIANTS` table with hand-written lookups over it, Vow
   gets the `fresh_arena_base_extern` decision tree, and `fresh_arena_variant_extern` strips the suffix)

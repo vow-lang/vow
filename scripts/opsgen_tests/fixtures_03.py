@@ -34,10 +34,6 @@ FACT_FIXTURES = [
         "vow-ir/src/lower/mod.rs",
         "    // GENERATE:OPERATION_FACTS:START\n    // GENERATE:OPERATION_FACTS:END\n",
     ),
-    (
-        "compiler/tests/catalogue_facts.vow",
-        "// GENERATE:OPERATION_FACTS:START\n// GENERATE:OPERATION_FACTS:END\n",
-    ),
 ]
 
 

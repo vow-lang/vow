@@ -5,7 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from opsgen.catalogue import result_shape
-from opsgen.markers import _stale_blocks, _write_blocks
+from opsgen.markers import (
+    _stale_blocks,
+    _stale_whole_files,
+    _write_blocks,
+    _write_whole_files,
+)
 from opsgen.tokens import DOC_SIGNATURE_RE, _split_top_level_commas
 
 FACTS_MARKER_START = "// GENERATE:OPERATION_FACTS:START"
@@ -158,7 +163,15 @@ def gen_vow_facts_block(ops: list[dict], excluded: list[dict]) -> str:
 FACT_TARGET_FILES = [
     (Path("vow-types/src/env.rs"), gen_rust_facts_block),
     (Path("vow-ir/src/lower/mod.rs"), gen_rust_lowering_facts_block),
-    (Path("compiler/tests/catalogue_facts.vow"), gen_vow_facts_block),
+]
+
+# Whole generated test module: (path, module name, generator).
+FACT_WHOLE_TARGETS = [
+    (
+        Path("compiler/tests/catalogue_facts_gen.vow"),
+        "CatalogueFactsGen",
+        gen_vow_facts_block,
+    ),
 ]
 
 
@@ -171,6 +184,7 @@ def write_fact_tables(ops: list[dict], repo_root: Path, excluded: list[dict]) ->
         ops,
         excluded,
     )
+    _write_whole_files(FACT_WHOLE_TARGETS, repo_root, ops, excluded)
 
 
 def check_fact_tables(
@@ -186,4 +200,6 @@ def check_fact_tables(
         ops,
         excluded,
         "spliced fact table is stale",
+    ) + _stale_whole_files(
+        FACT_WHOLE_TARGETS, repo_root, ops, excluded, "generated fact table is stale"
     )
