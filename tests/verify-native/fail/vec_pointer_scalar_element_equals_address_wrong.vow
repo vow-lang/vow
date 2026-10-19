@@ -1,0 +1,35 @@
+// TEST: counterexample-fn "g"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value h.0[0] 4096
+// The same for a scalar element read through a handle: it may be 4096 next to a stored object (#1825).
+module VecPointerScalarElementEqualsAddressWrong
+
+struct Holder {
+  items: Vec<i64>,
+}
+
+struct Box {
+  v: Vec<i64>,
+}
+
+fn g(h: Holder) -> bool vow {
+  requires: h.items.len() > 0
+  ensures: result
+} {
+  let a: Vec<i64> = Vec::new();
+  let b: Box = Box { v: a };
+  h.items[0] != 4096
+}
+
+fn main() -> i32 [io] {
+  let items: Vec<i64> = Vec::new();
+  items.push(1);
+  let h: Holder = Holder { items: items };
+  if g(h) {
+    print_i64(1);
+  } else {
+    print_i64(0);
+  }
+  0
+}

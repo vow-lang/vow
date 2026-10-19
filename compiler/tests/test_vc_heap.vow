@@ -327,7 +327,7 @@ fn check_stored_pointer_read_back() -> i64 {
     if vc_skip_reason(ok).len() != 0 { return 60; }
     let cs: VcClaims = vc_claims(ok);
     if cs.kinds.len() != 0 { return 61; }
-    if !vc_smt_render(cs.arena, cs.header).contains(String::from("(declare-const o0_haddr (_ BitVec 64))")) { return 62; }
+    if !vc_smt_render(cs.arena, cs.header).contains(String::from("(declare-const hbase (_ BitVec 64))")) { return 62; }
     let bad: VcClaims = vc_claims(stored_len_fn(2));
     if bad.kinds.len() != 1 { return 63; }
     0
@@ -543,7 +543,7 @@ fn check_tags_cover_late_entries() -> i64 {
     let head: String = vc_smt_render(cs.arena, cs.header);
     if !head.contains(String::from("QF_ABV")) { return 81; }
     let q: String = query(cs, 0);
-    if !q.contains(String::from("(= (select hatag o0_haddr) #x0000000000000001)")) { return 82; }
+    if !q.contains(String::from("(= (select hatag hbase) #x0000000000000001)")) { return 82; }
     if !q.contains(String::from("(= (select hatag p1_haddr) #x0000000000000000)")) { return 83; }
     0
 }

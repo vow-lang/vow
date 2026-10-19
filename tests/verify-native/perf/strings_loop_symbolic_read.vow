@@ -1,0 +1,23 @@
+// TEST: perf-expect proven 2
+// 60 strings pushed in a loop and one read with a symbolic index (#1825): the length of a stored
+// `String` is its own, one case per stored string and not a search over every address. It took 3 s
+// and more, about 30 times what it takes now.
+module StringsLoopSymbolicRead
+
+fn pick(i: u64) -> u64 vow {
+  requires: i < 60
+  ensures: result == 5
+} {
+  let names: Vec<String> = Vec::new();
+  let mut k: u64 = 0;
+  while k < 60 {
+    names.push(String::from("hello"));
+    k = k + 1;
+  }
+  names[i].len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(pick(3));
+  0
+}

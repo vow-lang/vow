@@ -70,34 +70,6 @@ fn vc_ptr_store_detail(f: IrFunction, tys: Vec<i64>, calls: bool) -> String {
     String::from("a pointer element is read back")
 }
 
-// True when `id` is a receiver of a pointer store (`held` of `vc_ptr_store_held`).
-fn vc_ptr_store_is_held(held: Vec<i64>, id: i64) -> bool {
-    id >= 0 && (id as u64) < held.len() && held[id as u64] == 1
-}
-
-// 1 for every receiver of a pointer store (`push` or `set` of an object), closed over Phis.
-fn vc_ptr_store_held(f: IrFunction, tys: Vec<i64>) -> Vec<i64> {
-    let n_ids: u64 = tys.len();
-    let held: Vec<i64> = dom_fill(n_ids, 0);
-    let mut any: bool = false;
-    let mut bi: u64 = 0;
-    while bi < f.blocks.len() {
-        let blk: IrBlock = f.blocks[bi];
-        let mut ii: u64 = 0;
-        while ii < blk.insts.len() {
-            let inst: IrInst = blk.insts[ii];
-            if inst.op == IOP_CALL() && vc_ptr_store_value(inst, tys) {
-                held[inst.args[0] as u64] = 1;
-                any = true;
-            }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    if any { vc_phi_merges_objects(f, held, n_ids, true); }
-    held
-}
-
 // True when the function reads an element back out of a `Vec` a pointer is stored into: its slots
 // hold the address of the object (`vc_ptr_store_detail` has admitted the function on that
 // ground). The walk asks this of the unrolled or loop-closed function it executes, which has the
@@ -332,11 +304,4 @@ fn vc_ptr_store_uses_elem(inst: IrInst, elem: Vec<i64>, n_ids: u64) -> bool {
         p = p + 1;
     }
     false
-}
-
-// True when `inst` is a `push` or `set` whose stored value is an object.
-fn vc_ptr_store_value(inst: IrInst, tys: Vec<i64>) -> bool {
-    if inst.op != IOP_CALL() { return false; }
-    let v: i64 = vc_inst_stored_operand(inst);
-    v >= 0 && vc_heap_ty(tys, v) == ITY_PTR()
 }

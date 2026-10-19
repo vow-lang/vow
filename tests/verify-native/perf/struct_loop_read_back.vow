@@ -1,0 +1,33 @@
+// TEST: perf-expect unknown 30
+// Structs pushed in a loop with a symbolic trip count and read back in a second one (#1825): the
+// same shape as the rows, over a `Vec<Person>`. It did not finish in 120 s.
+module StructLoopReadBack
+
+struct Person {
+  age: i64,
+}
+
+fn total(n: i64) -> i64 vow {
+  requires: n >= 0
+  ensures: result >= 0
+} {
+  let people: Vec<Person> = Vec::new();
+  let mut i: i64 = 0;
+  while i < n {
+    people.push(Person { age: 7 });
+    i = i + 1;
+  }
+  let mut t: i64 = 0;
+  let mut k: i64 = 0;
+  while k < n {
+    let p: Person = people[k as u64];
+    t = t + p.age;
+    k = k + 1;
+  }
+  t
+}
+
+fn main() -> i32 [io] {
+  print_i64(total(3));
+  0
+}

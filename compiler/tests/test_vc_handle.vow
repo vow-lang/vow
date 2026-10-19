@@ -1,0 +1,124 @@
+module TestVcHandle
+
+use ir
+use vc_term
+use vc_smt
+use vc_gate
+use vc_ops
+use vc_exec
+use vc_handle
+use vc_overlay
+use tests.builders
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn args2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v.push(b);
+    v
+}
+
+fn mk_vow(id: i64, op: i64, pred: i64, vow_id: i64) -> IrInst {
+    ir_inst_new(id, op, ITY_UNIT(), args1(pred), IDATA_VOW_ID(), vow_id, 0, String::from(""))
+}
+
+// `rows` `Vec`s pushed into one `Vec`, the odd ones holding an element, then `outer[k].len()` read
+// for a parameter `k`, with the claim that the length is `claimed`.
+fn rows_fn(rows: i64, claimed: i64) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_const_i64(0, 8));
+    i.push(mk_inst_const_i64(1, 8));
+    i.push(mk_inst_call_extern(2, ITY_PTR(), args2(0, 1), String::from("__vow_vec_new")));
+    let mut r: i64 = 0;
+    while r < rows {
+        i.push(mk_inst_call_extern(100 + 3 * r, ITY_PTR(), args2(0, 1), String::from("__vow_vec_new")));
+        i.push(mk_inst_call_extern(101 + 3 * r, ITY_UNIT(), args2(2, 100 + 3 * r), String::from("__vow_vec_push_val")));
+        if r % 2 == 1 {
+            i.push(mk_inst_call_extern(102 + 3 * r, ITY_UNIT(), args2(100 + 3 * r, 0), String::from("__vow_vec_push_val")));
+        }
+        r = r + 1;
+    }
+    let base: i64 = 100 + 3 * rows;
+    i.push(mk_inst_arg(base, ITY_U64(), 0));
+    i.push(mk_inst_call_extern(base + 1, ITY_I64(), args2(2, base), String::from("__vow_vec_get_val")));
+    i.push(mk_inst_call_extern(base + 2, ITY_U64(), args1(base + 1), String::from("__vow_vec_len")));
+    i.push(mk_inst_const_i64(base + 3, claimed));
+    i.push(mk_inst(base + 4, IOP_EQ(), ITY_BOOL(), args2(base + 2, base + 3)));
+    i.push(mk_vow(base + 5, IOP_VOW_ENS(), base + 4, 0));
+    i.push(mk_inst_return(base + 6, base + 2));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_U64());
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, i));
+    mk_function(1, String::from("rows"), p, ITY_U64(), blocks)
+}
+
+fn count_of(hay: String, needle: String) -> i64 {
+    let mut n: i64 = 0;
+    let mut i: u64 = 0;
+    while i + needle.len() <= hay.len() {
+        if hay.substring(i, i + needle.len()) == needle { n = n + 1; }
+        i = i + 1;
+    }
+    n
+}
+
+// The address of a stored object is `hbase + 16 * entry`: one free symbol and no literal (a scalar
+// may equal any literal, `fail/vec_pointer_scalar_*_wrong.vow`). A handle that is an element of a `Vec`
+// the function built is one of the addresses it stored, so the chain of its length ends in an entry,
+// never in `hlen[h]` (the one occurrence left is the bound every read handle's length carries): the
+// solver is not left a case split per stored object and per read to rule out an address no object has.
+fn check_element_chain_is_exact() -> i64 {
+    let f: IrFunction = rows_fn(20, 1);
+    if vc_skip_reason(f).len() != 0 { return 1; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 2 { return 2; }
+    let head: String = vc_smt_render(cs.arena, cs.header);
+    if head.contains(String::from("_haddr")) || !head.contains(String::from("(declare-const hbase (_ BitVec 64))")) { return 3; }
+    let mut k: u64 = 0;
+    while k < cs.kinds.len() {
+        let q: String = vc_smt_render(cs.arena, vc_claim_script(cs, k));
+        if q.contains(String::from("helem")) || count_of(q, String::from("(select hlen ")) > 1 { return 4; }
+        if q.contains(String::from("_haddr")) || q.contains(String::from("#x0000000000001000")) { return 5; }
+        k = k + 1;
+    }
+    0
+}
+
+// `outer.push(row)` followed by a havoc marker of the `Vec` `target` (outer is 2, row is 3).
+fn havoc_fn(target: i64) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_const_i64(0, 8));
+    i.push(mk_inst_const_i64(1, 8));
+    i.push(mk_inst_call_extern(2, ITY_PTR(), args2(0, 1), String::from("__vow_vec_new")));
+    i.push(mk_inst_call_extern(3, ITY_PTR(), args2(0, 1), String::from("__vow_vec_new")));
+    i.push(mk_inst_call_extern(4, ITY_UNIT(), args2(2, 3), String::from("__vow_vec_push_val")));
+    i.push(mk_inst_call_extern(5, ITY_UNIT(), args1(target), VC_INTERNAL_HAVOC_VEC()));
+    i.push(mk_inst_return(6, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, i));
+    mk_function(1, String::from("h"), Vec::new(), ITY_I64(), blocks)
+}
+
+// A loop cut that gives a `Vec` a pointer is stored into an arbitrary state makes its elements
+// arbitrary words: the chain of an element read there is not exact
+// (`fail/vec_pointer_elem_loop_cut_rows_wrong.vow`). The state of another `Vec` does not matter.
+fn check_vec_havoc_is_found() -> i64 {
+    let held: Vec<i64> = vc_ptr_store_held(havoc_fn(2), vc_ty_table(havoc_fn(2)));
+    if !vc_ptr_store_is_held(held, 2) || vc_ptr_store_is_held(held, 3) { return 20; }
+    if !vc_overlay_vec_havoc(havoc_fn(2), held) { return 21; }
+    if vc_overlay_vec_havoc(havoc_fn(3), held) { return 22; }
+    if vc_overlay_vec_havoc(rows_fn(2, 1), held) { return 23; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_element_chain_is_exact();
+    if r == 0 { r = check_vec_havoc_is_found(); }
+    i64_to_i32_wrap(r)
+}

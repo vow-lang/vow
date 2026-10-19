@@ -1,0 +1,29 @@
+// TEST: perf-expect unknown 30
+// Rows built in a loop with a symbolic trip count and read back in a second one (#1825). No
+// invariant can say what the rows hold, so the claim is open at every unrolling bound and the
+// answer is `unknown`; it ran into the 300 s budget when every read searched all stored addresses.
+module SymbolicLoopRowsReadBack
+
+fn total(n: i64) -> i64 vow {
+  requires: n >= 0
+  ensures: result == 0
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let mut i: i64 = 0;
+  while i < n {
+    outer.push(Vec::new());
+    i = i + 1;
+  }
+  let mut t: i64 = 0;
+  let mut k: i64 = 0;
+  while k < n {
+    t = t + (outer[k as u64].len() as i64);
+    k = k + 1;
+  }
+  t
+}
+
+fn main() -> i32 [io] {
+  print_i64(total(3));
+  0
+}

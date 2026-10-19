@@ -98,3 +98,6 @@ jobs:
       - name: Proven-callee trust fixtures
         if: ${{ !cancelled() }}
         run: bash tests/verify-native/trust/run.sh build/vowc
+      - name: Pointer element read cost fixtures
+        if: ${{ !cancelled() }}
+        run: bash tests/verify-native/perf/run.sh build/vowc

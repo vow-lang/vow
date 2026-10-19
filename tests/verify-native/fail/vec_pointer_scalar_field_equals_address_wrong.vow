@@ -1,0 +1,34 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value s.0 4096
+// A function that stores an object keeps the address of the object a symbol the solver may place
+// anywhere: a scalar parameter field that happens to be 4096 is no object, and 4096 is a value the
+// caller may pass (#1825).
+module VecPointerScalarFieldEqualsAddressWrong
+
+struct S {
+  n: i64,
+}
+
+struct Box {
+  v: Vec<i64>,
+}
+
+fn f(s: S) -> bool vow {
+  ensures: result
+} {
+  let a: Vec<i64> = Vec::new();
+  let b: Box = Box { v: a };
+  s.n != 4096
+}
+
+fn main() -> i32 [io] {
+  let s: S = S { n: 5 };
+  if f(s) {
+    print_i64(1);
+  } else {
+    print_i64(0);
+  }
+  0
+}
