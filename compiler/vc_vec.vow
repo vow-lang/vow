@@ -126,8 +126,8 @@ struct VcVec {
     pv_wide: Vec<i64>,
     // `src_of[o]` is the object a clone `o` was copied from (`pin_to_root`, `clone`), -1 for any other.
     src_of: Vec<i64>,
-    // Parameter slots that may be one object (`vc_vecalias`): `al_same[i * n + j]` is the Bool
-    // term "slots `al_slot[i]` and `al_slot[j]` are one", -1 when they never are.
+    // Parameter slots that may be one object (`vc_vecalias`); `al_same[i * n + j]`: "slots
+    // `al_slot[i]` and `al_slot[j]` are one", -1 when never.
     al_slot: Vec<i64>,
     al_same: Vec<i64>,
 }
@@ -443,14 +443,18 @@ fn vc_vec_write(vv: VcVec, ar: VcArena, hdr: SmtScript, s: i64, bi: i64, arr: i6
         vc_vec_phi_write(vv, ar, hdr, s, bi, arr, len);
         return;
     }
-    let p: u64 = vc_vec_pos(vv, s, bi);
-    vv.arr[p] = vc_flow_name(vv.fl, ar, hdr, VC_SORT_ARRAY64(), arr);
-    vv.len[p] = vc_flow_name(vv.fl, ar, hdr, 64, len);
+    vc_vec_store(vv, ar, hdr, s, bi, arr, len);
     if vv.al_slot.len() > 0 { vc_vec_spread(vv, ar, hdr, s, bi); }
 }
 
-// A write to parameter slot `s` is also a write to every parameter slot that may be the same
-// object, under the test that it is (`al_same`).
+// `vc_vec_write` without the spread.
+fn vc_vec_store(vv: VcVec, ar: VcArena, hdr: SmtScript, s: i64, bi: i64, arr: i64, len: i64) {
+    let p: u64 = vc_vec_pos(vv, s, bi);
+    vv.arr[p] = vc_flow_name(vv.fl, ar, hdr, VC_SORT_ARRAY64(), arr);
+    vv.len[p] = vc_flow_name(vv.fl, ar, hdr, 64, len);
+}
+
+// A write to parameter slot `s` is a write to each slot that may be the same object (`al_same`).
 fn vc_vec_spread(vv: VcVec, ar: VcArena, hdr: SmtScript, s: i64, bi: i64) {
     let n: u64 = vv.al_slot.len();
     let mut i: u64 = 0;
@@ -465,8 +469,7 @@ fn vc_vec_spread(vv: VcVec, ar: VcArena, hdr: SmtScript, s: i64, bi: i64) {
             let t: i64 = vv.al_slot[j];
             let a: i64 = vc_tm_app3(ar, VC_OP_ITE(), same, new_a, vc_vec_cur_arr(vv, t, bi));
             let l: i64 = vc_tm_app3(ar, VC_OP_ITE(), same, new_l, vc_vec_cur_len(vv, t, bi));
-            vv.arr[vc_vec_pos(vv, t, bi)] = vc_flow_name(vv.fl, ar, hdr, VC_SORT_ARRAY64(), a);
-            vv.len[vc_vec_pos(vv, t, bi)] = vc_flow_name(vv.fl, ar, hdr, 64, l);
+            vc_vec_store(vv, ar, hdr, t, bi, a, l);
         }
         j = j + 1;
     }
@@ -506,7 +509,7 @@ fn vc_vec_enter(vv: VcVec, ar: VcArena, hdr: SmtScript, bi: u64) {
             e = fl.e_next[e as u64];
         }
         if acc_a >= 0 {
-            vc_vec_write(vv, ar, hdr, s as i64, bi as i64, acc_a, acc_l);
+            vc_vec_store(vv, ar, hdr, s as i64, bi as i64, acc_a, acc_l);
         }
         s = s + 1;
     }

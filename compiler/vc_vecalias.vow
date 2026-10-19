@@ -21,15 +21,14 @@ use vc_heap
 // types); a function that only reads them cannot tell.
 
 // Per parameter, the classes (`VC_OV_VEC`, `VC_OV_STRING`) it is used as an object of by a `Vec` or
-// `String` operation, looking through Phis; one entry more, 1 when some such operation changes
-// a collection that is a parameter.
+// `String` operation, looking through Phis, and `VC_VA_CHANGED` when such an operation changes it.
 fn vc_vecalias_classes(f: IrFunction, n_ids: u64) -> Vec<i64> {
     let rpo: Vec<i64> = vc_cfg_rpo(f);
     let src: VcPhiSources = vc_fh_phi_sources(f, rpo, n_ids);
     let def_op: Vec<i64> = vc_agg_def_ops(f, n_ids);
     let arg_param: Vec<i64> = vc_agg_arg_params(f, n_ids);
     let seen: Vec<i64> = dom_fill(n_ids, -1);
-    let cls: Vec<i64> = dom_fill(f.params.len() + 1, 0);
+    let cls: Vec<i64> = dom_fill(f.params.len(), 0);
     let mut stamp: i64 = 0;
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
@@ -53,7 +52,7 @@ fn vc_vecalias_classes(f: IrFunction, n_ids: u64) -> Vec<i64> {
                             if l >= 0 && (l as u64) < n_ids && arg_param[l as u64] >= 0 {
                                 let p: u64 = arg_param[l as u64] as u64;
                                 cls[p] = cls[p] | { if j == 0 { first } else { VC_OV_STRING() } };
-                                if j == 0 && vc_vec_kind_mutates(k) { cls[f.params.len()] = 1; }
+                                if j == 0 && vc_vec_kind_mutates(k) { cls[p] = cls[p] | VC_VA_CHANGED(); }
                             }
                             li = li + 1;
                         }
@@ -68,40 +67,34 @@ fn vc_vecalias_classes(f: IrFunction, n_ids: u64) -> Vec<i64> {
     cls
 }
 
+fn VC_VA_CHANGED() -> i64 { 16 }
+
 // The ascending indices of the `Vec` and `String` parameters that may be one object as another
-// parameter of their declared type, when the function changes a collection that is one of
-// them (or a Phi of them); else none.
+// parameter of their declared type, when the function changes one of the two (or a Phi of
+// them): the parameters of each type group that has two of them and one changed.
 fn vc_vecalias_params(f: IrFunction, n_ids: u64) -> Vec<i64> {
     let cls: Vec<i64> = vc_vecalias_classes(f, n_ids);
-    let out: Vec<i64> = Vec::new();
-    if cls[f.params.len()] == 0 { return out; }
+    let used: Vec<i64> = Vec::new();
     let mut p: u64 = 0;
-    while p < f.params.len() {
-        if cls[p] != 0 { out.push(p as i64); }
+    while p < cls.len() {
+        if cls[p] != 0 { used.push(p as i64); }
         p = p + 1;
     }
-    let keys: Vec<String> = vc_agg_alias_keys(f, out);
-    let alone: Vec<i64> = Vec::new();
-    let mut i: u64 = 0;
-    while i < out.len() {
-        let mut mates: u64 = 0;
-        let mut j: u64 = 0;
-        while j < out.len() {
-            if keys[j] == keys[i] { mates = mates + 1; }
-            j = j + 1;
-        }
-        if mates < 2 { alone.push(out[i]); }
-        i = i + 1;
-    }
-    vc_vecalias_without(out, alone)
-}
-
-// `all` without the members of `drop`, in order.
-fn vc_vecalias_without(all: Vec<i64>, drop: Vec<i64>) -> Vec<i64> {
+    let keys: Vec<String> = vc_agg_alias_keys(f, used);
     let out: Vec<i64> = Vec::new();
     let mut i: u64 = 0;
-    while i < all.len() {
-        if !vc_ids_has(drop, all[i]) { out.push(all[i]); }
+    while i < used.len() {
+        let mut mates: u64 = 0;
+        let mut changed: bool = false;
+        let mut j: u64 = 0;
+        while j < used.len() {
+            if keys[j] == keys[i] {
+                mates = mates + 1;
+                if (cls[used[j] as u64] & VC_VA_CHANGED()) != 0 { changed = true; }
+            }
+            j = j + 1;
+        }
+        if mates >= 2 && changed { out.push(used[i]); }
         i = i + 1;
     }
     out
@@ -136,7 +129,7 @@ fn vc_vecalias_enable(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed
     let pos: Vec<i64> = Vec::new();
     let mut i: u64 = 0;
     while i < ag.al_params.len() {
-        if cls[ag.al_params[i] as u64] != 0 {
+        if (cls[ag.al_params[i] as u64] & (VC_OV_VEC() | VC_OV_STRING())) != 0 {
             vv.al_slot.push(vc_vec_slot(vv, ag, ar, hdr, assumed, vc_agg_param(ag, ag.al_params[i])));
             pos.push(i as i64);
         }
