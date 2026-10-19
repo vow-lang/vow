@@ -59,6 +59,24 @@ else
         fail "verify-native/trust" "run.sh reported $trust_got of $trust_want fixtures"
     fi
 fi
+# Cost of reading a pointer element back (#1825): tests/verify-native/perf/run.sh decides each
+# fixture with the real solver; the verdict and the wall time must be the ones its
+# `// TEST: perf-expect` directive names.
+if [ "$native_have_solver" -eq 0 ]; then
+    skip "verify-native/perf fixtures" "bitwuzla not on PATH"
+else
+    perf_want=$(find tests/verify-native/perf -maxdepth 1 -name '*.vow' | wc -l)
+    perf_got=0
+    while IFS= read -r perf_line; do
+        case "$perf_line" in
+            PASS\ *) pass "verify-native/${perf_line#PASS }"; perf_got=$((perf_got + 1)) ;;
+            FAIL\ *) fail "verify-native/${perf_line#FAIL }" "see tests/verify-native/perf/run.sh"; perf_got=$((perf_got + 1)) ;;
+        esac
+    done < <(bash tests/verify-native/perf/run.sh "$SELF" 2>/dev/null)
+    if [ "$perf_got" -ne "$perf_want" ]; then
+        fail "verify-native/perf" "run.sh reported $perf_got of $perf_want fixtures"
+    fi
+fi
 # Every code of the closed `Skipped` list is pinned by a skip/ fixture (or an
 # explicit exemption) and the list matches ADR-1430 section 4.
 skip_codes_log="$TMPDIR/verify-native-skip-codes.log"
