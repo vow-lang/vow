@@ -5,41 +5,12 @@
 
 section_begin "Section 8c: Contract Quality"
 
-# contract-quality/weak-gate: ratchet on static contract quality across the
-# self-hosted compiler — fail if the weak/tautological contract count exceeds the
-# committed baseline (#81). Static classification only (no ESBMC), so it is cheap.
-# Capture the contracts JSON in its own step so a producer failure (parse error,
-# missing binary, compiler crash) is reported as itself — with its stderr visible —
-# instead of being masked as a baseline breach by the checker's empty-stdin exit.
-# One run per entry point: `vow contracts` follows `use` edges, so an entry point
-# covers its own module graph and nothing else. `compiler/module_io.vow` is
-# deliberately not in main.vow's `use` graph (.vmod parity infrastructure), so it
-# had zero coverage until it was listed here. See the scope note in
-# scripts/check_contract_quality.py for why the corpus dirs stay ungated.
-for quality_entry in compiler/main.vow compiler/module_io.vow; do
-    quality_case="contract-quality/weak-gate:$(basename "$quality_entry" .vow)"
-    contract_quality_json="$TMPDIR/contract_quality_$(basename "$quality_entry" .vow).json"
-    if ! run_self contracts "$quality_entry" >"$contract_quality_json"; then
-        fail "$quality_case" "vow contracts $quality_entry failed (see stderr above); could not evaluate contract quality"
-        continue
-    fi
-    # Distinguish the checker's exit codes: 0 = pass, 1 = baseline breach (a real
-    # contract-quality regression), 2 = structural error (malformed JSON / missing
-    # or non-integer counter — the checker's stderr above names the cause). A bare
-    # else would mislabel a schema error as a baseline breach.
-    quality_status=0
-    uv run python scripts/check_contract_quality.py --label "$quality_entry" \
-        <"$contract_quality_json" || quality_status=$?
-    if [ "$quality_status" -eq 0 ]; then
-        pass "$quality_case"
-    elif [ "$quality_status" -eq 1 ]; then
-        fail "$quality_case" "weak/tautological contracts exceeded baseline in $quality_entry; strengthen the new contract or adjust scripts/check_contract_quality.py with justification"
-    else
-        fail "$quality_case" "contract quality check could not run for $quality_entry (malformed 'vow contracts' output / schema mismatch; see stderr above)"
-    fi
-done
+# contract-quality/weak-gate: ratchet on static contract quality across the self-hosted compiler
+# (#81), run by scripts/check_contract_quality.sh, which pull requests run too
+# (.github/workflows/native-fixtures.yml). Its verdict lines become this suite's results.
+run_shared_check "contract-quality/weak-gate" scripts/check_contract_quality.sh "$SELF"
 
-# contract-quality/parity: the ratchet above only ever runs $SELF, so
+# contract-quality/parity: the weak gate above only ever runs $SELF, so
 # vow/src/contract_quality.rs has no end-to-end coverage from it and the two
 # classifiers can drift silently. Compare the (function, kind, quality,
 # source.offset) tuples both compilers derive from one fixture, plus check

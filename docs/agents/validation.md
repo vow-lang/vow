@@ -27,10 +27,16 @@ The `tests/verify-native/` directives (`counterexample-*`, `unknown-reason`, `re
 `skip-reason`, `contract-*`, `warning`) and the weak-contract gate are checked at pull-request time
 too, by `.github/workflows/native-fixtures.yml`, which runs `scripts/check_native_fixtures.sh` and
 `scripts/check_contract_quality.sh` (and the `summary/` and `trust/` runners). `full_test.sh`
-Sections 4g and 8c keep their own copies of those loops, and
-`scripts/test_check_native_fixtures.py` fails when the directives they read differ, so change both.
-Run `scripts/check_native_fixtures.sh [--filter <path substring>] [--jobs N] build/vowc` before
+Sections 4g and 8c call those same two scripts (through `run_shared_check`) rather than keeping
+copies, so there is one place to change a directive. Run
+`scripts/check_native_fixtures.sh [--filter <path substring>] [--jobs N] build/vowc` before
 pushing a fixture. The rest of `full_test.sh` is still post-merge only (`full-test.yml`).
+
+`scripts/full_test.sh` is only the entry script (setup, the `VOW_FULL_TEST_*` mode gates, the
+Tier 1.5 cut-off and the summary). Its helpers and sections live in `scripts/full_test/`, one
+sourced file per section group (`lib_*.sh` for helpers, `section_NN_*.sh` for sections), listed in
+run order in the entry script, so each file stays under the 20,000-byte budget. They share one
+shell: a new section file is a `source` line in the entry script, and a helper goes in a `lib_*.sh`.
 Before claiming a directive is "never parsed by any harness," grep `tests/*.sh` as well as
 `scripts/*.sh` — the two harnesses live in different directories and cover different directives.
 

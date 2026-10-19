@@ -316,4 +316,41 @@ test_tier15_only_gate_sits_between_8c_and_9_and_calls_print_summary() {
 
 test_tier15_only_gate_sits_between_8c_and_9_and_calls_print_summary
 
+# run_shared_check turns the verdict lines of a check script into this suite's results and fails
+# a script that crashes or exits non-zero without naming a failure.
+run_shared_check_case() {
+    local name="$1" body="$2"
+    local script="$TEST_TMPDIR/$name.sh"
+    printf '%s\n' "$body" >"$script"
+    bash -c '
+        set -euo pipefail
+        RED="" GREEN="" YELLOW="" RESET="" PASS=0 FAIL=0 SKIP=0 FAILURES=()
+        source scripts/full_test/lib_core.sh
+        run_shared_check shared/label bash "$1"
+        echo "counts $PASS $FAIL $SKIP"
+    ' _ "$script" 2>&1
+}
+
+test_run_shared_check_replays_verdict_lines() {
+    local out
+    out=$(run_shared_check_case ok 'echo "PASS a/one"; echo "SKIP a/two — no solver"; echo "FAIL a/three — wrong: x — y"; exit 1')
+    assert_contains "$out" "counts 1 1 1" "verdict lines counted"
+    assert_contains "$out" "a/three — wrong: x — y" "failure reason keeps its text"
+    if [[ "$out" == *"shared/label"* ]]; then
+        fail_test "a script that names its failure must not add a second failure: $out"
+    fi
+}
+
+test_run_shared_check_fails_a_silent_non_zero_exit() {
+    local out
+    out=$(run_shared_check_case silent 'echo "PASS a/one"; exit 1')
+    assert_contains "$out" "counts 1 1 0" "silent exit 1 is a failure"
+    out=$(run_shared_check_case crash 'exit 2')
+    assert_contains "$out" "counts 0 1 0" "exit 2 is a failure"
+    assert_contains "$out" "exited with status 2" "exit status reported"
+}
+
+test_run_shared_check_replays_verdict_lines
+test_run_shared_check_fails_a_silent_non_zero_exit
+
 echo "full-test bootstrap tests passed"

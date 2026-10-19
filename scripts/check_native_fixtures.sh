@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 # Check the `// TEST:` directives of tests/verify-native fixtures against `vowc verify --backend
 # native` (#1408). It runs on every pull request through .github/workflows/native-fixtures.yml, so a
-# wrong directive in a new fixture fails its own PR. full_test.sh Section 4g, too large a file to
-# edit under the file token budget, keeps its own copy of this loop; a unit test
-# (scripts/test_check_native_fixtures.py) fails when the two read different directives.
+# wrong directive in a new fixture fails its own PR. full_test.sh Section 4g calls this script too.
 #
 #   pass/     Verified (exit 0); `warning` / `no-warning` directives
 #   fail/     VerifyFailed (exit 1); `counterexample-{fn,vow-id,blame,violation,value}` and

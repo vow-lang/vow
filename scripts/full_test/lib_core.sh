@@ -80,6 +80,33 @@ skip() {
     SKIP=$((SKIP + 1))
 }
 
+# Run a check script that prints `PASS|FAIL|SKIP <name>[ — <reason>]` lines (the same scripts
+# pull requests run) and record each line as one result. A run that exits non-zero without a
+# FAIL line, or with an exit code above 1, is itself a failure, so a crashed script cannot pass.
+run_shared_check() {
+    local label="$1" line rest name reason rc=-1 saw_fail=0
+    shift
+    while IFS= read -r line; do
+        case "$line" in
+            "@@rc "*) rc="${line#@@rc }"; continue ;;
+            PASS\ *|FAIL\ *|SKIP\ *) ;;
+            *) continue ;;
+        esac
+        rest="${line#* }"
+        name="${rest%% — *}"
+        reason=""
+        if [ "$name" != "$rest" ]; then reason="${rest#* — }"; fi
+        case "$line" in
+            PASS\ *) pass "$name" ;;
+            FAIL\ *) fail "$name" "$reason"; saw_fail=1 ;;
+            SKIP\ *) skip "$name" "$reason" ;;
+        esac
+    done < <("$@" && echo "@@rc 0" || echo "@@rc $?")
+    if [ "$rc" -gt 1 ] || { [ "$rc" -eq 1 ] && [ "$saw_fail" -eq 0 ]; } || [ "$rc" -lt 0 ]; then
+        fail "$label" "$1 exited with status $rc and no FAIL verdict"
+    fi
+}
+
 # Run one scripts/parity.py comparator. The optional fixture path lets the
 # comparator find a fixture's known-divergence suppression (a `// TEST:`
 # directive, or docs/equivalence/ledger.json), which it reports as `SKIP:`.
