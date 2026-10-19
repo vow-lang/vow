@@ -73,14 +73,15 @@ def compare_cex(esbmc_keys, native_keys, artifacts=None):
             WEAKER,
             f"native lacks ESBMC counterexample(s) {sorted(missing, key=repr)}",
         )
-    lost = declared - native_keys
-    if lost and {k[0] for k in lost} - {k[0] for k in native_keys}:
+    lost = sorted(declared - native_keys, key=repr)
+    native_fns = {k[0] for k in native_keys}
+    if any(k[0] not in native_fns for k in lost):
         return (
             WEAKER,
-            f"native does not refute the function(s) of ESBMC's declared artefact(s) {sorted(lost, key=repr)}",
+            f"native does not refute the function of ESBMC's declared artefact(s) {lost}",
         )
     if lost:
-        reasons = "; ".join(artifacts[k] for k in sorted(lost, key=repr))
+        reasons = "; ".join(artifacts[k] for k in lost)
         return (
             MORE_PRECISE,
             f"ESBMC adds counterexample(s) only through its own model ({reasons}); "
