@@ -1,6 +1,6 @@
 // TEST: replay-skipped a Vec held in a struct field is not rebuilt by the replay harness (#1778)
 // TEST: counterexample-fn "first"
-// TEST: counterexample-vow-id 0
+// TEST: counterexample-vow-id 1
 // TEST: counterexample-blame Callee
 // TEST: counterexample-value b.0.len 1
 // TEST: counterexample-value b.0[0] -7
