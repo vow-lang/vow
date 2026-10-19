@@ -291,18 +291,15 @@ test_tier15_only_gate_sits_between_8c_and_9_and_calls_print_summary() {
     local script="scripts/full_test.sh"
     local line_8c line_tier15 line_9
 
-    # Match the banner comments, not `section_begin "Section 9: ..."` calls:
-    # VOW_FULL_TEST_BOOTSTRAP_ONLY has its own early `section_begin "Section
-    # 9: Bootstrap Triple Test"` call near the top of the file (an isolated
-    # boundary-test harness, unrelated to the real Section 9), but only the
-    # real section has a banner comment.
-    line_8c=$(grep -n '^# ─── Section 8c: Contract Quality' "$script" | head -1 | cut -d: -f1 || true)
+    # The entry script sources one file per section, in run order, so the gate is the block
+    # between the Section 8c and Section 9 sources.
+    line_8c=$(grep -n '^source .*section_08c_contract_quality\.sh' "$script" | head -1 | cut -d: -f1 || true)
     line_tier15=$(grep -n 'VOW_FULL_TEST_TIER15_ONLY' "$script" | head -1 | cut -d: -f1 || true)
-    line_9=$(grep -n '^# ─── Section 9: Bootstrap Triple Test' "$script" | head -1 | cut -d: -f1 || true)
+    line_9=$(grep -n '^source .*section_09_bootstrap_default\.sh' "$script" | head -1 | cut -d: -f1 || true)
 
-    [ -n "$line_8c" ] || fail_test "tier15 gate: Section 8c marker not found in $script"
+    [ -n "$line_8c" ] || fail_test "tier15 gate: Section 8c source not found in $script"
     [ -n "$line_tier15" ] || fail_test "tier15 gate: VOW_FULL_TEST_TIER15_ONLY not found in $script"
-    [ -n "$line_9" ] || fail_test "tier15 gate: Section 9 marker not found in $script"
+    [ -n "$line_9" ] || fail_test "tier15 gate: Section 9 source not found in $script"
 
     [ "$line_tier15" -gt "$line_8c" ] || fail_test "tier15 gate: must appear after Section 8c (line $line_tier15 <= $line_8c)"
     [ "$line_tier15" -lt "$line_9" ] || fail_test "tier15 gate: must appear before Section 9 (line $line_tier15 >= $line_9)"
@@ -318,5 +315,46 @@ test_tier15_only_gate_sits_between_8c_and_9_and_calls_print_summary() {
 }
 
 test_tier15_only_gate_sits_between_8c_and_9_and_calls_print_summary
+
+# run_shared_check turns the verdict lines of a check script into this suite's results and fails
+# a script that crashes or exits non-zero without naming a failure.
+run_shared_check_case() {
+    local name="$1" body="$2"
+    local script="$TEST_TMPDIR/$name.sh"
+    printf '%s\n' "$body" >"$script"
+    bash -c '
+        set -euo pipefail
+        RED="" GREEN="" YELLOW="" RESET="" PASS=0 FAIL=0 SKIP=0 FAILURES=()
+        source scripts/full_test/lib_core.sh
+        run_shared_check shared/label bash "$1"
+        echo "counts $PASS $FAIL $SKIP"
+    ' _ "$script" 2>&1
+}
+
+test_run_shared_check_replays_verdict_lines() {
+    local out
+    out=$(run_shared_check_case ok 'echo "PASS a/one"; echo "SKIP a/two — no solver"; echo "FAIL a/three — wrong: x — y"; exit 1')
+    assert_contains "$out" "counts 1 1 1" "verdict lines counted"
+    assert_contains "$out" "a/three — wrong: x — y" "failure reason keeps its text"
+    if [[ "$out" == *"shared/label"* ]]; then
+        fail_test "a script that names its failure must not add a second failure: $out"
+    fi
+}
+
+test_run_shared_check_fails_a_silent_non_zero_exit() {
+    local out
+    out=$(run_shared_check_case silent 'echo "PASS a/one"; exit 1')
+    assert_contains "$out" "counts 1 1 0" "silent exit 1 is a failure"
+    out=$(run_shared_check_case crash 'exit 2')
+    assert_contains "$out" "counts 0 1 0" "exit 2 is a failure"
+    assert_contains "$out" "exited with status 2" "exit status reported"
+    out=$(run_shared_check_case empty 'exit 0')
+    assert_contains "$out" "counts 0 1 0" "a script with no verdict line is a failure"
+    out=$(run_shared_check_case no_newline 'printf "PASS a/one"')
+    assert_contains "$out" "counts 1 0 0" "a verdict without a trailing newline keeps its exit status"
+}
+
+test_run_shared_check_replays_verdict_lines
+test_run_shared_check_fails_a_silent_non_zero_exit
 
 echo "full-test bootstrap tests passed"

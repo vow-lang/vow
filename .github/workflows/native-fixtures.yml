@@ -7,9 +7,8 @@ name: Native fixture directives
 # contract that scored as weak (#1795), passed every pull-request check and turned `main` red at
 # the next push; four times in twelve hours.
 #
-# Both checks are standalone scripts that mirror the loops of `full_test.sh` (too large a file to
-# edit under the file token budget); `scripts/test_check_native_fixtures.py` fails when the
-# directives they read drift apart:
+# Both checks are standalone scripts that Sections 4g and 8c of `full_test.sh` call too, so the
+# pull-request run and the post-merge run read the same directives:
 #
 #   * `scripts/check_native_fixtures.sh` runs `vowc verify --backend native` over
 #     `tests/verify-native/{pass,fail,unknown,skip,contracts}` and compares each result with the
@@ -34,8 +33,8 @@ on:
       - "vow-clif-shim/**"
       - "scripts/check_native_fixtures.sh"
       - "scripts/check_contract_quality.*"
-      - "scripts/test_check_native_fixtures.py"
       - "scripts/full_test.sh"
+      - "scripts/full_test/**"
       - ".github/actions/install-bitwuzla/**"
       - ".github/workflows/native-fixtures.yml"
   workflow_dispatch:
@@ -99,6 +98,3 @@ jobs:
       - name: Proven-callee trust fixtures
         if: ${{ !cancelled() }}
         run: bash tests/verify-native/trust/run.sh build/vowc
-      - name: Directive parity with full_test.sh
-        if: ${{ !cancelled() }}
-        run: python3 scripts/test_check_native_fixtures.py

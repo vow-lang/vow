@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Weak-contract gate (#81): run scripts/check_contract_quality.py over the contracts of each
-# entry point `vow contracts` is asked about (as full_test.sh Section 8c does, which keeps its
-# own copy of this loop; run on every pull request by .github/workflows/native-fixtures.yml, since
-# #1795 reached `main` without it).
+# entry point `vow contracts` is asked about. full_test.sh Section 8c calls this script too, and
+# .github/workflows/native-fixtures.yml runs it on every pull request (#1795 reached `main` without it).
 # One run per entry point: `vow contracts` follows `use` edges, so an entry point covers its own
 # module graph and nothing else. `compiler/module_io.vow` is deliberately not in main.vow's `use`
 # graph (.vmod parity infrastructure), so it is listed on its own. See the scope note in
