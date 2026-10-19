@@ -384,12 +384,15 @@ struct ReplayObjs {
     cur: i64,
 }
 
+// A `linear struct` is consumed once, so a harness cannot name its binding in a second place.
 fn replay_holds_object(m: Module, tid: i64) -> bool {
     let a: AstArena = m.arena;
     if type_tag(a, tid) == TY_GENERIC() { return arena_str(a, type_a(a, tid)) == String::from("Vec"); }
     if type_tag(a, tid) != TY_NAMED() { return false; }
     let name: String = arena_str(a, type_a(a, tid));
-    name == String::from("String") || replay_find_struct(m, name) >= 0
+    if name == String::from("String") { return true; }
+    let sid: i64 = replay_find_struct(m, name);
+    sid >= 0 && sdef_is_linear(a, sid) == 0
 }
 
 // Per source parameter of `fn_name`: its address ("" for none), the harness binding of its value
@@ -478,11 +481,11 @@ fn replay_held_param(key: String, names: Vec<String>, vals: Vec<String>, objs: R
 fn replay_alias_field(shown: String, held: i64, objs: ReplayObjs) -> ReplayArg {
     let theirs: String = replay_obj_ty(objs, held);
     if theirs != shown {
-        return replay_arg_skip(str3r(String::from("field of type `"), shown, str3r(String::from("` holds the object of a parameter of type `"), theirs, String::from("`"))));
+        return replay_field_skip(shown, str3r(String::from("` holds the object of a parameter of type `"), theirs, String::from("`")));
     }
     let bind: String = replay_obj_bind(objs, held);
     if bind == replay_obj_bind(objs, objs.cur) {
-        return replay_arg_skip(str3r(String::from("field of type `"), shown, String::from("` holds the very value that holds it, and a value must exist before a field can hold it, so replay cannot build the cycle")));
+        return replay_field_skip(shown, String::from("` holds the very value that holds it, and a value must exist before a field can hold it, so replay cannot build the cycle"));
     }
     replay_arg_ok_deps(String::from(bind), shown, str3r(bind, String::from(" "), String::from("")))
 }

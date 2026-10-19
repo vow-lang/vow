@@ -166,6 +166,9 @@ fn agg_src() -> String {
     s.push_str(String::from("struct Rec { next: Option<Rec> }\n"));
     s.push_str(String::from("struct Both { a: Option<Pair>, b: Shape }\n"));
     s.push_str(String::from("fn fhv(h: HasVec) -> i64 { 0 }\n"));
+    s.push_str(String::from("linear struct Lin { n: i64 }\n"));
+    s.push_str(String::from("struct HoldsLin { l: Lin }\n"));
+    s.push_str(String::from("fn flin(l: Lin, h: HoldsLin) -> i64 { 0 }\n"));
     s.push_str(String::from("struct HasStr { s: String, n: i64 }\n"));
     s.push_str(String::from("struct HasVs { v: Vec<String> }\n"));
     s.push_str(String::from("struct HasWide { v: Vec<i128> }\n"));
@@ -412,6 +415,8 @@ fn check_field_holds_a_parameter() -> i32 [io] {
     if tag.lit != String::from("Bag { items: __replay_a0, tag: -1 }") { return 511; }
     let unlisted: ReplayArg = agg(String::from("fpush"), 1, String::from("b.addr=-2,b.0=-1"));
     if index_of(unlisted.reason, String::from("does not list its length")) < 0 { return 512; }
+    let lin: ReplayArg = agg(String::from("flin"), 1, String::from("l.addr=-1,h.addr=-2,h.0=-1,l.0=3"));
+    if index_of(lin.reason, String::from("is read through memory")) < 0 { return 514; }
     let other: ReplayArg = agg(String::from("fmix"), 1, one);
     if index_of(other.reason, String::from("holds the object of a parameter of type `Vec<u8>`")) < 0 { return 513; }
     0
