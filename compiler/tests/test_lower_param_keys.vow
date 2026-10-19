@@ -8,7 +8,8 @@ use ir
 use lower
 
 // `IrFunction.param_keys` is the head of each parameter's declared type with type aliases
-// resolved; the verifier tells parameters of different heads apart with it (#1802).
+// resolved, and for a `Vec` the head of its element too; the verifier tells parameters of
+// different keys apart with it (#1802, #1823).
 
 fn lower_source(source: String) -> IrModule {
     let arena: AstArena = arena_new();
@@ -42,16 +43,18 @@ fn function_named(m: IrModule, name: String) -> IrFunction {
 }
 
 fn check_keys_follow_the_declared_heads() -> i64 {
-    let src: String = String::from("struct Outer { a: i64 }\ntype Same = Outer;\nfn f(o: Outer, s: Same, v: Vec<i64>, t: str, u: String, p: Option<Outer>, n: i64) -> i64 { 0 }\nfn main() -> i32 { 0 }\n");
+    let src: String = String::from("struct Outer { a: i64 }\ntype Same = Outer;\ntype Id = i64;\nfn f(o: Outer, s: Same, v: Vec<i64>, t: str, u: String, p: Option<Outer>, n: i64, w: Vec<Id>, x: Vec<String>) -> i64 { 0 }\nfn main() -> i32 { 0 }\n");
     let f: IrFunction = function_named(lower_source(src), String::from("f"));
     let keys: Vec<String> = f.param_keys;
-    if keys.len() != 7 || keys.len() != f.params.len() { return 1; }
+    if keys.len() != 9 || keys.len() != f.params.len() { return 1; }
     if keys[0] != String::from("Outer") { return 2; }
     if keys[1] != String::from("Outer") { return 3; }
-    if keys[2] != String::from("Vec") { return 4; }
+    if keys[2] != String::from("Vec<i64>") { return 4; }
     if keys[3] != String::from("String") { return 5; }
     if keys[4] != String::from("String") { return 6; }
     if keys[5] != String::from("Option") { return 7; }
+    if keys[7] != String::from("Vec<i64>") { return 8; }
+    if keys[8] != String::from("Vec<String>") { return 9; }
     0
 }
 
