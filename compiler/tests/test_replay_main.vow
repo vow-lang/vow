@@ -169,6 +169,10 @@ fn agg_src() -> String {
     s.push_str(String::from("linear struct Lin { n: i64 }\n"));
     s.push_str(String::from("struct HoldsLin { l: Lin }\n"));
     s.push_str(String::from("fn flin(l: Lin, h: HoldsLin) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fmap(m: HashMap<i64, i64>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fmapb(m: BTreeMap<bool, bool>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fmapu(m: HashMap<u8, ()>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fmapw(m: HashMap<i64, i128>) -> i64 { 0 }\n"));
     s.push_str(String::from("struct HasStr { s: String, n: i64 }\n"));
     s.push_str(String::from("struct HasVs { v: Vec<String> }\n"));
     s.push_str(String::from("struct HasWide { v: Vec<i128> }\n"));
@@ -489,6 +493,31 @@ fn check_param_objects() -> i32 [io] {
     0
 }
 
+// A map is built with `new` and one `insert` per present key of the listed state, then keys the
+// claim did not ask about until the length is met.
+fn check_map_params() -> i32 [io] {
+    let head: String = String::from("{ let __replay_m: HashMap<i64, i64> = HashMap::new();");
+    if lit_of(String::from("fmap"), String::from("m.len=0")) != str2s(head, String::from(" __replay_m }")) { return 601; }
+    if lit_of(String::from("fmap"), String::from("")) != str2s(head, String::from(" __replay_m }")) { return 602; }
+    let two: String = str2s(head, String::from(" __replay_m.insert(5, 7); __replay_m.insert(0, 0); __replay_m }"));
+    if lit_of(String::from("fmap"), String::from("m.len=2,m[5]=7,m[-1]=absent")) != two { return 603; }
+    let skip0: String = str2s(head, String::from(" __replay_m.insert(1, 0); __replay_m }"));
+    if lit_of(String::from("fmap"), String::from("m.len=1,m[0]=absent")) != skip0 { return 604; }
+    if agg(String::from("fmap"), 0, String::from("m.len=1,m[0]=absent")).ty_text != String::from("HashMap<i64, i64>") { return 605; }
+    let flags: String = String::from("{ let __replay_m: BTreeMap<bool, bool> = BTreeMap::new(); __replay_m.insert(false, false); __replay_m }");
+    if lit_of(String::from("fmapb"), String::from("m.len=1,m[true]=absent")) != flags { return 606; }
+    let full: ReplayArg = agg(String::from("fmapb"), 0, String::from("m.len=2,m[false]=absent"));
+    if index_of(full.reason, String::from("too few keys")) < 0 { return 607; }
+    let units: String = String::from("{ let __replay_m: HashMap<u8, ()> = HashMap::new(); __replay_m.insert(3, ()); __replay_m }");
+    if lit_of(String::from("fmapu"), String::from("m.len=1,m[3]=()")) != units { return 608; }
+    let narrow: ReplayArg = agg(String::from("fmapu"), 0, String::from("m.len=300"));
+    if index_of(narrow.reason, String::from("too few keys")) < 0 { return 609; }
+    if index_of(agg(String::from("fmapu"), 0, String::from("m.len=9999")).reason, String::from("not a length")) < 0 { return 610; }
+    if index_of(agg(String::from("fmapw"), 0, String::from("m.len=0")).reason, String::from("is not rebuilt")) < 0 { return 611; }
+    if agg(String::from("fmap"), 0, String::from("m.len=1,m[1]=x")).reason.len() == 0 { return 612; }
+    0
+}
+
 fn check_value_text_is_validated() -> i32 [io] {
     if agg(String::from("ff"), 0, String::from("f.1=-1")).reason.len() == 0 { return 141; }
     if agg(String::from("fp"), 0, String::from("p.0=abc")).reason.len() == 0 { return 142; }
@@ -698,6 +727,8 @@ fn main() -> i32 [io] {
     if r20 != 0 { return r20; }
     let r21: i32 = check_tag_outside_the_enum();
     if r21 != 0 { return r21; }
+    let r60: i32 = check_map_params();
+    if r60 != 0 { return r60; }
     let r22: i32 = check_held_collections();
     if r22 != 0 { return r22; }
     let r19: i32 = check_float_vec_elements();

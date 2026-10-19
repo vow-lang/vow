@@ -165,7 +165,7 @@ fn vc_guard(cs: VcClaims, kind: i64, label: String, pc: i64, goal: i64, inst: Ir
 // slot each came from (a symbol's width is its sort: 0 for Bool). A slot read
 // at two sorts is `ambig` in every entry so reporting and replay can tell the
 // symbols apart.
-fn vc_claims_harvest_fields(cs: VcClaims, ag: VcAgg, vv: VcVec, memory: VcHandleMemory) {
+fn vc_claims_harvest_fields(cs: VcClaims, ag: VcAgg, vv: VcVec, memory: VcHandleMemory, mp: VcMap) {
     let ov: VcOverlay = memory.overlay;
     let held: VcHeld = memory.held;
     let none: i64 = 9223372036854775807;
@@ -173,14 +173,29 @@ fn vc_claims_harvest_fields(cs: VcClaims, ag: VcAgg, vv: VcVec, memory: VcHandle
     let mut v: u64 = 0;
     let mut a: u64 = 0;
     let mut d: u64 = 0;
-    while i < ag.ps_param.len() || v < vv.pv_param.len() || vc_overlay_next_listed(ov, a) < ov.param.len() || vc_held_next_listed(held, d) < held.hdr.len() {
+    let mut e: u64 = 0;
+    while i < ag.ps_param.len() || v < vv.pv_param.len() || vc_overlay_next_listed(ov, a) < ov.param.len() || vc_held_next_listed(held, d) < held.hdr.len() || e < mp.ent_hdr.len() {
         a = vc_overlay_next_listed(ov, a);
         d = vc_held_next_listed(held, d);
         let hi: i64 = { if i < ag.ps_param.len() { ag.ps_hdr[i] } else { none } };
         let hv: i64 = { if v < vv.pv_param.len() { vv.pv_hdr[v] } else { none } };
         let ha: i64 = { if a < ov.param.len() { ov.hdr[a] } else { none } };
         let hh: i64 = { if d < held.hdr.len() { held.hdr[d] } else { none } };
-        if hh < hi && hh < hv && hh < ha {
+        let he: i64 = { if e < mp.ent_hdr.len() { mp.ent_hdr[e] } else { none } };
+        if he < hi && he < hv && he < ha && he < hh {
+            cs.model_names.push(mp.ent_name[e]);
+            cs.model_paths.push(String::from(""));
+            cs.model_params.push(mp.ent_param[e]);
+            cs.model_tys.push(ITY_U64());
+            cs.model_widths.push(64);
+            cs.model_slots.push(mp.ent_slot[e]);
+            cs.model_hdr.push(he);
+            if mp.ent_slot[e] == VC_SLOT_VEC_LEN() {
+                cs.map_len.push(mp.ent_name[e]);
+                cs.map_len_hdr.push(he);
+            }
+            e = e + 1;
+        } else if hh < hi && hh < hv && hh < ha {
             cs.model_names.push(held.len_name[d]);
             cs.model_paths.push(held.path[d]);
             cs.model_params.push(held.param[d]);
@@ -1027,6 +1042,8 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         vec_wide: Vec::new(),
         vec_path: Vec::new(),
         vec_handle: Vec::new(),
+        map_len: Vec::new(),
+        map_len_hdr: Vec::new(),
     };
     vc_script_set_logic(hdr, String::from("QF_BV"));
     vc_script_set_option(hdr, String::from(":produce-models"), String::from("true"));
@@ -1107,7 +1124,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         }
         oi = oi + 1;
     }
-    vc_claims_harvest_fields(cs, w.ag, w.vv, w.memory);
+    vc_claims_harvest_fields(cs, w.ag, w.vv, w.memory, w.mp);
     cs.hook_vars = w.vv.hk_vars;
     cs.map_vars = vc_map_inexact_vars(w.mp);
     vc_script_replace_logic(hdr, vc_logic_name(vc_vec_count(w.vv) > 0 || vc_handle_memory_used(w.memory) || vc_map_count(w.mp) > 0, vc_function_has_float(f, tys), w.vv.quantified));

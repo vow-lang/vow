@@ -1,4 +1,3 @@
-// TEST: replay-skipped the replay harness rebuilds only scalar parameters, not a map
 // TEST: counterexample-fn "len_below_hundred"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee

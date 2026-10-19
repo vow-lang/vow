@@ -86,6 +86,30 @@ fn vc_alias_value_source(cs: VcClaims, vals: Vec<i64>, n: u64, j: u64) -> u64 {
     best
 }
 
+// The entry a map parameter's asked key makes in a counterexample: the key, presence and value
+// entries `j`, `j + 1` and `j + 2` become `<param>[<key>]`, the value slot when the key is in the
+// parameter's own state and `absent` when it is not. Both print as the raw unsigned 64-bit slot,
+// which the driver retypes from the declared key and value types (`vc_cex_elem`). A key asked
+// twice, or two keys with one value, lists once.
+fn vc_append_map_entry(f: IrFunction, cs: VcClaims, ans: VcSolverAnswer, j: u64, names: Vec<String>, values: Vec<String>) {
+    if j + 2 >= ans.values.len() { return; }
+    let name: String = String::from(vc_source_param_name(f, cs.model_params[j]));
+    name.push_str(String::from("["));
+    name.push_str(uint_to_string(ans.values[j] as u64));
+    name.push_str(String::from("]"));
+    let mut i: u64 = 0;
+    while i < names.len() {
+        if names[i] == name { return; }
+        i = i + 1;
+    }
+    names.push(name);
+    if ans.values[j + 1] == 0 {
+        values.push(String::from("absent"));
+    } else {
+        values.push(uint_to_string(ans.values[j + 2] as u64));
+    }
+}
+
 fn vc_violated_property_text(label: String) -> String {
     let out: String = String::from("Violated property:\n  ");
     out.push_str(label);
@@ -121,9 +145,13 @@ fn vc_claim_result(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnswer) -> 
         let n: u64 = vc_answer_regular_count(cs, k, ans);
         let mut j: u64 = 0;
         while j < n {
-            names.push(vc_model_symbol_name(f, cs, j));
-            let src: u64 = vc_alias_value_source(cs, ans.values, n, j);
-            values.push(vc_format_value(cs.model_tys[j], ans.values[src], ans.highs[src]));
+            if cs.model_slots[j] == VC_SLOT_MAP_KEY() {
+                vc_append_map_entry(f, cs, ans, j, names, values);
+            } else if cs.model_slots[j] != VC_SLOT_MAP_PRES() && cs.model_slots[j] != VC_SLOT_MAP_VAL() {
+                names.push(vc_model_symbol_name(f, cs, j));
+                let src: u64 = vc_alias_value_source(cs, ans.values, n, j);
+                values.push(vc_format_value(cs.model_tys[j], ans.values[src], ans.highs[src]));
+            }
             j = j + 1;
         }
         vc_append_vec_answer_contents(f, cs, k, ans, names, values);

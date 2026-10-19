@@ -122,6 +122,43 @@ fn vc_cex_param_elem_type(m: Module, fn_name: String, base: String) -> String {
     String::from("")
 }
 
+// Key and value type names of the map parameter `pname` of `fn_name` (see `replay_map_type_names`).
+fn vc_cex_param_map_types(m: Module, fn_name: String, pname: String) -> Vec<String> {
+    let a: AstArena = m.arena;
+    let fid: i64 = replay_find_fn_item(m, fn_name);
+    if fid < 0 { return Vec::new(); }
+    let lid: i64 = fn_params_lid(a, fid);
+    let n: i64 = list_len(a, lid) / 4;
+    let mut pi: i64 = 0;
+    while pi < n {
+        if arena_str(a, list_get(a, lid, pi * 4)) == pname {
+            return replay_map_type_names(a, list_get(a, lid, pi * 4 + 1));
+        }
+        pi = pi + 1;
+    }
+    Vec::new()
+}
+
+// Rewrites entry `j` of a map parameter, named `<param>[<slot>]` with the key as a raw slot, so
+// the key and the value print as the declared types read them; an `absent` key stays.
+fn vc_cex_retype_map_entry(names: Vec<String>, vals: Vec<String>, j: u64, open: u64, tys: Vec<String>) {
+    match names[j].substring(open + 1u64, names[j].len() - 1u64).parse_u64() {
+        Option::Some(slot) => {
+            names[j] = str3r(names[j].substring(0u64, open + 1u64), vc_cex_elem_text(tys[0], slot), String::from("]"));
+        },
+        Option::None => { return; },
+    }
+    if vals[j] == String::from("absent") { return; }
+    if tys[1] == String::from("()") {
+        vals[j] = String::from("()");
+        return;
+    }
+    match vals[j].parse_u64() {
+        Option::Some(v) => { vals[j] = vc_cex_elem_text(tys[1], v); },
+        Option::None => {},
+    }
+}
+
 // Position of the `[` of an entry named `<param>[<digits>]`, or -1.
 fn vc_cex_elem_open(key: String) -> i64 {
     let n: u64 = key.len();
@@ -140,6 +177,7 @@ fn vc_cex_elem_open(key: String) -> i64 {
 fn vc_cex_retype_elements(m: Module, fn_name: String, names: Vec<String>, vals: Vec<String>) {
     let mut last_base: String = String::from("");
     let mut last_ty: String = String::from("");
+    let mut last_map: Vec<String> = Vec::new();
     let mut j: u64 = 0u64;
     while j < names.len() && j < vals.len() {
         let open: i64 = vc_cex_elem_open(names[j]);
@@ -147,9 +185,12 @@ fn vc_cex_retype_elements(m: Module, fn_name: String, names: Vec<String>, vals: 
             let base: String = names[j].substring(0u64, open as u64);
             if base != last_base {
                 last_ty = vc_cex_param_elem_type(m, fn_name, base);
+                last_map = vc_cex_param_map_types(m, fn_name, base);
                 last_base = base;
             }
-            if last_ty.len() > 0 {
+            if last_map.len() == 2u64 {
+                vc_cex_retype_map_entry(names, vals, j, open as u64, last_map);
+            } else if last_ty.len() > 0 {
                 match vals[j].parse_u64() {
                     Option::Some(slot) => { vals[j] = vc_cex_elem_text(last_ty, slot); },
                     Option::None => {},

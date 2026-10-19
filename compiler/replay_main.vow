@@ -1020,6 +1020,131 @@ fn replay_string_arg(pname: String, names: Vec<String>, vals: Vec<String>) -> Re
     replay_arg_ok(lit, String::from("String"))
 }
 
+// Key and value type names of a parameter of AST type `tid` that is a `HashMap` or `BTreeMap`
+// (`()` for a unit value), or an empty list for any other type.
+fn replay_map_type_names(a: AstArena, tid: i64) -> Vec<String> {
+    let out: Vec<String> = Vec::new();
+    if type_tag(a, tid) != TY_GENERIC() { return out; }
+    let head: String = arena_str(a, type_a(a, tid));
+    if head != String::from("HashMap") && head != String::from("BTreeMap") { return out; }
+    let args_lid: i64 = type_b(a, tid);
+    if list_len(a, args_lid) != 2 { return out; }
+    let k: i64 = list_get(a, args_lid, 0);
+    let v: i64 = list_get(a, args_lid, 1);
+    if type_tag(a, k) != TY_NAMED() { return out; }
+    let mut vname: String = String::from("");
+    if type_tag(a, v) == TY_UNIT() {
+        vname = String::from("()");
+    } else if type_tag(a, v) == TY_NAMED() {
+        vname = arena_str(a, type_a(a, v));
+    }
+    if vname.len() == 0 { return out; }
+    out.push(arena_str(a, type_a(a, k)));
+    out.push(vname);
+    out
+}
+
+// The keys a `HashMap` or `BTreeMap` parameter was asked about, listed by the native
+// counterexample as `<param>[<key>]` (see `vc_cex_retype_map_entry`): the value of a key the
+// parameter's own state has, `absent` for one it has not. `keys` and `vals` get one item each
+// per entry, in order.
+fn replay_map_entries(pname: String, names: Vec<String>, vals: Vec<String>, keys: Vec<String>, held: Vec<String>) {
+    let prefix: String = String::from(pname);
+    prefix.push_str(String::from("["));
+    let mut i: u64 = 0u64;
+    while i < names.len() && i < vals.len() {
+        let n: String = names[i];
+        if n.len() > prefix.len() + 1u64 && n.substring(0u64, prefix.len()) == prefix && n.byte_at(n.len() - 1u64) == 93 {
+            keys.push(n.substring(prefix.len(), n.len() - 1u64));
+            held.push(vals[i]);
+        }
+        i = i + 1u64;
+    }
+}
+
+fn replay_has_key(keys: Vec<String>, key: String) -> bool {
+    let mut i: u64 = 0u64;
+    while i < keys.len() {
+        if keys[i] == key { return true; }
+        i = i + 1u64;
+    }
+    false
+}
+
+// The next key of type `kt` after `tried` candidates that `keys` does not hold, as source text,
+// or "" when the key type has none left (`bool` has two, a narrow integer its range).
+fn replay_fresh_key(kt: String, keys: Vec<String>, tried: i64) -> String {
+    let mut c: i64 = tried;
+    while c < tried + keys.len() as i64 + 2 {
+        let text: String = { if kt == String::from("bool") { if c == 0 { String::from("false") } else if c == 1 { String::from("true") } else { String::from("") } } else { i64_to_string(c) } };
+        if text.len() == 0 || (kt != String::from("bool") && !replay_int_fits(kt, text)) { return String::from(""); }
+        if !replay_has_key(keys, text) { return text; }
+        c = c + 1;
+    }
+    String::from("")
+}
+
+// A `HashMap` or `BTreeMap` parameter, built with `new` and one `insert` per key of the listed
+// state, then as many other keys as the length needs (`<param>.len`). A key the parameter does
+// not have stays out, and so does every key the claim asked about.
+fn replay_map_arg(a: AstArena, tid: i64, pname: String, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
+    let shown: String = print_type_text(a, tid);
+    let tys: Vec<String> = replay_map_type_names(a, tid);
+    let not_rebuilt: ReplayArg = replay_arg_skip(str3r(String::from("parameter type `"), shown, String::from("` is not rebuilt by replay")));
+    if tys.len() != 2u64 { return not_rebuilt; }
+    let kt: String = tys[0];
+    let vt: String = tys[1];
+    if !(kt == String::from("bool") || replay_int_bits(kt) > 0) { return not_rebuilt; }
+    if !(vt == String::from("()") || vt == String::from("bool") || replay_int_bits(vt) > 0) { return not_rebuilt; }
+    let len: i64 = replay_vec_len(pname, names, vals);
+    if len == -2 {
+        return replay_arg_skip(str3r(String::from("length of `"), pname, String::from("` is not a length replay can build")));
+    }
+    let keys: Vec<String> = Vec::new();
+    let held: Vec<String> = Vec::new();
+    replay_map_entries(pname, names, vals, keys, held);
+    let lit: String = String::from("{ let __replay_m: ");
+    lit.push_str(shown);
+    lit.push_str(String::from(" = "));
+    lit.push_str(arena_str(a, type_a(a, tid)));
+    lit.push_str(String::from("::new();"));
+    let mut present: i64 = 0;
+    let mut i: u64 = 0u64;
+    while i < keys.len() {
+        if held[i] != String::from("absent") {
+            let k: ReplayArg = replay_scalar_literal(kt, keys[i]);
+            if k.reason.len() > 0 { return k; }
+            let mut v: ReplayArg = replay_arg_ok(String::from("()"), vt);
+            if vt != String::from("()") { v = replay_scalar_literal(vt, held[i]); }
+            if v.reason.len() > 0 { return v; }
+            lit.push_str(String::from(" __replay_m.insert("));
+            lit.push_str(k.lit);
+            lit.push_str(String::from(", "));
+            lit.push_str(v.lit);
+            lit.push_str(String::from(");"));
+            present = present + 1;
+        }
+        i = i + 1u64;
+    }
+    let mut tried: i64 = 0;
+    while present < len {
+        let fresh: String = replay_fresh_key(kt, keys, tried);
+        if fresh.len() == 0 {
+            return replay_arg_skip(str3r(String::from("the key type `"), kt, String::from("` has too few keys for the length of the map")));
+        }
+        keys.push(fresh);
+        lit.push_str(String::from(" __replay_m.insert("));
+        lit.push_str(fresh);
+        lit.push_str(String::from(", "));
+        lit.push_str({ if vt == String::from("()") { String::from("()") } else { replay_zero_text(vt) } });
+        lit.push_str(String::from(");"));
+        present = present + 1;
+        tried = tried + 1;
+    }
+    lit.push_str(String::from(" __replay_m }"));
+    replay_arg_ok(lit, shown)
+}
+
 // Source expression and type for argument `pi` of the function `fn_name`
 // declared in `m`, rebuilt from the counterexample's `<param>.<slot>` values.
 // `reason` says why it cannot be (nested aggregates, 128-bit fields, references,
@@ -1048,6 +1173,7 @@ fn replay_agg_arg(m: Module, fn_name: String, pi: i64, names: Vec<String>, vals:
     }
     if tag == TY_GENERIC() {
         if arena_str(a, type_a(a, tid)) == String::from("Vec") { return replay_vec_arg(a, tid, pname, names, vals); }
+        if replay_map_type_names(a, tid).len() > 0u64 { return replay_map_arg(a, tid, pname, names, vals); }
         return replay_builtin_enum_arg(m, tid, pname, names, vals, 0, avoid, objs);
     }
     replay_arg_skip(str3r(String::from("parameter type `"), print_type_text(a, tid), String::from("` is not a struct, enum, Option, Result, Vec or String declared in this program")))

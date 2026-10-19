@@ -9,6 +9,7 @@ use vc_flow
 use vc_agg
 use vc_vec
 use vc_mapops
+use vc_query
 
 // Model of `HashMap<K, V>` and `BTreeMap<K, V>` (K a Bool or an integer of at
 // most 64 bits, V a Bool, such an integer or unit) for the native verifier
@@ -72,6 +73,15 @@ struct VcMap {
     fb_pres: Vec<Vec<i64>>,
     fb_len: Vec<Vec<i64>>,
     fb_acc: Vec<Vec<i64>>,
+    // Per slot: the parameter the map is, -1 for a map the function built.
+    slot_param: Vec<i64>,
+    // Model entries of the map parameters, in declaration order: the length of each parameter's
+    // state, and for each key the function asks it about, the key, its presence word and its
+    // value slot in the parameter's own state, so a counterexample can list the map.
+    ent_name: Vec<String>,
+    ent_param: Vec<i64>,
+    ent_slot: Vec<i64>,
+    ent_hdr: Vec<i64>,
 }
 
 fn vc_map_new_state(fl: VcFlow, n_blocks: u64) -> VcMap {
@@ -92,6 +102,11 @@ fn vc_map_new_state(fl: VcFlow, n_blocks: u64) -> VcMap {
         fb_pres: Vec::new(),
         fb_len: Vec::new(),
         fb_acc: Vec::new(),
+        slot_param: Vec::new(),
+        ent_name: Vec::new(),
+        ent_param: Vec::new(),
+        ent_slot: Vec::new(),
+        ent_hdr: Vec::new(),
     }
 }
 
@@ -127,6 +142,7 @@ fn vc_map_push_slot(mp: VcMap, obj: i64, kind: i64) -> i64 {
     mp.fb_len.push(none_len);
     let none_acc: Vec<i64> = Vec::new();
     mp.fb_acc.push(none_acc);
+    mp.slot_param.push(-1);
     let mut k: u64 = 0;
     while k < mp.n_blocks {
         mp.pres.push(-1);
@@ -233,6 +249,37 @@ fn vc_map_note_width(mp: VcMap, s: i64, bits: i64) {
     }
 }
 
+// Adds one model entry of a map parameter: the symbol `name` defined as `term`.
+fn vc_map_list_entry(mp: VcMap, hdr: SmtScript, s: i64, name: String, slot: i64, term: i64) {
+    mp.ent_name.push(name);
+    mp.ent_param.push(mp.slot_param[s as u64]);
+    mp.ent_slot.push(slot);
+    mp.ent_hdr.push(hdr.kinds.len() as i64);
+    vc_script_define_fun(hdr, name, 64, term);
+}
+
+// The function asks the parameter map of slot `s` about its `i`-th key `key`: a counterexample
+// lists the key, whether the parameter's own state has it, and the value slot it holds.
+fn vc_map_list_key(mp: VcMap, ar: VcArena, hdr: SmtScript, s: i64, key: i64, i: u64) {
+    if mp.slot_param[s as u64] < 0 { return; }
+    let prefix: String = String::from("p");
+    prefix.push_str(i64_to_string(mp.slot_param[s as u64]));
+    prefix.push_str(String::from("_m"));
+    let tail: String = i64_to_string(i as i64);
+    let pres: i64 = vc_tm_app2(ar, VC_OP_SELECT(), mp.base_pres[s as u64], key);
+    let vals: i64 = vc_tm_app2(ar, VC_OP_SELECT(), mp.base_vals[s as u64], key);
+    vc_map_list_entry(mp, hdr, s, str3m(prefix, String::from("k"), tail), VC_SLOT_MAP_KEY(), key);
+    vc_map_list_entry(mp, hdr, s, str3m(prefix, String::from("p"), tail), VC_SLOT_MAP_PRES(), pres);
+    vc_map_list_entry(mp, hdr, s, str3m(prefix, String::from("v"), tail), VC_SLOT_MAP_VAL(), vals);
+}
+
+fn str3m(a: String, b: String, c: String) -> String {
+    let out: String = String::from(a);
+    out.push_str(b);
+    out.push_str(c);
+    out
+}
+
 // Records that the function uses `key` on the map of slot `s`, so every arbitrary
 // base of the slot counts it. `bits` is the width of the key operand, or -1 for an
 // `i64` literal, whose type says nothing about the map's key type.
@@ -245,6 +292,7 @@ fn vc_map_note_key(mp: VcMap, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, s:
         i = i + 1;
     }
     qs.push(key);
+    vc_map_list_key(mp, ar, hdr, s, key, qs.len() - 1);
     let bases: Vec<i64> = mp.fb_pres[s as u64];
     let n: u64 = bases.len();
     let mut j: u64 = 0;
@@ -277,6 +325,13 @@ fn vc_map_slot(mp: VcMap, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i
     mp.base_pres[s as u64] = st[0];
     mp.base_vals[s as u64] = st[1];
     mp.base_len[s as u64] = st[2];
+    if kind == VC_OBJ_PARAM() {
+        mp.slot_param[s as u64] = ag.owners[obj as u64];
+        mp.ent_name.push(vc_term_text(ar, st[2]));
+        mp.ent_param.push(ag.owners[obj as u64]);
+        mp.ent_slot.push(VC_SLOT_VEC_LEN());
+        mp.ent_hdr.push(hdr.kinds.len() as i64 - 1);
+    }
     s
 }
 

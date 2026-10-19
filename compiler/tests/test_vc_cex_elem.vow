@@ -74,9 +74,45 @@ fn check_held_element_types() -> i32 [io] {
     0
 }
 
+// A map parameter's entry is named by the raw key slot: the key and the value read as the types
+// the declaration gives, an `absent` key keeps its marker, a unit value shows as `()`, and the
+// entries of any other parameter are left alone.
+fn check_map_entries() -> i32 [io] {
+    let m: Module = parse_src(String::from("module T\nfn f(a: HashMap<i32, bool>, b: BTreeMap<i64, ()>, c: HashMap<i64, i64>, v: Vec<u8>) -> i64 { 0 }\n"));
+    let ta: Vec<String> = vc_cex_param_map_types(m, String::from("f"), String::from("a"));
+    if ta.len() != 2u64 || ta[0] != String::from("i32") || ta[1] != String::from("bool") { return 50; }
+    let tb: Vec<String> = vc_cex_param_map_types(m, String::from("f"), String::from("b"));
+    if tb.len() != 2u64 || tb[1] != String::from("()") { return 51; }
+    if vc_cex_param_map_types(m, String::from("f"), String::from("v")).len() != 0u64 { return 52; }
+    if vc_cex_param_map_types(m, String::from("g"), String::from("a")).len() != 0u64 { return 53; }
+    let names: Vec<String> = Vec::new();
+    let vals: Vec<String> = Vec::new();
+    names.push(String::from("a.len"));
+    vals.push(String::from("2"));
+    names.push(String::from("a[4294967291]"));
+    vals.push(String::from("1"));
+    names.push(String::from("a[7]"));
+    vals.push(String::from("absent"));
+    names.push(String::from("b[18446744073709551615]"));
+    vals.push(String::from("0"));
+    names.push(String::from("c[18446744073709551609]"));
+    vals.push(String::from("18446744073709551615"));
+    names.push(String::from("v[0]"));
+    vals.push(String::from("353"));
+    vc_cex_retype_elements(m, String::from("f"), names, vals);
+    if names[0] != String::from("a.len") || vals[0] != String::from("2") { return 54; }
+    if names[1] != String::from("a[-5]") || vals[1] != String::from("true") { return 55; }
+    if names[2] != String::from("a[7]") || vals[2] != String::from("absent") { return 56; }
+    if names[3] != String::from("b[-1]") || vals[3] != String::from("()") { return 57; }
+    if names[4] != String::from("c[-7]") || vals[4] != String::from("-1") { return 58; }
+    if names[5] != String::from("v[0]") || vals[5] != String::from("97") { return 59; }
+    0
+}
+
 fn main() -> i32 [io] {
     let mut r: i64 = check_elem_text();
     if r == 0 { r = check_elem_open(); }
     if r == 0 { r = check_held_element_types() as i64; }
+    if r == 0 { r = check_map_entries() as i64; }
     i64_to_i32_wrap(r)
 }

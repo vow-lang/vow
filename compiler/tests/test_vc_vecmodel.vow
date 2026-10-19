@@ -46,6 +46,8 @@ fn two_vec_claims() -> VcClaims {
         vec_wide: Vec::new(),
         vec_path: Vec::new(),
         vec_handle: Vec::new(),
+        map_len: Vec::new(),
+        map_len_hdr: Vec::new(),
     };
     cs.header_lens.push(10);
     cs.model_names.push(String::from("p0_vlen"));

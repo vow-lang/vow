@@ -45,6 +45,8 @@ fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
         vec_wide: Vec::new(),
         vec_path: Vec::new(),
         vec_handle: Vec::new(),
+        map_len: Vec::new(),
+        map_len_hdr: Vec::new(),
     };
     cs.kinds.push(kind);
     cs.frames.push(-1);
@@ -695,6 +697,81 @@ fn check_held_collection_contents() -> i64 {
     0
 }
 
+// A map parameter's asked key makes one `<param>[<key>]` entry from its key, presence and value
+// entries: the value slot when the key is present, `absent` when it is not, listed once for a
+// key asked twice, with the length as `<param>.len`.
+fn map_claims() -> VcClaims {
+    let cs: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
+    let names: Vec<String> = Vec::new();
+    names.push(String::from("p0_mlen"));
+    names.push(String::from("p0_mk0"));
+    names.push(String::from("p0_mp0"));
+    names.push(String::from("p0_mv0"));
+    names.push(String::from("p0_mk1"));
+    names.push(String::from("p0_mp1"));
+    names.push(String::from("p0_mv1"));
+    names.push(String::from("p0_mk2"));
+    names.push(String::from("p0_mp2"));
+    names.push(String::from("p0_mv2"));
+    let mut j: u64 = 0;
+    while j < names.len() {
+        cs.model_names.push(names[j]);
+        cs.model_params.push(0);
+        cs.model_paths.push(String::from(""));
+        cs.model_tys.push(ITY_U64());
+        cs.model_widths.push(64);
+        let mut slot: i64 = VC_SLOT_VEC_LEN();
+        if j > 0 {
+            let which: u64 = (j - 1) % 3;
+            if which == 0 { slot = VC_SLOT_MAP_KEY(); } else if which == 1 { slot = VC_SLOT_MAP_PRES(); } else { slot = VC_SLOT_MAP_VAL(); }
+        }
+        cs.model_slots.push(slot);
+        cs.model_ambig.push(0);
+        j = j + 1;
+    }
+    cs
+}
+
+fn map_answer() -> VcSolverAnswer {
+    let values: Vec<i64> = Vec::new();
+    values.push(11);
+    values.push(12);
+    values.push(2);
+    values.push(5);
+    values.push(1);
+    values.push(7);
+    values.push(18446744073709551615u64 as i64);
+    values.push(0);
+    values.push(9);
+    values.push(5);
+    values.push(1);
+    values.push(7);
+    let highs: Vec<i64> = Vec::new();
+    let mut h: u64 = 0;
+    while h < values.len() {
+        highs.push(0);
+        h = h + 1;
+    }
+    VcSolverAnswer { verdict: VC_ANS_SAT(), values: values, highs: highs, raw: String::from("") }
+}
+
+fn check_map_entries() -> i64 {
+    let f: IrFunction = vec_fn();
+    let base: String = vc_source_param_name(f, 0);
+    let r: VerifyResult = vc_claim_result(f, map_claims(), 0, map_answer());
+    if r.var_names.len() != 5 { return 150; }
+    if r.var_names[2] != str2c(base, String::from(".len")) || r.var_values[2] != String::from("2") { return 151; }
+    if r.var_names[3] != str2c(base, String::from("[5]")) || r.var_values[3] != String::from("7") { return 152; }
+    if r.var_names[4] != str2c(base, String::from("[18446744073709551615]")) || r.var_values[4] != String::from("absent") { return 153; }
+    0
+}
+
+fn str2c(a: String, b: String) -> String {
+    let out: String = String::from(a);
+    out.push_str(b);
+    out
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_sat_ensures();
     if r == 0 { r = check_sat_abort_claims(); }
@@ -710,5 +787,6 @@ fn main() -> i32 {
     if r == 0 { r = check_append_visible_vec_contents(); }
     if r == 0 { r = check_append_unusable_vec_tails(); }
     if r == 0 { r = check_held_collection_contents(); }
+    if r == 0 { r = check_map_entries(); }
     i64_to_i32_wrap(r)
 }
