@@ -274,6 +274,40 @@ fn check_pin_model() -> i64 {
     0
 }
 
+// The presence word and value slot of a map parameter's key are the model's to choose, like a
+// length: `vc_hook_recheck` pins the scalars and leaves the map state free.
+fn check_pin_model_frees_map_state() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_U64(), 0));
+    insts.push(mk_inst_arg(1, ITY_U64(), 1));
+    insts.push(mk_inst_arg(2, ITY_U64(), 2));
+    insts.push(mk_inst_return(3, 0));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_U64());
+    p.push(ITY_U64());
+    p.push(ITY_U64());
+    let cs: VcClaims = vc_claims(one_block(p, ITY_U64(), insts));
+    if cs.model_names.len() != 3 { return 93; }
+    cs.model_slots[0] = VC_SLOT_MAP_KEY();
+    cs.model_slots[1] = VC_SLOT_MAP_PRES();
+    cs.model_slots[2] = VC_SLOT_MAP_VAL();
+    let vals: Vec<i64> = Vec::new();
+    vals.push(7);
+    vals.push(0);
+    vals.push(9);
+    let highs: Vec<i64> = Vec::new();
+    highs.push(0);
+    highs.push(0);
+    highs.push(0);
+    let s: SmtScript = vc_script_new();
+    vc_pin_model(cs, vc_answer(VC_ANS_SAT(), vals, highs, String::from("")), s);
+    let q: String = vc_smt_render(cs.arena, s);
+    if !contains(q, String::from("(assert (= p0 #x0000000000000007))")) { return 94; }
+    if contains(q, String::from("p1")) { return 95; }
+    if contains(q, String::from("p2")) { return 96; }
+    0
+}
+
 // The reason an opaque result carries is the label the driver tells it apart by.
 fn check_opaque_reason_label() -> i64 {
     if !vc_output_has_opaque_hook(vc_opaque_hook_reason()) { return 100; }
@@ -421,6 +455,7 @@ fn main() -> i32 {
     if r == 0 { r = check_format_pair_axiom(); }
     if r == 0 { r = check_cone_reaches_hook(); }
     if r == 0 { r = check_pin_model(); }
+    if r == 0 { r = check_pin_model_frees_map_state(); }
     if r == 0 { r = check_opaque_reason_label(); }
     i64_to_i32_wrap(r)
 }

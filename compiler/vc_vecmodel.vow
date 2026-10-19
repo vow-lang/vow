@@ -30,13 +30,17 @@ fn VC_CEX_VEC_MAX() -> i64 { 512 }
 
 // Asserts that each scalar the counterexample `ans` gives a value is that value.
 // A float is left free, which only makes the query that follows weaker, and so
-// is the length of a `Vec` or `String`: both are the model's to choose.
+// is the length of a `Vec` or `String`: both are the model's to choose. So is the state of a map
+// parameter (its length, and the presence word and value slot of each key it was asked about):
+// `vc_hook_recheck` frees it to ask whether the failure holds for every state, and pinning it
+// would leave the one state the first model chose.
 fn vc_pin_model(cs: VcClaims, ans: VcSolverAnswer, s: SmtScript) {
     let ar: VcArena = cs.arena;
     let mut j: u64 = 0;
     while j < ans.values.len() {
         let w: i64 = cs.model_widths[j];
-        if w < VC_SORT_ARRAY64() && cs.model_slots[j] != VC_SLOT_VEC_LEN() {
+        let slot: i64 = cs.model_slots[j];
+        if w < VC_SORT_ARRAY64() && slot != VC_SLOT_VEC_LEN() && slot != VC_SLOT_MAP_PRES() && slot != VC_SLOT_MAP_VAL() {
             let sym: i64 = vc_tm_var(ar, cs.model_names[j]);
             if w == VC_SORT_BOOL() {
                 if ans.values[j] != 0 { vc_script_assert(s, sym); } else { vc_script_assert(s, vc_tm_app1(ar, VC_OP_NOT(), sym)); }
