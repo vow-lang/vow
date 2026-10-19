@@ -81,10 +81,11 @@ skip() {
 }
 
 # Run a check script that prints `PASS|FAIL|SKIP <name>[ — <reason>]` lines (the same scripts
-# pull requests run) and record each line as one result. A run that exits non-zero without a
-# FAIL line, or with an exit code above 1, is itself a failure, so a crashed script cannot pass.
+# pull requests run) and record each line as one result. A script that crashes, exits above 1,
+# exits 1 without a FAIL line, or prints no verdict at all is itself a failure, so it cannot pass
+# vacuously. VOW_ULIMIT_KB is passed on explicitly so an unexported value still caps its runs.
 run_shared_check() {
-    local label="$1" line rest name reason rc=-1 saw_fail=0
+    local label="$1" line rest name reason rc=-1 seen=0 saw_fail=0
     shift
     while IFS= read -r line; do
         case "$line" in
@@ -92,6 +93,7 @@ run_shared_check() {
             PASS\ *|FAIL\ *|SKIP\ *) ;;
             *) continue ;;
         esac
+        seen=$((seen + 1))
         rest="${line#* }"
         name="${rest%% — *}"
         reason=""
@@ -101,9 +103,9 @@ run_shared_check() {
             FAIL\ *) fail "$name" "$reason"; saw_fail=1 ;;
             SKIP\ *) skip "$name" "$reason" ;;
         esac
-    done < <("$@" && echo "@@rc 0" || echo "@@rc $?")
-    if [ "$rc" -gt 1 ] || { [ "$rc" -eq 1 ] && [ "$saw_fail" -eq 0 ]; } || [ "$rc" -lt 0 ]; then
-        fail "$label" "$1 exited with status $rc and no FAIL verdict"
+    done < <(VOW_ULIMIT_KB="${VOW_ULIMIT_KB:-}" "$@" && printf '\n@@rc 0\n' || printf '\n@@rc %s\n' "$?")
+    if [ "$rc" -gt 1 ] || [ "$rc" -lt 0 ] || [ "$seen" -eq 0 ] || { [ "$rc" -eq 1 ] && [ "$saw_fail" -eq 0 ]; }; then
+        fail "$label" "$1 exited with status $rc, $seen verdict lines, and no FAIL verdict"
     fi
 }
 

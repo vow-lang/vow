@@ -14,8 +14,9 @@ is the ratchet.
 SCOPE — which entry points the gate reads, and why not the rest.
 
 `vow contracts` follows `use` edges, so one entry point covers its whole module
-graph but nothing outside it. `scripts/full_test.sh` therefore runs this checker
-once per entry point, passing `--label` so a breach names the entry it came from:
+graph but nothing outside it. `scripts/check_contract_quality.sh` (which `full_test.sh` Section
+8c and the native-fixtures workflow both run) therefore runs this checker once per entry point,
+passing `--label` so a breach names the entry it came from:
 
   compiler/main.vow       the compiler's own `use` graph
   compiler/module_io.vow  deliberately-unwired .vmod parity infrastructure that

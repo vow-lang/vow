@@ -348,6 +348,10 @@ test_run_shared_check_fails_a_silent_non_zero_exit() {
     out=$(run_shared_check_case crash 'exit 2')
     assert_contains "$out" "counts 0 1 0" "exit 2 is a failure"
     assert_contains "$out" "exited with status 2" "exit status reported"
+    out=$(run_shared_check_case empty 'exit 0')
+    assert_contains "$out" "counts 0 1 0" "a script with no verdict line is a failure"
+    out=$(run_shared_check_case no_newline 'printf "PASS a/one"')
+    assert_contains "$out" "counts 1 0 0" "a verdict without a trailing newline keeps its exit status"
 }
 
 test_run_shared_check_replays_verdict_lines
