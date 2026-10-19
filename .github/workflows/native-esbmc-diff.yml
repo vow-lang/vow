@@ -16,6 +16,9 @@ name: Native fixtures versus ESBMC
 # The `paths:` filter stays off changes the differential cannot observe, and
 # `main` has no required checks, so a workflow skipped by `paths:` cannot leave
 # a required check Pending.
+# A catalogue change (a flipped `verifier_model`) edits only the generated
+# `compiler/catalogue_*_gen.vow`, `compiler/tests/*_gen.vow` and the spec under
+# `docs/spec/`, so those paths are listed beside the verifier sources.
 on:
   push:
     branches: [main]
@@ -23,7 +26,10 @@ on:
     branches: [main]
     paths:
       - "compiler/vc_*.vow"
+      - "compiler/catalogue_*_gen.vow"
+      - "compiler/tests/*_gen.vow"
       - "tests/verify*/**"
+      - "docs/spec/**"
       - "scripts/verify_diff.py"
       - "scripts/verify_eval.py"
       - ".github/actions/install-bitwuzla/**"

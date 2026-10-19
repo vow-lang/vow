@@ -53,6 +53,7 @@ __all__ = [
     "build_skill_support_files",
     "extract_table",
     "extract_table_col",
+    "generated_output_paths",
     "normalize_option",
     "rust_help_files",
     "rust_skill_files",
@@ -61,19 +62,8 @@ __all__ = [
 ]
 
 
-def main() -> None:
-    check_only = "--check" in sys.argv
-
-    # The spec documents the generator reads are assembled from docs/spec/src/.
-    if check_only:
-        stale = spec_assemble.check()
-        if stale:
-            print("\n".join(stale), file=sys.stderr)
-            sys.exit(1)
-    else:
-        for doc in spec_assemble.write_all():
-            print(f"Updated docs/spec/{doc}.md")
-
+def build_outputs():
+    """Build the help JSON, the skill texts and every generated file's text."""
     grammar = GRAMMAR.read_text()
     cli = CLI.read_text()
     contracts = CONTRACTS.read_text()
@@ -95,6 +85,31 @@ def main() -> None:
         skill_entrypoint_md,
         skill_bundle_md,
         skill_support_files,
+    )
+    return data, skill_entrypoint_md, skill_bundle_md, skill_support_files, files
+
+
+def generated_output_paths() -> set[str]:
+    """Repo-relative paths of every file this generator writes, shards included."""
+    files = build_outputs()[-1]
+    return {path.relative_to(REPO).as_posix() for path in files}
+
+
+def main() -> None:
+    check_only = "--check" in sys.argv
+
+    # The spec documents the generator reads are assembled from docs/spec/src/.
+    if check_only:
+        stale = spec_assemble.check()
+        if stale:
+            print("\n".join(stale), file=sys.stderr)
+            sys.exit(1)
+    else:
+        for doc in spec_assemble.write_all():
+            print(f"Updated docs/spec/{doc}.md")
+
+    data, skill_entrypoint_md, skill_bundle_md, skill_support_files, files = (
+        build_outputs()
     )
 
     if check_only:

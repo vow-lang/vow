@@ -130,6 +130,7 @@ __all__ = [
     "gen_vow_facts_block",
     "gen_vow_lower_block",
     "gen_vow_vc_ops_block",
+    "generated_output_paths",
     "load_arena_routes",
     "load_catalogue",
     "load_excluded",
@@ -138,6 +139,12 @@ __all__ = [
     "write_fact_tables",
     "write_projections",
 ]
+
+
+def generated_output_paths() -> set[str]:
+    """Repo-relative paths of the whole files this generator writes."""
+    targets = WHOLE_FILE_TARGETS + FACT_WHOLE_TARGETS
+    return {path.as_posix() for path, _, _ in targets}
 
 
 def main() -> None:

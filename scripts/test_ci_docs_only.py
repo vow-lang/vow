@@ -53,8 +53,8 @@ class IsProseTest(unittest.TestCase):
         )
 
     def test_the_generated_skill_mirror_is_code(self):
-        # generate_help.py writes these, and a cargo test in vow/src/skill.rs
-        # asserts they match the compiler-embedded skill byte for byte.
+        # generate_help.py writes these, and `generate_help.py --check` asserts
+        # they match the skill text it builds from the spec.
         for path in (
             "skills/vow/SKILL.md",
             "skills/vow/reference/grammar.md",

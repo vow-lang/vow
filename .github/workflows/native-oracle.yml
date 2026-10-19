@@ -33,6 +33,9 @@ name: Native verifier oracles
 # observe. `main` has no required checks, so a workflow skipped by `paths:`
 # cannot leave a required check Pending; add this workflow's jobs to a ruleset
 # only together with a job-level gate in place of `paths:`.
+# A catalogue change (a flipped `verifier_model`) edits only the generated
+# `compiler/catalogue_*_gen.vow`, `compiler/tests/*_gen.vow` and the spec under
+# `docs/spec/`, so those paths are listed beside the verifier sources.
 on:
   push:
     branches: [main]
@@ -40,9 +43,12 @@ on:
     branches: [main]
     paths:
       - "compiler/vc_*.vow"
+      - "compiler/catalogue_*_gen.vow"
+      - "compiler/tests/*_gen.vow"
       - "compiler/replay*"
       - "tests/verify*/**"
       - "examples/**"
+      - "docs/spec/**"
       - "scripts/verifier_runtime.py"
       - "scripts/verify_*.py"
       - "scripts/z3_crosscheck.py"
