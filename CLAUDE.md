@@ -24,7 +24,9 @@ startup. For other agents use the launcher. Do not bypass failures with `SKIP`,
 Changed authored text files must fit **20,000 bytes** (5,000 estimated tokens at
 bytes/4). The hook checks staged blobs, including partial staging and rename
 destinations. CI checks committed blobs and exemptions from the head revision,
-even for docs-only changes. Existing oversized files must be split when edited.
+even for docs-only changes. An existing oversized file may change only if it does
+not grow past its size at the base commit (a ratchet), so split it as you touch it;
+new files and files under the limit must stay at or below it.
 Use cohesive Vow modules and explicit `use` declarations, keep semantic contracts
 and ownership intact, and honor dual-compiler and C-emitter parity. Never weaken
 contracts to make splitting or verification easier. Only complete generated
