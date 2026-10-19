@@ -48,6 +48,14 @@ INSTALL_BITWUZLA_ACTION = (
     REPO_ROOT / ".github" / "actions" / "install-bitwuzla" / "action.yml"
 )
 FULL_TEST_SCRIPT = REPO_ROOT / "scripts" / "full_test.sh"
+FULL_TEST_PARTS = sorted((REPO_ROOT / "scripts" / "full_test").glob("*.sh"))
+
+
+def full_test_text() -> str:
+    return "".join(
+        p.read_text(encoding="utf-8") for p in [FULL_TEST_SCRIPT, *FULL_TEST_PARTS]
+    )
+
 
 # A top-level job key: exactly two spaces, a name, a colon, end of line.
 JOB_KEY = re.compile(r"^  ([A-Za-z0-9_-]+):[ \t]*$", re.MULTILINE)
@@ -382,13 +390,8 @@ class FullTestWorkflowTest(unittest.TestCase):
         self.assertIn('[ "$passed" -ge 500 ]', full_test)
 
     def test_passed_count_grep_matches_full_test_sh_summary_format(self) -> None:
-        # Ties the workflow's grep pattern to the summary line it actually
-        # greps: a rename of "passed" in full_test.sh's print_summary would
-        # silently disable the floor check while every string-matching test
-        # above still passes.
-        script = FULL_TEST_SCRIPT.read_text(encoding="utf-8")
-
-        self.assertIn("${PASS} passed", script)
+        # A rename of "passed" in print_summary would silently disable the floor check.
+        self.assertIn("${PASS} passed", full_test_text())
 
 
 class PromotedFixturesWorkflowTest(unittest.TestCase):
@@ -453,7 +456,7 @@ class PromotedFixturesWorkflowTest(unittest.TestCase):
 
 class FullTestPromotedGateTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.script = FULL_TEST_SCRIPT.read_text(encoding="utf-8")
+        self.script = full_test_text()
 
     def test_compiler_setup_is_a_reusable_step(self) -> None:
         self.assertEqual(2, self.script.count("setup_compilers"))
@@ -481,7 +484,7 @@ class FullTestPromotedGateTest(unittest.TestCase):
         )
         exit_call = self.script.index('exit "$summary_status"', print_summary_call)
         gate_end = self.script.index("\nfi\n", exit_call)
-        section_zero_b = self.script.index("# ─── Section 0b")
+        section_zero_b = self.script.index("section_00b_block_region.sh")
 
         self.assertLess(setup_call, gate_start)
         self.assertLess(gate_end, section_zero_b)

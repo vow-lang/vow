@@ -36,6 +36,7 @@ on:
       - "scripts/check_contract_quality.*"
       - "scripts/test_check_native_fixtures.py"
       - "scripts/full_test.sh"
+      - "scripts/full_test/**"
       - ".github/actions/install-bitwuzla/**"
       - ".github/workflows/native-fixtures.yml"
   workflow_dispatch:

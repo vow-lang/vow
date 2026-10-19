@@ -291,18 +291,15 @@ test_tier15_only_gate_sits_between_8c_and_9_and_calls_print_summary() {
     local script="scripts/full_test.sh"
     local line_8c line_tier15 line_9
 
-    # Match the banner comments, not `section_begin "Section 9: ..."` calls:
-    # VOW_FULL_TEST_BOOTSTRAP_ONLY has its own early `section_begin "Section
-    # 9: Bootstrap Triple Test"` call near the top of the file (an isolated
-    # boundary-test harness, unrelated to the real Section 9), but only the
-    # real section has a banner comment.
-    line_8c=$(grep -n '^# ─── Section 8c: Contract Quality' "$script" | head -1 | cut -d: -f1 || true)
+    # The entry script sources one file per section, in run order, so the gate is the block
+    # between the Section 8c and Section 9 sources.
+    line_8c=$(grep -n '^source .*section_08c_contract_quality\.sh' "$script" | head -1 | cut -d: -f1 || true)
     line_tier15=$(grep -n 'VOW_FULL_TEST_TIER15_ONLY' "$script" | head -1 | cut -d: -f1 || true)
-    line_9=$(grep -n '^# ─── Section 9: Bootstrap Triple Test' "$script" | head -1 | cut -d: -f1 || true)
+    line_9=$(grep -n '^source .*section_09_bootstrap_default\.sh' "$script" | head -1 | cut -d: -f1 || true)
 
-    [ -n "$line_8c" ] || fail_test "tier15 gate: Section 8c marker not found in $script"
+    [ -n "$line_8c" ] || fail_test "tier15 gate: Section 8c source not found in $script"
     [ -n "$line_tier15" ] || fail_test "tier15 gate: VOW_FULL_TEST_TIER15_ONLY not found in $script"
-    [ -n "$line_9" ] || fail_test "tier15 gate: Section 9 marker not found in $script"
+    [ -n "$line_9" ] || fail_test "tier15 gate: Section 9 source not found in $script"
 
     [ "$line_tier15" -gt "$line_8c" ] || fail_test "tier15 gate: must appear after Section 8c (line $line_tier15 <= $line_8c)"
     [ "$line_tier15" -lt "$line_9" ] || fail_test "tier15 gate: must appear before Section 9 (line $line_tier15 >= $line_9)"
