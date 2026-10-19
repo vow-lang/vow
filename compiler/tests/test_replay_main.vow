@@ -407,11 +407,11 @@ fn check_field_holds_a_parameter() -> i32 [io] {
     if holder.lit != String::from("Holder { p: __replay_a0 }") { return 508; }
     if holder.deps != String::from("__replay_a0 ") { return 509; }
     let plain: ReplayArg = agg(String::from("fpush"), 1, String::from("out.addr=-1,b.addr=-2,b.0=-3"));
-    if index_of(plain.reason, String::from("is not a scalar")) < 0 { return 510; }
+    if index_of(plain.reason, String::from("does not list its length")) < 0 { return 510; }
     let tag: ReplayArg = agg(String::from("fpush"), 1, String::from("out.addr=-1,b.addr=-2,b.0=-1,b.1=-1"));
     if tag.lit != String::from("Bag { items: __replay_a0, tag: -1 }") { return 511; }
     let unlisted: ReplayArg = agg(String::from("fpush"), 1, String::from("b.addr=-2,b.0=-1"));
-    if index_of(unlisted.reason, String::from("is not a scalar")) < 0 { return 512; }
+    if index_of(unlisted.reason, String::from("does not list its length")) < 0 { return 512; }
     let other: ReplayArg = agg(String::from("fmix"), 1, one);
     if index_of(other.reason, String::from("holds the object of a parameter of type `Vec<u8>`")) < 0 { return 513; }
     0
