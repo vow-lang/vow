@@ -52,10 +52,10 @@ const PROGRAMS: &[(&str, &str)] = &[
     ),
 ];
 
-/// Copies of every program in `PROGRAMS` concatenated into one module for the
-/// syntax-level benchmarks (parse only: the repeated items collide, so it is
+/// Repetitions of every program in `PROGRAMS` in the module the syntax-level
+/// benchmarks lex and parse (parse only: the repeated items collide, so it is
 /// never type-checked).
-const SYNTAX_COPIES: &[(&str, usize)] = &[("small", 10), ("large", 200)];
+const SYNTAX_COPIES: &[usize] = &[10, 200];
 
 const PROGRAM_NAMES: &[&str] = &[
     "stack_push_pop",
@@ -66,22 +66,12 @@ const PROGRAM_NAMES: &[&str] = &[
     "expression_eval",
 ];
 
-const SYNTAX_NAMES: &[&str] = &["small", "large"];
-
 fn lookup(table: &[(&str, &'static str)], name: &str) -> &'static str {
     table
         .iter()
         .find(|(n, _)| *n == name)
         .map(|(_, src)| *src)
         .unwrap_or_else(|| panic!("unknown bench input {name}"))
-}
-
-fn syntax_copies(name: &str) -> usize {
-    SYNTAX_COPIES
-        .iter()
-        .find(|(n, _)| *n == name)
-        .map(|(_, copies)| *copies)
-        .unwrap_or_else(|| panic!("unknown syntax input {name}"))
 }
 
 /// One module made of `copies` repetitions of every program body. Each
@@ -153,18 +143,17 @@ fn typecheck(module: &Module) -> bool {
 mod syntax {
     use super::*;
 
-    #[divan::bench(args = SYNTAX_NAMES)]
-    fn lex(bencher: Bencher, name: &str) {
-        let src = syntax_module(syntax_copies(name));
+    #[divan::bench(args = SYNTAX_COPIES)]
+    fn lex(bencher: Bencher, copies: usize) {
+        let src = syntax_module(copies);
         bencher.bench(|| Lexer::new(black_box(&src)).tokenize().unwrap());
     }
 
-    #[divan::bench(args = SYNTAX_NAMES)]
-    fn parse(bencher: Bencher, name: &str) {
-        let copies = syntax_copies(name);
+    #[divan::bench(args = SYNTAX_COPIES)]
+    fn parse(bencher: Bencher, copies: usize) {
         let src = syntax_module(copies);
-        let per_copy = super::parse(&syntax_module(1)).items.len();
-        assert_eq!(super::parse(&src).items.len(), per_copy * copies);
+        // Fails on any parse diagnostic, so a truncated parse cannot go unnoticed.
+        super::parse(&src);
         bencher.bench(|| parse_module(black_box(&src), FILE));
     }
 }

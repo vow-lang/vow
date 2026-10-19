@@ -153,7 +153,7 @@ fn collect_target_block_args(
 }
 
 // ---------------------------------------------------------------------------
-// ISA and type helpers
+// Type helpers
 // ---------------------------------------------------------------------------
 
 fn ir_ty_to_cranelift(ty: IrTy) -> Option<types::Type> {
