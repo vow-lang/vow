@@ -1,0 +1,23 @@
+// TEST: replay-skipped a held Vec of 128-bit integers is listed as raw slots, not rebuilt
+// TEST: counterexample-fn "first"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// A held 128-bit element is the raw 64-bit slot in the counterexample, which a literal cannot rebuild.
+module HeapVecWideFieldElementSkipped
+
+struct Bag { items: Vec<i128>, tag: i64 }
+
+fn first(b: Bag) -> i128 vow {
+  requires: b.items.len() > 0u64
+  ensures: result == 5i128
+} {
+  b.items[0]
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i128> = Vec::new();
+  v.push(5i128);
+  let b: Bag = Bag { items: v, tag: 0 };
+  let r: i128 = first(b);
+  0
+}

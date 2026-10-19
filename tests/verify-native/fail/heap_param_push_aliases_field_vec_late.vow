@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "push_one"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The `Vec` that `out` names may be the one `b.items` holds, with `b` declared first: replay binds
+// `out` before `b` whatever the order of the parameters, and passes one `Vec` for both.
+module HeapParamPushAliasesFieldVecLate
+
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn push_one(b: Bag, out: Vec<i64>) -> bool vow {
+  ensures: result
+} {
+  let before: u64 = b.items.len();
+  out.push(1);
+  b.items.len() == before
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), tag: 1 };
+  let out: Vec<i64> = Vec::new();
+  if push_one(b, out) { print_i64(1); }
+  0
+}

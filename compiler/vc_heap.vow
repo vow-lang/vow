@@ -102,21 +102,33 @@ fn vc_heap_len(hp: VcHeap, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, h: i6
     len
 }
 
-// Element `idx` of the collection at `h`, as its 8-byte slot.
-fn vc_heap_elem(hp: VcHeap, ar: VcArena, hdr: SmtScript, h: i64, idx: i64) -> i64 {
+// The array of the elements of every collection at a handle, declared on first use.
+fn vc_heap_elem_array(hp: VcHeap, ar: VcArena, hdr: SmtScript) -> i64 {
     if hp.elem_arr < 0 {
         hp.elem_arr = vc_agg_declare(ar, hdr, String::from("helem"), VC_SORT_ARRAY128());
     }
-    vc_tm_app2(ar, VC_OP_SELECT(), hp.elem_arr, vc_tm_app2(ar, VC_OP_CONCAT(), h, idx))
+    hp.elem_arr
+}
+
+// The array of the bytes of every string at a handle, declared on first use.
+fn vc_heap_byte_array(hp: VcHeap, ar: VcArena, hdr: SmtScript) -> i64 {
+    if hp.byte_arr < 0 {
+        hp.byte_arr = vc_agg_declare(ar, hdr, String::from("hbyte"), VC_SORT_ARRAY128());
+    }
+    hp.byte_arr
+}
+
+// Element `idx` of the collection at `h`, as its 8-byte slot.
+fn vc_heap_elem(hp: VcHeap, ar: VcArena, hdr: SmtScript, h: i64, idx: i64) -> i64 {
+    let arr: i64 = vc_heap_elem_array(hp, ar, hdr);
+    vc_tm_app2(ar, VC_OP_SELECT(), arr, vc_tm_app2(ar, VC_OP_CONCAT(), h, idx))
 }
 
 // Byte `idx` of the string at `h`: the low byte of its 64-bit cell, like a string the
 // function built (`vc_str_byte`).
 fn vc_heap_byte(hp: VcHeap, ar: VcArena, hdr: SmtScript, h: i64, idx: i64) -> i64 {
-    if hp.byte_arr < 0 {
-        hp.byte_arr = vc_agg_declare(ar, hdr, String::from("hbyte"), VC_SORT_ARRAY128());
-    }
-    let cell: i64 = vc_tm_app2(ar, VC_OP_SELECT(), hp.byte_arr, vc_tm_app2(ar, VC_OP_CONCAT(), h, idx));
+    let arr: i64 = vc_heap_byte_array(hp, ar, hdr);
+    let cell: i64 = vc_tm_app2(ar, VC_OP_SELECT(), arr, vc_tm_app2(ar, VC_OP_CONCAT(), h, idx));
     vc_tm_app2(ar, VC_OP_BVAND(), cell, vc_tm_bv(ar, 64, 255, 0))
 }
 

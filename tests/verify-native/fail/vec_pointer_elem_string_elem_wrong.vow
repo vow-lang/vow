@@ -1,0 +1,20 @@
+// TEST: counterexample-fn "first_len"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// Index 1 holds the three-byte text, so the length is 3, not 2.
+module VecPointerElemStringElemWrong
+
+fn first_len() -> u64 vow {
+  ensures: result == 2
+} {
+  let names: Vec<String> = Vec::new();
+  names.push(String::from("ab"));
+  names.push(String::from("xyz"));
+  let second: String = names[1];
+  second.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(first_len());
+  0
+}

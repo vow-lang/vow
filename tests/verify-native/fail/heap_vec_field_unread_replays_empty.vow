@@ -1,0 +1,19 @@
+// TEST: counterexample-fn "tag_of"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The function never touches `b.items`, so the replay builds the Vec empty.
+module HeapVecFieldUnreadReplaysEmpty
+
+struct Bag { items: Vec<i64>, tag: i64 }
+
+fn tag_of(b: Bag) -> i64 vow {
+  ensures: result == 0
+} {
+  b.tag
+}
+
+fn main() -> i32 [io] {
+  let b: Bag = Bag { items: Vec::new(), tag: 0 };
+  print_i64(tag_of(b));
+  0
+}

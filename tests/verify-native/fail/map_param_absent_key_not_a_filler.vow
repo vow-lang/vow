@@ -1,0 +1,20 @@
+// TEST: counterexample-fn "empty_without_zero"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value m.len 1
+// The map has one entry and its key is not `k`, which the function asked about: the harness picks
+// another key for it.
+module MapParamAbsentKeyNotAFiller
+
+fn empty_without_zero(m: HashMap<i64, i64>, k: i64) -> bool vow {
+  requires: !m.contains_key(k)
+  ensures: m.len() == 0
+} {
+  m.len() == 0
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<i64, i64> = HashMap::new();
+  if empty_without_zero(m, 0) { print_u64(1); }
+  0
+}

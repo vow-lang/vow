@@ -1,5 +1,9 @@
 module TestVcCexElem
 
+use lexer
+use ast
+use diag
+use parser
 use vc_cex_elem
 
 fn check_elem_text() -> i64 {
@@ -32,8 +36,83 @@ fn check_elem_open() -> i64 {
     0
 }
 
-fn main() -> i32 {
+fn parse_src(source: String) -> Module [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    parse_module_into(lex(source), arena, dctx, String::from("entry.vow"))
+}
+
+// The element type of a held collection follows the slots of the structs down to its field: a
+// 128-bit field takes two slots, so the slot of the field after it is two more.
+fn check_held_element_types() -> i32 [io] {
+    let m: Module = parse_src(String::from("module T\nstruct Inner { n: i64, w: i128, items: Vec<i32> }\nstruct Outer { tag: u8, inner: Inner, text: String, o: Option<i64> }\nfn f(o: Outer, v: Vec<u8>, x: i64) -> i64 { 0 }\n"));
+    if vc_cex_param_elem_type(m, String::from("f"), String::from("v")) != String::from("u8") { return 30; }
+    if vc_cex_param_elem_type(m, String::from("f"), String::from("o.2")) != String::from("u8") { return 31; }
+    if vc_cex_param_elem_type(m, String::from("f"), String::from("o.1.3")) != String::from("i32") { return 32; }
+    if vc_cex_param_elem_type(m, String::from("f"), String::from("o.1.2")).len() != 0 { return 33; }
+    if vc_cex_param_elem_type(m, String::from("f"), String::from("o.0")).len() != 0 { return 34; }
+    if vc_cex_param_elem_type(m, String::from("f"), String::from("o.9")).len() != 0 { return 35; }
+    if vc_cex_param_elem_type(m, String::from("f"), String::from("o.3.0")).len() != 0 { return 36; }
+    if vc_cex_param_elem_type(m, String::from("f"), String::from("x.0")).len() != 0 { return 37; }
+    if vc_cex_param_elem_type(m, String::from("f"), String::from("o.1.x")).len() != 0 { return 38; }
+    if vc_cex_param_elem_type(m, String::from("g"), String::from("v")).len() != 0 { return 39; }
+    if vc_cex_param_elem_type(m, String::from("f"), String::from("o.1.")).len() != 0 { return 42; }
+    if vc_cex_param_elem_type(m, String::from("f"), String::from("o..3")).len() != 0 { return 43; }
+    let names: Vec<String> = Vec::new();
+    let vals: Vec<String> = Vec::new();
+    names.push(String::from("o.1.3.len"));
+    vals.push(String::from("1"));
+    names.push(String::from("o.1.3[0]"));
+    vals.push(String::from("4294967289"));
+    names.push(String::from("o.2[0]"));
+    vals.push(String::from("353"));
+    names.push(String::from("o.0"));
+    vals.push(String::from("7"));
+    vc_cex_retype_elements(m, String::from("f"), names, vals);
+    if vals[0] != String::from("1") || vals[1] != String::from("-7") { return 40; }
+    if vals[2] != String::from("97") || vals[3] != String::from("7") { return 41; }
+    0
+}
+
+// A map parameter's entry is named by the raw key slot: the key and the value read as the types
+// the declaration gives, an `absent` key keeps its marker, a unit value shows as `()`, and the
+// entries of any other parameter are left alone.
+fn check_map_entries() -> i32 [io] {
+    let m: Module = parse_src(String::from("module T\nfn f(a: HashMap<i32, bool>, b: BTreeMap<i64, ()>, c: HashMap<i64, i64>, v: Vec<u8>) -> i64 { 0 }\n"));
+    let ta: Vec<String> = vc_cex_param_map_types(m, String::from("f"), String::from("a"));
+    if ta.len() != 2u64 || ta[0] != String::from("i32") || ta[1] != String::from("bool") { return 50; }
+    let tb: Vec<String> = vc_cex_param_map_types(m, String::from("f"), String::from("b"));
+    if tb.len() != 2u64 || tb[1] != String::from("()") { return 51; }
+    if vc_cex_param_map_types(m, String::from("f"), String::from("v")).len() != 0u64 { return 52; }
+    if vc_cex_param_map_types(m, String::from("g"), String::from("a")).len() != 0u64 { return 53; }
+    let names: Vec<String> = Vec::new();
+    let vals: Vec<String> = Vec::new();
+    names.push(String::from("a.len"));
+    vals.push(String::from("2"));
+    names.push(String::from("a[4294967291]"));
+    vals.push(String::from("1"));
+    names.push(String::from("a[7]"));
+    vals.push(String::from("absent"));
+    names.push(String::from("b[18446744073709551615]"));
+    vals.push(String::from("0"));
+    names.push(String::from("c[18446744073709551609]"));
+    vals.push(String::from("18446744073709551615"));
+    names.push(String::from("v[0]"));
+    vals.push(String::from("353"));
+    vc_cex_retype_elements(m, String::from("f"), names, vals);
+    if names[0] != String::from("a.len") || vals[0] != String::from("2") { return 54; }
+    if names[1] != String::from("a[-5]") || vals[1] != String::from("true") { return 55; }
+    if names[2] != String::from("a[7]") || vals[2] != String::from("absent") { return 56; }
+    if names[3] != String::from("b[-1]") || vals[3] != String::from("()") { return 57; }
+    if names[4] != String::from("c[-7]") || vals[4] != String::from("-1") { return 58; }
+    if names[5] != String::from("v[0]") || vals[5] != String::from("97") { return 59; }
+    0
+}
+
+fn main() -> i32 [io] {
     let mut r: i64 = check_elem_text();
     if r == 0 { r = check_elem_open(); }
+    if r == 0 { r = check_held_element_types() as i64; }
+    if r == 0 { r = check_map_entries() as i64; }
     i64_to_i32_wrap(r)
 }

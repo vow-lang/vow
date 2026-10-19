@@ -1,0 +1,22 @@
+// TEST: counterexample-fn "name_len"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The `String` in the field has two bytes, not three.
+module VecPointerElemStructWithStringFieldWrong
+
+struct Person { name: String, age: i64 }
+
+fn name_len() -> u64 vow {
+  ensures: result == 3
+} {
+  let people: Vec<Person> = Vec::new();
+  people.push(Person { name: String::from("al"), age: 3 });
+  let p: Person = people[0];
+  let n: String = p.name;
+  n.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(name_len());
+  0
+}

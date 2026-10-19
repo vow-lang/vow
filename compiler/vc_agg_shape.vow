@@ -4,6 +4,7 @@ use ir
 use ir_dominance
 use vc_wide
 use vc_heap
+use vc_ops
 
 // Gate and set-up for the aggregate model (`vc_agg`): which writes it accepts and
 // which parameters it must treat as possibly one object. Both read the IR only.
@@ -114,6 +115,12 @@ fn vc_agg_alias_marked(f: IrFunction, n_ids: u64) -> Vec<i64> {
             let touches: bool = inst.op == IOP_FIELD_SET() || inst.op == IOP_FIELD_GET() || inst.op == IOP_UPSILON();
             if touches && inst.args.len() > 0 && inst.args[0] >= 0 && (inst.args[0] as u64) < n_ids && arg_param[inst.args[0] as u64] >= 0 {
                 marked[arg_param[inst.args[0] as u64] as u64] = 1;
+            }
+            // A parameter stored as a pointer (into a field, or pushed into or set in a `Vec`) is
+            // read back as the address it has, and a write through another parameter reaches it.
+            let stored: i64 = vc_inst_stored_operand(inst);
+            if stored >= 0 && (stored as u64) < n_ids && arg_param[stored as u64] >= 0 {
+                marked[arg_param[stored as u64] as u64] = 1;
             }
             if inst.op == IOP_FIELD_SET() {
                 let op: i64 = def_op[inst.args[0] as u64];

@@ -268,9 +268,9 @@ fn vc_hook_multi_text_fn(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i6
 }
 
 // `string_join(parts, sep)`: a fresh text whose length is below `VOW_CAP_VALUE_MASK`, empty for
-// no parts. The runtime reads the contents of every part, which the model does not hold for an
-// object the function stored (`vc_ptr_store_detail`), so two calls on the same terms need not
-// agree and no congruence is stated.
+// no parts. The runtime reads the contents of every part, which the model does not tie to the
+// join (a slot is a constant or the address of an object, `vc_ptr_store_detail`), so two calls on
+// the same terms need not agree and no congruence is stated.
 fn vc_hook_join(vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, parts_len: i64, out: Vec<i64>) {
     let ra: i64 = vc_str_fresh_array(vv, ar, hdr, String::from("hkj"));
     let rl: i64 = vc_agg_declare(ar, hdr, vc_vec_fresh_name(vv, String::from("hkk")), 64);

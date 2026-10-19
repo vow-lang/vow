@@ -76,14 +76,21 @@ struct ReplayArg {
     lit: String,
     ty_text: String,
     reason: String,
+    deps: String,
 }
 
 fn replay_arg_skip(reason: String) -> ReplayArg {
-    ReplayArg { lit: String::from(""), ty_text: String::from(""), reason: reason }
+    ReplayArg { lit: String::from(""), ty_text: String::from(""), reason: reason, deps: String::from("") }
 }
 
 fn replay_arg_ok(lit: String, ty_text: String) -> ReplayArg {
-    ReplayArg { lit: lit, ty_text: ty_text, reason: String::from("") }
+    ReplayArg { lit: lit, ty_text: ty_text, reason: String::from(""), deps: String::from("") }
+}
+
+// `deps` lists, each followed by a space, the harness bindings of the other parameters the
+// literal names (see `ReplayObjs`), so they are declared before it.
+fn replay_arg_ok_deps(lit: String, ty_text: String, deps: String) -> ReplayArg {
+    ReplayArg { lit: lit, ty_text: ty_text, reason: String::from(""), deps: deps }
 }
 
 // True if `s` is a plain decimal integer literal (optional leading `-`).
@@ -365,30 +372,289 @@ fn replay_zero_text(name: String) -> String {
     String::from("0")
 }
 
+// A function that reads memory through a field and writes a parameter has the native
+// counterexample list the address of each `Vec`, `String` and struct parameter as `<param>.addr`;
+// a field holding an object lists the address it holds as its own slot (`b.0`), and equal values
+// are one object. The harness binds each parameter once and such a field names the binding.
+struct ReplayObjs {
+    addrs: Vec<String>,
+    binds: Vec<String>,
+    tys: Vec<String>,
+    owners: Vec<i64>,
+    cur: i64,
+}
+
+// A `linear struct` is consumed once, so a harness cannot name its binding in a second place.
+fn replay_holds_object(m: Module, tid: i64) -> bool {
+    let a: AstArena = m.arena;
+    if type_tag(a, tid) == TY_GENERIC() { return arena_str(a, type_a(a, tid)) == String::from("Vec"); }
+    if type_tag(a, tid) != TY_NAMED() { return false; }
+    let name: String = arena_str(a, type_a(a, tid));
+    if name == String::from("String") { return true; }
+    let sid: i64 = replay_find_struct(m, name);
+    sid >= 0 && sdef_is_linear(a, sid) == 0
+}
+
+// Per source parameter of `fn_name`: its address ("" for none), the harness binding of its value
+// (the first parameter's with the same `.alias` identity, else `__replay_a<i>`), its type text and
+// the index of the first parameter it is one object with.
+fn replay_param_objects(m: Module, fn_name: String, names: Vec<String>, vals: Vec<String>) -> ReplayObjs {
+    let a: AstArena = m.arena;
+    let addrs: Vec<String> = Vec::new();
+    let binds: Vec<String> = Vec::new();
+    let tys: Vec<String> = Vec::new();
+    let owners: Vec<i64> = Vec::new();
+    let ids: Vec<String> = Vec::new();
+    let fid: i64 = replay_find_fn_item(m, fn_name);
+    if fid >= 0 {
+        let lid: i64 = fn_params_lid(a, fid);
+        let n: i64 = list_len(a, lid) / 4;
+        let mut i: i64 = 0;
+        while i < n {
+            let pname: String = arena_str(a, list_get(a, lid, i * 4));
+            let tid: i64 = list_get(a, lid, i * 4 + 1);
+            let aid: String = replay_alias_id(names, vals, pname);
+            let first: i64 = replay_alias_find(ids, aid);
+            ids.push(aid);
+            tys.push(print_type_text(a, tid));
+            if first >= 0 && first < binds.len() as i64 {
+                owners.push(first);
+                binds.push(binds[first as u64]);
+            } else {
+                owners.push(i);
+                binds.push(str3r(String::from("__replay_a"), i64_to_string(i), String::from("")));
+            }
+            if replay_holds_object(m, tid) {
+                addrs.push(replay_cex_value(names, vals, str3r(pname, String::from(".addr"), String::from(""))));
+            } else {
+                addrs.push(String::from(""));
+            }
+            i = i + 1;
+        }
+    }
+    ReplayObjs { addrs: addrs, binds: binds, tys: tys, owners: owners, cur: -1 }
+}
+
+fn replay_objs_at(o: ReplayObjs, pi: i64) -> ReplayObjs {
+    ReplayObjs { addrs: o.addrs, binds: o.binds, tys: o.tys, owners: o.owners, cur: pi }
+}
+
+fn replay_obj_bind(o: ReplayObjs, pi: i64) -> String {
+    let binds: Vec<String> = o.binds;
+    if pi >= 0 && pi < binds.len() as i64 { return binds[pi as u64]; }
+    str3r(String::from("__replay_a"), i64_to_string(pi), String::from(""))
+}
+
+fn replay_obj_owner(o: ReplayObjs, pi: i64) -> i64 {
+    let owners: Vec<i64> = o.owners;
+    if pi >= 0 && pi < owners.len() as i64 { return owners[pi as u64]; }
+    pi
+}
+
+fn replay_obj_ty(o: ReplayObjs, pi: i64) -> String {
+    let tys: Vec<String> = o.tys;
+    if pi >= 0 && pi < tys.len() as i64 { return tys[pi as u64]; }
+    String::from("")
+}
+
+// Index of the first parameter whose address is the value of slot `key`; -1 when the slot is not
+// listed or names no parameter, -2 when parameters that are not one object share that address.
+fn replay_held_param(key: String, names: Vec<String>, vals: Vec<String>, objs: ReplayObjs) -> i64 {
+    let raw: String = replay_cex_value(names, vals, key);
+    if raw.len() == 0 { return -1; }
+    let addrs: Vec<String> = objs.addrs;
+    let mut first: i64 = -1;
+    let mut i: u64 = 0u64;
+    while i < addrs.len() {
+        if addrs[i] == raw {
+            if first < 0 { first = i as i64; }
+            else if replay_obj_owner(objs, i as i64) != replay_obj_owner(objs, first) { return -2; }
+        }
+        i = i + 1u64;
+    }
+    first
+}
+
+// A field of type text `shown` that holds the object of parameter `held` is that parameter's
+// binding. The model does not know types, so a parameter of another type is no such object. The
+// parameter being built cannot hold itself: its field would need a value before it exists.
+fn replay_alias_field(shown: String, held: i64, objs: ReplayObjs) -> ReplayArg {
+    let theirs: String = replay_obj_ty(objs, held);
+    if theirs != shown {
+        return replay_field_skip(shown, str3r(String::from("` holds the object of a parameter of type `"), theirs, String::from("`")));
+    }
+    let bind: String = replay_obj_bind(objs, held);
+    if bind == replay_obj_bind(objs, objs.cur) {
+        return replay_field_skip(shown, String::from("` holds the very value that holds it, and a value must exist before a field can hold it, so replay cannot build the cycle"));
+    }
+    replay_arg_ok_deps(String::from(bind), shown, str3r(bind, String::from(" "), String::from("")))
+}
+
+// Indices of the items in an order that declares each binding before a value names it. `defs[i]`
+// is the binding item `i` declares ("" for none) and `uses[i]` the bindings its value names, each
+// followed by a space. Fewer indices than declared bindings means items need each other.
+fn replay_let_order(defs: Vec<String>, uses: Vec<String>) -> Vec<i64> {
+    let order: Vec<i64> = Vec::new();
+    let done: Vec<bool> = Vec::new();
+    let n: u64 = defs.len();
+    let mut k: u64 = 0u64;
+    while k < n {
+        done.push(false);
+        k = k + 1u64;
+    }
+    let mut round: u64 = 0u64;
+    while round < n && uses.len() == n {
+        let mut i: u64 = 0u64;
+        while i < n {
+            if !done[i] && defs[i].len() > 0 && replay_uses_done(defs, done, uses[i]) {
+                done[i] = true;
+                order.push(i as i64);
+            }
+            i = i + 1u64;
+        }
+        round = round + 1u64;
+    }
+    order
+}
+
+fn replay_ordered_lets(lets: Vec<String>, defs: Vec<String>, uses: Vec<String>) -> ReplayArg {
+    let order: Vec<i64> = replay_let_order(defs, uses);
+    if order.len() as i64 != replay_count_defs(defs) || lets.len() != defs.len() {
+        return replay_arg_skip(String::from("parameters hold each other's objects, so no order declares each before it is used"));
+    }
+    let body: String = String::from("");
+    let mut i: u64 = 0u64;
+    while i < order.len() {
+        let k: i64 = order[i];
+        if k < 0 || k >= lets.len() as i64 { return replay_arg_skip(String::from("no order declares each parameter before it is used")); }
+        body.push_str(lets[k as u64]);
+        i = i + 1u64;
+    }
+    replay_arg_ok(body, String::from(""))
+}
+
+fn replay_count_defs(defs: Vec<String>) -> i64 {
+    let mut n: i64 = 0;
+    let mut i: u64 = 0u64;
+    while i < defs.len() {
+        if defs[i].len() > 0 { n = n + 1; }
+        i = i + 1u64;
+    }
+    n
+}
+
+fn replay_uses_done(defs: Vec<String>, done: Vec<bool>, uses: String) -> bool {
+    let n: u64 = uses.len();
+    let mut start: u64 = 0u64;
+    let mut i: u64 = 0u64;
+    while i < n {
+        if uses.byte_at(i) == 32 {
+            if i > start && !replay_def_done(defs, done, uses.substring(start, i)) { return false; }
+            start = i + 1u64;
+        }
+        i = i + 1u64;
+    }
+    true
+}
+
+fn replay_def_done(defs: Vec<String>, done: Vec<bool>, name: String) -> bool {
+    let mut j: u64 = 0u64;
+    while j < defs.len() && j < done.len() {
+        if defs[j] == name { return done[j]; }
+        j = j + 1u64;
+    }
+    false
+}
+
 // How deep an aggregate held in an aggregate is rebuilt.
 fn REPLAY_MAX_DEPTH() -> i64 { 8 }
 
+// Skip of a field of AST type text `shown`; `tail` completes "field of type `<shown>" with its closing quote.
+fn replay_field_skip(shown: String, tail: String) -> ReplayArg {
+    replay_arg_skip(str3r(String::from("field of type `"), shown, tail))
+}
+
+// True for the element types a held `Vec` rebuilds: `bool` and the integers of up to 64 bits.
+// A held 128-bit or float element is the raw 64-bit slot, not the value the program reads.
+fn replay_held_elem_scalar(a: AstArena, tid: i64) -> bool {
+    if type_tag(a, tid) != TY_NAMED() { return false; }
+    let name: String = arena_str(a, type_a(a, tid));
+    name == String::from("bool") || replay_int_bits(name) > 0
+}
+
+// The `Vec` or `String` a field of AST type `tid` holds at `slot`. A field the model never read
+// holds an empty collection: nothing the function did depended on it. A field whose address
+// is listed but whose length is not was read by something other than `len`, `v[i]` or
+// `byte_at`, and is not rebuilt.
+fn replay_held_arg(a: AstArena, tid: i64, inner: String, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
+    let shown: String = print_type_text(a, tid);
+    let is_vec: bool = type_tag(a, tid) == TY_GENERIC();
+    let entry: String = replay_cex_value(names, vals, inner);
+    let len: i64 = replay_vec_len(inner, names, vals);
+    if entry.len() == 0 && len != -1 {
+        return replay_field_skip(shown, String::from("`: the counterexample lists its length but not its address"));
+    }
+    if entry.len() > 0 && len == -1 {
+        return replay_field_skip(shown, String::from("`: the counterexample does not list its length"));
+    }
+    if !is_vec {
+        return replay_string_arg(inner, names, vals);
+    }
+    let elem: i64 = list_get(a, type_b(a, tid), 0);
+    if replay_held_elem_scalar(a, elem) { return replay_vec_arg(a, tid, inner, names, vals); }
+    if len > 0 || len == -2 {
+        return replay_field_skip(shown, String::from("` holds elements replay cannot rebuild"));
+    }
+    let lit: String = String::from("{ let __replay_v: ");
+    lit.push_str(shown);
+    lit.push_str(String::from(" = Vec::new(); __replay_v }"));
+    replay_arg_ok(lit, shown)
+}
+
+fn replay_read_through_memory(shown: String) -> ReplayArg {
+    replay_field_skip(shown, String::from("` is read through memory; its fields are not listed"))
+}
+
 // The struct, enum, `Option` or `Result` a field of AST type `tid` holds at `slot`: a pointer
 // to an object whose slot `j` is the counterexample entry `<prefix>.<slot>.<j>` (the native
-// model names a held object by the path of slots that reach it). Any other type is not a scalar.
-fn replay_nested_arg(m: Module, tid: i64, pname: String, slot: i64, names: Vec<String>, vals: Vec<String>, depth: i64, avoid: Vec<i64>) -> ReplayArg {
+// model names a held object by the path of slots that reach it), or the `Vec` or `String` it
+// holds. A field whose slot value is the address of a parameter is that parameter. Any other
+// field that has an entry of its own is a pointer the function loaded and read through memory:
+// the model lists its address, not its fields, so the object cannot be rebuilt.
+fn replay_nested_arg(m: Module, tid: i64, pname: String, slot: i64, names: Vec<String>, vals: Vec<String>, depth: i64, avoid: Vec<i64>, objs: ReplayObjs) -> ReplayArg {
     let a: AstArena = m.arena;
     let shown: String = print_type_text(a, tid);
     let not_scalar: ReplayArg = replay_arg_skip(str3r(String::from("field of type `"), shown, String::from("` is not a scalar")));
+    let inner: String = replay_slot_key(pname, slot);
+    if replay_holds_object(m, tid) {
+        let held: i64 = replay_held_param(inner, names, vals, objs);
+        if held == -2 {
+            return replay_arg_skip(str3r(String::from("field of type `"), shown, String::from("` holds an address that several parameters share without being one object")));
+        }
+        if held >= 0 { return replay_alias_field(shown, held, objs); }
+    }
     if depth >= REPLAY_MAX_DEPTH() {
         return replay_arg_skip(str3r(String::from("field of type `"), shown, String::from("` is nested too deep to rebuild")));
     }
-    let inner: String = replay_slot_key(pname, slot);
-    if type_tag(a, tid) == TY_NAMED() {
+    let tag: i64 = type_tag(a, tid);
+    if tag == TY_NAMED() {
         let name: String = arena_str(a, type_a(a, tid));
+        if name == String::from("String") { return replay_held_arg(a, tid, inner, names, vals); }
         let sid: i64 = replay_find_struct(m, name);
-        if sid >= 0 { return replay_struct_arg(m, sid, inner, names, vals, depth + 1, avoid); }
         let eid: i64 = replay_find_enum(m, name);
-        if eid >= 0 { return replay_enum_arg(m, eid, inner, names, vals, depth + 1, avoid); }
-        return not_scalar;
+        if sid < 0 && eid < 0 { return not_scalar; }
+        if replay_cex_value(names, vals, inner).len() > 0 {
+            return replay_read_through_memory(shown);
+        }
+        if sid >= 0 { return replay_struct_arg(m, sid, inner, names, vals, depth + 1, avoid, objs); }
+        return replay_enum_arg(m, eid, inner, names, vals, depth + 1, avoid, objs);
     }
-    if type_tag(a, tid) == TY_GENERIC() && arena_str(a, type_a(a, tid)) != String::from("Vec") {
-        return replay_builtin_enum_arg(m, tid, inner, names, vals, depth + 1, avoid);
+    if tag == TY_GENERIC() {
+        if arena_str(a, type_a(a, tid)) == String::from("Vec") { return replay_held_arg(a, tid, inner, names, vals); }
+        if replay_cex_value(names, vals, inner).len() > 0 {
+            return replay_read_through_memory(shown);
+        }
+        return replay_builtin_enum_arg(m, tid, inner, names, vals, depth + 1, avoid, objs);
     }
     not_scalar
 }
@@ -396,18 +662,18 @@ fn replay_nested_arg(m: Module, tid: i64, pname: String, slot: i64, names: Vec<S
 // Literal of the scalar (or `()`) a field of AST type `tid` holds at `slot`, or of the
 // aggregate it points to. A slot the model never read cannot have influenced the path to the
 // claim, so it takes the zero value.
-fn replay_field_arg(m: Module, tid: i64, pname: String, slot: i64, names: Vec<String>, vals: Vec<String>, depth: i64, avoid: Vec<i64>) -> ReplayArg {
+fn replay_field_arg(m: Module, tid: i64, pname: String, slot: i64, names: Vec<String>, vals: Vec<String>, depth: i64, avoid: Vec<i64>, objs: ReplayObjs) -> ReplayArg {
     let a: AstArena = m.arena;
     let shown: String = print_type_text(a, tid);
     if type_tag(a, tid) == TY_UNIT() {
         return replay_arg_ok(String::from("()"), shown);
     }
     if type_tag(a, tid) != TY_NAMED() {
-        return replay_nested_arg(m, tid, pname, slot, names, vals, depth, avoid);
+        return replay_nested_arg(m, tid, pname, slot, names, vals, depth, avoid, objs);
     }
     let name: String = arena_str(a, type_a(a, tid));
     if !replay_is_scalar_name(name) {
-        return replay_nested_arg(m, tid, pname, slot, names, vals, depth, avoid);
+        return replay_nested_arg(m, tid, pname, slot, names, vals, depth, avoid, objs);
     }
     let mut raw: String = replay_slot_value(pname, slot, replay_slot_label(name), names, vals);
     if raw.len() == 0 { raw = replay_zero_text(name); }
@@ -436,23 +702,25 @@ fn replay_field_slots(a: AstArena, tid: i64) -> i64 {
 }
 
 // `(f0, f1, ...)` or "" for no payload, from slot `first` on.
-fn replay_payload_args(m: Module, tids: Vec<i64>, pname: String, first: i64, names: Vec<String>, vals: Vec<String>, depth: i64, avoid: Vec<i64>) -> ReplayArg {
+fn replay_payload_args(m: Module, tids: Vec<i64>, pname: String, first: i64, names: Vec<String>, vals: Vec<String>, depth: i64, avoid: Vec<i64>, objs: ReplayObjs) -> ReplayArg {
     let a: AstArena = m.arena;
     let out: String = String::from("");
+    let deps: String = String::from("");
     let mut slot: i64 = first;
     let mut i: u64 = 0u64;
     while i < tids.len() {
-        let f: ReplayArg = replay_field_arg(m, tids[i], pname, slot, names, vals, depth, avoid);
+        let f: ReplayArg = replay_field_arg(m, tids[i], pname, slot, names, vals, depth, avoid, objs);
         if f.reason.len() > 0 { return f; }
         if i > 0u64 { out.push_str(String::from(", ")); }
         out.push_str(f.lit);
+        deps.push_str(f.deps);
         slot = slot + replay_field_slots(a, tids[i]);
         i = i + 1u64;
     }
-    replay_arg_ok(out, String::from(""))
+    replay_arg_ok_deps(out, String::from(""), deps)
 }
 
-fn replay_struct_arg(m: Module, sid: i64, pname: String, names: Vec<String>, vals: Vec<String>, depth: i64, avoid: Vec<i64>) -> ReplayArg {
+fn replay_struct_arg(m: Module, sid: i64, pname: String, names: Vec<String>, vals: Vec<String>, depth: i64, avoid: Vec<i64>, objs: ReplayObjs) -> ReplayArg {
     let a: AstArena = m.arena;
     let sname: String = arena_str(a, sdef_name_sid(a, sid));
     let fields_lid: i64 = sdef_fields_lid(a, sid);
@@ -461,12 +729,13 @@ fn replay_struct_arg(m: Module, sid: i64, pname: String, names: Vec<String>, val
         return replay_arg_skip(str3r(String::from("struct `"), sname, String::from("` has no fields")));
     }
     let lit: String = String::from(sname);
+    let deps: String = String::from("");
     lit.push_str(String::from(" { "));
     let mut slot: i64 = 0;
     let mut i: i64 = 0;
     while i < n {
         let ftid: i64 = list_get(a, fields_lid, i * 2 + 1);
-        let f: ReplayArg = replay_field_arg(m, ftid, pname, slot, names, vals, depth, avoid);
+        let f: ReplayArg = replay_field_arg(m, ftid, pname, slot, names, vals, depth, avoid, objs);
         slot = slot + replay_field_slots(a, ftid);
         if f.reason.len() > 0 {
             let fname: String = arena_str(a, list_get(a, fields_lid, i * 2));
@@ -476,10 +745,11 @@ fn replay_struct_arg(m: Module, sid: i64, pname: String, names: Vec<String>, val
         lit.push_str(arena_str(a, list_get(a, fields_lid, i * 2)));
         lit.push_str(String::from(": "));
         lit.push_str(f.lit);
+        deps.push_str(f.deps);
         i = i + 1;
     }
     lit.push_str(String::from(" }"));
-    replay_arg_ok(lit, sname)
+    replay_arg_ok_deps(lit, sname, deps)
 }
 
 // The smallest discriminant below `n` that no instruction of the program compares a
@@ -504,7 +774,7 @@ fn replay_untested_tag(n: i64, avoid: Vec<i64>) -> i64 {
 // `payloads[v]` holds the AST types of variant `v`'s payload. The model puts no range on a
 // tag, so it may pick one outside the enum (`-1`); that run takes the arm no test selects,
 // which a variant the program never tests also takes, so replay builds that variant instead.
-fn replay_variant_arg(m: Module, ename: String, variants: Vec<String>, payloads: Vec<Vec<i64>>, pname: String, names: Vec<String>, vals: Vec<String>, depth: i64, avoid: Vec<i64>) -> ReplayArg {
+fn replay_variant_arg(m: Module, ename: String, variants: Vec<String>, payloads: Vec<Vec<i64>>, pname: String, names: Vec<String>, vals: Vec<String>, depth: i64, avoid: Vec<i64>, objs: ReplayObjs) -> ReplayArg {
     let mut tag: i64 = 0;
     let raw: String = replay_slot_value(pname, 0, String::from("64"), names, vals);
     if raw.len() > 0 {
@@ -534,19 +804,21 @@ fn replay_variant_arg(m: Module, ename: String, variants: Vec<String>, payloads:
     lit.push_str(String::from("::"));
     lit.push_str(variants[tag as u64]);
     let tids: Vec<i64> = payloads[tag as u64];
+    let deps: String = String::from("");
     if tids.len() > 0 {
-        let p: ReplayArg = replay_payload_args(m, tids, pname, 1, names, vals, depth, avoid);
+        let p: ReplayArg = replay_payload_args(m, tids, pname, 1, names, vals, depth, avoid, objs);
         if p.reason.len() > 0 {
             return replay_arg_skip(str3r(String::from("variant `"), variants[tag as u64], str3r(String::from("` of `"), ename, str3r(String::from("`: "), p.reason, String::from("")))));
         }
         lit.push_str(String::from("("));
         lit.push_str(p.lit);
         lit.push_str(String::from(")"));
+        deps.push_str(p.deps);
     }
-    replay_arg_ok(lit, ename)
+    replay_arg_ok_deps(lit, ename, deps)
 }
 
-fn replay_enum_arg(m: Module, eid: i64, pname: String, names: Vec<String>, vals: Vec<String>, depth: i64, avoid: Vec<i64>) -> ReplayArg {
+fn replay_enum_arg(m: Module, eid: i64, pname: String, names: Vec<String>, vals: Vec<String>, depth: i64, avoid: Vec<i64>, objs: ReplayObjs) -> ReplayArg {
     let a: AstArena = m.arena;
     let variants_lid: i64 = edef_variants_lid(a, eid);
     let n: i64 = list_len(a, variants_lid) / 2;
@@ -565,12 +837,12 @@ fn replay_enum_arg(m: Module, eid: i64, pname: String, names: Vec<String>, vals:
         payloads.push(tids);
         i = i + 1;
     }
-    replay_variant_arg(m, arena_str(a, edef_name_sid(a, eid)), variants, payloads, pname, names, vals, depth, avoid)
+    replay_variant_arg(m, arena_str(a, edef_name_sid(a, eid)), variants, payloads, pname, names, vals, depth, avoid, objs)
 }
 
 // `Option<T>` (`None`, `Some`) and `Result<T, E>` (`Ok`, `Err`), in the
 // lowerer's variant order.
-fn replay_builtin_enum_arg(m: Module, tid: i64, pname: String, names: Vec<String>, vals: Vec<String>, depth: i64, avoid: Vec<i64>) -> ReplayArg {
+fn replay_builtin_enum_arg(m: Module, tid: i64, pname: String, names: Vec<String>, vals: Vec<String>, depth: i64, avoid: Vec<i64>, objs: ReplayObjs) -> ReplayArg {
     let a: AstArena = m.arena;
     let name: String = arena_str(a, type_a(a, tid));
     let args_lid: i64 = type_b(a, tid);
@@ -595,9 +867,9 @@ fn replay_builtin_enum_arg(m: Module, tid: i64, pname: String, names: Vec<String
     } else {
         return replay_arg_skip(str3r(String::from("parameter type `"), print_type_text(a, tid), String::from("` is not rebuilt by replay")));
     }
-    let r: ReplayArg = replay_variant_arg(m, name, variants, payloads, pname, names, vals, depth, avoid);
+    let r: ReplayArg = replay_variant_arg(m, name, variants, payloads, pname, names, vals, depth, avoid, objs);
     if r.reason.len() > 0 { return r; }
-    replay_arg_ok(r.lit, print_type_text(a, tid))
+    replay_arg_ok_deps(r.lit, print_type_text(a, tid), r.deps)
 }
 
 // `Vec` and `String` parameters. The counterexample lists `<param>.len` and, for
@@ -748,11 +1020,182 @@ fn replay_string_arg(pname: String, names: Vec<String>, vals: Vec<String>) -> Re
     replay_arg_ok(lit, String::from("String"))
 }
 
+// Key and value type names of a parameter of AST type `tid` that is a `HashMap` or `BTreeMap`
+// (`()` for a unit value), or an empty list for any other type.
+fn replay_map_type_names(a: AstArena, tid: i64) -> Vec<String> {
+    let out: Vec<String> = Vec::new();
+    if type_tag(a, tid) != TY_GENERIC() { return out; }
+    let head: String = arena_str(a, type_a(a, tid));
+    if head != String::from("HashMap") && head != String::from("BTreeMap") { return out; }
+    let args_lid: i64 = type_b(a, tid);
+    if list_len(a, args_lid) != 2 { return out; }
+    let k: i64 = list_get(a, args_lid, 0);
+    let v: i64 = list_get(a, args_lid, 1);
+    if type_tag(a, k) != TY_NAMED() { return out; }
+    let mut vname: String = String::from("");
+    if type_tag(a, v) == TY_UNIT() {
+        vname = String::from("()");
+    } else if type_tag(a, v) == TY_NAMED() {
+        vname = arena_str(a, type_a(a, v));
+    }
+    if vname.len() == 0 { return out; }
+    out.push(arena_str(a, type_a(a, k)));
+    out.push(vname);
+    out
+}
+
+// The keys a `HashMap` or `BTreeMap` parameter was asked about, listed by the native
+// counterexample as `<param>[<key>]` (see `vc_cex_retype_map_entry`): the value of a key the
+// parameter's own state has, `absent` for one it has not. `keys` and `vals` get one item each
+// per entry, in order.
+fn replay_map_entries(pname: String, names: Vec<String>, vals: Vec<String>, keys: Vec<String>, held: Vec<String>) {
+    let prefix: String = String::from(pname);
+    prefix.push_str(String::from("["));
+    let mut i: u64 = 0u64;
+    while i < names.len() && i < vals.len() {
+        let n: String = names[i];
+        if n.len() > prefix.len() + 1u64 && n.substring(0u64, prefix.len()) == prefix && n.byte_at(n.len() - 1u64) == 93 {
+            keys.push(n.substring(prefix.len(), n.len() - 1u64));
+            held.push(vals[i]);
+        }
+        i = i + 1u64;
+    }
+}
+
+// True when a key text of `keys` occurs twice: two slots of one narrow key type that read back as one key.
+fn replay_has_repeat(keys: Vec<String>) -> bool {
+    let mut i: u64 = 1u64;
+    while i < keys.len() {
+        let mut j: u64 = 0u64;
+        while j < i {
+            if keys[i] == keys[j] { return true; }
+            j = j + 1u64;
+        }
+        i = i + 1u64;
+    }
+    false
+}
+
+fn replay_has_key(keys: Vec<String>, key: String) -> bool {
+    let mut i: u64 = 0u64;
+    while i < keys.len() {
+        if keys[i] == key { return true; }
+        i = i + 1u64;
+    }
+    false
+}
+
+// Candidate `c` of the keys of type `kt`: `false` and `true`, 0, 1, 2, ... for an unsigned integer,
+// and 0, -1, 1, -2, ... for a signed one. "" past the end of `bool`.
+fn replay_key_candidate(kt: String, c: i64) -> String {
+    if kt == String::from("bool") {
+        if c == 0 { return String::from("false"); }
+        if c == 1 { return String::from("true"); }
+        return String::from("");
+    }
+    if replay_int_signed(kt) && c % 2 == 1 { return i64_to_string(0 - (c + 1) / 2); }
+    if replay_int_signed(kt) { return i64_to_string(c / 2); }
+    i64_to_string(c)
+}
+
+// The next key of type `kt` after `tried` candidates that `keys` does not hold, as source text,
+// or "" when the key type has none left (`bool` has two, a narrow integer its range).
+fn replay_fresh_key(kt: String, keys: Vec<String>, tried: i64) -> String {
+    let mut c: i64 = tried;
+    while c < tried + keys.len() as i64 + 2 {
+        let text: String = replay_key_candidate(kt, c);
+        if text.len() == 0 || (kt != String::from("bool") && !replay_int_fits(kt, text)) { return String::from(""); }
+        if !replay_has_key(keys, text) { return text; }
+        c = c + 1;
+    }
+    String::from("")
+}
+
+fn replay_map_insert(lit: String, key: String, val: String) {
+    lit.push_str(String::from(" __replay_m.insert("));
+    lit.push_str(key);
+    lit.push_str(String::from(", "));
+    lit.push_str(val);
+    lit.push_str(String::from(");"));
+}
+
+// A `HashMap` or `BTreeMap` parameter, built with `new` and one `insert` per key of the listed
+// state, then as many other keys as the length needs (`<param>.len`). A key the parameter does
+// not have stays out, and so does every key the claim asked about.
+fn replay_map_arg(a: AstArena, tid: i64, pname: String, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
+    let shown: String = print_type_text(a, tid);
+    let tys: Vec<String> = replay_map_type_names(a, tid);
+    let not_rebuilt: ReplayArg = replay_arg_skip(str3r(String::from("parameter type `"), shown, String::from("` is not rebuilt by replay")));
+    if tys.len() != 2u64 { return not_rebuilt; }
+    let kt: String = tys[0];
+    let vt: String = tys[1];
+    if !(kt == String::from("bool") || replay_int_bits(kt) > 0) { return not_rebuilt; }
+    if !(vt == String::from("()") || vt == String::from("bool") || replay_int_bits(vt) > 0) { return not_rebuilt; }
+    let len: i64 = replay_vec_len(pname, names, vals);
+    if len == -2 {
+        return replay_arg_skip(str3r(String::from("length of `"), pname, String::from("` is not a length replay can build")));
+    }
+    let keys: Vec<String> = Vec::new();
+    let held: Vec<String> = Vec::new();
+    replay_map_entries(pname, names, vals, keys, held);
+    if replay_has_repeat(keys) {
+        return replay_arg_skip(str3r(String::from("two keys of `"), pname, String::from("` are one key of the declared key type")));
+    }
+    let lit: String = String::from("{ let __replay_m: ");
+    lit.push_str(shown);
+    lit.push_str(String::from(" = "));
+    lit.push_str(arena_str(a, type_a(a, tid)));
+    lit.push_str(String::from("::new();"));
+    let mut present: i64 = 0;
+    let mut i: u64 = 0u64;
+    while i < keys.len() {
+        if held[i] != String::from("absent") {
+            let k: ReplayArg = replay_scalar_literal(kt, keys[i]);
+            if k.reason.len() > 0 { return k; }
+            let mut v: ReplayArg = replay_arg_ok(String::from("()"), vt);
+            if vt != String::from("()") { v = replay_scalar_literal(vt, held[i]); }
+            if v.reason.len() > 0 { return v; }
+            replay_map_insert(lit, k.lit, v.lit);
+            present = present + 1;
+        }
+        i = i + 1u64;
+    }
+    let filler: String = { if vt == String::from("()") { String::from("()") } else { replay_zero_text(vt) } };
+    let mut tried: i64 = 0;
+    while present < len {
+        let fresh: String = replay_fresh_key(kt, keys, tried);
+        if fresh.len() == 0 {
+            return replay_arg_skip(str3r(String::from("the key type `"), kt, String::from("` has too few keys for the length of the map")));
+        }
+        keys.push(fresh);
+        replay_map_insert(lit, fresh, filler);
+        present = present + 1;
+        tried = tried + 1;
+    }
+    lit.push_str(String::from(" __replay_m }"));
+    replay_arg_ok(lit, shown)
+}
+
+// The statement of the harness that calls `fn_name`. A linear result (a `linear struct`, or an
+// `Option`, `Result` or enum that owns one) carries an obligation that a bare call statement leaves
+// undischarged, so the harness hands it to `drop`, the language's own way to consume a value.
+fn replay_call_stmt(fn_name: String, call_args: String, linear_result: bool) -> String {
+    let out: String = String::from("    ");
+    if linear_result { out.push_str(String::from("drop(")); }
+    out.push_str(fn_name);
+    out.push_str(String::from("("));
+    out.push_str(call_args);
+    out.push_str(String::from(")"));
+    if linear_result { out.push_str(String::from(")")); }
+    out.push_str(String::from(";\n"));
+    out
+}
+
 // Source expression and type for argument `pi` of the function `fn_name`
 // declared in `m`, rebuilt from the counterexample's `<param>.<slot>` values.
 // `reason` says why it cannot be (nested aggregates, 128-bit fields, references,
 // aliases, an out-of-range discriminant ...); the caller then skips the replay.
-fn replay_agg_arg(m: Module, fn_name: String, pi: i64, names: Vec<String>, vals: Vec<String>, avoid: Vec<i64>) -> ReplayArg {
+fn replay_agg_arg(m: Module, fn_name: String, pi: i64, names: Vec<String>, vals: Vec<String>, avoid: Vec<i64>, all_objs: ReplayObjs) -> ReplayArg {
     let a: AstArena = m.arena;
     let fid: i64 = replay_find_fn_item(m, fn_name);
     if fid < 0 {
@@ -765,17 +1208,19 @@ fn replay_agg_arg(m: Module, fn_name: String, pi: i64, names: Vec<String>, vals:
     let pname: String = arena_str(a, list_get(a, lid, pi * 4));
     let tid: i64 = list_get(a, lid, pi * 4 + 1);
     let tag: i64 = type_tag(a, tid);
+    let objs: ReplayObjs = replay_objs_at(all_objs, pi);
     if tag == TY_NAMED() {
         let tname: String = arena_str(a, type_a(a, tid));
         if tname == String::from("String") { return replay_string_arg(pname, names, vals); }
         let sid: i64 = replay_find_struct(m, tname);
-        if sid >= 0 { return replay_struct_arg(m, sid, pname, names, vals, 0, avoid); }
+        if sid >= 0 { return replay_struct_arg(m, sid, pname, names, vals, 0, avoid, objs); }
         let eid: i64 = replay_find_enum(m, tname);
-        if eid >= 0 { return replay_enum_arg(m, eid, pname, names, vals, 0, avoid); }
+        if eid >= 0 { return replay_enum_arg(m, eid, pname, names, vals, 0, avoid, objs); }
     }
     if tag == TY_GENERIC() {
         if arena_str(a, type_a(a, tid)) == String::from("Vec") { return replay_vec_arg(a, tid, pname, names, vals); }
-        return replay_builtin_enum_arg(m, tid, pname, names, vals, 0, avoid);
+        if replay_map_type_names(a, tid).len() > 0u64 { return replay_map_arg(a, tid, pname, names, vals); }
+        return replay_builtin_enum_arg(m, tid, pname, names, vals, 0, avoid, objs);
     }
     replay_arg_skip(str3r(String::from("parameter type `"), print_type_text(a, tid), String::from("` is not a struct, enum, Option, Result, Vec or String declared in this program")))
 }

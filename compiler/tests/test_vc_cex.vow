@@ -43,6 +43,10 @@ fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
         vec_hdr: Vec::new(),
         map_vars: Vec::new(),
         vec_wide: Vec::new(),
+        vec_path: Vec::new(),
+        vec_handle: Vec::new(),
+        map_len: Vec::new(),
+        map_len_hdr: Vec::new(),
     };
     cs.kinds.push(kind);
     cs.frames.push(-1);
@@ -625,6 +629,149 @@ fn check_append_unusable_vec_tails() -> i64 {
     0
 }
 
+// A `Vec` a struct parameter holds in slot 0 is a model entry of its own (`v.0.len`) and its
+// elements follow under the path of the slot (`v.0[0]`), after the parameter's own entries.
+fn held_claims() -> VcClaims {
+    let cs: VcClaims = vec_claims();
+    cs.model_names.push(String::from("p1f0s64_hl"));
+    cs.model_params.push(1);
+    cs.model_paths.push(String::from(".0"));
+    cs.model_tys.push(ITY_U64());
+    cs.model_widths.push(64);
+    cs.model_slots.push(VC_SLOT_VEC_LEN());
+    cs.model_hdr.push(4);
+    cs.model_ambig.push(0);
+    cs.vec_param.push(1);
+    cs.vec_arr.push(String::from("helem"));
+    cs.vec_len.push(String::from("p1f0s64_hl"));
+    cs.vec_hdr.push(4);
+    cs.vec_wide.push(-1);
+    cs.vec_path.push(String::from(""));
+    cs.vec_path.push(String::from(".0"));
+    cs.vec_handle.push(String::from(""));
+    cs.vec_handle.push(String::from("p1f0s64"));
+    cs
+}
+
+fn held_answer(own_len: i64, held_len: i64, per: i64) -> VcSolverAnswer {
+    let values: Vec<i64> = Vec::new();
+    values.push(5);
+    values.push(own_len);
+    values.push(held_len);
+    let mut i: i64 = 0;
+    while i < 2 * per {
+        values.push(100 + i);
+        i = i + 1;
+    }
+    let highs: Vec<i64> = Vec::new();
+    let mut h: u64 = 0;
+    while h < values.len() {
+        highs.push(0);
+        h = h + 1;
+    }
+    VcSolverAnswer { verdict: VC_ANS_SAT(), values: values, highs: highs, raw: String::from("") }
+}
+
+fn check_held_collection_contents() -> i64 {
+    let f: IrFunction = vec_fn();
+    let r: VerifyResult = vc_claim_result(f, held_claims(), 0, held_answer(1, 2, 2));
+    if r.var_names.len() != 6 { return 140; }
+    if r.var_names[1] != String::from("v.len") || r.var_values[1] != String::from("1") { return 141; }
+    if r.var_names[2] != String::from("v.0.len") || r.var_values[2] != String::from("2") { return 142; }
+    if r.var_names[3] != String::from("v[0]") || r.var_values[3] != String::from("100") { return 143; }
+    if r.var_names[4] != String::from("v.0[0]") || r.var_values[4] != String::from("102") { return 144; }
+    if r.var_names[5] != String::from("v.0[1]") || r.var_values[5] != String::from("103") { return 145; }
+    // an empty held collection lists no element, a failed enrichment only the length
+    let empty: VerifyResult = vc_claim_result(f, held_claims(), 0, held_answer(0, 0, 1));
+    if empty.var_names.len() != 3 || empty.var_names[2] != String::from("v.0.len") { return 146; }
+    let bare: VerifyResult = vc_claim_result(f, held_claims(), 0, held_answer(1, 2, 0));
+    if bare.var_names.len() != 3 || bare.var_values[2] != String::from("2") { return 147; }
+    // a held collection declared after the claim's prefix is not part of its answer
+    let late: VcClaims = held_claims();
+    late.header_lens[0] = 4;
+    let early: VcSolverAnswer = held_answer(1, 2, 0);
+    early.values.pop();
+    early.highs.pop();
+    let short: VerifyResult = vc_claim_result(f, late, 0, early);
+    if short.var_names.len() != 2 { return 148; }
+    0
+}
+
+// A map parameter's asked key makes one `<param>[<key>]` entry from its key, presence and value
+// entries: the value slot when the key is present, `absent` when it is not, listed once for a
+// key asked twice, with the length as `<param>.len`.
+fn map_claims() -> VcClaims {
+    let cs: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
+    let names: Vec<String> = Vec::new();
+    names.push(String::from("p0_mlen"));
+    names.push(String::from("p0_mk0"));
+    names.push(String::from("p0_mp0"));
+    names.push(String::from("p0_mv0"));
+    names.push(String::from("p0_mk1"));
+    names.push(String::from("p0_mp1"));
+    names.push(String::from("p0_mv1"));
+    names.push(String::from("p0_mk2"));
+    names.push(String::from("p0_mp2"));
+    names.push(String::from("p0_mv2"));
+    let mut j: u64 = 0;
+    while j < names.len() {
+        cs.model_names.push(names[j]);
+        cs.model_params.push(0);
+        cs.model_paths.push(String::from(""));
+        cs.model_tys.push(ITY_U64());
+        cs.model_widths.push(64);
+        let mut slot: i64 = VC_SLOT_VEC_LEN();
+        if j > 0 {
+            let which: u64 = (j - 1) % 3;
+            if which == 0 { slot = VC_SLOT_MAP_KEY(); } else if which == 1 { slot = VC_SLOT_MAP_PRES(); } else { slot = VC_SLOT_MAP_VAL(); }
+        }
+        cs.model_slots.push(slot);
+        cs.model_ambig.push(0);
+        j = j + 1;
+    }
+    cs
+}
+
+fn map_answer() -> VcSolverAnswer {
+    let values: Vec<i64> = Vec::new();
+    values.push(11);
+    values.push(12);
+    values.push(2);
+    values.push(5);
+    values.push(1);
+    values.push(7);
+    values.push(18446744073709551615u64 as i64);
+    values.push(0);
+    values.push(9);
+    values.push(5);
+    values.push(1);
+    values.push(7);
+    let highs: Vec<i64> = Vec::new();
+    let mut h: u64 = 0;
+    while h < values.len() {
+        highs.push(0);
+        h = h + 1;
+    }
+    VcSolverAnswer { verdict: VC_ANS_SAT(), values: values, highs: highs, raw: String::from("") }
+}
+
+fn check_map_entries() -> i64 {
+    let f: IrFunction = vec_fn();
+    let base: String = vc_source_param_name(f, 0);
+    let r: VerifyResult = vc_claim_result(f, map_claims(), 0, map_answer());
+    if r.var_names.len() != 5 { return 150; }
+    if r.var_names[2] != str2c(base, String::from(".len")) || r.var_values[2] != String::from("2") { return 151; }
+    if r.var_names[3] != str2c(base, String::from("[5]")) || r.var_values[3] != String::from("7") { return 152; }
+    if r.var_names[4] != str2c(base, String::from("[18446744073709551615]")) || r.var_values[4] != String::from("absent") { return 153; }
+    0
+}
+
+fn str2c(a: String, b: String) -> String {
+    let out: String = String::from(a);
+    out.push_str(b);
+    out
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_sat_ensures();
     if r == 0 { r = check_sat_abort_claims(); }
@@ -639,5 +786,7 @@ fn main() -> i32 {
     if r == 0 { r = check_append_mixed_vec_contents(); }
     if r == 0 { r = check_append_visible_vec_contents(); }
     if r == 0 { r = check_append_unusable_vec_tails(); }
+    if r == 0 { r = check_held_collection_contents(); }
+    if r == 0 { r = check_map_entries(); }
     i64_to_i32_wrap(r)
 }

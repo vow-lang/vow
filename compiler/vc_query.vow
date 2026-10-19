@@ -48,6 +48,15 @@ struct VcClaims {
     // Parallel to `vec_param`: the element type of a parameter whose elements are
     // 128-bit integers (`ITY_I128`/`ITY_U128`), else -1.
     vec_wide: Vec<i64>,
+    // Parallel to `vec_param`: "" for a `Vec` or `String` parameter; for a collection a struct
+    // parameter holds in a field, the path to that field (`.1.0`, see `vc_held`), and the symbol
+    // of the address the field holds, whose `helem`/`hbyte` entries the elements are.
+    vec_path: Vec<String>,
+    vec_handle: Vec<String>,
+    // The lengths of the `HashMap` and `BTreeMap` parameters (`vc_map`) the way `vec_len` has
+    // those of a `Vec`: the symbol and the header position of its declaration.
+    map_len: Vec<String>,
+    map_len_hdr: Vec<i64>,
 }
 
 // `model_slots` of the length of a `Vec` or `String` parameter; a scalar
@@ -58,6 +67,15 @@ fn VC_SLOT_VEC_LEN() -> i64 { -3 }
 // `model_slots` of the address a parameter that may be the memory a handle names carries
 // (`vc_overlay`): `<param>.addr` in a counterexample.
 fn VC_SLOT_ADDR() -> i64 { -4 }
+
+// `model_slots` of the three entries that tell a key a `HashMap` or `BTreeMap` parameter was
+// asked about (`vc_map`): the key, its presence word in the parameter's own state, and the value
+// slot it holds there. A counterexample lists the three as one `<param>[<key>]` entry.
+fn VC_SLOT_MAP_KEY() -> i64 { -5 }
+
+fn VC_SLOT_MAP_PRES() -> i64 { -6 }
+
+fn VC_SLOT_MAP_VAL() -> i64 { -7 }
 
 // Number of model symbols claim `k`'s query declares: the header is only
 // declared up to `header_lens[k]`, and `get-value` of a symbol declared later

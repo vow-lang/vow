@@ -21,4 +21,3 @@ fn make(fd: i64) -> Handle vow {
 fn main() -> i32 {
     0
 }
-// TEST: replay-skipped linear struct return value is not consumed by the replay harness (#1649)

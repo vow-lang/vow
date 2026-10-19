@@ -1,3 +1,4 @@
+// TEST: replay-skipped a map of 256 i8 keys has every key, so the absent key -1 cannot be built
 // TEST: unknown-reason unconstrained map state
 module MapNarrowKeyFoldedLiteral
 

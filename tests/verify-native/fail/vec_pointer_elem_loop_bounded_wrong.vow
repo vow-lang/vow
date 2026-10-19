@@ -1,0 +1,30 @@
+// TEST: counterexample-fn "rows"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// Trip `i` stores a `Vec` of `i + 1` values: slots 1 and 2 hold 2 and 3, not 3 and 3.
+module VecPointerElemLoopBoundedWrong
+
+fn rows() -> u64 vow {
+  ensures: result == 6
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let mut i: i64 = 0;
+  while i < 3 {
+    let row: Vec<i64> = Vec::new();
+    let mut j: i64 = 0;
+    while j <= i {
+      row.push(j);
+      j = j + 1;
+    }
+    outer.push(row);
+    i = i + 1;
+  }
+  let first: Vec<i64> = outer[1];
+  let last: Vec<i64> = outer[2];
+  first.len() + last.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(rows());
+  0
+}

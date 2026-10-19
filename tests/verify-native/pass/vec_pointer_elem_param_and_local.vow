@@ -1,0 +1,22 @@
+// A struct parameter and a local struct stored in the same `Vec`: each slot names its own object.
+module VecPointerElemParamAndLocal
+
+struct Person { age: i64 }
+
+fn mix(given: Person) -> i64 vow {
+  ensures: result == given.age + 1
+} {
+  let people: Vec<Person> = Vec::new();
+  let w: Person = Person { age: 1 };
+  people.push(given);
+  people.push(w);
+  let a: Person = people[0];
+  let b: Person = people[1];
+  a.age + b.age
+}
+
+fn main() -> i32 [io] {
+  let g: Person = Person { age: 4 };
+  print_i64(mix(g));
+  0
+}

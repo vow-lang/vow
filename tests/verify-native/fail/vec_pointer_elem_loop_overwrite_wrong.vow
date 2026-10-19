@@ -1,0 +1,31 @@
+// TEST: counterexample-fn "overwrite"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// A loop that overwrites slot 0 leaves the replacement there, not the object stored before it: the
+// state at the loop head is not the entry state.
+module VecPointerElemLoopOverwriteWrong
+
+fn overwrite(n: u64) -> u64 vow {
+  requires: n > 0
+  ensures: result == 1
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let a: Vec<i64> = Vec::new();
+  a.push(1);
+  outer.push(a);
+  let b: Vec<i64> = Vec::new();
+  b.push(1);
+  b.push(2);
+  let mut i: u64 = 0;
+  while i < n {
+    outer[0] = b;
+    i = i + 1;
+  }
+  let now: Vec<i64> = outer[0];
+  now.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(overwrite(1));
+  0
+}

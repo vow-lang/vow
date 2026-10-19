@@ -17,6 +17,8 @@ use vc_heap
 use vc_map
 use vc_mapops
 use vc_overlay
+use vc_ptrstore
+use vc_held
 use vc_strops
 use vc_strdeep
 use vc_str
@@ -163,18 +165,46 @@ fn vc_guard(cs: VcClaims, kind: i64, label: String, pc: i64, goal: i64, inst: Ir
 // slot each came from (a symbol's width is its sort: 0 for Bool). A slot read
 // at two sorts is `ambig` in every entry so reporting and replay can tell the
 // symbols apart.
-fn vc_claims_harvest_fields(cs: VcClaims, ag: VcAgg, vv: VcVec, memory: VcHandleMemory) {
+fn vc_claims_harvest_fields(cs: VcClaims, ag: VcAgg, vv: VcVec, memory: VcHandleMemory, mp: VcMap) {
     let ov: VcOverlay = memory.overlay;
+    let held: VcHeld = memory.held;
     let none: i64 = 9223372036854775807;
     let mut i: u64 = 0;
     let mut v: u64 = 0;
     let mut a: u64 = 0;
-    while i < ag.ps_param.len() || v < vv.pv_param.len() || vc_overlay_next_listed(ov, a) < ov.param.len() {
+    let mut d: u64 = 0;
+    let mut e: u64 = 0;
+    while i < ag.ps_param.len() || v < vv.pv_param.len() || vc_overlay_next_listed(ov, a) < ov.param.len() || vc_held_next_listed(held, d) < held.hdr.len() || e < mp.ent_hdr.len() {
         a = vc_overlay_next_listed(ov, a);
+        d = vc_held_next_listed(held, d);
         let hi: i64 = { if i < ag.ps_param.len() { ag.ps_hdr[i] } else { none } };
         let hv: i64 = { if v < vv.pv_param.len() { vv.pv_hdr[v] } else { none } };
         let ha: i64 = { if a < ov.param.len() { ov.hdr[a] } else { none } };
-        if hv < hi && hv < ha {
+        let hh: i64 = { if d < held.hdr.len() { held.hdr[d] } else { none } };
+        let he: i64 = { if e < mp.ent_hdr.len() { mp.ent_hdr[e] } else { none } };
+        if he < hi && he < hv && he < ha && he < hh {
+            cs.model_names.push(mp.ent_name[e]);
+            cs.model_paths.push(String::from(""));
+            cs.model_params.push(mp.ent_param[e]);
+            cs.model_tys.push(ITY_U64());
+            cs.model_widths.push(64);
+            cs.model_slots.push(mp.ent_slot[e]);
+            cs.model_hdr.push(he);
+            if mp.ent_slot[e] == VC_SLOT_VEC_LEN() {
+                cs.map_len.push(mp.ent_name[e]);
+                cs.map_len_hdr.push(he);
+            }
+            e = e + 1;
+        } else if hh < hi && hh < hv && hh < ha {
+            cs.model_names.push(held.len_name[d]);
+            cs.model_paths.push(held.path[d]);
+            cs.model_params.push(held.param[d]);
+            cs.model_tys.push(ITY_U64());
+            cs.model_widths.push(64);
+            cs.model_slots.push(VC_SLOT_VEC_LEN());
+            cs.model_hdr.push(hh);
+            d = d + 1;
+        } else if hv < hi && hv < ha {
             cs.model_names.push(vv.pv_len[v]);
             cs.model_paths.push(String::from(""));
             cs.model_params.push(vv.pv_param[v]);
@@ -208,6 +238,7 @@ fn vc_claims_harvest_fields(cs: VcClaims, ag: VcAgg, vv: VcVec, memory: VcHandle
     cs.vec_len = vv.pv_len;
     cs.vec_hdr = vv.pv_hdr;
     cs.vec_wide = vv.pv_wide;
+    vc_held_append_vecs(cs, held);
     let mut j: u64 = 0;
     while j < cs.model_slots.len() {
         let mut amb: i64 = 0;
@@ -399,6 +430,7 @@ fn vc_walk_wide_access(w: VcWalk, bi: u64, inst: IrInst) {
     let b: i64 = bi as i64;
     let r: u64 = inst.args[0] as u64;
     if w.whandle[r] >= 0 {
+        if inst.op == IOP_FIELD_GET() { vc_held_mark_wide(w.memory.held, ar, w.whandle[r], inst.ty); }
         vc_define(w, inst, vc_handle_wide(w.memory, b, w.whandle[r], w.widx[r]));
         return;
     }
@@ -412,6 +444,13 @@ fn vc_walk_wide_access(w: VcWalk, bi: u64, inst: IrInst) {
         vc_vec_mark_elem(vv, w.ag, w.wobj[r], w.tys[val as u64]);
         vc_vec_write(vv, ar, cs.header, s, b, vc_wide_write(ar, arr, w.widx[r], w.var_of[val as u64]), vc_vec_cur_len(vv, s, b));
     }
+}
+
+// The 64-bit address a pointer store keeps for the object `val` (`vc_overlay_addr_of`), entered under
+// the classes it is used, built or declared as.
+fn vc_walk_store_address(w: VcWalk, val: i64) -> i64 {
+    let ov: VcOverlay = w.memory.overlay;
+    vc_overlay_addr_of(ov, w.ag, w.cs.arena, w.cs.header, w.cs.assumed, w.obj_of[val as u64], vc_overlay_stored_class(ov, val))
 }
 
 // Aggregate instructions: pointers are objects (`obj_of`), never terms; a field
@@ -439,7 +478,7 @@ fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
         let mut ty: i64 = w.tys[val as u64];
         if ty == ITY_PTR() {
             // The slot holds the address of the object (`vc_overlay`).
-            term = vc_overlay_addr_of(w.memory.overlay, ag, cs.arena, cs.header, cs.assumed, w.obj_of[val as u64], vc_overlay_stored_class(w.memory.overlay, val, vc_agg_is_param(ag, w.obj_of[inst.args[0] as u64])));
+            term = vc_walk_store_address(w, val);
             ty = ITY_I64();
         }
         vc_agg_write_field(ag, cs.arena, cs.header, w.obj_of[inst.args[0] as u64], inst.dv, ty, term, w.fl.block_pc[bi]);
@@ -652,11 +691,13 @@ fn vc_mark_stored_float(w: VcWalk, obj: i64, val: i64) {
     if ft >= 0 { vc_vec_mark_elem(w.vv, w.ag, obj, ft); }
 }
 
-// The 64-bit slot a `push` or `set` stores for value `val`. An object has no address
-// in the model, so its slot is a fresh constant; `vc_ptr_store_detail` keeps every
-// function that could read it back out of the subset.
+// The 64-bit slot a `push` or `set` stores for value `val`. In a function that reads an element
+// back, an object's slot is its address (`vc_overlay_addr_of`), so a read through the element is
+// a read of that object; otherwise nothing looks at the slot and it is a fresh constant
+// (`vc_ptr_store_detail` keeps every other function out of the subset).
 fn vc_walk_slot_word(w: VcWalk, val: i64) -> i64 {
     let ty: i64 = w.tys[val as u64];
+    if ty == ITY_PTR() && w.memory.overlay.elems { return vc_walk_store_address(w, val); }
     if ty == ITY_PTR() {
         return vc_agg_declare(w.cs.arena, w.cs.header, vc_vec_fresh_name(w.vv, String::from("pe")), 64);
     }
@@ -993,6 +1034,10 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         vec_hdr: Vec::new(),
         map_vars: Vec::new(),
         vec_wide: Vec::new(),
+        vec_path: Vec::new(),
+        vec_handle: Vec::new(),
+        map_len: Vec::new(),
+        map_len_hdr: Vec::new(),
     };
     vc_script_set_logic(hdr, String::from("QF_BV"));
     vc_script_set_option(hdr, String::from(":produce-models"), String::from("true"));
@@ -1024,7 +1069,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         vc_heap_assume(ar, cs.assumed, group_facts[gi]);
         gi = gi + 1;
     }
-    let memory: VcHandleMemory = vc_handle_memory_new(f, tys, ag, vv, ar, hdr, cs.assumed);
+    let memory: VcHandleMemory = vc_handle_memory_new(f, tys, ag, vv, ar, hdr, cs.assumed, vc_ptr_store_reads_back(f, tys));
     let w: VcWalk = VcWalk {
         cs: cs,
         fl: fl,
@@ -1073,7 +1118,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         }
         oi = oi + 1;
     }
-    vc_claims_harvest_fields(cs, w.ag, w.vv, w.memory);
+    vc_claims_harvest_fields(cs, w.ag, w.vv, w.memory, w.mp);
     cs.hook_vars = w.vv.hk_vars;
     cs.map_vars = vc_map_inexact_vars(w.mp);
     vc_script_replace_logic(hdr, vc_logic_name(vc_vec_count(w.vv) > 0 || vc_handle_memory_used(w.memory) || vc_map_count(w.mp) > 0, vc_function_has_float(f, tys), w.vv.quantified));

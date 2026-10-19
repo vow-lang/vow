@@ -1,0 +1,20 @@
+// TEST: replay-skipped a held Vec of Strings with an element is not rebuilt
+// TEST: counterexample-fn "firstlen"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The counterexample needs one element, and an element that is a String is only an address.
+module HeapVecOfStringsFieldElementSkipped
+
+struct Names { items: Vec<String>, tag: i64 }
+
+fn firstlen(n: Names) -> u64 vow {
+  ensures: result == 7
+} {
+  if n.items.len() > 0u64 { 1u64 } else { 7u64 }
+}
+
+fn main() -> i32 [io] {
+  let n: Names = Names { items: Vec::new(), tag: 0 };
+  print_u64(firstlen(n));
+  0
+}

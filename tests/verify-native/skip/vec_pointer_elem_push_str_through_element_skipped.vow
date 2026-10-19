@@ -1,0 +1,19 @@
+// TEST: skip-reason unsupported-opcode
+// A `String` appended to through the element (`names[0].push_str(..)`) is a write through a handle:
+// the function stays `Skipped`.
+module VecPointerElemPushStrThroughElementSkipped
+
+fn longer() -> u64 vow {
+  ensures: result == 3
+} {
+  let names: Vec<String> = Vec::new();
+  names.push(String::from("ab"));
+  names[0].push_str(String::from("c"));
+  let n: String = names[0];
+  n.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(longer());
+  0
+}

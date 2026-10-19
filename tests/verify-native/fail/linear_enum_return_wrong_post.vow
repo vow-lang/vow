@@ -1,0 +1,25 @@
+// TEST: counterexample-fn "wrap"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// A user enum that owns a linear payload, returned by the replayed function, is discharged with
+// `drop`.
+module LinearEnumReturnWrongPost
+
+linear struct Handle {
+    fd: i64,
+}
+
+enum Slot {
+    Open(Handle),
+    Closed,
+}
+
+fn wrap(fd: i64) -> Slot vow {
+    ensures: fd < 0
+} {
+    Slot::Open(Handle { fd: fd })
+}
+
+fn main() -> i32 {
+    0
+}

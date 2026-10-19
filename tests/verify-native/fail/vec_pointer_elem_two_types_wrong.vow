@@ -1,0 +1,26 @@
+// TEST: counterexample-fn "mixed"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The `String` and the `Vec` are of different classes and different objects: the text has 3 bytes and the row 2 values, not the other way round.
+// Elements of two classes in one function: a `Vec<String>` and a `Vec<Vec<i64>>`.
+module VecPointerElemTwoTypesWrong
+
+fn mixed() -> u64 vow {
+  ensures: result == 23
+} {
+  let names: Vec<String> = Vec::new();
+  names.push(String::from("abc"));
+  let rows: Vec<Vec<i64>> = Vec::new();
+  let r: Vec<i64> = Vec::new();
+  r.push(1);
+  r.push(2);
+  rows.push(r);
+  let n: String = names[0];
+  let row: Vec<i64> = rows[0];
+  n.len() * 10 + row.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(mixed());
+  0
+}

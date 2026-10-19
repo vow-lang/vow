@@ -1,0 +1,28 @@
+// A pointer stored in a loop: each trip builds its own `Vec` and the read of each slot gives the
+// one stored on that trip.
+module VecPointerElemLoopBounded
+
+fn rows() -> u64 vow {
+  ensures: result == 5
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let mut i: i64 = 0;
+  while i < 3 {
+    let row: Vec<i64> = Vec::new();
+    let mut j: i64 = 0;
+    while j <= i {
+      row.push(j);
+      j = j + 1;
+    }
+    outer.push(row);
+    i = i + 1;
+  }
+  let first: Vec<i64> = outer[1];
+  let last: Vec<i64> = outer[2];
+  first.len() + last.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(rows());
+  0
+}

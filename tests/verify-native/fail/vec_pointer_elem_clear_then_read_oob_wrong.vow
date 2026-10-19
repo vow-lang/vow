@@ -1,0 +1,22 @@
+// TEST: counterexample-fn "read_cleared"
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-blame None
+// `clear` empties the outer `Vec`: the element read is out of bounds, the stored object is not
+// still there.
+module VecPointerElemClearThenReadOobWrong
+
+fn read_cleared() -> u64 vow {
+  ensures: result == 0
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let a: Vec<i64> = Vec::new();
+  outer.push(a);
+  outer.clear();
+  let top: Vec<i64> = outer[0];
+  top.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(read_cleared());
+  0
+}

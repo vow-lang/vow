@@ -1,0 +1,27 @@
+// TEST: skip-reason unsupported-opcode
+// A `Vec` parameter stored in a field of a struct that is pushed into a `Vec` and read back is as
+// much a stored collection parameter as one pushed directly: two `Vec` parameters may be one value
+// (#1823), so the function stays `Skipped`.
+module VecPointerElemCollectionParamInFieldSkipped
+
+struct Holder { v: Vec<i64> }
+
+fn f(a: Vec<i64>, b: Vec<i64>) -> u64 vow {
+  requires: a.len() == 0 && b.len() == 0
+  ensures: result == 0
+} {
+  let outer: Vec<Holder> = Vec::new();
+  let h: Holder = Holder { v: a };
+  outer.push(h);
+  b.push(1);
+  let t: Holder = outer[0];
+  let x: Vec<i64> = t.v;
+  x.len()
+}
+
+fn main() -> i32 [io] {
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  print_u64(f(a, b));
+  0
+}
