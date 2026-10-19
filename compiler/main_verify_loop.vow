@@ -1,0 +1,236 @@
+module MainVerifyLoop
+
+fn emit_ce_vars(vr: VerifyResult) [io] {
+    let vnames: Vec<String> = vr.var_names;
+    let vvals: Vec<String> = vr.var_values;
+    let mut vi: u64 = 0;
+    while vi < vnames.len() {
+        diag_eprintln_best_effort(str4(String::from("    "), vnames[vi], String::from(" = "), vvals[vi]));
+        vi = vi + 1;
+    }
+}
+
+// Skip non-modelable vowed functions before ESBMC runs; otherwise the C emitter emits __ESBMC_assert(0) traps and the build fails closed.
+// Callers invoke it for every verify target, even after a failure: a skip is a static fact about the program, so the warning set must not depend on how many ESBMC jobs were in flight (--verify-jobs).
+fn skip_if_non_modelable(f: IrFunction, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx) -> bool [io] {
+    let reason: String = non_modelable_reason(f, ir_mod, const_fn_indices);
+    if reason.len() == 0 {
+        return false;
+    }
+    diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": SKIPPED (non-modelable in verifier)")));
+    let msg: String = str3(
+        String::from("skipped verification of `"),
+        f.name,
+        str2(String::from("`: "), reason),
+    );
+    let d: Diagnostic = diag_new(SEV_WARNING(), EC_VERIFICATION_SKIPPED(), msg, String::from(""), 0, 0, DIAG_BLAME_NONE());
+    diag_add_hint(d, String::from("the contract is documentary; runtime checks still apply in --mode debug"));
+    diag_ctx_emit(dctx, d);
+    true
+}
+
+// Returns 0=Verified, 1=VerifyFailed, 2=Skipped (both 1 and 2 exit 1).
+fn run_verify_loop(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
+                   vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64) -> i64 [io, write] {
+    run_verify_loop_traced(esbmc_bin, fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs, trace_off())
+}
+
+// Collect one ESBMC result and record its proof span + compiler->esbmc flow
+// arrow (issue #784). `verify_origin` is the verification-driver handoff origin;
+// `fi` is the function index used as the flow id. A no-op for tracing when `t`
+// is disabled. Returns the proven flag from verify_collect_and_report.
+fn verify_collect_traced(esbmc_bin: String, t: TraceCtx, verify_origin: i64, h: i64, tmp: String, f: IrFunction, fi: i64, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
+                         vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, model_bounds: Vec<String>, dctx: DiagCtx) -> i64 [io, write] {
+    let proof_start: i64 = trace_now(t);
+    trace_flow(t, String::from("verify->esbmc"), PID_COMPILER(), TID_VERIFY_DRIVER(), verify_origin, fi, TRACE_FLOW_START());
+    trace_flow(t, String::from("verify->esbmc"), PID_COMPILER(), TID_VERIFY_DRIVER(), proof_start, fi, TRACE_FLOW_END());
+    let mut proven: i64 = verify_collect_and_report(esbmc_bin, h, tmp, f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, t, dctx);
+    if proven == 0 && demote_undecided_caller(f, ir_mod, soft_meta, dctx) {
+        proven = 1;
+        model_bounds[fi as u64] = String::from("");
+    }
+    trace_span(t, str2(String::from("esbmc:"), f.name), PID_COMPILER(), TID_VERIFY_DRIVER(), proof_start, trace_now(t) - proof_start, f.name);
+    proven
+}
+
+// Returns 0=Verified, 1=VerifyFailed, 2=Skipped (both 1 and 2 exit 1).
+fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
+                   vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64, t: TraceCtx) -> i64 [io, write] {
+    let mut all_proven: i64 = 1;
+    let mut any_skipped: i64 = 0;
+    let verify_origin: i64 = trace_now(t);
+    // Bounded pool: ≤ jobs ESBMC processes in flight, FIFO drain. See #175.
+    let in_flight_h: Vec<i64> = Vec::new();
+    let in_flight_fi: Vec<i64> = Vec::new();
+    let in_flight_tmp: Vec<String> = Vec::new();
+    let model_bounds: Vec<String> = model_bounds_table(fns.len() as i64);
+    let mut fi: i64 = 0;
+    while fi < fns.len() as i64 {
+        let f: IrFunction = fns[fi as u64];
+        if is_verify_target(f, ir_mod, const_fn_indices) {
+            if skip_if_non_modelable(f, ir_mod, const_fn_indices, dctx) {
+                // Fail closed: a non-modelable function is not statically proved.
+                any_skipped = 1;
+            } else if all_proven == 1 {
+                // Stop launching new ESBMC jobs once any in-flight verification has failed.
+                while in_flight_h.len() as i64 >= jobs {
+                    let oldest_h: i64 = in_flight_h[0];
+                    let oldest_fi: i64 = in_flight_fi[0];
+                    let oldest_tmp: String = in_flight_tmp[0];
+                    let oldest_f: IrFunction = fns[oldest_fi as u64];
+                    vec_i64_remove_front(in_flight_h);
+                    vec_i64_remove_front(in_flight_fi);
+                    vec_string_remove_front(in_flight_tmp);
+                    let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, model_bounds, dctx);
+                    if proven == 0 {
+                        all_proven = 0;
+                    }
+                }
+                if all_proven == 1 {
+                    diag_eprintln_best_effort(str3(String::from("Verifying "), f.name, String::from("...")));
+                    let started: EsbmcStart = verify_start(esbmc_bin, f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                    model_bounds[fi as u64] = started.bounds;
+                    in_flight_h.push(started.handle);
+                    in_flight_fi.push(fi);
+                    in_flight_tmp.push(started.tmp_path);
+                }
+            }
+        }
+        fi = fi + 1;
+    }
+    while in_flight_h.len() > 0 {
+        let oldest_h: i64 = in_flight_h[0];
+        let oldest_fi: i64 = in_flight_fi[0];
+        let oldest_tmp: String = in_flight_tmp[0];
+        let oldest_f: IrFunction = fns[oldest_fi as u64];
+        vec_i64_remove_front(in_flight_h);
+        vec_i64_remove_front(in_flight_fi);
+        vec_string_remove_front(in_flight_tmp);
+        let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, model_bounds, dctx);
+        if proven == 0 {
+            all_proven = 0;
+        }
+    }
+    if all_proven == 0 {
+        report_unchecked_calls(fns, ir_mod, const_fn_indices, dctx);
+        return 1;
+    }
+    if any_skipped == 1 {
+        report_unchecked_calls(fns, ir_mod, const_fn_indices, dctx);
+        return 2;
+    }
+    report_capacity_notes(fns, model_bounds, dctx);
+    report_unchecked_calls(fns, ir_mod, const_fn_indices, dctx);
+    0
+}
+
+fn emit_ir_warnings(ir_mod: IrModule, dctx: DiagCtx) [io] {
+    let ws: Vec<String> = ir_mod.warnings;
+    let mut i: u64 = 0;
+    while i < ws.len() {
+        let d: Diagnostic = diag_new(SEV_WARNING(), EC_LOWERING_WARNING(), ws[i], String::from(""), 0, 0, DIAG_BLAME_NONE());
+        diag_ctx_emit(dctx, d);
+        diag_eprintln_best_effort(ws[i]);
+        i = i + 1;
+    }
+}
+
+fn resolve_verify_jobs(argv: Vec<String>) -> i64 [io] {
+    let raw: String = get_flag_arg(argv, "--verify-jobs");
+    if raw.len() == 0 {
+        let n: i64 = num_cpus() / 2;
+        if n < 1 { 1 } else { n }
+    } else {
+        let n: i64 = match parse_i64(raw) {
+            Option::Some(value) => { value },
+            Option::None => { 0 },
+        };
+        if n < 1 {
+            diag_eprintln_best_effort(String::from("error: --verify-jobs must be >= 1"));
+            process_exit(1);
+            1
+        } else {
+            n
+        }
+    }
+}
+
+// Concurrent test files for `vowc test`. An explicit --jobs wins; otherwise
+// half the CPUs capped at 8, or 1 under --verify (ESBMC already parallelizes).
+fn resolve_test_jobs(argv: Vec<String>, do_verify: bool) -> i64 [io] {
+    let raw: String = get_flag_arg(argv, "--jobs");
+    if raw.len() == 0 {
+        if do_verify { return 1; }
+        let n: i64 = num_cpus() / 2;
+        if n < 1 { return 1; }
+        if n > 8 { return 8; }
+        return n;
+    }
+    let n: i64 = match parse_i64(raw) {
+        Option::Some(value) => { value },
+        Option::None => { 0 },
+    };
+    if n < 1 {
+        diag_eprintln_best_effort(String::from("error: --jobs must be >= 1"));
+        process_exit(1);
+    }
+    n
+}
+
+fn push_test_flag_value(a: Vec<String>, argv: Vec<String>, flag: String) {
+    let v: String = get_flag_arg(argv, flag);
+    if v.len() > 0 {
+        a.push(flag);
+        a.push(v);
+    }
+}
+
+// Flags a parallel `vowc test` worker inherits from its parent invocation.
+fn test_worker_common_flags(argv: Vec<String>) -> Vec<String> {
+    let a: Vec<String> = Vec::new();
+    push_test_flag_value(a, argv, String::from("--mode"));
+    push_test_flag_value(a, argv, String::from("--timeout"));
+    push_test_flag_value(a, argv, String::from("--max-k-step"));
+    push_test_flag_value(a, argv, String::from("--verify-jobs"));
+    push_test_flag_value(a, argv, String::from("--backend"));
+    if has_flag(argv, String::from("--verify")) {
+        a.push(String::from("--verify"));
+    }
+    a
+}
+
+fn vec_i64_remove_front(v: Vec<i64>) {
+    // Caller-enforced invariant: v.len() > 0 (drain loops guard this).
+    // Guard defensively so an empty Vec becomes a no-op rather than popping below zero.
+    let n: u64 = v.len();
+    if n == 0 { return; }
+    let mut i: u64 = 0;
+    while i < n - 1 {
+        v[i] = v[i + 1];
+        i = i + 1;
+    }
+    v.pop();
+}
+
+fn vec_string_remove_front(v: Vec<String>) {
+    let n: u64 = v.len();
+    if n == 0 { return; }
+    let mut i: u64 = 0;
+    while i < n - 1 {
+        v[i] = v[i + 1];
+        i = i + 1;
+    }
+    v.pop();
+}
+
+// Record the first soft-fail ESBMC outcome (status/message/function) into `meta`.
+// Convention: meta is `[]` until the first soft-fail, then `[status, message, function]`.
+// The function name is needed to populate the schema-required top-level
+// `function` field on VerifyFailed JSON output.
+fn record_soft_fail(meta: Vec<String>, status: String, message: String, function: String) {
+    if meta.len() == 0 {
+        meta.push(status);
+        meta.push(message);
+        meta.push(function);
+    }
+}

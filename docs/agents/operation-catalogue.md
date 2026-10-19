@@ -32,7 +32,8 @@ python3 scripts/generate_operations.py --check  # validate without writing (CI-g
 ```
 
 It splices generated lookup functions between `// GENERATE:OPERATIONS:START` / `:END` markers — the
-same marker convention `scripts/generate_help.py` uses for `// GENERATE:SKILL_*` — into:
+same marker convention `scripts/generate_help.py` uses for `// GENERATE:SKILL_*` (which now sit in whole generated
+modules, `compiler/help_text_gen.vow` and friends) — into:
 
 - `vow-ir/src/lower/mod.rs` (`catalogue_builtin_to_runtime`)
 - `vow-codegen/src/cranelift_backend.rs` and `vow-clif-shim/src/lib.rs` (`catalogue_extern_sig`)
@@ -64,9 +65,9 @@ and `--check` fails on any disagreement. `i64_to_string`,
 hand-written.
 
 `docs/spec/grammar.md`'s Builtin Function Signatures table and the generated help-JSON in
-`compiler/main.vow`/`vow/src/skill.rs` are **checked against** the catalogue (not generated from it) —
+`compiler/help_text_gen.vow`/`vow/src/skill.rs` are **checked against** the catalogue (not generated from it) —
 `--check` fails if any drift (`check_doc_facts` compares each entry's signature and effects with the
-grammar.md row and with the `skill.rs` and `main.vow` help lines).
+grammar.md row and with the `skill.rs` and `help_text_gen.vow` help lines).
 
 `c_model` (ESBMC C model, parity until epic #1398 P6) and `verifier_model` (native verifier, exempt
 from parity) are separate per-entry fields, and only pure entries may be known to either.

@@ -12,3 +12,7 @@ docs/spec/grammar.md token-limit-ignore linguist-generated
 docs/spec/errors.md token-limit-ignore linguist-generated
 docs/spec/contracts.md token-limit-ignore linguist-generated
 docs/spec/operations.json token-limit-ignore linguist-generated
+# Whole machine-generated modules written by scripts/generate_help.py (never hand-edit).
+compiler/*_gen.vow token-limit-ignore linguist-generated
+# Whole machine-generated fragments that vow/src/skill.rs includes (generate_help.py).
+vow/src/skill_gen/*.rs token-limit-ignore linguist-generated

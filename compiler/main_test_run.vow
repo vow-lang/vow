@@ -1,0 +1,257 @@
+module MainTestRun
+
+fn run_test(argv: Vec<String>) -> i32 [io, read, write] {
+    let mut path: String = get_source_path_sub(argv);
+    if path.len() == 0 {
+        path = String::from(".");
+    }
+    let filter: String = get_flag_arg(argv, "--filter");
+    let mode_str: String = get_flag_arg(argv, "--mode");
+    let mode: i64 = {
+        if mode_str == String::from("release") { 0 }
+        else { 1 }
+    };
+    let timeout_str: String = get_flag_arg(argv, "--timeout");
+    let timeout_ms: i64 = {
+        if timeout_str.len() > 0 {
+            match parse_i64(timeout_str) {
+                Option::Some(value) => { value },
+                Option::None => { 0 },
+            }
+        }
+        else { 30000 }
+    };
+    let do_verify: bool = has_flag(argv, "--verify");
+    let t_native: bool = get_flag_arg(argv, "--backend") == "native";
+    let esbmc_bin: String = {
+        if do_verify && !t_native { esbmc_path() }
+        else { String::from("") }
+    };
+    let t_mks_str: String = get_flag_arg(argv, "--max-k-step");
+    let t_max_k_step: String = { if t_mks_str.len() > 0 { t_mks_str } else { String::from("50") } };
+    let t_jobs: i64 = resolve_verify_jobs(argv);
+
+    // Validate path exists
+    if fs_exists(path) == 0 {
+        let missing_msg: String = String::from("test path '");
+        missing_msg.push_str(path);
+        missing_msg.push_str(String::from("' does not exist"));
+        let missing_entry: String = emit_test_entry_json(path, file_stem_from_path(path), String::from("failed"), -1, String::from(""), missing_msg, 0, String::from("[]"));
+        let missing_r: String = String::from("{\"status\":\"TestsFailed\",\"total\":1,\"passed\":0,\"failed\":1,\"skipped\":0,\"tests\":[");
+        missing_r.push_str(missing_entry);
+        missing_r.push_str(String::from("],\"contract_density\":{\"functions_total\":0,\"functions_with_vows\":0,\"density_pct\":0.0}}"));
+        print_str(missing_r);
+        print_str(String::from("\n"));
+        return 1;
+    }
+
+    let module_root_flag: String = get_flag_arg(argv, "--module-root");
+    let selection: TestSelection = select_tests(path, filter, module_root_flag);
+    let test_files: Vec<String> = selection.files;
+    let mut module_root: String = selection.module_root;
+    if module_root.len() == 0 && test_files.len() == 1 && fs_is_dir(path) == 0 {
+        module_root = frontend_infer_module_root(path);
+    }
+    let worker_mode: bool = has_flag(argv, "--worker-entry");
+
+    let entries_json: Vec<String> = Vec::new();
+    let mut passed: i64 = 0;
+    let mut failed: i64 = 0;
+    let mut total_fns: i64 = 0;
+    let mut fns_with_vows: i64 = 0;
+    let mut ti: u64 = 0;
+    let test_jobs: i64 = resolve_test_jobs(argv, do_verify);
+    if !worker_mode && test_jobs > 1 && test_files.len() > 1 {
+        let replies: Vec<String> = run_tests_parallel(argv[0], test_files, module_root, test_worker_common_flags(argv), test_jobs);
+        let mut ri: u64 = 0;
+        while ri < replies.len() {
+            let one: TestOne = worker_reply_parse(replies[ri]);
+            if one.status.len() == 0 {
+                let crashed: String = emit_test_entry_json(test_files[ri], file_stem_from_path(test_files[ri]), String::from("compile_error"), -1, String::from(""), String::from(""), 0, String::from("[{\"error_code\":\"CompileError\",\"message\":\"test worker exited without a result\",\"severity\":\"error\"}]"));
+                entries_json.push(crashed);
+                failed = failed + 1;
+            } else {
+                entries_json.push(one.entry);
+                if one.status == String::from("passed") { passed = passed + 1; } else { failed = failed + 1; }
+                total_fns = total_fns + one.fns;
+                fns_with_vows = fns_with_vows + one.vow_fns;
+            }
+            ri = ri + 1;
+        }
+        ti = test_files.len();
+    }
+    while ti < test_files.len() {
+        let test_path: String = test_files[ti];
+        let short_name: String = file_stem_from_path(test_path);
+        let start_time: i64 = time_unix_ms();
+
+        // Compile
+        let fr: LoweredFrontend = frontend_lower_path_with_root(test_path, module_root);
+        let checked: CheckedFrontend = fr.checked;
+        if checked.n_errors > 0 {
+            let duration: i64 = time_unix_ms() - start_time;
+            diag_ctx_print_all(checked.dctx);
+            let diag_json: String = diag_ctx_to_json(checked.dctx);
+            let entry: String = emit_test_entry_json(test_path, short_name, String::from("compile_error"), -1, String::from(""), String::from(""), duration, diag_json);
+            entries_json.push(entry);
+            failed = failed + 1;
+            ti = ti + 1;
+        } else {
+            let ir_mod: IrModule = fr.ir_mod;
+
+            // Count contract density
+            let fns2: Vec<IrFunction> = ir_mod.functions;
+            let mut fi: u64 = 0;
+            while fi < fns2.len() {
+                let f: IrFunction = fns2[fi];
+                if f.name != String::from("main") {
+                    total_fns = total_fns + 1;
+                    let vows: Vec<IrVowEntry> = f.vows;
+                    if vows.len() > 0 {
+                        fns_with_vows = fns_with_vows + 1;
+                    }
+                }
+                fi = fi + 1;
+            }
+
+            // Verify if requested — bounded pool honoring --verify-jobs.
+            let mut skip_exec: bool = false;
+            if do_verify && t_native {
+                let nv: TestNativeVerdict = test_native_verify(ir_mod, argv[0], test_path, module_root, t_jobs, checked.dctx);
+                if nv.failed || nv.skipped {
+                    let duration: i64 = time_unix_ms() - start_time;
+                    let status_nv: String = { if nv.failed { String::from("verify_failed") } else { String::from("contract_skipped") } };
+                    entries_json.push(emit_test_entry_json(test_path, short_name, status_nv, -1, String::from(""), String::from(""), duration, nv.diag_json));
+                    failed = failed + 1;
+                    skip_exec = true;
+                }
+            }
+            if do_verify && !t_native {
+                let esbmc_verdict: i64 = test_esbmc_verdict(ir_mod, checked.dctx, esbmc_bin, t_max_k_step, t_jobs);
+                let verify_failed: bool = esbmc_verdict == 1;
+                let contract_skipped: bool = esbmc_verdict == 2;
+                if verify_failed {
+                    let duration: i64 = time_unix_ms() - start_time;
+                    let diag_vf: String = String::from("[{\"error_code\":\"VerifyFailed\",\"message\":\"contract verification failed\",\"severity\":\"error\"}]");
+                    let entry: String = emit_test_entry_json(test_path, short_name, String::from("verify_failed"), -1, String::from(""), String::from(""), duration, diag_vf);
+                    entries_json.push(entry);
+                    failed = failed + 1;
+                    skip_exec = true;
+                } else if contract_skipped {
+                    // Fail closed but distinguishable: ESBMC was never invoked
+                    // because a vowed function is non-modelable (#386).
+                    let duration: i64 = time_unix_ms() - start_time;
+                    let diag_cs: String = String::from("[{\"error_code\":\"VerificationSkipped\",\"message\":\"contract verification skipped: function not modelable\",\"severity\":\"error\"}]");
+                    let entry: String = emit_test_entry_json(test_path, short_name, String::from("contract_skipped"), -1, String::from(""), String::from(""), duration, diag_cs);
+                    entries_json.push(entry);
+                    failed = failed + 1;
+                    skip_exec = true;
+                }
+            }
+
+            if !skip_exec {
+                // Compile to binary
+                let worker_tag: String = { if worker_mode { str2(get_flag_arg(argv, "--worker-entry"), String::from("_")) } else { String::from("") } };
+                let tmp_out: String = str2(str3(String::from("build/vow_test_"), short_name, String::from("_")), str2(worker_tag, i64_to_string(time_unix_ms())));
+                let result: i64 = clif_emit_module(ir_mod, tmp_out, mode, 0);
+                if result != 0 {
+                    let duration: i64 = time_unix_ms() - start_time;
+                    let codegen_diag: Diagnostic = codegen_failure_diagnostic(result, test_path, str2(tmp_out, String::from(".o")));
+                    diag_eprintln_best_effort(diag_to_human(codegen_diag, checked.dctx));
+                    let diag_json2: String = str3(String::from("["), diag_to_json(codegen_diag), String::from("]"));
+                    let entry: String = emit_test_entry_json(test_path, short_name, String::from("compile_error"), -1, String::from(""), String::from(""), duration, diag_json2);
+                    entries_json.push(entry);
+                    failed = failed + 1;
+                } else {
+                    // Execute with a timeout
+                    let no_args: Vec<String> = Vec::new();
+                    let handle: i64 = process_start(tmp_out, no_args);
+                    let exit_code: i64 = process_wait_timeout(handle, timeout_ms);
+                    let stdout: String = {
+                        if exit_code == -2 {
+                            process_kill(handle);
+                            String::from("")
+                        } else {
+                            process_stdout_for(handle)
+                        }
+                    };
+                    let stderr: String = {
+                        if exit_code == -2 {
+                            String::from("timeout")
+                        } else {
+                            process_stderr_for(handle)
+                        }
+                    };
+                    fs_remove(tmp_out);
+                    process_kill(handle);
+                    let duration: i64 = time_unix_ms() - start_time;
+                    let status: String = {
+                        if exit_code == 0 { String::from("passed") }
+                        else if exit_code == -2 { String::from("timeout") }
+                        else { String::from("failed") }
+                    };
+                    if exit_code == 0 {
+                        passed = passed + 1;
+                    } else {
+                        failed = failed + 1;
+                    }
+                    let entry: String = emit_test_entry_json(test_path, short_name, status, exit_code, stdout, stderr, duration, String::from("[]"));
+                    entries_json.push(entry);
+                }
+            }
+            ti = ti + 1;
+        }
+    }
+
+    if worker_mode {
+        let wstatus: String = { if passed == 1 { String::from("passed") } else { String::from("failed") } };
+        if entries_json.len() == 0 { return 1; }
+        print_str(worker_reply_line(TestOne { status: wstatus, entry: entries_json[0], fns: total_fns, vow_fns: fns_with_vows }));
+        return 0;
+    }
+
+    // Emit JSON result
+    let total: i64 = passed + failed;
+    let result_status: String = {
+        if failed > 0 { String::from("TestsFailed") }
+        else { String::from("TestsPassed") }
+    };
+    let density_pct: i64 = {
+        if total_fns > 0 { (fns_with_vows * 1000) / total_fns }
+        else { 0 }
+    };
+    let r: String = String::from("{\"status\":\"");
+    r.push_str(result_status);
+    r.push_str(String::from("\",\"total\":"));
+    r.push_str(i64_to_string(total));
+    r.push_str(String::from(",\"passed\":"));
+    r.push_str(i64_to_string(passed));
+    r.push_str(String::from(",\"failed\":"));
+    r.push_str(i64_to_string(failed));
+    r.push_str(String::from(",\"skipped\":0,\"tests\":["));
+    let mut ji: u64 = 0;
+    while ji < entries_json.len() {
+        if ji > 0 {
+            r.push_str(String::from(","));
+        }
+        r.push_str(entries_json[ji]);
+        ji = ji + 1;
+    }
+    r.push_str(String::from("],\"contract_density\":{\"functions_total\":"));
+    r.push_str(i64_to_string(total_fns));
+    r.push_str(String::from(",\"functions_with_vows\":"));
+    r.push_str(i64_to_string(fns_with_vows));
+    r.push_str(String::from(",\"density_pct\":"));
+    // Emit density as X.Y
+    let whole: i64 = density_pct / 10;
+    let frac: i64 = density_pct - (whole * 10);
+    r.push_str(i64_to_string(whole));
+    r.push_str(String::from("."));
+    r.push_str(i64_to_string(frac));
+    r.push_str(String::from("}}"));
+    print_str(r);
+    if failed > 0 {
+        return 1;
+    }
+    0
+}

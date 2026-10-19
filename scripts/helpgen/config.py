@@ -13,8 +13,6 @@ ERRORS = SPEC_DIR / "errors.md"
 EXAMPLES = SPEC_DIR / "examples.md"
 STDLIB = SPEC_DIR / "stdlib.md"
 SCHEMAS_DIR = SPEC_DIR / "schemas"
-SKILL_RS = REPO / "vow" / "src" / "skill.rs"
-MAIN_VOW = REPO / "compiler" / "main.vow"
 SKILLS_DIR = REPO / "skills" / "vow"
 
 SCHEMA_VERSION = "2"

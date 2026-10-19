@@ -1,0 +1,194 @@
+module MainCe
+
+fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path: String) -> VerifyCE {
+    let vow_id: i64 = vr.vow_id;
+    // Keep the raw `-1` sentinel internally for vow matching. The JSON API uses
+    // a reserved non-contract id so an unattributed property cannot collide
+    // with the function's real vow 0.
+    let public_vow_id: i64 = {
+        if vow_id < 0 { verifier_unattributed_vow_id() } else { vow_id }
+    };
+    let mut ce_violation: String = String::from("");
+    let mut ce_blame: i64 = DIAG_BLAME_NONE();
+    let call_site_functions: Vec<String> = Vec::new();
+    let call_site_files: Vec<String> = Vec::new();
+    let call_site_offsets: Vec<i64> = Vec::new();
+    let call_site_lengths: Vec<i64> = Vec::new();
+    let violating_arg_params: Vec<String> = Vec::new();
+    let violating_arg_values: Vec<String> = Vec::new();
+    let violating_arg_offsets: Vec<i64> = Vec::new();
+    let violating_arg_lengths: Vec<i64> = Vec::new();
+    let mut ce_source_file: String = String::from("");
+    let mut ce_source_start: i64 = 0;
+    let mut ce_source_len: i64 = 0;
+    let mut ce_function: String = f.name;
+    if vow_id == unsupported_op_vow_id() {
+        // Fail-closed assertion from emit_unsupported_for_verification: no
+        // user-authored vow has this id, so synthesize an actionable message
+        // instead of leaving the violation blank.
+        ce_violation = String::from("function uses side-effecting operations not supported for verification");
+    } else if vr.callee_precondition_func_id >= 0 && vr.callee_precondition_vow_id >= 0 {
+        let fi: i64 = find_ir_function_index_by_id(ir_mod.functions, vr.callee_precondition_func_id);
+        if fi >= 0 {
+            let callee: IrFunction = ir_mod.functions[fi as u64];
+            let vows: Vec<IrVowEntry> = callee.vows;
+            let vi: i64 = find_ir_vow_index(vows, vr.callee_precondition_vow_id);
+            if vi >= 0 {
+                let ve: IrVowEntry = vows[vi as u64];
+                ce_violation = ve.description;
+                ce_blame = DIAG_BLAME_CALLER();
+                let callee_src: CeSource = ce_source_for_vow(callee, ve, path);
+                ce_source_file = callee_src.file;
+                ce_source_start = callee_src.start;
+                ce_source_len = callee_src.len;
+
+                let exact_call_matches: i64 = count_exact_callee_precondition_calls(f, callee, ve, vr);
+                let blocks: Vec<IrBlock> = f.blocks;
+                let mut bi: u64 = 0;
+                while bi < blocks.len() {
+                    let insts: Vec<IrInst> = blocks[bi].insts;
+                    let mut ii: u64 = 0;
+                    while ii < insts.len() {
+                        let inst: IrInst = insts[ii];
+                        if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() && inst.dv == callee.id {
+                            if exact_call_matches == 0 || call_matches_callee_precondition_candidate(f, callee, ve, inst, vr) {
+                                call_site_functions.push(f.name);
+                                call_site_files.push(path);
+                                call_site_offsets.push(inst.ostart);
+                                call_site_lengths.push(inst.olen);
+
+                                let mut bindi: u64 = 0;
+                                while bindi < ve.binding_names.len() {
+                                    let bname: String = ve.binding_names[bindi];
+                                    let pidx: i64 = find_param_index(callee.param_names, bname);
+                                    if pidx >= 0 && pidx < inst.args.len() as i64 {
+                                        violating_arg_params.push(bname);
+                                        let arg_inst_id: i64 = inst.args[pidx as u64];
+                                        let ce_val: String = ce_value_for_param(vr.var_names, vr.var_values, bname, pidx);
+                                        if ce_val.len() > 0 {
+                                            violating_arg_values.push(ce_val);
+                                        } else {
+                                            violating_arg_values.push(ce_arg_value_string(f, arg_inst_id));
+                                        }
+                                        violating_arg_offsets.push(inst_offset_by_id(f, arg_inst_id));
+                                        violating_arg_lengths.push(inst_len_by_id(f, arg_inst_id));
+                                    }
+                                    bindi = bindi + 1;
+                                }
+                            }
+                        }
+                        ii = ii + 1;
+                    }
+                    bi = bi + 1;
+                }
+            }
+        }
+        if ce_violation.len() == 0 {
+            ce_violation = String::from("callee precondition violated by the caller");
+            ce_blame = DIAG_BLAME_CALLER();
+        }
+    } else if vr.callee_postcondition_func_id >= 0 && vr.callee_postcondition_vow_id >= 0 {
+        // A co-emitted callee's `ensures`/`invariant` failed: its vow id is local
+        // to the callee, so resolve it there, never against the target's vows.
+        let fi: i64 = find_ir_function_index_by_id(ir_mod.functions, vr.callee_postcondition_func_id);
+        if fi >= 0 {
+            let callee: IrFunction = ir_mod.functions[fi as u64];
+            let vows: Vec<IrVowEntry> = callee.vows;
+            let vi: i64 = find_ir_vow_index(vows, vr.callee_postcondition_vow_id);
+            if vi >= 0 {
+                let ve: IrVowEntry = vows[vi as u64];
+                ce_function = callee.name;
+                ce_violation = ve.description;
+                ce_blame = ve.blame;
+                let callee_src: CeSource = ce_source_for_vow(callee, ve, path);
+                ce_source_file = callee_src.file;
+                ce_source_start = callee_src.start;
+                ce_source_len = callee_src.len;
+            }
+        }
+        if ce_violation.len() == 0 {
+            let assert_description: String = parse_assert_label(vr.raw_output);
+            if assert_description.len() > 0 {
+                ce_violation = assert_description;
+            } else {
+                ce_violation = String::from("internal verifier assertion failed");
+            }
+        }
+    } else if vow_id == caller_precondition_vow_id() {
+        // A co-emitted callee's `requires` was violated by this caller. The
+        // sentinel id matches no vow in `f`, so synthesize a Caller-blamed
+        // precondition diagnostic rather than mis-resolving to the target's vow
+        // of the same local index.
+        ce_violation = String::from("callee precondition violated by the caller");
+        ce_blame = DIAG_BLAME_CALLER();
+    } else {
+        let vow_entries: Vec<IrVowEntry> = f.vows;
+        let mut vi: u64 = 0;
+        while vi < vow_entries.len() {
+            let ve: IrVowEntry = vow_entries[vi];
+            if ve.id == vow_id {
+                ce_violation = ve.description;
+                ce_blame = ve.blame;
+                let own_src: CeSource = ce_source_for_vow(f, ve, path);
+                ce_source_file = own_src.file;
+                ce_source_start = own_src.start;
+                ce_source_len = own_src.len;
+            }
+            vi = vi + 1;
+        }
+        if ce_violation.len() == 0 {
+            let assert_description: String = parse_assert_label(vr.raw_output);
+            if assert_description.len() > 0 {
+                ce_violation = assert_description;
+            } else {
+                ce_violation = String::from("internal verifier assertion failed");
+            }
+        }
+    }
+    VerifyCE {
+        function: ce_function,
+        target_function: f.name,
+        var_names: vr.var_names,
+        var_values: vr.var_values,
+        violation: ce_violation,
+        claim: parse_assert_claim(vr.raw_output),
+        vow_id: public_vow_id,
+        source: ce_source_file,
+        source_start: ce_source_start,
+        source_len: ce_source_len,
+        blame: ce_blame,
+        call_site_functions: call_site_functions,
+        call_site_files: call_site_files,
+        call_site_offsets: call_site_offsets,
+        call_site_lengths: call_site_lengths,
+        violating_arg_params: violating_arg_params,
+        violating_arg_values: violating_arg_values,
+        violating_arg_offsets: violating_arg_offsets,
+        violating_arg_lengths: violating_arg_lengths,
+        replay: String::from(""),
+        replay_reason: String::from(""),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Counterexample replay (--replay-cex, issue #335)
+//
+// Differential test of the verifier model against runtime semantics: after a
+// counterexample, build a `--mode debug` harness that calls the failing
+// function with the counterexample's concrete inputs and check the runtime
+// VowViolation agrees (same vow_id + blame). NOT part of the proof.
+//
+// Under `--backend native`, abort-claim counterexamples (zero divisor, signed
+// MIN / -1) replay too and are confirmed by an ArithmeticOverflow abort; a
+// diverged or aborted replay is reported as a VerifierBug diagnostic.
+//
+// Self-hosted v1 scope: scalar params (i64/u64/bool). Under `--backend native`
+// a struct, enum, `Option` or `Result` parameter whose fields are scalars is
+// rebuilt from the counterexample's `<param>.<slot>` values (`replay_agg_arg`), and
+// a `Vec`, `String` or struct field that holds another parameter's object (the
+// address `<param>.addr`) names that parameter's binding.
+// Any other aggregate param or a Unit param is reported as `skipped` with a
+// reason (the Rust compiler additionally reconstructs bounded Vecs). An entry
+// file that already defines `main` replays too: that definition is renamed out
+// of the harness.
+// ---------------------------------------------------------------------------

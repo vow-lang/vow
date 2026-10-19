@@ -1,0 +1,154 @@
+module MainArgs
+
+fn has_flag(argv: Vec<String>, flag: String) -> bool {
+    let mut i: u64 = 1;
+    let mut found: bool = false;
+    while i < argv.len() {
+        if argv[i] == flag {
+            found = true;
+        }
+        i = i + 1;
+    }
+    found
+}
+
+fn get_flag_arg(argv: Vec<String>, flag: String) -> String {
+    let n: i64 = argv.len() as i64;
+    let mut i: i64 = 1;
+    while n > 1 && i < n - 1 {
+        if argv[i as u64] == flag {
+            return argv[(i + 1) as u64];
+        }
+        i = i + 1;
+    }
+    String::from("")
+}
+
+// `-o` and `--output` are the same flag; `-o` wins when both are given.
+fn output_flag_value(argv: Vec<String>) -> String {
+    if has_flag(argv, "-o") { return get_flag_arg(argv, "-o"); }
+    get_flag_arg(argv, "--output")
+}
+
+fn has_output_flag(argv: Vec<String>) -> bool {
+    has_flag(argv, "-o") || has_flag(argv, "--output")
+}
+
+fn get_source_path(argv: Vec<String>) -> String {
+    let argc: i64 = argv.len() as i64;
+    let mut i: i64 = argc - 1;
+    while i >= 1 {
+        let a: String = argv[i as u64];
+        let first_byte: i64 = a.byte_at(0);
+        if first_byte != 45 {
+            if i > 1 {
+                let prev: String = argv[(i - 1) as u64];
+                if cli_flag_takes_value(prev) {
+                    i = i - 1;
+                } else {
+                    return a;
+                }
+            } else {
+                return a;
+            }
+        }
+        i = i - 1;
+    }
+    String::from("")
+}
+
+fn get_source_path_sub(argv: Vec<String>) -> String {
+    let argc: i64 = argv.len() as i64;
+    let mut i: i64 = argc - 1;
+    while i >= 2 {
+        let a: String = argv[i as u64];
+        let first_byte: i64 = a.byte_at(0);
+        if first_byte != 45 {
+            if i > 2 {
+                let prev: String = argv[(i - 1) as u64];
+                if cli_flag_takes_value(prev) {
+                    i = i - 1;
+                } else {
+                    return a;
+                }
+            } else {
+                return a;
+            }
+        }
+        i = i - 1;
+    }
+    String::from("")
+}
+
+fn default_output(path: String) -> String {
+    let n: u64 = path.len();
+    // Find last '/' to extract basename
+    let start: u64 = match str_rfind_byte(path, 47) {
+        Option::None => 0,
+        Option::Some(k) => k + 1u64,
+    };
+    // Strip .vow extension if present
+    let mut end: u64 = n;
+    if n - start > 4 {
+        let d: i64 = path.byte_at(n - 4);
+        let v: i64 = path.byte_at(n - 3);
+        let o: i64 = path.byte_at(n - 2);
+        let w: i64 = path.byte_at(n - 1);
+        if d == 46 && v == 118 && o == 111 && w == 119 {
+            end = n - 4;
+        }
+    };
+    let r: String = String::from("build/");
+    r.push_str(path.substring(start, end));
+    r
+}
+
+fn get_subcommand(argv: Vec<String>) -> i64 {
+    if argv.len() < 2 {
+        return CMD_NONE();
+    }
+    let sub: String = argv[1];
+    if sub == "build" {
+        return CMD_BUILD();
+    }
+    if sub == "verify" {
+        return CMD_VERIFY();
+    }
+    if sub == "test" {
+        return CMD_TEST();
+    }
+    if sub == "contracts" {
+        return CMD_CONTRACTS();
+    }
+    if sub == "skill" {
+        return CMD_SKILL();
+    }
+    if sub == "mutants" {
+        return CMD_MUTANTS();
+    }
+    if sub == "complexity" {
+        return CMD_COMPLEXITY();
+    }
+    if sub == "decl" {
+        return CMD_DECL();
+    }
+    if sub == "verify-worker" {
+        return CMD_VERIFY_WORKER();
+    }
+    CMD_NONE()
+}
+
+fn frontend_path_from_argv(argv: Vec<String>, sub: bool, cmd: String) -> String [io] {
+    let path: String = {
+        if sub {
+            get_source_path_sub(argv)
+        } else {
+            get_source_path(argv)
+        }
+    };
+    if path.len() == 0 {
+        diag_eprintln_best_effort(str3(String::from("vow "), cmd, String::from(": source file required (try --help)")));
+        process_exit(1);
+    }
+    path
+}

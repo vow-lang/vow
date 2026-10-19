@@ -1,0 +1,399 @@
+module MainReplay
+
+struct ReplayVerdict {
+    status: String,
+    reason: String,
+}
+
+struct ReplayScan {
+    violation_line: String,
+    abort_kind: String,
+}
+
+// 128 + SIGABRT: the runtime's reserved abort exit status (docs/spec/errors.md
+// "Exit status"). Gate abort classification on this, not any nonzero code, so
+// an unrelated nonzero exit that happens to print an error-shaped line to
+// stderr isn't misclassified as a runtime abort.
+const RUNTIME_ABORT_EXIT_CODE: i64 = 134;
+
+fn replay_blame_runtime_name(b: i64) -> String {
+    if b == DIAG_BLAME_CALLER() { return String::from("Caller"); }
+    if b == DIAG_BLAME_CALLEE() { return String::from("Callee"); }
+    String::from("None")
+}
+
+fn replay_ty_name(ty: i64) -> String {
+    if ty == ITY_I64() { return String::from("i64"); }
+    if ty == ITY_U64() { return String::from("u64"); }
+    if ty == ITY_BOOL() { return String::from("bool"); }
+    if ty == ITY_I32() { return String::from("i32"); }
+    if ty == ITY_U32() { return String::from("u32"); }
+    if ty == ITY_I16() { return String::from("i16"); }
+    if ty == ITY_U16() { return String::from("u16"); }
+    if ty == ITY_I8() { return String::from("i8"); }
+    if ty == ITY_U8() { return String::from("u8"); }
+    if ty == ITY_I128() { return String::from("i128"); }
+    if ty == ITY_U128() { return String::from("u128"); }
+    if ty == ITY_F32() { return String::from("f32"); }
+    if ty == ITY_F64() { return String::from("f64"); }
+    String::from("")
+}
+
+fn replay_effects_suffix(effects: i64) -> String {
+    // Canonical (alphabetical) effect order, per CLAUDE.md, so the synthesized
+    // `fn main()` annotation matches the printer/type-checker's expected form.
+    let parts: Vec<String> = Vec::new();
+    if (effects & EFF_IO()) != 0 { parts.push(String::from("io")); }
+    if (effects & EFF_PANIC()) != 0 { parts.push(String::from("panic")); }
+    if (effects & EFF_READ()) != 0 { parts.push(String::from("read")); }
+    if (effects & EFF_UNSAFE()) != 0 { parts.push(String::from("unsafe")); }
+    if (effects & EFF_WRITE()) != 0 { parts.push(String::from("write")); }
+    if parts.len() == 0 { return String::from(""); }
+    let s: String = String::from(" [");
+    let mut i: u64 = 0;
+    while i < parts.len() {
+        if i > 0 { s.push_str(String::from(", ")); }
+        s.push_str(parts[i]);
+        i = i + 1;
+    }
+    s.push_str(String::from("]"));
+    s
+}
+
+// Render an ESBMC scalar value as a Vow literal for `ty`, or "" if not
+// renderable in v1.
+fn replay_render_scalar(ty: i64, raw: String) -> String {
+    if ty == ITY_BOOL() {
+        if raw == String::from("0") || raw == String::from("false") || raw == String::from("FALSE") {
+            return String::from("false");
+        }
+        return String::from("true");
+    }
+    if replay_is_int_literal(raw) { return raw; }
+    String::from("")
+}
+
+// Every discriminant the program compares a slot-0 field read with (`tag == k`, `tag != k`,
+// in any function) to choose between two different blocks: the tags a `match` or an unwrap
+// can select. The last arm of a `match` is tested too but reached either way, so that
+// test does not count. `replay_untested_tag` picks an enum variant outside this set to stand
+// for a tag the model chose outside the enum, which fails every test.
+fn replay_compared_tags(fns: Vec<IrFunction>) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut fi: u64 = 0u64;
+    while fi < fns.len() {
+        let f: IrFunction = fns[fi];
+        let mut top: i64 = 0;
+        let mut bi: u64 = 0u64;
+        while bi < f.blocks.len() {
+            let blk: IrBlock = f.blocks[bi];
+            let mut ii: u64 = 0u64;
+            while ii < blk.insts.len() {
+                if blk.insts[ii].id > top { top = blk.insts[ii].id; }
+                ii = ii + 1u64;
+            }
+            bi = bi + 1u64;
+        }
+        let kind: Vec<i64> = Vec::new();
+        let konst: Vec<i64> = Vec::new();
+        let splits: Vec<i64> = Vec::new();
+        let mut z: i64 = 0;
+        while z <= top {
+            kind.push(0);
+            konst.push(0);
+            splits.push(0);
+            z = z + 1;
+        }
+        bi = 0u64;
+        while bi < f.blocks.len() {
+            let blk: IrBlock = f.blocks[bi];
+            let mut ii: u64 = 0u64;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                if inst.id >= 0 {
+                    if inst.op == IOP_FIELD_GET() && inst.dv == 0 && inst.ty == ITY_I64() { kind[inst.id as u64] = 1; }
+                    if inst.op == IOP_CONST_I64() { kind[inst.id as u64] = 2; konst[inst.id as u64] = inst.dv; }
+                }
+                if inst.op == IOP_BRANCH() && inst.args.len() == 1 && inst.dv != inst.dv2 && inst.args[0] >= 0 && inst.args[0] <= top {
+                    splits[inst.args[0] as u64] = 1;
+                }
+                ii = ii + 1u64;
+            }
+            bi = bi + 1u64;
+        }
+        bi = 0u64;
+        while bi < f.blocks.len() {
+            let blk: IrBlock = f.blocks[bi];
+            let mut ii: u64 = 0u64;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                if (inst.op == IOP_EQ() || inst.op == IOP_NE()) && inst.args.len() == 2 && inst.id >= 0 && inst.id <= top && splits[inst.id as u64] == 1 {
+                    let a0: i64 = inst.args[0];
+                    let a1: i64 = inst.args[1];
+                    if a0 >= 0 && a1 >= 0 && a0 <= top && a1 <= top {
+                        if kind[a0 as u64] == 1 && kind[a1 as u64] == 2 { out.push(konst[a1 as u64]); }
+                        if kind[a1 as u64] == 1 && kind[a0 as u64] == 2 { out.push(konst[a0 as u64]); }
+                    }
+                }
+                ii = ii + 1u64;
+            }
+            bi = bi + 1u64;
+        }
+        fi = fi + 1u64;
+    }
+    out
+}
+
+fn replay_find_fn(fns: Vec<IrFunction>, name: String) -> i64 {
+    let mut i: i64 = 0;
+    while i < fns.len() as i64 {
+        let f: IrFunction = fns[i as u64];
+        if f.name == name { return i; }
+        i = i + 1;
+    }
+    -1
+}
+
+// Directory prefix of `path` (with trailing slash), or "./" if it has none.
+fn replay_dir_of(path: String) -> String {
+    match str_rfind_byte(path, 47) {
+        Option::None => String::from("./"),
+        Option::Some(k) => path.substring(0, k + 1u64),
+    }
+}
+
+fn replay_skip(reason: String) -> ReplayVerdict {
+    ReplayVerdict { status: String::from("skipped"), reason: reason }
+}
+
+fn replay_diverge(reason: String) -> ReplayVerdict {
+    ReplayVerdict { status: String::from("diverged"), reason: reason }
+}
+
+fn replay_abort(reason: String) -> ReplayVerdict {
+    ReplayVerdict { status: String::from("aborted"), reason: reason }
+}
+
+fn replay_confirm() -> ReplayVerdict {
+    ReplayVerdict { status: String::from("confirmed"), reason: String::from("") }
+}
+
+// Source literal and type text of argument `pi` (named `pname`, of IR type `ty`)
+// of the replayed function, or the reason it cannot be rebuilt. An aggregate is
+// rebuilt from the native counterexample's `<param>.<slot>` entries via the
+// source declaration; anything else is an i64, u64 or bool taken by name.
+fn replay_param_arg(m: Module, ce: VerifyCE, aggregate: bool, native: bool, pi: i64, pname: String, ty: i64, avoid: Vec<i64>, objs: ReplayObjs) -> ReplayArg {
+    if aggregate {
+        return replay_agg_arg(m, ce.function, pi, ce.var_names, ce.var_values, avoid, objs);
+    }
+    let raw: String = replay_cex_value(ce.var_names, ce.var_values, pname);
+    if raw.len() == 0 { return replay_arg_skip(String::from("no counterexample value")); }
+    if native { return replay_scalar_literal(replay_ty_name(ty), raw); }
+    let lit: String = replay_render_scalar(ty, raw);
+    if lit.len() == 0 { return replay_arg_skip(String::from("value not renderable as a literal")); }
+    replay_arg_ok(lit, replay_ty_name(ty))
+}
+
+fn replay_one_ce(ce: VerifyCE, m: Module, fns: Vec<IrFunction>, path: String, main_start: i64, argv0: String, native: bool) -> ReplayVerdict [io, read, write] {
+    if ce.function == String::from("main") {
+        return replay_skip(String::from("cannot replay the entry function `main`"));
+    }
+    // Synthetic verifier-only ids never match a runtime-emitted vow_id, so an
+    // exact id comparison would always diverge — skip them. The exception is
+    // the native backend's unattributed id, which marks the language-specified
+    // aborts (zero divisor, signed MIN / -1, unwrap on None, a `Vec` index past the end) and replays.
+    let abort_claim: bool = native && ce.vow_id == verifier_unattributed_vow_id();
+    if abort_claim && ce.claim == String::from("integer shift count") {
+        return replay_skip(String::from("replay: a shift-count counterexample is a verifier obligation; the runtime masks the count (8-bit shifts excepted)"));
+    }
+    if abort_claim && ce.claim == String::from("string bounds") {
+        return replay_skip(String::from("replay: a byte_at counterexample is a verifier obligation; the runtime returns -1 for an index past the end"));
+    }
+    if abort_claim && assert_label_runtime_abort(ce.claim).len() == 0 {
+        return replay_skip(String::from("replay: no runtime abort is predicted for this obligation"));
+    }
+    if !abort_claim && (ce.vow_id == caller_precondition_vow_id() || ce.vow_id == unsupported_op_vow_id() || ce.vow_id == verifier_unattributed_vow_id()) {
+        return replay_skip(String::from("replay: synthetic counterexample id (caller-precondition / unsupported-op / unattributed-property sentinel)"));
+    }
+    if ce.function != ce.target_function {
+        return replay_skip(String::from("replay: counterexample belongs to a co-emitted callee; its inputs are the caller's"));
+    }
+    let fi: i64 = replay_find_fn(fns, ce.function);
+    if fi < 0 {
+        return replay_skip(str3(String::from("no IR for function `"), ce.function, String::from("`")));
+    }
+    let f: IrFunction = fns[fi as u64];
+    let src: String = fs_read(path);
+    if src.len() == 0 {
+        return replay_skip(String::from("replay: could not read source"));
+    }
+    let mut base: String = src;
+    if main_start >= 0 {
+        base = replay_rename_main(src, main_start);
+        if base.len() == 0 {
+            return replay_skip(String::from("replay: could not locate the entry file's main"));
+        }
+    }
+
+    let params: Vec<i64> = f.params;
+    let pnames: Vec<String> = f.param_names;
+    let np: i64 = params.len() as i64;
+    let avoid: Vec<i64> = replay_compared_tags(fns);
+    let call_args: String = String::from("");
+    let objs: ReplayObjs = replay_param_objects(m, ce.function, ce.var_names, ce.var_values);
+    let lets: Vec<String> = Vec::new();
+    let defs: Vec<String> = Vec::new();
+    let uses: Vec<String> = Vec::new();
+    let mut pi: i64 = 0;
+    while pi < np {
+        let ty: i64 = params[pi as u64];
+        if ty == ITY_UNIT() {
+            return replay_skip(String::from("function has a Unit parameter"));
+        }
+        let pname: String = pnames[pi as u64];
+        let aggregate: bool = native && (ty == ITY_PTR() || ty == ITY_LPTR());
+        let rebuildable: bool = ty == ITY_I64() || ty == ITY_U64() || ty == ITY_BOOL() || (native && replay_ty_name(ty).len() > 0);
+        if !aggregate && !rebuildable {
+            return replay_skip(str3(String::from("parameter "), i64_to_string(pi), String::from(": unsupported type (self-hosted v1: scalars only)")));
+        }
+        let arg: ReplayArg = replay_param_arg(m, ce, aggregate, native, pi, pname, ty, avoid, objs);
+        if arg.reason.len() > 0 {
+            return replay_skip(str3(String::from("parameter "), pname, str2(String::from(": "), arg.reason)));
+        }
+        let aname: String = replay_obj_bind(objs, pi);
+        let owner: i64 = replay_obj_owner(objs, pi);
+        let shared: bool = aggregate && owner != pi;
+        if shared && replay_obj_ty(objs, owner) != arg.ty_text {
+            return replay_skip(str3(String::from("parameter "), pname, String::from(": aliases a parameter of another type in the counterexample")));
+        }
+        let stmt: String = String::from("");
+        if !shared {
+            stmt.push_str(String::from("    let "));
+            stmt.push_str(aname);
+            stmt.push_str(String::from(": "));
+            stmt.push_str(arg.ty_text);
+            stmt.push_str(String::from(" = "));
+            stmt.push_str(arg.lit);
+            stmt.push_str(String::from(";\n"));
+            defs.push(aname);
+            uses.push(arg.deps);
+        } else {
+            defs.push(String::from(""));
+            uses.push(String::from(""));
+        }
+        lets.push(stmt);
+        if pi > 0 { call_args.push_str(String::from(", ")); }
+        call_args.push_str(aname);
+        pi = pi + 1;
+    }
+    let ordered: ReplayArg = replay_ordered_lets(lets, defs, uses);
+    if ordered.reason.len() > 0 { return replay_skip(ordered.reason); }
+    let body: String = ordered.lit;
+    body.push_str(replay_call_stmt(ce.function, call_args, f.return_ty == ITY_LPTR()));
+
+    let harness: String = base;
+    harness.push_str(String::from("\n\nfn main()"));
+    harness.push_str(replay_effects_suffix(f.effects));
+    harness.push_str(String::from(" {\n"));
+    harness.push_str(body);
+    harness.push_str(String::from("}\n"));
+
+    let dir: String = replay_dir_of(path);
+    // Tag by function + vow_id so two functions sharing a (per-function-local)
+    // vow_id do not collide within one run.
+    let tag: String = str4(String::from("__vow_replay_"), ce.function, String::from("_"), i64_to_string(ce.vow_id));
+    let harness_path: String = str3(dir, tag, String::from(".vow"));
+    let bin_path: String = str2(dir, tag);
+    let oext: String = str2(bin_path, String::from(".o"));
+
+    // Never overwrite an existing file in the source tree — a collision with a
+    // user file would otherwise be silently clobbered and then deleted.
+    if fs_exists(harness_path) != 0 || fs_exists(bin_path) != 0 {
+        return replay_skip(String::from("replay: temp path already exists; not overwriting"));
+    }
+
+    if fs_write(harness_path, harness) != 0 {
+        return replay_skip(String::from("replay: could not write harness"));
+    }
+
+    let bargs: Vec<String> = Vec::new();
+    bargs.push(String::from("build"));
+    bargs.push(String::from("--no-verify"));
+    bargs.push(String::from("--mode"));
+    bargs.push(String::from("debug"));
+    bargs.push(harness_path);
+    bargs.push(String::from("-o"));
+    bargs.push(bin_path);
+    let brc: i64 = process_run(argv0, bargs);
+
+    if brc != 0 {
+        fs_remove(harness_path);
+        fs_remove(bin_path);
+        fs_remove(oext);
+        return replay_skip(String::from("replay: harness did not compile"));
+    }
+
+    // Run the harness with a bounded timeout: a replayed function could loop
+    // forever (the very drift being tested), and an unbounded wait would hang
+    // `verify --replay-cex` instead of returning the original VerifyFailed JSON.
+    let runargs: Vec<String> = Vec::new();
+    let pid: i64 = process_start(bin_path, runargs);
+    if pid < 0 {
+        fs_remove(harness_path);
+        fs_remove(bin_path);
+        fs_remove(oext);
+        return replay_skip(String::from("replay: harness failed to start"));
+    }
+    let rrc: i64 = process_wait_timeout(pid, 10000);
+    let timed_out: bool = rrc == -2;
+    let err: String = {
+        if timed_out {
+            process_kill(pid);
+            String::from("")
+        } else {
+            process_stderr_for(pid)
+        }
+    };
+
+    fs_remove(harness_path);
+    fs_remove(bin_path);
+    fs_remove(oext);
+
+    if timed_out {
+        return replay_skip(String::from("replay: harness timed out"));
+    }
+
+    // Confirm only if a SINGLE VowViolation line carries both the predicted
+    // vow_id and blame — a substring scan over all of stderr could otherwise
+    // splice a vow_id and blame from two different lines into a false confirm.
+    // `__vow_violation` always exits with the reserved abort status, so a
+    // genuine violation is exit-134 too; gating on it here closes the same
+    // false-match surface the abort branch below guards against (a debug
+    // write that coalesces a VowViolation-shaped substring onto its line).
+    let scan: ReplayScan = replay_scan_stderr(err);
+    if abort_claim {
+        return replay_abort_claim_verdict(scan, rrc, assert_label_runtime_abort(ce.claim));
+    }
+    let viol: String = scan.violation_line;
+    let vowid_needle: String = str3(String::from("\"vow_id\":"), i64_to_string(ce.vow_id), String::from(","));
+    let blame_needle: String = str3(String::from("\"blame\":\""), replay_blame_runtime_name(ce.blame), String::from("\""));
+    if viol.len() > 0 && rrc == RUNTIME_ABORT_EXIT_CODE {
+        if viol.contains(vowid_needle) && viol.contains(blame_needle) {
+            return replay_confirm();
+        }
+        return replay_diverge(String::from("runtime violation did not match predicted vow_id/blame"));
+    }
+    if scan.abort_kind.len() > 0 && rrc == RUNTIME_ABORT_EXIT_CODE {
+        let reason: String = String::from("runtime aborted with ");
+        reason.push_str(scan.abort_kind);
+        reason.push_str(String::from(" before reaching predicted VowViolation vow_id="));
+        reason.push_str(i64_to_string(ce.vow_id));
+        reason.push_str(String::from(" blame="));
+        reason.push_str(replay_blame_runtime_name(ce.blame));
+        return replay_abort(reason);
+    }
+    if rrc == 0 {
+        return replay_diverge(String::from("harness exited cleanly; no VowViolation fired at runtime"));
+    }
+    replay_diverge(String::from("runtime violation did not match predicted vow_id/blame"))
+}

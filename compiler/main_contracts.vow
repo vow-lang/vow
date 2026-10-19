@@ -1,0 +1,363 @@
+module MainContracts
+
+// True when the function failed and no clause was refuted: the counterexample is
+// an abort (division, shift, unwrap, index), which `verify` reports as a failure.
+// A clause verdict is then only about the executions that return, so none of
+// them may read `proven`.
+fn native_failed_on_abort_only(oc: VcOutcome) -> bool {
+    if oc.result.status != VERIFY_FAILED() { return false; }
+    let mut k: u64 = 0;
+    while k < oc.clause_proven.len() {
+        if oc.clause_proven[k] == 0 { return false; }
+        k = k + 1;
+    }
+    true
+}
+
+// Fills the `status` and `trivially_satisfiable` columns of the `contracts`
+// entries from the native pool. The entry arrays are parallel: entry `i` is
+// clause `vow_ids[i]` of the function with id `func_ids[i]`. A function outside
+// the native subset is `skipped`; otherwise each clause takes its per-clause
+// verdict (the same fallbacks as the ESBMC multi-property run, except that a
+// function that fails only on an abort proves no clause), a proven vacuity probe
+// overrides every clause of the function with `vacuous`, and a proven trivial
+// probe marks its `ensures` clauses. A missing solver is an `error` status on
+// every clause that needed it; the exit code follows from the statuses.
+fn contracts_native_verify(ir_mod: IrModule, exe: String, path: String, jobs: i64, budget_ms: i64, vow_ids: Vec<i64>, func_ids: Vec<i64>, kinds: Vec<String>, statuses: Vec<String>, trivial: Vec<i64>) [io, read, write] {
+    let drv: VcDriverRun = vc_driver_run(exe, path, String::from(""), ir_mod, true, jobs, budget_ms);
+    let fns: Vec<IrFunction> = ir_mod.functions;
+    let mut fi: u64 = 0;
+    while fi < fns.len() {
+        let func: IrFunction = fns[fi];
+        if func.vows.len() > 0 {
+            let oc: VcOutcome = drv.outcomes[fi];
+            let aborts: bool = native_failed_on_abort_only(oc);
+            let mut ei: u64 = 0;
+            while ei < func_ids.len() {
+                if func_ids[ei] == func.id {
+                    if drv.skip[fi].len() > 0 {
+                        statuses[ei] = String::from("skipped");
+                    } else if drv.vacuous[fi] == 1 {
+                        statuses[ei] = String::from("vacuous");
+                    } else {
+                        statuses[ei] = resolve_clause_status(vow_ids[ei], oc.clause_ids, oc.clause_proven, oc.result.status, false);
+                        if aborts && statuses[ei] == String::from("proven") {
+                            statuses[ei] = String::from("unknown");
+                        }
+                    }
+                    if drv.skip[fi].len() == 0 && drv.trivial[fi] == 1 && kinds[ei] == String::from("ensures") {
+                        trivial[ei] = 1;
+                    }
+                }
+                ei = ei + 1;
+            }
+        }
+        fi = fi + 1;
+    }
+}
+
+fn run_contracts(argv: Vec<String>) -> i32 [io, read, write] {
+    let path: String = frontend_path_from_argv(argv, true, String::from("contracts"));
+    let fr: LoweredFrontend = frontend_lower_path(path);
+    let checked: CheckedFrontend = fr.checked;
+    let dctx: DiagCtx = checked.dctx;
+    let n_errors: i64 = checked.n_errors;
+    if diag_ctx_print_all(dctx) == DIAG_EMIT_FAILED() {
+        diag_emit_emission_failure_json(dctx);
+        return 1;
+    }
+    if n_errors > 0 {
+        diag_emit_verify_json(String::from("CompileFailed"), dctx, Vec::new());
+        return 1;
+    }
+    let ir_mod: IrModule = fr.ir_mod;
+
+    let do_verify: bool = has_flag(argv, "--verify");
+    let use_cache: bool = !has_flag(argv, "--no-cache");
+    let mks_str: String = get_flag_arg(argv, "--max-k-step");
+    let max_k_step: String = {
+        if mks_str.len() > 0 { mks_str }
+        else { String::from("50") }
+    };
+    let mut solver: String = get_flag_arg(argv, "--solver");
+    let encoding: String = get_flag_arg(argv, "--encoding");
+    let timeout_secs: String = get_flag_arg(argv, "--timeout");
+    if encoding == String::from("ir") {
+        if solver == String::from("boolector") || solver == String::from("bitwuzla") {
+            diag_eprintln_best_effort(String::from("error: --encoding ir requires --solver z3"));
+            return 1;
+        }
+        if solver.len() == 0 || solver == String::from("auto") {
+            solver = String::from("z3");
+        }
+    }
+    let vec_max_c: i64 = VOW_VEC_MAX();
+    let string_max_c: i64 = VOW_STRING_MAX();
+    let hashmap_max_c: i64 = VOW_HASHMAP_MAX();
+    let btreemap_max_c: i64 = VOW_BTREEMAP_MAX();
+    // The ESBMC loop below is serial and ignores it; the native pool runs this
+    // many workers at a time.
+    let cjobs: i64 = resolve_verify_jobs(argv);
+    let native: bool = get_flag_arg(argv, "--backend") == "native";
+
+    // Collect per-contract entries into parallel arrays
+    let e_vow_ids: Vec<i64> = Vec::new();
+    let e_func_ids: Vec<i64> = Vec::new();
+    let e_func_names: Vec<String> = Vec::new();
+    let e_kinds: Vec<String> = Vec::new();
+    let e_descs: Vec<String> = Vec::new();
+    let e_blames: Vec<String> = Vec::new();
+    let e_files: Vec<String> = Vec::new();
+    let e_offsets: Vec<i64> = Vec::new();
+    let e_statuses: Vec<String> = Vec::new();
+    let e_qualities: Vec<String> = Vec::new();
+    // 1 when a trivial `return <default>` body satisfies this ensures (#81 PR-C).
+    let e_trivial: Vec<i64> = Vec::new();
+
+    let nf: u64 = ir_mod.functions.len();
+    let mut fi: u64 = 0;
+    while fi < nf {
+        let func: IrFunction = ir_mod.functions[fi];
+        let nv: u64 = func.vows.len();
+        let mut vi: u64 = 0;
+        while vi < nv {
+            let ve: IrVowEntry = func.vows[vi];
+            let ve_desc: String = ve.description;
+            let ve_kind: String = vow_kind_from_desc(ve_desc);
+            e_vow_ids.push(ve.id);
+            e_func_ids.push(func.id);
+            e_func_names.push(func.name);
+            e_kinds.push(ve_kind);
+            e_descs.push(ve_desc);
+            e_qualities.push(cq_classify(ve_kind, ve_desc));
+            if ve.blame == BLAME_CALLER() {
+                e_blames.push(String::from("Caller"));
+            } else {
+                e_blames.push(String::from("Callee"));
+            }
+            e_files.push(ve.file);
+            e_offsets.push(ve.offset);
+            e_statuses.push(String::from("not_verified"));
+            e_trivial.push(0);
+            vi = vi + 1;
+        }
+        fi = fi + 1;
+    }
+
+    // If --verify, run verification per function and update statuses
+    let mut exit_code: i32 = 0;
+    let esbmc_bin: String = {
+        if do_verify && !native { esbmc_path() }
+        else { String::from("") }
+    };
+    if do_verify && native {
+        contracts_native_verify(ir_mod, argv[0], path, cjobs, watchdog_ms_for(timeout_secs), e_vow_ids, e_func_ids, e_kinds, e_statuses, e_trivial);
+    }
+    if do_verify && !native {
+        if !esbmc_exists(esbmc_bin) {
+            let mut ei_missing: u64 = 0;
+            while ei_missing < e_statuses.len() {
+                e_statuses[ei_missing] = String::from("error");
+                ei_missing = ei_missing + 1;
+            }
+            exit_code = 1;
+        } else {
+            let const_fn_indices_c: Vec<i64> = detect_const_fns(ir_mod);
+            fi = 0;
+            while fi < nf {
+                let func: IrFunction = ir_mod.functions[fi];
+                if func.vows.len() > 0 {
+                    let skip_reason: String = non_modelable_reason(func, ir_mod, const_fn_indices_c);
+                    if skip_reason.len() > 0 {
+                        let mut ei: u64 = 0;
+                        while ei < e_func_ids.len() {
+                            if e_func_ids[ei] == func.id {
+                                e_statuses[ei] = String::from("skipped");
+                            }
+                            ei = ei + 1;
+                        }
+                    } else {
+                        // Per-clause status via ESBMC `--multi-property`: every
+                        // `vow:N` claim is reported individually, so each clause
+                        // gets a precise verdict instead of the siblings of a
+                        // failed clause collapsing to `unknown` (#81 PR-A).
+                        let mpr: MultiPropertyResult = verify_function_multi_property(esbmc_bin, func, ir_mod, max_k_step, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
+                        let overall: i64 = mpr.status;
+                        let v_ids: Vec<i64> = mpr.verdict_ids;
+                        let v_proven: Vec<i64> = mpr.verdict_proven;
+                        let mpr_tainted: bool = mpr.tainted;
+                        // Per-clause status, including the tainted-PASSED guard
+                        // (esbmc/esbmc#4484): see resolve_clause_status's doc
+                        // comment in compiler/verifier.vow.
+                        let mut ei: u64 = 0;
+                        while ei < e_func_ids.len() {
+                            if e_func_ids[ei] == func.id {
+                                e_statuses[ei] = resolve_clause_status(e_vow_ids[ei], v_ids, v_proven, overall, mpr_tainted);
+                            }
+                            ei = ei + 1;
+                        }
+
+                        // Vacuity probe (#81 PR-B): if the function's `requires`
+                        // are contradictory, the `ensures` above all passed
+                        // vacuously. Re-run with a `vow_reach` label after the
+                        // requires; if that point is unreachable, override the
+                        // whole contract's clauses with `vacuous`. Only functions
+                        // with a `requires` are eligible.
+                        let vac: i64 = verify_function_vacuity(esbmc_bin, func, ir_mod, max_k_step, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
+                        if vac == 1 {
+                            let mut vi2: u64 = 0;
+                            while vi2 < e_func_ids.len() {
+                                if e_func_ids[vi2] == func.id {
+                                    e_statuses[vi2] = String::from("vacuous");
+                                }
+                                vi2 = vi2 + 1;
+                            }
+                        }
+
+                        // Weakness probe (#81 PR-C): if a trivial `return
+                        // <default>` body still satisfies the ensures, mark each
+                        // ensures clause trivially_satisfiable (informational).
+                        let triv: i64 = verify_function_trivial(esbmc_bin, func, ir_mod, max_k_step, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
+                        if triv == 1 {
+                            let mut ti: u64 = 0;
+                            while ti < e_func_ids.len() {
+                                if e_func_ids[ti] == func.id && e_kinds[ti] == String::from("ensures") {
+                                    e_trivial[ti] = 1;
+                                }
+                                ti = ti + 1;
+                            }
+                        }
+                    }
+                }
+                fi = fi + 1;
+            }
+        }
+    }
+
+    // Build JSON output
+    let total: i64 = e_vow_ids.len() as i64;
+    let json: String = String::from("{\"contracts\":[");
+    let mut ci: i64 = 0;
+    while ci < total {
+        let cu: u64 = ci as u64;
+        if ci > 0 {
+            json.push_str(String::from(","));
+        }
+        json.push_str(String::from("{\"vow_id\":"));
+        json.push_str(i64_to_string(e_vow_ids[cu]));
+        json.push_str(String::from(",\"function\":\""));
+        json.push_str(diag_json_escape_str(e_func_names[cu]));
+        json.push_str(String::from("\",\"kind\":\""));
+        json.push_str(e_kinds[cu]);
+        json.push_str(String::from("\",\"description\":\""));
+        json.push_str(diag_json_escape_str(e_descs[cu]));
+        json.push_str(String::from("\",\"blame\":\""));
+        json.push_str(e_blames[cu]);
+        json.push_str(String::from("\",\"source\":{\"file\":\""));
+        json.push_str(diag_json_escape_str(e_files[cu]));
+        json.push_str(String::from("\",\"offset\":"));
+        json.push_str(i64_to_string(e_offsets[cu]));
+        json.push_str(String::from("},\"status\":\""));
+        json.push_str(e_statuses[cu]);
+        json.push_str(String::from("\",\"quality\":\""));
+        json.push_str(e_qualities[cu]);
+        json.push_str(String::from("\",\"trivially_satisfiable\":"));
+        if e_trivial[cu] == 1 {
+            json.push_str(String::from("true"));
+        } else {
+            json.push_str(String::from("false"));
+        }
+        json.push_str(String::from("}"));
+        ci = ci + 1;
+    }
+
+    // Compute summary counts
+    let mut n_proven: i64 = 0;
+    let mut n_failed: i64 = 0;
+    let mut n_unknown: i64 = 0;
+    let mut n_timeout: i64 = 0;
+    let mut n_error: i64 = 0;
+    let mut n_not_verified: i64 = 0;
+    let mut n_skipped: i64 = 0;
+    let mut n_vacuous: i64 = 0;
+    let mut n_trivial: i64 = 0;
+    let mut si: i64 = 0;
+    while si < total {
+        let s: String = e_statuses[si as u64];
+        if e_trivial[si as u64] == 1 {
+            n_trivial = n_trivial + 1;
+        }
+        if s == String::from("proven") || s == String::from("proven-ir") {
+            n_proven = n_proven + 1;
+        } else if s == String::from("failed") {
+            n_failed = n_failed + 1;
+        } else if s == String::from("unknown") {
+            n_unknown = n_unknown + 1;
+        } else if s == String::from("timeout") {
+            n_timeout = n_timeout + 1;
+        } else if s == String::from("error") {
+            n_error = n_error + 1;
+        } else if s == String::from("skipped") {
+            n_skipped = n_skipped + 1;
+        } else if s == String::from("vacuous") {
+            n_vacuous = n_vacuous + 1;
+        } else {
+            n_not_verified = n_not_verified + 1;
+        }
+        si = si + 1;
+    }
+
+    // Fail closed: `vow contracts --verify` exits non-zero when any contract is
+    // not proven, matching `vow build --verify` / `vow verify` (#479). A vacuous
+    // contract is a hollow proof, so it fails closed too (#81 PR-B).
+    if do_verify && (n_failed > 0 || n_timeout > 0 || n_unknown > 0 || n_error > 0 || n_skipped > 0 || n_vacuous > 0) {
+        exit_code = 1;
+    }
+
+    // Static contract-quality tallies (independent of verification status).
+    let mut n_weak: i64 = 0;
+    let mut n_taut: i64 = 0;
+    let mut n_subst: i64 = 0;
+    let mut qi: i64 = 0;
+    while qi < total {
+        let q: String = e_qualities[qi as u64];
+        if q == String::from("weak") {
+            n_weak = n_weak + 1;
+        } else if q == String::from("tautological") {
+            n_taut = n_taut + 1;
+        } else {
+            n_subst = n_subst + 1;
+        }
+        qi = qi + 1;
+    }
+
+    json.push_str(String::from("],\"summary\":{\"total\":"));
+    json.push_str(i64_to_string(total));
+    json.push_str(String::from(",\"proven\":"));
+    json.push_str(i64_to_string(n_proven));
+    json.push_str(String::from(",\"failed\":"));
+    json.push_str(i64_to_string(n_failed));
+    json.push_str(String::from(",\"unknown\":"));
+    json.push_str(i64_to_string(n_unknown));
+    json.push_str(String::from(",\"timeout\":"));
+    json.push_str(i64_to_string(n_timeout));
+    json.push_str(String::from(",\"error\":"));
+    json.push_str(i64_to_string(n_error));
+    json.push_str(String::from(",\"not_verified\":"));
+    json.push_str(i64_to_string(n_not_verified));
+    json.push_str(String::from(",\"skipped\":"));
+    json.push_str(i64_to_string(n_skipped));
+    json.push_str(String::from(",\"vacuous\":"));
+    json.push_str(i64_to_string(n_vacuous));
+    json.push_str(String::from(",\"trivially_satisfiable\":"));
+    json.push_str(i64_to_string(n_trivial));
+    json.push_str(String::from(",\"quality\":{\"weak\":"));
+    json.push_str(i64_to_string(n_weak));
+    json.push_str(String::from(",\"tautological\":"));
+    json.push_str(i64_to_string(n_taut));
+    json.push_str(String::from(",\"substantive\":"));
+    json.push_str(i64_to_string(n_subst));
+    json.push_str(String::from("}}}"));
+    print_str(json);
+    exit_code
+}
