@@ -460,8 +460,9 @@ fn vc_vec_spread(vv: VcVec, ar: VcArena, hdr: SmtScript, s: i64, bi: i64) {
     let mut i: u64 = 0;
     while i < n && vv.al_slot[i] != s { i = i + 1; }
     if i == n { return; }
-    let new_a: i64 = vv.arr[vc_vec_pos(vv, s, bi)];
-    let new_l: i64 = vv.len[vc_vec_pos(vv, s, bi)];
+    let p: u64 = vc_vec_pos(vv, s, bi);
+    let new_a: i64 = vv.arr[p];
+    let new_l: i64 = vv.len[p];
     let mut j: u64 = 0;
     while j < n {
         let same: i64 = vv.al_same[i * n + j];

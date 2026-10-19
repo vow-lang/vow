@@ -71,9 +71,9 @@ fn VC_VA_CHANGED() -> i64 { 16 }
 
 // The ascending indices of the `Vec` and `String` parameters that may be one object as another
 // parameter of their declared type, when the function changes one of the two (or a Phi of
-// them): the parameters of each type group that has two of them and one changed.
-fn vc_vecalias_params(f: IrFunction, n_ids: u64) -> Vec<i64> {
-    let cls: Vec<i64> = vc_vecalias_classes(f, n_ids);
+// them): the parameters of each type group that has two of them and one changed. `cls` is
+// `vc_vecalias_classes`.
+fn vc_vecalias_params(f: IrFunction, cls: Vec<i64>) -> Vec<i64> {
     let used: Vec<i64> = Vec::new();
     let mut p: u64 = 0;
     while p < cls.len() {
@@ -124,8 +124,7 @@ fn vc_vecalias_union(a: Vec<i64>, b: Vec<i64>) -> Vec<i64> {
 // Gives the collection parameters among the aliasable ones (`ag.al_params`, identities already
 // declared) their slots, and relates them: parameters of one type group that have equal
 // identities have equal initial contents, and `vc_vec_write` spreads a write to each.
-fn vc_vecalias_enable(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, f: IrFunction, n_ids: u64) {
-    let cls: Vec<i64> = vc_vecalias_classes(f, n_ids);
+fn vc_vecalias_enable(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, cls: Vec<i64>) {
     let pos: Vec<i64> = Vec::new();
     let mut i: u64 = 0;
     while i < ag.al_params.len() {
@@ -163,12 +162,14 @@ fn vc_vecalias_enable(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed
 // Declares the identity of every aliasable parameter (structs, `Vec`s and `Strings`) and what
 // relates the collection parameters. The facts the identities need go to `assumed`.
 fn vc_vecalias_setup(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, f: IrFunction, n_ids: u64) {
-    let params: Vec<i64> = vc_vecalias_union(vc_agg_alias_params(f, n_ids), vc_vecalias_params(f, n_ids));
+    let mut cls: Vec<i64> = dom_fill(f.params.len(), 0);
+    if f.params.len() >= 2 { cls = vc_vecalias_classes(f, n_ids); }
+    let params: Vec<i64> = vc_vecalias_union(vc_agg_alias_params(f, n_ids), vc_vecalias_params(f, cls));
     let facts: Vec<i64> = vc_agg_enable_alias(ag, ar, hdr, params, vc_agg_alias_keys(f, params));
     let mut i: u64 = 0;
     while i < facts.len() {
         vc_heap_assume(ar, assumed, facts[i]);
         i = i + 1;
     }
-    vc_vecalias_enable(vv, ag, ar, hdr, assumed, f, n_ids);
+    vc_vecalias_enable(vv, ag, ar, hdr, assumed, cls);
 }

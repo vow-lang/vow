@@ -61,7 +61,7 @@ fn two_vecs(ka: String, kb: String, mutate: bool) -> IrFunction {
 }
 
 fn ids_text(f: IrFunction) -> String {
-    let ids: Vec<i64> = vc_vecalias_params(f, vc_ty_table(f).len());
+    let ids: Vec<i64> = vc_vecalias_params(f, vc_vecalias_classes(f, vc_ty_table(f).len()));
     let out: String = String::from("");
     let mut i: u64 = 0;
     while i < ids.len() {

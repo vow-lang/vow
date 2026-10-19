@@ -17,7 +17,8 @@ fn lower_param_key(a: AstArena, tid: i64, elem_tid: i64) -> String {
     let key: String = String::from("Vec<");
     if elem_tid != -1 {
         let etag: i64 = type_tag(a, elem_tid);
-        if etag == TY_NAMED() || etag == TY_GENERIC() { key.push_str(arena_str(a, type_a(a, elem_tid))); }
+        let ehead: String = { if etag == TY_NAMED() || etag == TY_GENERIC() { arena_str(a, type_a(a, elem_tid)) } else { String::from("") } };
+        key.push_str({ if ehead == String::from("str") { String::from("String") } else { ehead } });
     }
     key.push_str(String::from(">"));
     key
