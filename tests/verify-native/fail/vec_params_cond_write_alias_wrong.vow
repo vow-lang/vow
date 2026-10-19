@@ -1,0 +1,20 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 2
+// TEST: counterexample-blame Callee
+// A write on one branch only is still a write through the other parameter when they are one object.
+module VecParamsCondWriteAliasWrong
+
+fn f(a: Vec<i64>, b: Vec<i64>, c: bool) -> u64 vow {
+    requires: a.len() == 0
+    requires: b.len() == 0
+    ensures: result == 0
+} {
+    if c { b.push(1); }
+    a.len()
+}
+
+fn main() -> i32 [io] {
+    let x: Vec<i64> = Vec::new();
+    print_u64(f(x, x, true));
+    0
+}

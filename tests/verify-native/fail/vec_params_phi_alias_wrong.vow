@@ -1,0 +1,24 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 3
+// TEST: counterexample-blame Callee
+// The push goes through `a` or `b` (a Phi of two parameters); the third parameter is the object it
+// reaches when the caller passes one value for `a` (or `b`) and `c`.
+module VecParamsPhiAliasWrong
+
+fn f(a: Vec<i64>, b: Vec<i64>, c: Vec<i64>, k: bool) -> u64 vow {
+    requires: a.len() == 0
+    requires: b.len() == 0
+    requires: c.len() == 0
+    ensures: result == 0
+} {
+    let t: Vec<i64> = if k { a } else { b };
+    t.push(1);
+    c.len()
+}
+
+fn main() -> i32 [io] {
+    let x: Vec<i64> = Vec::new();
+    let y: Vec<i64> = Vec::new();
+    print_u64(f(x, y, x, true));
+    0
+}

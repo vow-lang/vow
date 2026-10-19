@@ -4,6 +4,7 @@ use ast
 use contract_text
 use diag
 use ir
+use lower_keys
 
 struct LowerCtx {
     func: IrFunction,
@@ -1312,18 +1313,6 @@ fn lower_resolve_alias_tid(a: AstArena, tid: i64, alias_names: Vec<String>, alia
     let index: i64 = lower_find_type_alias(alias_names, name);
     if index == -1 { return tid; }
     alias_target_tids[index as u64]
-}
-
-// `IrFunction.param_keys` entry: head of the declared type (`Vec<T>` whole, `str` is `String`),
-// "" if unknown. Different keys are never one object.
-fn lower_param_key(a: AstArena, tid: i64) -> String {
-    if tid == -1 { return String::from(""); }
-    let tag: i64 = type_tag(a, tid);
-    if tag != TY_NAMED() && tag != TY_GENERIC() { return String::from(""); }
-    let head: String = arena_str(a, type_a(a, tid));
-    if head == String::from("str") { return String::from("String"); }
-    if head == String::from("Vec") && tag == TY_GENERIC() { return print_type_text(a, tid); }
-    head
 }
 
 fn is_scalar_field_type_name(name: String) -> bool {
@@ -6102,6 +6091,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
         func.param_names.push(pname);
 
         let resolved_ptid: i64 = lower_resolve_alias_tid(a, ptid, ctx.type_alias_names, ctx.type_alias_target_tids);
+        let mut pkey_elem: i64 = -1;
         if resolved_ptid != -1 {
             let ptag: i64 = type_tag(a, resolved_ptid);
             if ptag == TY_NAMED() {
@@ -6127,6 +6117,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
                     let pargs_lid: i64 = type_b(a, resolved_ptid);
                     if list_len(a, pargs_lid) > 0 {
                         let pelem_tid: i64 = lower_resolve_alias_tid(a, list_get(a, pargs_lid, 0), ctx.type_alias_names, ctx.type_alias_target_tids);
+                        pkey_elem = pelem_tid;
                         let petag: i64 = type_tag(a, pelem_tid);
                         if petag == TY_NAMED() {
                             let pelem_sid: i64 = type_a(a, pelem_tid);
@@ -6149,7 +6140,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
             }
         }
 
-        func.param_keys.push(lower_param_key(a, resolved_ptid));
+        func.param_keys.push(lower_param_key(a, resolved_ptid, pkey_elem));
         ctx.func.local_names_ids.push(arg_id);
         ctx.func.local_names_strs.push(pname);
         lctx_define(ctx, pname, arg_id);

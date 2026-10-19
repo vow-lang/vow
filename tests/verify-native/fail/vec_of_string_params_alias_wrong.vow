@@ -1,0 +1,21 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 2
+// TEST: counterexample-blame Callee
+// The same for two `Vec<String>` parameters, a type of its own: a push through `b` changes the
+// length `a.len()` reads when the caller passes one value for both.
+module VecOfStringParamsAliasWrong
+
+fn f(a: Vec<String>, b: Vec<String>) -> u64 vow {
+    requires: a.len() == 0
+    requires: b.len() == 0
+    ensures: result == 0
+} {
+    b.push(String::from("x"));
+    a.len()
+}
+
+fn main() -> i32 [io] {
+    let x: Vec<String> = Vec::new();
+    print_u64(f(x, x));
+    0
+}

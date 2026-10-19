@@ -1,0 +1,20 @@
+// Three `Vec` parameters, every identity assignment satisfies the bound: at most `a` and `b` both
+// read the one length that the push through `c` makes 1.
+module VecParamsThreeAliasSafe
+
+fn f(a: Vec<i64>, b: Vec<i64>, c: Vec<i64>) -> u64 vow {
+    requires: a.len() == 0
+    requires: b.len() == 0
+    requires: c.len() == 0
+    ensures: result <= 2
+} {
+    c.push(1);
+    a.len() + b.len()
+}
+
+fn main() -> i32 [io] {
+    let x: Vec<i64> = Vec::new();
+    let y: Vec<i64> = Vec::new();
+    print_u64(f(x, y, x));
+    0
+}

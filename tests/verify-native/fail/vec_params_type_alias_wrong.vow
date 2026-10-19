@@ -1,0 +1,24 @@
+// TEST: replay-skipped the replay harness does not resolve the alias `Id` of an element type
+// TEST: counterexample-fn "t"
+// TEST: counterexample-vow-id 2
+// TEST: counterexample-blame Callee
+// `Vec<Id>` and `Vec<i64>` are one type under `type Id = i64`, so a caller may pass one value for
+// both: the push through `b` is the length `a.len()` reads back.
+module VecParamsTypeAliasWrong
+
+type Id = i64;
+
+fn t(a: Vec<Id>, b: Vec<i64>) -> u64 vow {
+    requires: a.len() == 0
+    requires: b.len() == 0
+    ensures: result == 0
+} {
+    b.push(1);
+    a.len()
+}
+
+fn main() -> i32 [io] {
+    let x: Vec<i64> = Vec::new();
+    print_u64(t(x, x));
+    0
+}
