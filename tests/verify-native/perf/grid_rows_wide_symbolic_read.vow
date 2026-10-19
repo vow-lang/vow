@@ -1,8 +1,7 @@
 // TEST: perf-expect proven 20
-// 128 stored rows read with a symbolic row (#1825): the address of each row is a constant and the
-// handle `grid[i]` is one of them, so the read is one case per row and not a search over every
-// address. It took 8 s for 64 rows and 43 s for 128 (a loaded machine) and grew cubically; it is now
-// decided in well under a second.
+// 128 stored rows read with a symbolic row (#1825): the handle `grid[i]` is one of the addresses of the
+// rows, so the read is one case per row and not a search over every address. It took 5 s for 64 rows
+// and 32 s for 128 (the cost grew cubically); it is now decided in well under a second.
 module GridRowsWideSymbolicRead
 
 fn cell(i: u64) -> i64 vow {

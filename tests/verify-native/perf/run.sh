@@ -5,8 +5,8 @@ set -uo pipefail
 # decided with the real solver, and its verdict and wall time must be the ones
 # `// TEST: perf-expect <proven|unknown> <seconds>` names. The bound is generous (a loaded CI runner
 # is several times slower than a workstation) and still far below what the shapes cost before the
-# addresses of stored objects were constants and the chain of a stored element was exact: 43 s for the
-# wide grid (on a machine with a load of 25), the whole 300 s budget for the symbolic loop.
+# addresses of stored objects were one symbol and a constant apart and the chain of a stored element was
+# exact: 32 s for the wide grid, the whole 300 s budget for the symbolic loop.
 #
 #   proven   Verified
 #   unknown  VerifyFailed, verify_status unknown, no counterexample
