@@ -86,7 +86,9 @@ jobs:
       - name: Verifier-evaluation unit tests
         run: python3 scripts/test_verify_eval.py
       - name: Native-vs-ESBMC differential harness unit tests
-        run: python3 scripts/test_verify_diff.py
+        run: |
+          python3 scripts/test_verify_diff.py
+          python3 scripts/test_verify_diff_explain.py
       - name: Native-vs-ESBMC performance harness unit tests
         run: python3 scripts/test_verify_perf.py
       - name: Whole-compiler native verification harness unit tests

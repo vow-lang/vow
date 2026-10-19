@@ -14,6 +14,8 @@ classifies each fixture:
                 timeout / tool_not_found where ESBMC proves or refutes), drops
                 or re-attributes a counterexample, or refutes a program the
                 corpus labels correct
+  tracked       a `weaker` row the fixture documents with `native-gap "<why>" #N`
+                (scripts/verify_diff_explain.py); reported, never failing
   soundness     native proves a program that ESBMC refutes or the corpus labels
                 incorrect
 
@@ -48,6 +50,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import candidate_isolation
 import verify_eval
+from verify_diff_explain import TRACKED, compare_cex, track
 
 REPO_ROOT = verify_eval.REPO_ROOT
 
@@ -65,7 +68,7 @@ WEAKER = "weaker"
 SOUNDNESS = "soundness"
 HARNESS = "harness"
 
-CLASSES = (MATCH, MORE_PRECISE, WEAKER, SOUNDNESS, HARNESS)
+CLASSES = (MATCH, MORE_PRECISE, TRACKED, WEAKER, SOUNDNESS, HARNESS)
 FAILING_CLASSES = (WEAKER, SOUNDNESS)
 
 CONCLUSIVE = (PROVEN, REFUTED)
@@ -84,7 +87,7 @@ CLAUSE_VERDICT = {
     "skipped": SKIPPED,
 }
 
-SEVERITY = {MATCH: 0, MORE_PRECISE: 1, HARNESS: 2, WEAKER: 3, SOUNDNESS: 4}
+SEVERITY = {MATCH: 0, MORE_PRECISE: 1, TRACKED: 2, HARNESS: 3, WEAKER: 4, SOUNDNESS: 5}
 
 SOFT_FAILURES = ("panicked", "error", "crashed")
 
@@ -178,23 +181,6 @@ def verdict_of(result):
 def cex_keys(cexes):
     """Counterexamples as a set of comparable (fn, blame, vow_id)."""
     return frozenset((c["fn"], c["blame"], c["vow_id"]) for c in cexes)
-
-
-def compare_cex(esbmc_keys, native_keys):
-    """Return (class, detail) for two refutations of the same fixture."""
-    missing = esbmc_keys - native_keys
-    extra = native_keys - esbmc_keys
-    if missing:
-        return (
-            WEAKER,
-            f"native lacks ESBMC counterexample(s) {sorted(missing, key=repr)}",
-        )
-    if extra:
-        return (
-            MORE_PRECISE,
-            f"native reports extra counterexample(s) {sorted(extra, key=repr)}",
-        )
-    return MATCH, None
 
 
 def classify(
@@ -324,7 +310,8 @@ def classify_verdicts(
 
     if esbmc == native:
         if native == REFUTED:
-            return compare_cex(esbmc_keys, native_keys)
+            artifacts = model_artifacts if truth == "VerifyFailed" else None
+            return compare_cex(esbmc_keys, native_keys, artifacts)
         return MATCH, None
 
     if esbmc in CONCLUSIVE and native in CONCLUSIVE:
@@ -694,7 +681,7 @@ def classify_outcomes(truth, path, esbmc, native):
     `esbmc-*-artifact` directive explains.
     """
     artifacts = verify_eval.artifact_directives(path)
-    return classify(
+    cls, detail = classify(
         truth,
         esbmc["verdict"],
         native["verdict"],
@@ -707,6 +694,7 @@ def classify_outcomes(truth, path, esbmc, native):
         esbmc["skipped"],
         native["skipped"],
     )
+    return track(cls, detail, native["verdict"], path)
 
 
 def diff_fixture(vowc, timeout, sub, exp, command="verify"):
