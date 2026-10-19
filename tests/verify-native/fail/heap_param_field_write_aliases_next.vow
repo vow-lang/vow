@@ -1,4 +1,4 @@
-// TEST: replay-skipped field 1 is a struct, which the replay harness cannot build
+// TEST: replay-skipped field 1 holds `Node` itself, and a `Node` cannot be built before the `Node` that holds it
 // TEST: counterexample-fn "bump"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee

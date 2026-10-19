@@ -166,6 +166,9 @@ fn agg_src() -> String {
     s.push_str(String::from("struct Rec { next: Option<Rec> }\n"));
     s.push_str(String::from("struct Both { a: Option<Pair>, b: Shape }\n"));
     s.push_str(String::from("fn fhv(h: HasVec) -> i64 { 0 }\n"));
+    s.push_str(String::from("linear struct Lin { n: i64 }\n"));
+    s.push_str(String::from("struct HoldsLin { l: Lin }\n"));
+    s.push_str(String::from("fn flin(l: Lin, h: HoldsLin) -> i64 { 0 }\n"));
     s.push_str(String::from("struct HasStr { s: String, n: i64 }\n"));
     s.push_str(String::from("struct HasVs { v: Vec<String> }\n"));
     s.push_str(String::from("struct HasWide { v: Vec<i128> }\n"));
@@ -205,12 +208,26 @@ fn agg_src() -> String {
     s.push_str(String::from("fn fu(u: Unknown) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fq(x: i64, p: Pair) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fe(r: Result<(), bool>) -> i64 { 0 }\n"));
+    s.push_str(String::from("struct Bag { items: Vec<i64>, tag: i64 }\n"));
+    s.push_str(String::from("struct Label { text: String, n: i64 }\n"));
+    s.push_str(String::from("struct Node { val: i64, next: Node }\n"));
+    s.push_str(String::from("struct Ring { peer: Link }\n"));
+    s.push_str(String::from("struct Link { back: Ring }\n"));
+    s.push_str(String::from("fn fpush(out: Vec<i64>, b: Bag) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fbagfirst(b: Bag, out: Vec<i64>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fwipe(out: String, l: Label) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fmix(out: Vec<u8>, b: Bag) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fholds(p: Pair, h: Holder) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fnode(p: Node) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fring(x: Ring, y: Link) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn ftwins(a: Pair, b: Pair, c: Bag) -> i64 { 0 }\n"));
     s
 }
 
 fn agg_avoiding(fname: String, pi: i64, kv: String, avoid: Vec<i64>) -> ReplayArg [io] {
     let m: Module = parse_src(agg_src());
-    replay_agg_arg(m, fname, pi, kv_part(kv, false), kv_part(kv, true), avoid)
+    let objs: ReplayObjs = replay_param_objects(m, fname, kv_part(kv, false), kv_part(kv, true));
+    replay_agg_arg(m, fname, pi, kv_part(kv, false), kv_part(kv, true), avoid, objs)
 }
 
 fn agg(fname: String, pi: i64, kv: String) -> ReplayArg [io] {
@@ -345,7 +362,7 @@ fn check_held_collections() -> i32 [io] {
     let no_len: ReplayArg = agg(String::from("fhv"), 0, String::from("h.0=0"));
     if index_of(no_len.reason, String::from("does not list its length")) < 0 { return 333; }
     let alias: ReplayArg = agg(String::from("faliasp"), 1, String::from("v.addr=-2,h.addr=-1,v.len=0,h.0=-2,h.0.len=0"));
-    if index_of(alias.reason, String::from("holds the object of another parameter")) < 0 { return 334; }
+    if alias.lit != String::from("HasVec { v: __replay_a0 }") || alias.deps != String::from("__replay_a0 ") { return 334; }
     let owned: String = String::from("v.addr=-2,h.addr=-1,v.len=0,h.0=5,h.0.len=0");
     if agg(String::from("faliasp"), 1, owned).reason.len() != 0 { return 335; }
     let text: String = String::from("HasStr { s: { let __replay_s: String = String::from(\"\"); __replay_s.push_byte(97); __replay_s }, n: 3 }");
@@ -370,6 +387,105 @@ fn check_held_collections() -> i32 [io] {
     if index_of(agg(String::from("fboth"), 0, both).reason, String::from("is read through memory")) < 0 { return 350; }
     let two: String = String::from("t.0=0,t.0.0=0,t.0.0.len=1,t.0.0[0]=7");
     if index_of(agg(String::from("ftwo"), 0, two).reason, String::from("is read through memory")) < 0 { return 348; }
+    0
+}
+
+// A field holding the address another parameter lists as `<param>.addr` is that parameter's
+// object: the harness names its binding instead of building a second value, and the literal
+// reports the binding so the `let` of that parameter comes first.
+fn check_field_holds_a_parameter() -> i32 [io] {
+    let one: String = String::from("out.addr=-1,b.addr=-2,b.0=-1,out.len=0");
+    let b: ReplayArg = agg(String::from("fpush"), 1, one);
+    if b.lit != String::from("Bag { items: __replay_a0, tag: 0 }") { return 501; }
+    if b.deps != String::from("__replay_a0 ") { return 502; }
+    if b.ty_text != String::from("Bag") { return 503; }
+    let late: ReplayArg = agg(String::from("fbagfirst"), 0, one);
+    if late.lit != String::from("Bag { items: __replay_a1, tag: 0 }") { return 504; }
+    if late.deps != String::from("__replay_a1 ") { return 505; }
+    let out: ReplayArg = agg(String::from("fpush"), 0, one);
+    if out.deps.len() != 0 { return 506; }
+    let text: ReplayArg = agg(String::from("fwipe"), 1, String::from("out.addr=-1,l.addr=-2,l.0=-1,out.len=1,out[0]=0"));
+    if text.lit != String::from("Label { text: __replay_a0, n: 0 }") { return 507; }
+    let holder: ReplayArg = agg(String::from("fholds"), 1, String::from("p.addr=-1,h.addr=-2,h.0=-1,p.0=4"));
+    if holder.lit != String::from("Holder { p: __replay_a0 }") { return 508; }
+    if holder.deps != String::from("__replay_a0 ") { return 509; }
+    let plain: ReplayArg = agg(String::from("fpush"), 1, String::from("out.addr=-1,b.addr=-2,b.0=-3"));
+    if index_of(plain.reason, String::from("does not list its length")) < 0 { return 510; }
+    let tag: ReplayArg = agg(String::from("fpush"), 1, String::from("out.addr=-1,b.addr=-2,b.0=-1,b.1=-1"));
+    if tag.lit != String::from("Bag { items: __replay_a0, tag: -1 }") { return 511; }
+    let unlisted: ReplayArg = agg(String::from("fpush"), 1, String::from("b.addr=-2,b.0=-1"));
+    if index_of(unlisted.reason, String::from("does not list its length")) < 0 { return 512; }
+    let lin: ReplayArg = agg(String::from("flin"), 1, String::from("l.addr=-1,h.addr=-2,h.0=-1,l.0=3"));
+    if index_of(lin.reason, String::from("is read through memory")) < 0 { return 514; }
+    let other: ReplayArg = agg(String::from("fmix"), 1, one);
+    if index_of(other.reason, String::from("holds the object of a parameter of type `Vec<u8>`")) < 0 { return 513; }
+    0
+}
+
+// A struct whose field holds the struct itself has no finite value: the field needs a value of the
+// type before the value exists. The same holds for two structs that hold each other.
+fn check_self_referential_field() -> i32 [io] {
+    let node: ReplayArg = agg(String::from("fnode"), 0, String::from("p.addr=0,p.1=0,p.0=0"));
+    if node.lit.len() != 0 { return 521; }
+    if index_of(node.reason, String::from("holds the very value that holds it")) < 0 { return 522; }
+    let away: ReplayArg = agg(String::from("fnode"), 0, String::from("p.addr=0,p.1=7,p.0=0"));
+    if index_of(away.reason, String::from("holds the very value")) >= 0 { return 523; }
+    let ring: ReplayArg = agg(String::from("fring"), 0, String::from("x.addr=-1,y.addr=-2,x.0=-2,y.0=-1"));
+    if ring.lit != String::from("Ring { peer: __replay_a1 }") { return 524; }
+    let link: ReplayArg = agg(String::from("fring"), 1, String::from("x.addr=-1,y.addr=-2,x.0=-2,y.0=-1"));
+    if link.lit != String::from("Link { back: __replay_a0 }") { return 525; }
+    let defs: Vec<String> = Vec::new();
+    defs.push(String::from("__replay_a0"));
+    defs.push(String::from("__replay_a1"));
+    let uses: Vec<String> = Vec::new();
+    uses.push(ring.deps);
+    uses.push(link.deps);
+    if replay_let_order(defs, uses).len() != 0 { return 526; }
+    0
+}
+
+// The `let` of a parameter comes after the `let` of every parameter its value names; a parameter
+// that declares nothing (the twin of an earlier one) is left out.
+fn check_let_order() -> i32 {
+    let defs: Vec<String> = Vec::new();
+    defs.push(String::from("__replay_a0"));
+    defs.push(String::from("__replay_a1"));
+    defs.push(String::from(""));
+    defs.push(String::from("__replay_a3"));
+    let uses: Vec<String> = Vec::new();
+    uses.push(String::from("__replay_a1 __replay_a3 "));
+    uses.push(String::from(""));
+    uses.push(String::from(""));
+    uses.push(String::from("__replay_a1 "));
+    let order: Vec<i64> = replay_let_order(defs, uses);
+    if order.len() != 3 { return 531; }
+    if order[0] != 1 || order[1] != 3 || order[2] != 0 { return 532; }
+    if replay_count_defs(defs) != 3 { return 533; }
+    let missing: Vec<String> = Vec::new();
+    missing.push(String::from("__replay_a9 "));
+    missing.push(String::from(""));
+    let two: Vec<String> = Vec::new();
+    two.push(String::from("__replay_a0"));
+    two.push(String::from("__replay_a1"));
+    if replay_let_order(two, missing).len() != 1 { return 534; }
+    0
+}
+
+// Parameters with one `.alias` identity share the binding of the first, and an index outside the
+// source signature falls back to its own.
+fn check_param_objects() -> i32 [io] {
+    let m: Module = parse_src(agg_src());
+    let kv: String = String::from("a.alias=3,b.alias=3,a.addr=-1,b.addr=-1,c.addr=-4");
+    let o: ReplayObjs = replay_param_objects(m, String::from("ftwins"), kv_part(kv, false), kv_part(kv, true));
+    if replay_obj_bind(o, 0) != String::from("__replay_a0") { return 541; }
+    if replay_obj_bind(o, 1) != String::from("__replay_a0") { return 542; }
+    if replay_obj_bind(o, 2) != String::from("__replay_a2") { return 543; }
+    if replay_obj_owner(o, 1) != 0 || replay_obj_owner(o, 2) != 2 { return 544; }
+    if replay_obj_ty(o, 1) != String::from("Pair") { return 545; }
+    if replay_held_param(String::from("c.addr"), kv_part(kv, false), kv_part(kv, true), o) != 2 { return 546; }
+    if replay_held_param(String::from("b.addr"), kv_part(kv, false), kv_part(kv, true), o) != 0 { return 547; }
+    if replay_held_param(String::from("z"), kv_part(kv, false), kv_part(kv, true), o) != -1 { return 548; }
+    if replay_obj_bind(o, 9) != String::from("__replay_a9") { return 549; }
     0
 }
 
@@ -586,5 +702,13 @@ fn main() -> i32 [io] {
     if r22 != 0 { return r22; }
     let r19: i32 = check_float_vec_elements();
     if r19 != 0 { return r19; }
+    let r50: i32 = check_field_holds_a_parameter();
+    if r50 != 0 { return r50; }
+    let r52: i32 = check_self_referential_field();
+    if r52 != 0 { return r52; }
+    let r53: i32 = check_let_order();
+    if r53 != 0 { return r53; }
+    let r54: i32 = check_param_objects();
+    if r54 != 0 { return r54; }
     0
 }
