@@ -313,6 +313,7 @@ fn generate_replay_harness(
     ast_module: &vow_syntax::ast::Module,
     target: &vow_syntax::ast::FnDef,
     args: &[ReplayArg],
+    linear_result: bool,
 ) -> String {
     use vow_syntax::ast::{Item, Type};
     let mut src = original_source.to_string();
@@ -347,6 +348,9 @@ fn generate_replay_harness(
     let call = call_args.join(", ");
     let call_line = match &target.return_ty {
         Type::Unit { .. } => format!("    {}({});\n", target.name, call),
+        // A linear result carries an obligation a `let` would leave undischarged: hand it to
+        // `drop`, the language's own way to consume it.
+        _ if linear_result => format!("    drop({}({}));\n", target.name, call),
         ret => format!(
             "    let __replay_ret: {} = {}({});\n",
             vow_syntax::printer::print_type(ret),
@@ -639,7 +643,13 @@ fn replay_one(
         ReplayPlan::Ready(a) => a,
         ReplayPlan::Skipped(r) => return replay_skip(r),
     };
-    let harness = generate_replay_harness(original_source, ast_module, ast_fn, &args);
+    let harness = generate_replay_harness(
+        original_source,
+        ast_module,
+        ast_fn,
+        &args,
+        ir_fn.return_ty == vow_ir::Ty::LinearPtr,
+    );
     compile_and_run_replay(source, &harness, ce)
 }
 
@@ -1142,7 +1152,7 @@ mod tests {
             ReplayPlan::Ready(a) => a,
             ReplayPlan::Skipped(r) => panic!("unexpected skip: {r}"),
         };
-        let harness = generate_replay_harness(src, ast, ast_fn, &args);
+        let harness = generate_replay_harness(src, ast, ast_fn, &args, false);
 
         // Synthesized main calls the target with the concrete args.
         assert!(harness.contains("let __replay_a0: i64 = 5;"));
@@ -1152,6 +1162,35 @@ mod tests {
         assert!(!harness.contains("__orig_marker"));
         // Exactly one `fn main` remains.
         assert_eq!(harness.matches("fn main(").count(), 1);
+    }
+
+    #[test]
+    fn replay_harness_drops_a_linear_result() {
+        let dir = TempDir::new().unwrap();
+        let src = "module L\n\nlinear struct Handle {\n    fd: i64,\n}\n\nfn make(fd: i64) -> Handle {\n    Handle { fd: fd }\n}\n";
+        let path = write_source(&dir, "l.vow", src);
+        let bundle = prepare_frontend(&path, FrontendGoal::LoweredIr).unwrap();
+        let ast = bundle.module();
+        let ir = bundle.ir().unwrap();
+        let ast_fn = ast
+            .items
+            .iter()
+            .find_map(|it| match it {
+                vow_syntax::ast::Item::Fn(f) if f.name == "make" => Some(f),
+                _ => None,
+            })
+            .unwrap();
+        let ir_fn = ir.functions.iter().find(|f| f.name == "make").unwrap();
+        assert_eq!(ir_fn.return_ty, vow_ir::Ty::LinearPtr);
+        let args = vec![ReplayArg::Scalar {
+            ty: "i64".to_string(),
+            value: "0".to_string(),
+        }];
+        let linear = generate_replay_harness(src, ast, ast_fn, &args, true);
+        assert!(linear.contains("drop(make(__replay_a0));"));
+        assert!(!linear.contains("__replay_ret"));
+        let plain = generate_replay_harness(src, ast, ast_fn, &args, false);
+        assert!(plain.contains("let __replay_ret: Handle = make(__replay_a0);"));
     }
 
     #[test]
