@@ -4724,17 +4724,49 @@ pub extern "C" fn __vow_process_stderr_for(handle: i64) -> *mut u8 {
     unsafe { with_root_arena(|arena| alloc_bytes_string(arena, &bytes)) }
 }
 
-/// Delay before poll `round` of `__vow_process_wait_timeout`: 50 us doubling to
-/// a 10 ms cap. A fixed 10 ms quantum was longer than most solver queries, so
-/// every short child cost an extra few milliseconds of sleep on top of its run.
+/// Delay before poll `round`: 50 us doubling to a 10 ms cap, so a short child is not
+/// charged a whole fixed quantum on top of its run.
 fn wait_poll_delay(round: u32) -> std::time::Duration {
     const FIRST_US: u64 = 50;
     const CAP_US: u64 = 10_000;
     std::time::Duration::from_micros((FIRST_US << round.min(8)).min(CAP_US))
 }
 
-/// Wait for a process with a timeout in milliseconds.
-/// Returns exit code on success, -2 on timeout, -1 on error.
+/// `wait_poll_delay` held to `max_ms` (the latest a late exit is seen) and to the time `left`.
+fn poll_sleep(round: u32, max_ms: u64, left: std::time::Duration) -> std::time::Duration {
+    wait_poll_delay(round)
+        .min(std::time::Duration::from_millis(max_ms))
+        .min(left)
+}
+
+/// Polls `child` until it exits (`Ok(code)`), `timeout` passes (`Err(-2)`) or the wait
+/// fails (`Err(-1)`).
+fn poll_child_for(
+    handle: i64,
+    child: &mut std::process::Child,
+    timeout: std::time::Duration,
+    max_ms: u64,
+) -> Result<i64, i64> {
+    let piped = piped::lookup(handle);
+    let start = std::time::Instant::now();
+    let mut round: u32 = 0;
+    loop {
+        if let Some(p) = &piped {
+            p.pump();
+        }
+        if let Some(status) = child.try_wait().map_err(|_| -1)? {
+            return Ok(process_status_code(handle, status));
+        }
+        let elapsed = start.elapsed();
+        if elapsed >= timeout {
+            return Err(-2);
+        }
+        std::thread::sleep(poll_sleep(round, max_ms, timeout - elapsed));
+        round = round.saturating_add(1);
+    }
+}
+
+/// Wait up to `timeout_ms` for a process: its exit code, -2 on timeout, -1 on error.
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_process_wait_timeout(handle: i64, timeout_ms: i64) -> i64 {
     let mut guard = PROCESS_MAP.lock().unwrap();
@@ -4745,39 +4777,15 @@ pub extern "C" fn __vow_process_wait_timeout(handle: i64, timeout_ms: i64) -> i6
     };
     match state {
         ProcessState::Running(mut child) => {
-            // Take stdout/stderr handles and spawn reader threads to prevent
-            // pipe buffer deadlock when the child writes >64KB before exiting.
+            // Reader threads keep a child that writes >64KB from deadlocking.
             let stdout_thread = spawn_drain(child.stdout.take());
             let stderr_thread = spawn_drain(child.stderr.take());
 
-            // Drop the lock during polling so other process operations aren't blocked.
+            // Poll without holding the lock.
             drop(guard);
 
-            let piped = piped::lookup(handle);
             let timeout = std::time::Duration::from_millis(timeout_ms.max(0) as u64);
-            let start = std::time::Instant::now();
-            let mut round: u32 = 0;
-            let result = loop {
-                if let Some(p) = &piped {
-                    p.pump();
-                }
-                match child.try_wait() {
-                    Ok(Some(status)) => {
-                        break Ok(process_status_code(handle, status));
-                    }
-                    Ok(None) => {
-                        let elapsed = start.elapsed();
-                        if elapsed >= timeout {
-                            break Err(-2i64); // timeout
-                        }
-                        std::thread::sleep(wait_poll_delay(round).min(timeout - elapsed));
-                        round = round.saturating_add(1);
-                    }
-                    Err(_) => {
-                        break Err(-1i64); // error
-                    }
-                }
-            };
+            let result = poll_child_for(handle, &mut child, timeout, 10);
 
             // Re-acquire the lock to update state.
             let mut guard = PROCESS_MAP.lock().unwrap();
@@ -4795,8 +4803,7 @@ pub extern "C" fn __vow_process_wait_timeout(handle: i64, timeout_ms: i64) -> i6
                     exit_code
                 }
                 Err(code) => {
-                    // On timeout or error, kill the child so pipes close,
-                    // then join reader threads to reclaim their buffers.
+                    // Kill the child so its pipes close, then reclaim the readers.
                     kill_process_tree(handle, &mut child);
                     let _ = child.wait();
                     let joined = (
@@ -4822,13 +4829,10 @@ pub extern "C" fn __vow_process_wait_timeout(handle: i64, timeout_ms: i64) -> i6
 /// The self-hosted poll loop (verifier.vow) compares against this exact value.
 pub const VOW_PROC_STILL_RUNNING: i64 = -999_999;
 
-/// Non-killing bounded poll of a process, for the --perfetto tracer (issue
-/// #784). Waits up to `ms` for the child; returns its exit code if it exited,
-/// `VOW_PROC_STILL_RUNNING` if it is still alive (LEFT RUNNING, not killed),
-/// or -1 on an unknown handle / wait error. Unlike `__vow_process_wait_timeout`
-/// it never kills on timeout, so the caller can sample resources between polls
-/// and re-impose its own watchdog deadline. stdout/stderr are drained by
-/// persistent reader threads (POLL_READERS) so a verbose child cannot deadlock.
+/// Non-killing bounded poll of a process (--perfetto tracer, issue #784, native
+/// verifier pool). Waits up to `ms`; returns the exit code, `VOW_PROC_STILL_RUNNING`
+/// if the child lives on (never killed), or -1 on an unknown handle / wait error.
+/// POLL_READERS drain stdout/stderr so a verbose child cannot deadlock.
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_process_poll_wait(handle: i64, ms: i64) -> i64 {
     let mut guard = PROCESS_MAP.lock().unwrap();
@@ -4842,8 +4846,7 @@ pub extern "C" fn __vow_process_poll_wait(handle: i64, ms: i64) -> i64 {
         None => return -1,
     };
 
-    // On first poll of this handle, take stdout/stderr and spawn persistent
-    // drain threads so the child never blocks on a full pipe between polls.
+    // First poll: drain stdout/stderr on persistent threads between polls.
     {
         let mut rguard = POLL_READERS.lock().unwrap();
         let readers = rguard.get_or_insert_with(HashMap::new);
@@ -4855,26 +4858,11 @@ pub extern "C" fn __vow_process_poll_wait(handle: i64, ms: i64) -> i64 {
         }
     }
 
-    // Poll without holding the process-map lock across sleeps.
+    // Poll without the process-map lock.
     drop(guard);
-    let piped = piped::lookup(handle);
     let budget = std::time::Duration::from_millis(ms.max(0) as u64);
-    let start = std::time::Instant::now();
-    let outcome: Result<i64, ()> = loop {
-        if let Some(p) = &piped {
-            p.pump();
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => break Ok(process_status_code(handle, status)),
-            Ok(None) => {
-                if start.elapsed() >= budget {
-                    break Err(()); // still running
-                }
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-            Err(_) => break Ok(-1),
-        }
-    };
+    let outcome: Result<i64, ()> = poll_child_for(handle, &mut child, budget, 5)
+        .or_else(|code| if code == -2 { Err(()) } else { Ok(code) });
 
     let mut guard = PROCESS_MAP.lock().unwrap();
     let map = process_map_init(&mut guard);
@@ -4894,7 +4882,7 @@ pub extern "C" fn __vow_process_poll_wait(handle: i64, ms: i64) -> i64 {
             exit_code
         }
         Err(()) => {
-            // Still running — reinsert and report the sentinel; do NOT kill.
+            // Still running: reinsert, do not kill.
             map.insert(handle, ProcessState::Running(child));
             VOW_PROC_STILL_RUNNING
         }
@@ -6260,6 +6248,29 @@ mod tests {
             assert!(d >= prev && d <= Duration::from_millis(10));
             prev = d;
         }
+    }
+
+    #[test]
+    fn poll_child_for_reports_exit_code_and_times_out() {
+        let ms = std::time::Duration::from_millis;
+        let sh = |c| std::process::Command::new("sh").args(["-c", c]).spawn();
+        let mut done = sh("exit 3").unwrap();
+        assert!(matches!(poll_child_for(0, &mut done, ms(5000), 5), Ok(3)));
+        let mut slow = sh("exec sleep 5").unwrap();
+        assert!(matches!(poll_child_for(0, &mut slow, ms(30), 1), Err(-2)));
+        let _ = slow.kill();
+        let _ = slow.wait();
+    }
+
+    #[test]
+    fn poll_sleep_is_held_to_the_cap_and_the_deadline() {
+        let ms = std::time::Duration::from_millis;
+        assert_eq!(
+            poll_sleep(3, 5, ms(99)),
+            std::time::Duration::from_micros(400)
+        );
+        assert_eq!(poll_sleep(30, 5, ms(99)), ms(5));
+        assert_eq!(poll_sleep(30, 5, ms(2)), ms(2));
     }
 
     #[test]
