@@ -284,17 +284,15 @@ run), one fixture at a time on one machine, and reports the median of five runs
 per backend. The harness asserts that the cache directory is still empty after
 each run, so a native result cache (#1429) can never answer a timed run.
 
-**Corpus** (read-only, enumerated at start; a benchmark count other than 23 is
-corpus drift and exits `2`):
+**Corpus** (read-only; a benchmark count other than 23 is corpus drift, exit `2`):
 
 - the 23 non-stretch `benchmarks/*/reference.vow` files from `benchmarks/manifest.toml`;
 - `tests/verify`, `tests/verify-fail`, `tests/verify-skip` (honouring `// TEST: skip`);
 - `tests/verify-fail-multi/*/main.vow`;
 - `tests/verify-native/{pass,fail,skip,unknown}` (truth from the directory);
 - the float fixtures, which live inside the sets above;
-- `tests/verify-stress` only with `--include-stress`. Its rows are reported with
-  `gating: false` and never enter the ratios or the timeout criterion (times out
-  by design).
+- `tests/verify-stress` only with `--include-stress`; its rows are `gating: false`
+  and never enter the ratios or the timeout criterion.
 
 **Metrics.** Wall-clock is the process wall time. Peak RSS is the largest of
 three readings (`scripts/peak_rss.py`): the sampled sum of resident sets over the
@@ -309,8 +307,8 @@ still an upper bound of the child's peak: it is used, labelled
 `ru_maxrss_upper_bound` in the row's `rss_sources`, for native (it can only raise
 the native/ESBMC ratio), and is a harness failure naming the fixture for ESBMC,
 whose peak is the denominator. A peak RSS of 0 never reaches a ratio. One
-discarded warm-up run per backend precedes the timed runs, and the timed runs
-alternate between backends so host drift hits both.
+warm-up run per backend is discarded; timed runs alternate between backends so
+host drift hits both.
 
 **Gate.** A ratio is `native / esbmc` of the per-backend medians.
 
@@ -321,14 +319,13 @@ alternate between backends so host drift hits both.
 | Timeouts | native times out on no fixture where ESBMC finishes |
 | Comparable rows | at least one |
 
-Only rows classed `match` by `verify_diff.py` (same verdict and counterexamples,
-and the same set of skipped functions, so the same work) enter the ratios.
-`more_precise`, `weaker`, `soundness`,
-`harness`, a verdict that changes between runs of one backend (`unstable`) and
-rows where either backend timed out are listed with their reason and left out of
-the ratios. Verdict parity is gate item 1 and stays with `verify_diff.py`. The
-timeout criterion looks at every row, so a native timeout still counts when the
-row is otherwise excluded. A fixture times out on a backend when more than half
+Only rows classed `match` by `verify_diff.py` (same verdict, counterexamples and
+skipped functions) where both backends decided (`proven` or `refuted`) enter the
+ratios. `more_precise`, `weaker`, `soundness`, `harness`, `unstable` and timed-out
+rows are listed with their reason and left out; so are rows a backend skips or
+leaves inconclusive ([ADR-2026-10-20-1848](adr/2026-10-20-1848-corpus-sweep-like-for-like.md)),
+which time declining, not verifying: `undecided[]` lists them with both times. Verdict parity is gate item 1 and stays with `verify_diff.py`. The
+timeout criterion looks at every row, excluded or not. A fixture times out on a backend when more than half
 of its runs did (`verify_status` `timeout` or the watchdog fired).
 
 By default neither backend gets `--timeout`, so each runs at its shipped
@@ -338,7 +335,7 @@ Both backends run with `--verify-jobs 1` unless overridden.
 
 **Report.** One JSON document (`schema_version`, `vowc`, `esbmc_version`,
 `bitwuzla_version`, `host`, `runs`, `budget`, `timeout_s`, `verify_jobs`,
-`corpus`, `rows[]`, `gate`) on stdout or in `--output FILE`, plus a human
+`corpus`, `rows[]`, `gate`, `undecided[]`) on stdout or in `--output FILE`, plus a human
 summary on stderr. Each row carries both backends' medians, raw samples,
 verdicts, `timeout_runs`, the `verify_diff` class, the ratios and the reason a
 row was excluded. `gate` carries the criteria, per-metric geometric mean and
@@ -348,8 +345,8 @@ code does not distinguish a provisional pass, so read `gate.provisional` before
 treating `0` as the gate.
 
 Exit codes: `0` gate passed, `1` gate failed, `2` the harness could not run
-(missing `vowc`, `esbmc` or `bitwuzla`; ESBMC that is not 8.5; non-Linux host;
-corpus drift; no fixture selected; an I/O error).
+(missing `vowc`, `esbmc` or `bitwuzla`; ESBMC other than 8.5; non-Linux host;
+corpus drift; no fixture selected; I/O error).
 
 ```bash
 python3 scripts/verify_perf.py --vowc build/vowc --output /tmp/verify-perf.json
