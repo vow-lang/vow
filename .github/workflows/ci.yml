@@ -90,7 +90,9 @@ jobs:
           python3 scripts/test_verify_diff.py
           python3 scripts/test_verify_diff_explain.py
       - name: Native-vs-ESBMC performance harness unit tests
-        run: python3 scripts/test_verify_perf.py
+        run: |
+          python3 scripts/test_verify_perf.py
+          python3 scripts/test_perf_gate.py
       - name: Whole-compiler native verification harness unit tests
         run: python3 scripts/test_verify_compiler.py
       - name: Candidate isolation unit tests

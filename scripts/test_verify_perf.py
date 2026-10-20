@@ -16,28 +16,6 @@ import peak_rss
 import verify_perf as vp
 
 
-def row(
-    fixture="g/f",
-    cls="match",
-    comparable=True,
-    gating=True,
-    wall=1.0,
-    rss=1.0,
-    native_timeout=False,
-    esbmc_timeout=False,
-):
-    return {
-        "fixture": fixture,
-        "class": cls,
-        "comparable": comparable,
-        "gating": gating,
-        "ratio_wall": wall,
-        "ratio_rss": rss,
-        "esbmc": {"timed_out": esbmc_timeout},
-        "native": {"timed_out": native_timeout},
-    }
-
-
 class ResolvePeakTest(unittest.TestCase):
     def test_largest_sampled_reading_wins_over_a_floor_level_maxrss(self):
         self.assertEqual(
@@ -92,134 +70,6 @@ class TreeSamplerTest(unittest.TestCase):
             tree, single = peak_rss.sample_tree(os.getpid())
         self.assertGreater(tree, solo)
         self.assertGreater(single, 0)
-
-
-class StatisticsTest(unittest.TestCase):
-    def test_geomean_of_reciprocal_ratios_is_one(self):
-        self.assertAlmostEqual(1.0, vp.geomean([2.0, 0.5]))
-        self.assertAlmostEqual(2.0, vp.geomean([1.0, 4.0]))
-
-    def test_geomean_rejects_empty_and_non_positive(self):
-        with self.assertRaises(ValueError):
-            vp.geomean([])
-        with self.assertRaises(ValueError):
-            vp.geomean([1.0, 0.0])
-
-    def test_ratio_is_native_over_esbmc(self):
-        self.assertEqual(0.5, vp.ratio(1.0, 2.0))
-
-    def test_ratio_rejects_zero_denominator(self):
-        with self.assertRaises(ValueError):
-            vp.ratio(1.0, 0.0)
-
-
-class GateTest(unittest.TestCase):
-    def gate(self, rows, runs=vp.RUNS):
-        return vp.evaluate_gate(rows, runs)
-
-    def test_geomean_exactly_one_passes_and_above_fails(self):
-        self.assertTrue(self.gate([row(wall=1.25), row(wall=0.8)])["passed"])
-        gate = self.gate([row(wall=1.001)])
-        self.assertFalse(gate["passed"])
-        self.assertFalse(gate["criteria"]["geomean_wall"])
-        self.assertTrue(gate["criteria"]["geomean_rss"])
-
-    def test_rss_is_gated_independently_of_wall(self):
-        gate = self.gate([row(wall=0.5, rss=1.2)])
-        self.assertTrue(gate["criteria"]["geomean_wall"])
-        self.assertFalse(gate["criteria"]["geomean_rss"])
-        self.assertFalse(gate["passed"])
-
-    def test_worst_fixture_bound_is_inclusive_at_1_25(self):
-        fast = row("g/fast", wall=0.1)
-        self.assertTrue(self.gate([fast, row("g/edge", wall=1.25)])["passed"])
-        gate = self.gate([fast, row("g/slow", wall=1.2501)])
-        self.assertFalse(gate["criteria"]["worst_wall"])
-        self.assertEqual("g/slow", gate["metrics"]["wall"]["worst"]["fixture"])
-
-    def test_native_only_timeout_fails_the_gate(self):
-        gate = self.gate(
-            [
-                row(),
-                row(
-                    "g/t",
-                    cls="weaker",
-                    comparable=False,
-                    wall=None,
-                    rss=None,
-                    native_timeout=True,
-                ),
-            ]
-        )
-        self.assertFalse(gate["criteria"]["no_new_timeouts"])
-        self.assertEqual(["g/t"], gate["timeouts"]["native_only"])
-        self.assertFalse(gate["passed"])
-
-    def test_timeout_on_both_backends_passes(self):
-        gate = self.gate(
-            [
-                row(),
-                row(
-                    "g/t",
-                    comparable=False,
-                    wall=None,
-                    rss=None,
-                    native_timeout=True,
-                    esbmc_timeout=True,
-                ),
-            ]
-        )
-        self.assertTrue(gate["passed"])
-        self.assertEqual(["g/t"], gate["timeouts"]["both"])
-
-    def test_esbmc_only_timeout_is_reported_not_gated(self):
-        gate = self.gate(
-            [
-                row(),
-                row("g/t", comparable=False, wall=None, rss=None, esbmc_timeout=True),
-            ]
-        )
-        self.assertTrue(gate["passed"])
-        self.assertEqual(["g/t"], gate["timeouts"]["esbmc_only"])
-
-    def test_incomparable_rows_do_not_enter_ratios(self):
-        gate = self.gate(
-            [row(), row("g/w", cls="weaker", comparable=False, wall=9.0, rss=9.0)]
-        )
-        self.assertTrue(gate["passed"])
-        self.assertEqual(1, gate["comparable"])
-        self.assertEqual(1.0, gate["metrics"]["wall"]["geomean"])
-
-    def test_no_comparable_rows_fails_closed(self):
-        gate = self.gate([row(comparable=False, wall=None, rss=None)])
-        self.assertFalse(gate["passed"])
-        self.assertFalse(gate["criteria"]["enough_comparable"])
-        self.assertIsNone(gate["metrics"]["wall"]["geomean"])
-
-    def test_fewer_runs_than_the_gate_requires_is_provisional(self):
-        self.assertFalse(self.gate([row()])["provisional"])
-        self.assertTrue(self.gate([row()], runs=1)["provisional"])
-        self.assertTrue(vp.evaluate_gate([row()], filtered=True)["provisional"])
-
-    def test_non_gating_rows_never_enter_ratios_or_timeouts(self):
-        gate = self.gate(
-            [
-                row(),
-                row("verify-stress/s", gating=False, wall=9.0, rss=9.0),
-                row(
-                    "verify-stress/t",
-                    gating=False,
-                    comparable=False,
-                    wall=None,
-                    rss=None,
-                    native_timeout=True,
-                ),
-            ]
-        )
-        self.assertTrue(gate["passed"])
-        self.assertEqual(1, gate["comparable"])
-        self.assertEqual(2, gate["non_gating"])
-        self.assertEqual([], gate["timeouts"]["native_only"])
 
 
 class CorpusTest(unittest.TestCase):
@@ -551,11 +401,13 @@ class FixtureTest(unittest.TestCase):
         self.assertIn("low", got["detail"])
         self.assertIsNone(got["ratio_wall"])
 
-    def test_same_skipped_functions_stay_comparable(self):
+    def test_same_skipped_functions_match_but_decide_nothing(self):
         both = [sample("Skipped", skipped=("call_ret",))] * 6
         got, _ = self.measure({"esbmc": self.feed(*both), "native": self.feed(*both)})
         self.assertEqual("match", got["class"])
-        self.assertTrue(got["comparable"])
+        self.assertFalse(got["comparable"])
+        self.assertEqual("undecided", got["excluded"])
+        self.assertIsNone(got["ratio_wall"])
 
     def test_row_class_is_the_verify_diff_class(self):
         cases = [
@@ -700,6 +552,36 @@ class MainTest(unittest.TestCase):
         self.assertFalse(report["gate"]["provisional"])
         self.assertEqual(2, len(report["rows"]))
         self.assertIn("geomean", err)
+
+    def test_undecided_rows_are_listed_with_both_times_and_not_gated(self):
+        def fake(vowc, backend, path, jobs, timeout, watchdog_s):
+            if "undecided" in path:
+                return sample("Skipped", wall=0.5 if backend == "native" else 0.01)
+            return sample(wall=1.0)
+
+        fixtures = self.FX + [
+            vp.Fixture("verify", "undecided", "tests/verify/undecided.vow", "Skipped")
+        ]
+        out, err = io.StringIO(), io.StringIO()
+        with (
+            mock.patch.object(vp, "preflight", return_value=[]),
+            mock.patch.object(vp, "probe_version", return_value="8.5.0"),
+            mock.patch.object(vp, "collect_corpus", return_value=fixtures),
+            mock.patch.object(vp.verify_diff, "function_count", return_value=1),
+            mock.patch.object(vp, "run_once", side_effect=fake),
+            mock.patch.object(sys, "stdout", out),
+            mock.patch.object(sys, "stderr", err),
+        ):
+            code = vp.main([])
+        report = json.loads(out.getvalue())
+        self.assertEqual(0, code)
+        self.assertEqual(2, report["gate"]["comparable"])
+        (listed,) = report["undecided"]
+        self.assertEqual("verify/undecided", listed["fixture"])
+        self.assertEqual(0.01, listed["esbmc"]["wall_s"])
+        self.assertEqual(0.5, listed["native"]["wall_s"])
+        self.assertIn("[not decided: undecided] verify/undecided", err.getvalue())
+        self.assertIn("(50.00x, not gated)", err.getvalue())
 
     def test_failing_gate_exits_one(self):
         code, out, _ = self.run_main([], {"esbmc": 1.0, "native": 2.0})
