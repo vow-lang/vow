@@ -1,0 +1,120 @@
+module TestVcSources
+
+use ir
+use ir_dominance
+use vc_sources
+use vc_induct_agg
+use vc_induct
+use tests.builders
+
+// Deliberately includes malformed source ids and unreachable edges: callers must
+// still be able to refuse unknown objects, and dead edges must never name one.
+fn source_function() -> IrFunction {
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_arg(1, ITY_PTR(), 0));
+    a.push(mk_inst_arg(4, ITY_I64(), 1));
+    a.push(mk_inst_alloc(7, 8));
+    a.push(mk_inst_call_target(9, ITY_PTR(), Vec::new(), 2));
+    a.push(mk_inst_phi(20, ITY_PTR()));
+    a.push(mk_inst_phi(21, ITY_PTR()));
+    a.push(mk_inst_phi(22, ITY_PTR()));
+    a.push(mk_inst_phi(23, ITY_PTR()));
+    a.push(mk_inst_phi(24, ITY_PTR()));
+    a.push(mk_inst_phi(25, ITY_PTR()));
+    a.push(mk_inst_phi(26, ITY_PTR()));
+    a.push(mk_inst_phi(27, ITY_PTR()));
+    a.push(mk_inst_phi(28, ITY_PTR()));
+    a.push(mk_inst_upsilon(30, 1, 20));
+    a.push(mk_inst_upsilon(31, 7, 20));
+    a.push(mk_inst_upsilon(32, 20, 21));
+    a.push(mk_inst_upsilon(33, 1, 21));
+    a.push(mk_inst_upsilon(34, 21, 20));
+    a.push(mk_inst_upsilon(35, 23, 24));
+    a.push(mk_inst_upsilon(36, 24, 23));
+    a.push(mk_inst_upsilon(37, -2, 25));
+    a.push(mk_inst_upsilon(38, 200, 25));
+    a.push(mk_inst_upsilon(39, -2, 25));
+    a.push(mk_inst_upsilon(40, 1, 26));
+    a.push(mk_inst_upsilon(41, 9, 26));
+    a.push(mk_inst_upsilon(42, 7, 26));
+    a.push(mk_inst_upsilon(43, 20, 27));
+    a.push(mk_inst_upsilon(44, 4, 28));
+    a.push(mk_inst_upsilon(45, 1, -1));
+    a.push(mk_inst_upsilon(46, 1, 200));
+    a.push(ir_inst_new(47, IOP_UPSILON(), ITY_UNIT(), Vec::new(), IDATA_PHI_TARGET(), 22, 0, String::from("")));
+    a.push(mk_inst(48, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let dead: Vec<IrInst> = Vec::new();
+    dead.push(mk_inst_alloc(60, 8));
+    dead.push(mk_inst_upsilon(61, 60, 20));
+    dead.push(mk_inst_upsilon(62, 60, 22));
+    dead.push(mk_inst(63, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, a));
+    blocks.push(mk_block(1, dead));
+    mk_function(1, String::from("sources"), Vec::new(), ITY_UNIT(), blocks)
+}
+
+fn check_leaves(s: VcSources) -> i64 {
+    let first: Vec<i64> = vc_sources_leaves(s, 20);
+    if first.len() != 2 || first[0] != 1 || first[1] != 7 { return 1; }
+    let nested: Vec<i64> = vc_sources_leaves(s, 21);
+    if nested.len() != 2 || nested[0] != 1 || nested[1] != 7 { return 2; }
+    if vc_sources_leaves(s, 22).len() != 0 || vc_sources_leaves(s, 23).len() != 0 { return 3; }
+    let invalid: Vec<i64> = vc_sources_leaves(s, 25);
+    if invalid.len() != 3 || invalid[0] != -2 || invalid[1] != 200 || invalid[2] != -2 { return 4; }
+    let again: Vec<i64> = vc_sources_leaves(s, 20);
+    if again.len() != 2 || again[0] != 1 || again[1] != 7 { return 5; }
+    if first.len() != 2 || first[0] != 1 || first[1] != 7 { return 6; }
+    let missing: Vec<i64> = vc_sources_leaves(s, 17);
+    if missing.len() != 1 || missing[0] != 17 { return 7; }
+    let outside: Vec<i64> = vc_sources_leaves(s, 200);
+    if outside.len() != 1 || outside[0] != 200 { return 8; }
+    let negative: Vec<i64> = vc_sources_leaves(s, -2);
+    if negative.len() != 1 || negative[0] != -2 { return 9; }
+    0
+}
+
+fn check_roots(s: VcSources) -> i64 {
+    let good: VcRoots = vc_fh_roots(20, s);
+    if !good.ok || good.ids.len() != 2 || good.ids[0] != 1 || good.ids[1] != 7 { return 10; }
+    let cycle: VcRoots = vc_fh_roots(23, s);
+    if !cycle.ok || cycle.ids.len() != 0 { return 11; }
+    let call: VcRoots = vc_fh_roots(26, s);
+    if call.ok || call.ids.len() != 1 || call.ids[0] != 1 { return 12; }
+    let recv: Vec<i64> = vc_induct_recv_leaves(26, s);
+    if recv.len() != 3 || recv[0] != 1 || recv[1] != 9 || recv[2] != 7 { return 13; }
+    if vc_fh_roots(28, s).ok || vc_induct_recv_leaves(28, s).len() != 0 { return 14; }
+    if vc_fh_roots(25, s).ok || vc_fh_roots(17, s).ok { return 15; }
+    // A definition in a dead block is still classified, although its Upsilons
+    // were excluded. The supplied reachability applies to edges, not metadata.
+    let dead: VcRoots = vc_fh_roots(60, s);
+    if !dead.ok || dead.ids.len() != 1 || dead.ids[0] != 60 { return 16; }
+    0
+}
+
+fn check_marked(s: VcSources) -> i64 {
+    let marks: Vec<i64> = dom_fill(64, 0);
+    marks[1] = 1;
+    if vc_sources_any_input_marked(s, 27, marks) { return 20; }
+    marks[20] = 1;
+    if !vc_sources_any_input_marked(s, 27, marks) { return 21; }
+    marks[60] = 1;
+    if vc_sources_any_input_marked(s, 22, marks) { return 22; }
+    if !vc_sources_any_input_marked(s, 20, marks) { return 23; }
+    if vc_sources_any_input_marked(s, 23, marks) { return 24; }
+    let again: Vec<i64> = vc_sources_leaves(s, 21);
+    if again.len() != 2 || again[0] != 1 || again[1] != 7 { return 25; }
+    0
+}
+
+fn main() -> i32 {
+    let f: IrFunction = source_function();
+    let reachable: Vec<i64> = Vec::new();
+    reachable.push(0);
+    reachable.push(-1);
+    let s: VcSources = vc_sources_new(f, reachable, 64);
+    let mut result: i64 = check_leaves(s);
+    if result == 0 { result = check_roots(s); }
+    if result == 0 { result = check_marked(s); }
+    i64_to_i32_wrap(result)
+}

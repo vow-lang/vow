@@ -7,7 +7,7 @@ use vc_strops
 use vc_term
 use vc_agg
 use vc_agg_shape
-use vc_induct_agg
+use vc_sources
 use vc_loops
 use vc_overlay
 use vc_vec
@@ -24,12 +24,9 @@ use vc_heap
 // `String` operation, looking through Phis, and `VC_VA_CHANGED` when such an operation changes it.
 fn vc_vecalias_classes(f: IrFunction, n_ids: u64) -> Vec<i64> {
     let rpo: Vec<i64> = vc_cfg_rpo(f);
-    let src: VcPhiSources = vc_fh_phi_sources(f, rpo, n_ids);
-    let def_op: Vec<i64> = vc_agg_def_ops(f, n_ids);
+    let src: VcSources = vc_sources_new(f, rpo, n_ids);
     let arg_param: Vec<i64> = vc_agg_arg_params(f, n_ids);
-    let seen: Vec<i64> = dom_fill(n_ids, -1);
     let cls: Vec<i64> = dom_fill(f.params.len(), 0);
-    let mut stamp: i64 = 0;
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
         if rpo[bi] >= 0 {
@@ -44,8 +41,7 @@ fn vc_vecalias_classes(f: IrFunction, n_ids: u64) -> Vec<i64> {
                     if first == VC_OV_STRING() { objects = vc_str_kind_object_operands(k); }
                     let mut j: u64 = 0;
                     while j < objects && j < inst.args.len() {
-                        stamp = stamp + 1;
-                        let leaves: Vec<i64> = vc_fh_leaves(inst.args[j], src, def_op, seen, stamp);
+                        let leaves: Vec<i64> = vc_sources_leaves(src, inst.args[j]);
                         let mut li: u64 = 0;
                         while li < leaves.len() {
                             let l: i64 = leaves[li];

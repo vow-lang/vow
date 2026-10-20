@@ -7,7 +7,7 @@ use vc_strops
 use vc_gate
 use vc_loops
 use vc_agg_shape
-use vc_induct_agg
+use vc_sources
 
 // A collection held in a field of a struct the function allocated, and used where an
 // object is declared. The IR types such a field `i64` (a handle, see `vc_heap`), so
@@ -47,8 +47,7 @@ use vc_induct_agg
 struct VcPfCtx {
     ok: bool,
     f: IrFunction,
-    src: VcPhiSources,
-    def_op: Vec<i64>,
+    src: VcSources,
     tys: Vec<i64>,
     nums: Vec<i64>,
     s_val: Vec<i64>,
@@ -87,9 +86,10 @@ fn vc_pf_loaded_leaf(leaves: Vec<i64>, def_op: Vec<i64>) -> bool {
     false
 }
 
-fn vc_pf_mark_escaped(c: VcPfCtx, v: i64, src: VcPhiSources, seen: Vec<i64>, stamp: i64) {
+fn vc_pf_mark_escaped(c: VcPfCtx, v: i64) {
+    let src: VcSources = c.src;
     if v < 0 || (v as u64) >= c.tys.len() || c.tys[v as u64] != ITY_PTR() { return; }
-    let leaves: Vec<i64> = vc_fh_leaves(v, src, c.def_op, seen, stamp);
+    let leaves: Vec<i64> = vc_sources_leaves(src, v);
     let mut i: u64 = 0;
     while i < leaves.len() {
         if leaves[i] >= 0 && (leaves[i] as u64) < c.escaped.len() { c.escaped[leaves[i] as u64] = 1; }
@@ -107,12 +107,11 @@ fn vc_pf_link(c: VcPfCtx, leaf: i64, s: i64) {
 
 // The context of `f`; `ok` is false when a `FieldSet` has a shape the rule does not know.
 fn vc_pf_context(f: IrFunction, tys: Vec<i64>, rpo: Vec<i64>, n_ids: u64) -> VcPfCtx {
-    let src: VcPhiSources = vc_fh_phi_sources(f, rpo, n_ids);
+    let src: VcSources = vc_sources_new(f, rpo, n_ids);
     let c: VcPfCtx = VcPfCtx {
         ok: false,
         f: f,
         src: src,
-        def_op: vc_agg_def_ops(f, n_ids),
         tys: tys,
         nums: Vec::new(),
         s_val: Vec::new(),
@@ -126,8 +125,6 @@ fn vc_pf_context(f: IrFunction, tys: Vec<i64>, rpo: Vec<i64>, n_ids: u64) -> VcP
         loose_loaded: Vec::new(),
         escaped: dom_fill(n_ids, 0),
     };
-    let seen: Vec<i64> = dom_fill(n_ids, -1);
-    let mut stamp: i64 = 0;
     let mut b: u64 = 0;
     while b < f.blocks.len() {
         if rpo[b] >= 0 {
@@ -142,29 +139,26 @@ fn vc_pf_context(f: IrFunction, tys: Vec<i64>, rpo: Vec<i64>, n_ids: u64) -> VcP
                     c.s_slot.push(inst.dv);
                     c.s_blk.push(b as i64);
                     c.s_pos.push(i as i64);
-                    stamp = stamp + 1;
-                    let leaves: Vec<i64> = vc_fh_leaves(inst.args[0], src, c.def_op, seen, stamp);
+                    let leaves: Vec<i64> = vc_sources_leaves(src, inst.args[0]);
                     let mut l: u64 = 0;
                     while l < leaves.len() {
                         let v: i64 = leaves[l];
-                        if v >= 0 && (v as u64) < n_ids && (c.def_op[v as u64] == IOP_REGION_ALLOC() || c.def_op[v as u64] == IOP_GET_ARG()) {
+                        if v >= 0 && (v as u64) < n_ids && (src.op[v as u64] == IOP_REGION_ALLOC() || src.op[v as u64] == IOP_GET_ARG()) {
                             vc_pf_link(c, v, s);
                         }
                         l = l + 1;
                     }
                     if leaves.len() == 0 {
                         c.loose_any.push(s);
-                    } else if vc_pf_loaded_leaf(leaves, c.def_op) {
+                    } else if vc_pf_loaded_leaf(leaves, src.op) {
                         c.loose_loaded.push(s);
                     }
-                    stamp = stamp + 1;
-                    vc_pf_mark_escaped(c, inst.args[1], src, seen, stamp);
+                    vc_pf_mark_escaped(c, inst.args[1]);
                 } else if inst.op == IOP_CALL() {
                     let objs: u64 = vc_pf_object_operands(inst);
                     let mut p: u64 = objs;
                     while p < inst.args.len() {
-                        stamp = stamp + 1;
-                        vc_pf_mark_escaped(c, inst.args[p], src, seen, stamp);
+                        vc_pf_mark_escaped(c, inst.args[p]);
                         p = p + 1;
                     }
                 }
@@ -239,9 +233,7 @@ fn vc_pf_dominates(c: VcPfCtx, a: i64, b: i64) -> bool {
 fn vc_pf_resolve(c: VcPfCtx, rpo: Vec<i64>, n_ids: u64) -> Vec<i64> {
     let f: IrFunction = c.f;
     let repl: Vec<i64> = dom_fill(n_ids, -1);
-    let src: VcPhiSources = c.src;
-    let seen: Vec<i64> = dom_fill(n_ids, -1);
-    let mut stamp: i64 = 0;
+    let src: VcSources = c.src;
     let mut b: u64 = 0;
     while b < f.blocks.len() {
         if rpo[b] >= 0 {
@@ -251,9 +243,8 @@ fn vc_pf_resolve(c: VcPfCtx, rpo: Vec<i64>, n_ids: u64) -> Vec<i64> {
                 let inst: IrInst = blk.insts[i];
                 if inst.op == IOP_FIELD_GET() && inst.ty == ITY_I64() && inst.dk == IDATA_FIELD() && inst.id >= 0
                     && inst.args.len() == 1 && inst.args[0] >= 0 && (inst.args[0] as u64) < n_ids && c.tys[inst.args[0] as u64] == ITY_PTR() {
-                    stamp = stamp + 1;
-                    let leaves: Vec<i64> = vc_fh_leaves(inst.args[0], src, c.def_op, seen, stamp);
-                    if leaves.len() == 1 && leaves[0] >= 0 && (leaves[0] as u64) < n_ids && c.def_op[leaves[0] as u64] == IOP_REGION_ALLOC() {
+                    let leaves: Vec<i64> = vc_sources_leaves(src, inst.args[0]);
+                    if leaves.len() == 1 && leaves[0] >= 0 && (leaves[0] as u64) < n_ids && src.op[leaves[0] as u64] == IOP_REGION_ALLOC() {
                         repl[inst.id as u64] = vc_pf_single_store(c, leaves[0], inst.dv, b as i64, i as i64);
                     }
                 }
