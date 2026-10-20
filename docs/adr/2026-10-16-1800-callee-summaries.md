@@ -55,6 +55,9 @@ decided again in every caller, although the callee was proven on its own.
    can be tried. A callee that is no verify target but is itself above the budget (an uncontracted
    intermediate) is wanted too, together with the callees it needs. A callee that is not proven, or that the native subset does not
    take, is never trusted and the function that needed it is skipped as before.
+   A function skipped as too large starts no wave when no callee of it can be
+   summarised even if every one were proven (`vc_summary_module` with every id
+   trusted swaps nothing): no proof could change the skip.
    The parent plans from the proven ids and tells every worker the same ids
    (`--worker-summaries`), so planner and worker build the same module.
 5. **A summary over-approximates, so it never produces a counterexample.** A
