@@ -1,0 +1,193 @@
+module TestVcModel
+
+use ir
+use vc_term
+use vc_smt
+use vc_flow
+use vc_agg
+use vc_vec
+use vc_heap
+use vc_overlay
+use vc_held
+use vc_map
+use vc_query
+use vc_model
+use vc_exec
+use tests.builders
+
+fn empty_claims() -> VcClaims {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, Vec::new()));
+    vc_claims(mk_function(1, String::from("model"), Vec::new(), ITY_UNIT(), blocks))
+}
+
+fn memory_for(cs: VcClaims) -> VcHandleMemory {
+    let fl: VcFlow = vc_flow_new(1, 0);
+    VcHandleMemory {
+        heap: vc_heap_new(), held: vc_held_new(), overlay: vc_overlay_new(),
+        ag: vc_agg_new(fl), vv: vc_vec_new_state(fl, cs.arena, 1),
+        ar: cs.arena, header: cs.header, assumed: cs.assumed,
+    }
+}
+
+// Source fixtures describe already declared symbols. Equal header positions exercise the
+// merge's deterministic precedence; ordinary declarations have distinct positions.
+fn agg_row(ag: VcAgg, name: String, param: i64, path: String, slot: i64, ty: i64, width: i64, hdr: i64) {
+    ag.ps_name.push(name);
+    ag.ps_param.push(param);
+    ag.ps_path.push(path);
+    ag.ps_slot.push(slot);
+    ag.ps_ty.push(ty);
+    ag.ps_sort.push(width);
+    ag.ps_hdr.push(hdr);
+}
+
+fn vec_row(vv: VcVec, name: String, param: i64, hdr: i64, wide: i64) {
+    vv.pv_len.push(name);
+    vv.pv_param.push(param);
+    vv.pv_hdr.push(hdr);
+    vv.pv_arr.push(String::from("direct_array"));
+    vv.pv_wide.push(wide);
+}
+
+fn overlay_row(ov: VcOverlay, name: String, param: i64, hdr: i64) {
+    ov.names.push(name);
+    ov.param.push(param);
+    ov.hdr.push(hdr);
+}
+
+fn held_row(hd: VcHeld, name: String, cls: i64, hdr: i64) {
+    hd.len_name.push(name);
+    hd.handle.push(String::from("field_handle"));
+    hd.path.push(String::from(".1.0"));
+    hd.param.push(3);
+    hd.cls.push(cls);
+    hd.arr.push(String::from("held_array"));
+    hd.hdr.push(hdr);
+    hd.wide.push(ITY_U128());
+}
+
+fn map_row(mp: VcMap, name: String, slot: i64, hdr: i64) {
+    mp.ent_name.push(name);
+    mp.ent_param.push(4);
+    mp.ent_slot.push(slot);
+    mp.ent_hdr.push(hdr);
+}
+
+fn row_is(cs: VcClaims, at: u64, name: String, param: i64, path: String, ty: i64, width: i64, slot: i64, hdr: i64, ambig: i64) -> bool {
+    cs.model_names[at] == name && cs.model_params[at] == param && cs.model_paths[at] == path
+        && cs.model_tys[at] == ty && cs.model_widths[at] == width && cs.model_slots[at] == slot
+        && cs.model_hdr[at] == hdr && cs.model_ambig[at] == ambig
+}
+
+// All five lazy sources, filtered entries at both ends, ties, and field ambiguity. Different
+// parameters, paths, and negative slots must never be confused with the same scalar field.
+fn check_merge() -> i64 {
+    let cs: VcClaims = empty_claims();
+    let memory: VcHandleMemory = memory_for(cs);
+    let ag: VcAgg = memory.ag;
+    let vv: VcVec = memory.vv;
+    let ov: VcOverlay = memory.overlay;
+    let hd: VcHeld = memory.held;
+    let mp: VcMap = vc_map_new_state(ag.fl, 1);
+    agg_row(ag, String::from("field64"), 0, String::from(".1"), 0, ITY_I64(), 64, 5);
+    agg_row(ag, String::from("field_bool"), 0, String::from(".1"), 0, ITY_BOOL(), 0, 9);
+    agg_row(ag, String::from("other_path"), 0, String::from(".2"), 0, ITY_I64(), 64, 10);
+    agg_row(ag, String::from("other_param"), 1, String::from(".1"), 0, ITY_I64(), 64, 11);
+    agg_row(ag, String::from("alias8"), 0, String::from(""), -2, ITY_U8(), 8, 12);
+    agg_row(ag, String::from("alias64"), 0, String::from(""), -2, ITY_U64(), 64, 13);
+    agg_row(ag, String::from("other_slot"), 0, String::from(".1"), 1, ITY_U8(), 8, 14);
+    vec_row(vv, String::from("vec_len"), 2, 5, ITY_F32());
+    overlay_row(ov, String::from("allocation"), -1, 1);
+    overlay_row(ov, String::from("address"), 0, 5);
+    overlay_row(ov, String::from("trailing_allocation"), -1, 20);
+    held_row(hd, String::from("unlisted"), VC_HELD_BOTH(), 2);
+    held_row(hd, String::from("held_len"), VC_HELD_VEC(), 5);
+    held_row(hd, String::from("trailing_unlisted"), VC_HELD_BOTH(), 21);
+    map_row(mp, String::from("map_len"), VC_SLOT_VEC_LEN(), 5);
+    map_row(mp, String::from("map_key"), VC_SLOT_MAP_KEY(), 6);
+    vc_model_finish(cs, memory, mp);
+    if cs.model_names.len() != 12 || cs.model_ambig.len() != 12 { return 1; }
+    if !row_is(cs, 0, String::from("field64"), 0, String::from(".1"), ITY_I64(), 64, 0, 5, 1) { return 2; }
+    if !row_is(cs, 1, String::from("address"), 0, String::from(""), ITY_I64(), 64, VC_SLOT_ADDR(), 5, 0) { return 3; }
+    if !row_is(cs, 2, String::from("vec_len"), 2, String::from(""), ITY_U64(), 64, VC_SLOT_VEC_LEN(), 5, 0) { return 4; }
+    if !row_is(cs, 3, String::from("held_len"), 3, String::from(".1.0"), ITY_U64(), 64, VC_SLOT_VEC_LEN(), 5, 0) { return 5; }
+    if !row_is(cs, 4, String::from("map_len"), 4, String::from(""), ITY_U64(), 64, VC_SLOT_VEC_LEN(), 5, 0) { return 6; }
+    if !row_is(cs, 5, String::from("map_key"), 4, String::from(""), ITY_U64(), 64, VC_SLOT_MAP_KEY(), 6, 0) { return 7; }
+    if !row_is(cs, 6, String::from("field_bool"), 0, String::from(".1"), ITY_BOOL(), 0, 0, 9, 1) { return 8; }
+    let mut i: u64 = 7;
+    while i < cs.model_ambig.len() {
+        if cs.model_ambig[i] != 0 { return 9; }
+        i = i + 1;
+    }
+    if !row_is(cs, 11, String::from("other_slot"), 0, String::from(".1"), ITY_U8(), 8, 1, 14, 0) { return 19; }
+    if cs.map_len.len() != 1 || cs.map_len[0] != String::from("map_len") || cs.map_len_hdr[0] != 5 { return 10; }
+    cs.header_lens.push(5);
+    cs.header_lens.push(6);
+    cs.header_lens.push(7);
+    if vc_claim_model_count(cs, 0) != 0 || vc_claim_model_count(cs, 1) != 5 || vc_claim_model_count(cs, 2) != 6 { return 11; }
+    let names: Vec<String> = vc_claim_model_names(cs, 1);
+    let widths: Vec<i64> = vc_claim_model_widths(cs, 1);
+    if names.len() != 5 || names[4] != String::from("map_len") || widths.len() != 5 || widths[0] != 64 { return 12; }
+    // Held collections follow direct collections, without appending into the direct model.
+    if cs.vec_param.len() != 2 || vv.pv_param.len() != 1 || cs.vec_param[0] != 2 || cs.vec_param[1] != 3 { return 13; }
+    if cs.vec_path[0] != String::from("") || cs.vec_handle[0] != String::from("") { return 14; }
+    if cs.vec_path[1] != String::from(".1.0") || cs.vec_handle[1] != String::from("field_handle") { return 15; }
+    if cs.vec_arr[0] != String::from("direct_array") || cs.vec_arr[1] != String::from("held_array") { return 16; }
+    if cs.vec_wide[0] != ITY_F32() || cs.vec_wide[1] != ITY_U128() || cs.vec_hdr[1] != 5 { return 17; }
+    cs.vec_param.push(99);
+    cs.vec_len[0] = String::from("changed");
+    if vv.pv_param.len() != 1 || vv.pv_len[0] != String::from("vec_len") { return 18; }
+    0
+}
+
+// With no listed held collection the direct lists remain shared and the optional path/handle
+// lists stay empty, as query and replay callers already expect.
+fn check_direct_only() -> i64 {
+    let cs: VcClaims = empty_claims();
+    let memory: VcHandleMemory = memory_for(cs);
+    let ag: VcAgg = memory.ag;
+    let vv: VcVec = memory.vv;
+    let hd: VcHeld = memory.held;
+    vec_row(vv, String::from("only_vec"), 0, 3, ITY_I128());
+    held_row(hd, String::from("not_listed"), VC_HELD_BOTH(), 4);
+    vc_model_finish(cs, memory, vc_map_new_state(ag.fl, 1));
+    if cs.model_names.len() != 1 || cs.model_ambig.len() != 1 || cs.model_ambig[0] != 0 { return 1; }
+    if cs.vec_path.len() != 0 || cs.vec_handle.len() != 0 || cs.vec_wide[0] != ITY_I128() { return 2; }
+    cs.vec_len[0] = String::from("shared");
+    if vv.pv_len[0] != String::from("shared") { return 3; }
+    0
+}
+
+fn check_scalars() -> i64 {
+    let cs: VcClaims = empty_claims();
+    vc_model_declare_scalar(cs, 0, ITY_BOOL());
+    vc_model_declare_scalar(cs, 2, ITY_I8());
+    vc_model_declare_scalar(cs, 3, ITY_F32());
+    vc_model_declare_scalar(cs, 4, ITY_U128());
+    let memory: VcHandleMemory = memory_for(cs);
+    let ag: VcAgg = memory.ag;
+    agg_row(ag, String::from("lazy"), 1, String::from(""), 0, ITY_I64(), 64, 6);
+    vc_model_finish(cs, memory, vc_map_new_state(ag.fl, 1));
+    if cs.model_names.len() != 5 || cs.model_ambig.len() != 5 { return 1; }
+    if !row_is(cs, 0, String::from("p0"), 0, String::from(""), ITY_BOOL(), 0, -1, 2, 0) { return 2; }
+    if !row_is(cs, 1, String::from("p2"), 2, String::from(""), ITY_I8(), 8, -1, 3, 0) { return 3; }
+    if !row_is(cs, 2, String::from("p3"), 3, String::from(""), ITY_F32(), VC_SORT_F32(), -1, 4, 0) { return 4; }
+    if !row_is(cs, 3, String::from("p4"), 4, String::from(""), ITY_U128(), 128, -1, 5, 0) { return 5; }
+    let want: String = String::from("(set-logic QF_BV)\n(set-option :produce-models true)\n(declare-const p0 Bool)\n(declare-const p2 (_ BitVec 8))\n(declare-const p3 (_ FloatingPoint 8 24))\n(declare-const p4 (_ BitVec 128))\n");
+    if vc_smt_render(cs.arena, cs.header) != want { return 6; }
+    cs.header_lens.push(5);
+    cs.header_lens.push(6);
+    if vc_claim_model_count(cs, 0) != 3 || vc_claim_model_count(cs, 1) != 4 { return 7; }
+    0
+}
+
+fn main() -> i32 {
+    let merge: i64 = check_merge();
+    if merge != 0 { return i64_to_i32_wrap(merge); }
+    let direct: i64 = check_direct_only();
+    if direct != 0 { return i64_to_i32_wrap(40 + direct); }
+    let scalars: i64 = check_scalars();
+    if scalars != 0 { return i64_to_i32_wrap(60 + scalars); }
+    0
+}
