@@ -173,19 +173,21 @@ def print_summary(report, stream):
             print(f"  criterion failed: {criterion}", file=stream)
     listed = {u["fixture"]: u for u in report["undecided"]}
     for r in report["rows"]:
-        if r["fixture"] in listed:
-            u = listed[r["fixture"]]
-            x = f"{u['ratio_wall']:.2f}x, " if u["ratio_wall"] is not None else ""
-            print(
-                f"  [not decided: {u['excluded']}] {r['fixture']}: "
-                f"esbmc {u['esbmc']['verdict']} {u['esbmc']['wall_s'] * 1000:.1f} ms, "
-                f"native {u['native']['verdict']} {u['native']['wall_s'] * 1000:.1f} ms "
-                f"({x}not gated)" + (f": {u['detail']}" if u["detail"] else ""),
-                file=stream,
+        u = listed.get(r["fixture"])
+        if u is None and r["comparable"]:
+            continue
+        note = f": {r['detail']}" if r["detail"] else ""
+        if u is None:
+            line = f"[excluded: {r['excluded']}] {r['fixture']}{note}"
+        else:
+            times = (
+                f"esbmc {u['esbmc']['verdict']} {u['esbmc']['wall_s'] * 1000:.1f} ms"
             )
-        elif not r["comparable"]:
-            print(
-                f"  [excluded: {r['excluded']}] {r['fixture']}"
-                + (f": {r['detail']}" if r["detail"] else ""),
-                file=stream,
+            times += f", native {u['native']['verdict']} {u['native']['wall_s'] * 1000:.1f} ms"
+            factor = u["ratio_wall"]
+            shown = f"{factor:.2f}x, " if factor is not None else ""
+            line = (
+                f"[not decided: {u['excluded']}] {r['fixture']}: "
+                f"{times} ({shown}not gated){note}"
             )
+        print("  " + line, file=stream)
