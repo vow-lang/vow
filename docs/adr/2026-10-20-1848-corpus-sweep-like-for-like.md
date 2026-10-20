@@ -25,13 +25,15 @@ has a measurement floor for this; the corpus sweep has none.
 1. A sweep row is **like-for-like** only when both backends reach a deciding verdict (`proven` or
    `refuted`) on the same functions (class `match`, same skipped set, as before). Only those rows
    enter the geomean and the worst-case bound.
-2. Every other gating row (a backend skipped or inconclusive, whichever way round, and whatever its
-   class) is left out of the gate and **listed**: `undecided[]` in the JSON report and a
-   `[not decided: ...]` line in the summary carry both verdicts, both wall times and their ratio.
-   Nothing is dropped silently; the cost of declining stays visible.
-3. Rows both backends decide are never left out. A refutation where native is slower than ESBMC
-   (`fail/string_contains_not_symmetric`, 1.46x) keeps gating, and so does any native-only cost
-   on a proven row.
+2. Every other gating row that is not already excluded for a timeout or instability (a backend
+   skipped or inconclusive, whichever way round, and whatever its class) is left out of the gate and
+   **listed**: `undecided[]` in the JSON report and a `[not decided: ...]` line in the summary carry
+   both verdicts, both wall times, their ratio and the class detail. Nothing is dropped silently;
+   the cost of declining stays visible.
+3. This rule never leaves out a row both backends decide. (Rows of another class, such as
+   `more_precise` or `soundness`, are still excluded for that class, as before.) A refutation where
+   native is slower than ESBMC (`fail/string_contains_not_symmetric`, 1.46x) keeps gating, and so
+   does any native-only cost on a proven row.
 4. Timeouts keep their own criterion over every row, and unstable rows keep their own reason; the
    rule does not touch either.
 5. The thresholds (1.0 geomean, 1.25 worst) and the five-run median are unchanged.
@@ -40,6 +42,8 @@ has a measurement floor for this; the corpus sweep has none.
 
 - The seven tiny `skip`/`unknown` offenders leave the gate and appear in `undecided[]`. The
   worst-case bound is then decided by rows where a verdict was actually computed.
+- The exemption is not bounded by cost: a native regression from 1 s to 25 s on a fixture where
+  it still ends `inconclusive` is listed, not gated. That is the trade-off to decide on.
 - A regression that makes native slower at *declining* is no longer a gate failure. It is
   visible in `undecided[]` and the summary; the maintainers can add a separate, generous bound
   on that list if they want one (not proposed here: absolute times of 10 to 80 ms are noise on a

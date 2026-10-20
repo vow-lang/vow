@@ -166,11 +166,12 @@ def outcome(verdict, wall=1.0, timed_out=False, unstable=False):
     }
 
 
-def swept(fixture, esbmc, native, cls=verify_diff.MATCH, gating=True):
+def swept(fixture, esbmc, native, cls=verify_diff.MATCH, gating=True, detail=""):
     excluded = pg.excluded_reason(gating, cls, esbmc, native)
     return {
         "fixture": fixture,
         "class": cls,
+        "detail": detail,
         "gating": gating,
         "excluded": excluded,
         "esbmc": esbmc,
@@ -235,6 +236,23 @@ class LikeForLikeTest(unittest.TestCase):
             {"verdict": "inconclusive", "wall_s": 0.079}, listed[0]["native"]
         )
         self.assertAlmostEqual(15.8, listed[0]["ratio_wall"])
+
+    def test_a_proof_native_fails_to_find_is_listed_with_its_detail(self):
+        weaker = swept(
+            "g/w",
+            outcome("proven", 0.2),
+            outcome("inconclusive", 0.4),
+            "weaker",
+            detail="native inconclusive on `f`",
+        )
+        (listed,) = pg.undecided_rows([weaker])
+        self.assertEqual("weaker", listed["excluded"])
+        self.assertEqual("native inconclusive on `f`", listed["detail"])
+
+    def test_a_zero_wall_time_does_not_crash_the_listing(self):
+        row_ = swept("g/z", outcome("skipped", 0.0), outcome("skipped", 0.01))
+        (listed,) = pg.undecided_rows([row_])
+        self.assertIsNone(listed["ratio_wall"])
 
     def test_undecided_rows_skip_timeouts_unstable_and_non_gating(self):
         rows = [

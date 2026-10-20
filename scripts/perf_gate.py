@@ -22,6 +22,10 @@ DECIDED = (verify_diff.PROVEN, verify_diff.REFUTED)
 UNDECIDED = "undecided"
 
 
+def decided(esbmc, native):
+    return esbmc["verdict"] in DECIDED and native["verdict"] in DECIDED
+
+
 def excluded_reason(gating, cls, esbmc, native):
     if not gating:
         return "non-gating"
@@ -31,28 +35,28 @@ def excluded_reason(gating, cls, esbmc, native):
         return "timeout"
     if cls != verify_diff.MATCH:
         return cls
-    if esbmc["verdict"] not in DECIDED or native["verdict"] not in DECIDED:
-        return UNDECIDED
-    return None
+    return None if decided(esbmc, native) else UNDECIDED
 
 
 def undecided_rows(rows):
-    """Gating rows left out because a backend did not decide, with both times."""
+    """Excluded rows where a backend did not decide, with both verdicts and times."""
     out = []
     for r in rows:
         esbmc, native = r["esbmc"], r["native"]
-        if not r["gating"] or r["excluded"] in ("unstable", "timeout"):
+        if r["excluded"] in (None, "non-gating", "unstable", "timeout"):
             continue
-        if esbmc["verdict"] in DECIDED and native["verdict"] in DECIDED:
+        if decided(esbmc, native):
             continue
+        ratio_wall = native["wall_s"] / esbmc["wall_s"] if esbmc["wall_s"] > 0 else None
         out.append(
             {
                 "fixture": r["fixture"],
                 "class": r["class"],
                 "excluded": r["excluded"],
+                "detail": r["detail"],
                 "esbmc": {"verdict": esbmc["verdict"], "wall_s": esbmc["wall_s"]},
                 "native": {"verdict": native["verdict"], "wall_s": native["wall_s"]},
-                "ratio_wall": ratio(native["wall_s"], esbmc["wall_s"]),
+                "ratio_wall": ratio_wall,
             }
         )
     return out
@@ -171,11 +175,12 @@ def print_summary(report, stream):
     for r in report["rows"]:
         if r["fixture"] in listed:
             u = listed[r["fixture"]]
+            x = f"{u['ratio_wall']:.2f}x, " if u["ratio_wall"] is not None else ""
             print(
                 f"  [not decided: {u['excluded']}] {r['fixture']}: "
                 f"esbmc {u['esbmc']['verdict']} {u['esbmc']['wall_s'] * 1000:.1f} ms, "
                 f"native {u['native']['verdict']} {u['native']['wall_s'] * 1000:.1f} ms "
-                f"({u['ratio_wall']:.2f}x, not gated)",
+                f"({x}not gated)" + (f": {u['detail']}" if u["detail"] else ""),
                 file=stream,
             )
         elif not r["comparable"]:
