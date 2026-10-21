@@ -1,0 +1,30 @@
+// TEST: counterexample-fn "bump"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The handle `pick` is a merge of two field reads (`if c { g.p } else { h.p }`), and the
+// claim is refuted only through a state a program reaches: the caller builds `h` with `p`
+// set to `q` and calls with `c` false, so `pick` is `q` and the write to `q.lo` is what
+// the second read of `pick.lo` sees. The field-cycle ranking (#1779) must not mistake
+// this for a cycle: the rank edges of the merge's arms bind only on the paths that take
+// them, and this state keeps a ranking.
+module HeapParamPhiHandleAliasWrong
+
+struct Pair { lo: i64, hi: i64 }
+struct Holder { p: Pair, n: i64 }
+
+fn bump(c: bool, q: Pair, h: Holder, g: Holder) -> bool vow {
+  ensures: result
+} {
+  let pick: Pair = if c { g.p } else { h.p };
+  let before: i64 = pick.lo;
+  q.lo = before + 1;
+  pick.lo == before
+}
+
+fn main() -> i32 [io] {
+  let q: Pair = Pair { lo: 0, hi: 0 };
+  let h: Holder = Holder { p: q, n: 1 };
+  let g: Holder = Holder { p: Pair { lo: 2, hi: 3 }, n: 4 };
+  if bump(false, q, h, g) { print_i64(1); }
+  0
+}
