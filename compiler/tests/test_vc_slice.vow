@@ -220,6 +220,56 @@ fn check_claim_without_assumptions_drops_nothing() -> i64 {
     0
 }
 
+// f(a): requires a > 0, computes a + a the claim never reads, ensures a > 5.
+// The slice keeps the assumption and drops only the unused definition: the
+// defs-only case the hard-claim oneshot decides on the full query (`vc_native`).
+fn check_defs_only_slice_of_a_hard_claim() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_const_i64(1, 0));
+    i.push(mk_inst(2, IOP_GT(), ITY_BOOL(), args2(0, 1)));
+    i.push(mk_vow(3, IOP_VOW_REQ(), 2, 0));
+    i.push(mk_inst_add(4, 0, 0));
+    i.push(mk_inst_const_i64(5, 5));
+    i.push(mk_inst(6, IOP_GT(), ITY_BOOL(), args2(0, 5)));
+    i.push(mk_vow(7, IOP_VOW_ENS(), 6, 1));
+    i.push(mk_inst_return(8, 4));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    let cs: VcClaims = vc_claims(one_block(String::from("unused"), p, ITY_I64(), i));
+    if cs.kinds.len() != 1 { return 1; }
+    let sx: VcSlicer = vc_slicer_new(cs);
+    let s: VcSlice = vc_slice_claim(sx, cs, 0);
+    if !vc_slice_is_defs_only(s) { return 2; }
+    let t: String = vc_smt_render(cs.arena, vc_claim_script_sliced(cs, 0, s));
+    if t.contains(String::from("(define-fun v4 ")) { return 3; }
+    if !t.contains(String::from("(assert v2)\n")) { return 4; }
+    0
+}
+
+// A slice that also dropped an assumption is weaker than the full query, and
+// one that dropped nothing is the full query: neither is the defs-only case.
+fn check_defs_only_excludes_other_drops() -> i64 {
+    let cs: VcClaims = vc_claims(two_chains());
+    let sx: VcSlicer = vc_slicer_new(cs);
+    let both: VcSlice = vc_slice_claim(sx, cs, 1);
+    if vc_slice_is_defs_only(both) { return 1; }
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_const_i64(1, 5));
+    i.push(mk_inst(2, IOP_GT(), ITY_BOOL(), args2(0, 1)));
+    i.push(mk_vow(3, IOP_VOW_ENS(), 2, 0));
+    i.push(mk_inst_return(4, 0));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    let kept: VcClaims = vc_claims(one_block(String::from("kept"), p, ITY_I64(), i));
+    let sk: VcSlicer = vc_slicer_new(kept);
+    let none: VcSlice = vc_slice_claim(sk, kept, 0);
+    if none.dropped_asserts || none.dropped_defs { return 2; }
+    if vc_slice_is_defs_only(none) { return 3; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_independent_chains_are_separated();
     if r == 0 { r = check_clause_over_both_keeps_everything(); }
@@ -228,5 +278,7 @@ fn main() -> i32 {
     if r == 0 { r = check_definitions_precede_uses(); }
     if r == 0 { r = check_later_assumption_is_outside_the_prefix(); }
     if r == 0 { r = check_claim_without_assumptions_drops_nothing(); }
+    if r == 0 { r = check_defs_only_slice_of_a_hard_claim(); }
+    if r == 0 { r = check_defs_only_excludes_other_drops(); }
     i64_to_i32_wrap(r)
 }

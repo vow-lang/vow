@@ -1,0 +1,52 @@
+module VcRecheck
+
+use vc_cache
+use vc_query
+use vc_slice
+use vc_smt
+use vc_solver
+use vc_term
+use vc_vecmodel
+
+// Rechecking a `sat` whose cone reaches a value the model leaves free: a
+// float-text hook's result (`vc_hooks`) or the state of a map the function did
+// not build (`vc_map`). Neither is a verdict by itself; the recheck decides
+// whether the failure survives every value the runtime could supply.
+
+// True when the cone of claim `k` reaches one of the constants `vars`: the claim's
+// query then depends on a value the model leaves free. `cs.hook_vars` are the
+// constants a float-text hook declared (`vc_hooks`), `cs.map_vars` the presence
+// array and length of a map the function did not build (`vc_map`).
+fn vc_claim_reaches(cs: VcClaims, sx: VcSlicer, k: u64, vars: Vec<i64>) -> bool {
+    if vars.len() == 0 { return false; }
+    vc_slice_claim(sx, cs, k);
+    let mut i: u64 = 0;
+    while i < vars.len() {
+        if sx.tmark[vars[i] as u64] == sx.epoch { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// A `sat` on a hard claim whose cone reaches a float-text hook is a real failure
+// only if it does not depend on the hook's value: the model gives the hook an
+// arbitrary result, where the runtime computes one. The check pins the scalar
+// inputs of the counterexample, leaves every string and hook free, and asks
+// whether the claim can hold: `unsat` says it fails for every result of the hook
+// (and every string), so the counterexample stands. A timeout, memory limit or
+// solver error is passed on as such; any other answer, a `sat` included, leaves
+// the claim neither proven nor refuted: `unknown` for `reason`. A claim that
+// reaches a map the function did not build is rechecked the same way, with every
+// array and length free: a failure for every state is a failure for the states a
+// run can have.
+fn vc_hook_recheck(cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: VcSolverAnswer, budget_ms: i64, scratch: String, reason: String) -> VcSolverAnswer [io, read, write] {
+    let ar: VcArena = cs.arena;
+    let s: SmtScript = vc_claim_context_script(cs, k);
+    vc_pin_model(cs, ans, s);
+    vc_script_assert(s, vc_tm_app1(ar, VC_OP_NOT(), cs.negated_goals[k]));
+    vc_script_check_sat(s);
+    let again: VcSolverAnswer = vc_solver_check_cached(cache, bin, vc_smt_render(ar, s), Vec::new(), Vec::new(), budget_ms, scratch);
+    if again.verdict == VC_ANS_UNSAT() { return ans; }
+    if vc_answer_halts(again.verdict) { return again; }
+    vc_answer_plain(VC_ANS_UNKNOWN(), reason)
+}

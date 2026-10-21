@@ -25,7 +25,13 @@ command to the native backend).
    assumptions made before it that mention a reached variable or a variable
    that depends on one through definitions. An `unsat` answer is final. Any
    other answer is re-asked on the full query, in what is left of the budget,
-   and that answer alone decides.
+   and that answer alone decides. (Amended 2026-10-21, #1862: a hard claim from
+   which only definitions were dropped skips the sliced ask and is asked on the
+   full query right away — the slice kept every assumption and dropped only
+   definitions nothing kept references, so its query is the full one up to
+   unused abbreviations and re-decides the full query's own answer at the full
+   query's cost; the deciding query is byte-for-byte the one that decided
+   before.)
 2. **Hard claims always reach the full query on a non-`unsat` answer**, so a
    counterexample is the one the full query produces: reports are byte-for-byte
    what they were before slicing. The one exception is a soft claim (checked

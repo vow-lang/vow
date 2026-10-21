@@ -767,9 +767,9 @@ no_leftovers "loop sat"
 # the 1-induction of the invariant (the loop has one) is the first query, and
 # each of the two rounds that stop short (bounds 2 and 4) runs its k-induction
 # step case, whose first claim is one more query. The covering round at bound 8
-# then ends the check on its own, with no query. Sliced, the hypotheses of a
-# step are outside the cone of its first claim, so that claim is asked sliced
-# and then again in full: two queries per step case.
+# then ends the check on its own, with no query. Sliced, the step's hypotheses
+# are kept (ground) outside the first claim's cone; the dropped defs send the
+# full query right away: one query per step case.
 LITERAL_LOOP="$TMP_ROOT/literal_loop.vow"
 cat > "$LITERAL_LOOP" <<'SRC'
 module LiteralLoop
@@ -795,7 +795,7 @@ fn main() -> i32 [io] {
 SRC
 run_native unknown "$LITERAL_LOOP"
 expect "literal loop status" "$(field "$RUN_OUT" status)" "Verified"
-expect "literal loop bounded rounds spawn nothing" "$(queries)" "5"
+expect "literal loop bounded rounds spawn nothing" "$(queries)" "3"
 export VOW_VERIFY_NO_SLICE=1
 run_native unknown "$LITERAL_LOOP"
 unset VOW_VERIFY_NO_SLICE

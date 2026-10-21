@@ -61,6 +61,15 @@ struct VcSlice {
     dropped_defs: bool,
 }
 
+// True when the slice kept every assumption and only dropped definitions
+// nothing kept references: its query is the full one up to unused
+// abbreviations, so the two are equisatisfiable with the same model for the
+// declared constants, and the sliced ask can decide nothing the full ask does
+// not at the same cost.
+fn vc_slice_is_defs_only(sl: VcSlice) -> bool {
+    !sl.dropped_asserts && sl.dropped_defs
+}
+
 // Pushes the operands of the application or extension term `t` (`kind` is its
 // kind); leaves have none.
 fn vc_slice_push_children(st: Vec<i64>, ar: VcArena, t: i64, kind: i64) {
