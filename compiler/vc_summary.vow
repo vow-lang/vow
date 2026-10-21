@@ -10,7 +10,7 @@ use vc_loops
 use vc_agg_shape
 use vc_sources
 use vc_inline
-use vc_overlay
+use vc_objects
 use vc_summary_ens
 
 // Callee summaries for the native verifier (#1791, ADR-2026-10-16-1800). A function whose

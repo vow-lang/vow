@@ -1,0 +1,134 @@
+module TestVcObjects
+
+use ir
+use ir_dominance
+use vc_objects
+use tests.builders
+
+fn args1(a: i64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    out.push(a);
+    out
+}
+
+fn args2(a: i64, b: i64) -> Vec<i64> {
+    let out: Vec<i64> = args1(a);
+    out.push(b);
+    out
+}
+
+// Deliberately out-of-order parameter reads, repeated reads, and a chain of Phis.
+// Use of Phi 8 as a String reaches both its parameter and fresh-Vec sources.
+// Declared collection provenance reaches the Phis, never the fresh sibling 4.
+fn objects_fn() -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 2));
+    i.push(mk_inst_arg(1, ITY_PTR(), 0));
+    i.push(mk_inst_arg(2, ITY_PTR(), 1));
+    i.push(mk_inst_arg(3, ITY_PTR(), 0));
+    i.push(mk_inst_call_extern(4, ITY_PTR(), Vec::new(), String::from("__vow_vec_new")));
+    i.push(mk_inst_phi(5, ITY_PTR()));
+    i.push(mk_inst_upsilon(6, 1, 5));
+    i.push(mk_inst_upsilon(7, 4, 5));
+    i.push(mk_inst_phi(8, ITY_PTR()));
+    i.push(mk_inst_upsilon(9, 5, 8));
+    i.push(mk_inst_call_extern(10, ITY_U64(), args1(8), String::from("__vow_string_len")));
+    i.push(mk_inst_call_extern(11, ITY_U64(), args1(3), String::from("__vow_vec_len")));
+    i.push(mk_inst_call_extern(12, ITY_UNIT(), args2(0, 2), String::from("__vow_string_push_str")));
+    i.push(mk_inst_call_extern(13, ITY_PTR(), Vec::new(), String::from("__vow_string_clone")));
+    i.push(mk_inst_call_extern(14, ITY_PTR(), Vec::new(), String::from("__vow_string_split")));
+    i.push(mk_inst(15, IOP_REGION_ALLOC(), ITY_PTR(), Vec::new()));
+    i.push(mk_inst_arg(16, ITY_PTR(), 3));
+    i.push(mk_inst_arg(17, ITY_PTR(), 4));
+    i.push(mk_inst_arg(18, ITY_PTR(), 5));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, i));
+    let f: IrFunction = mk_function(0, String::from("objects"), dom_fill(6, ITY_PTR()), ITY_UNIT(), blocks);
+    f.param_keys.push(String::from("Vec<i64>"));
+    f.param_keys.push(String::from("String"));
+    f.param_keys.push(String::from("Person"));
+    f.param_keys.push(String::from("HashMap"));
+    f.param_keys.push(String::from(""));
+    f.param_keys.push(String::from("String"));
+    f
+}
+
+fn check_objects() -> i64 {
+    let f: IrFunction = objects_fn();
+    let o: VcObjects = vc_objects_analyze(f, dom_fill(19, ITY_PTR()));
+    if vc_objects_stored_class(o, 1) != (VC_OV_VEC() | VC_OV_STRING()) { return 1; }
+    if vc_objects_stored_class(o, 4) != (VC_OV_VEC() | VC_OV_STRING()) { return 2; }
+    if vc_objects_stored_class(o, 8) != (VC_OV_VEC() | VC_OV_STRING()) { return 3; }
+    if vc_objects_stored_class(o, 0) != (VC_OV_STRUCT() | VC_OV_STRING()) { return 4; }
+    if vc_objects_stored_class(o, 13) != (VC_OV_VEC() | VC_OV_STRING()) { return 5; }
+    if vc_objects_stored_class(o, 14) != VC_OV_VEC() { return 6; }
+    if vc_objects_stored_class(o, 15) != VC_OV_STRUCT() { return 7; }
+    if vc_objects_stored_class(o, 16) != 0 || vc_objects_stored_class(o, 17) != 0 { return 8; }
+    if vc_objects_stored_class(o, -1) != 0 || vc_objects_stored_class(o, 19) != 0 { return 9; }
+    if !vc_objects_is_collection_param(o, 1) || !vc_objects_is_collection_param(o, 8) { return 10; }
+    if vc_objects_is_collection_param(o, 4) || vc_objects_is_collection_param(o, 0) { return 11; }
+    if vc_objects_is_collection_param(o, -1) || vc_objects_is_collection_param(o, 19) { return 12; }
+    let vecs: Vec<i64> = vc_objects_params(o, VC_OV_VEC());
+    if vecs.len() != 1 || vecs[0] != 0 { return 13; }
+    let strs: Vec<i64> = vc_objects_params(o, VC_OV_STRING());
+    if strs.len() != 3 || strs[0] != 0 || strs[1] != 1 || strs[2] != 2 { return 14; }
+    // Declared-only String 5 and the declared Person 2 are not observed overlay uses.
+    if vc_objects_params(o, VC_OV_STRUCT()).len() != 0 { return 15; }
+    if vc_objects_stored_class(o, 18) != VC_OV_STRING() { return 16; }
+    0
+}
+
+// Constructor provenance travels to a Phi, never from it into the other source.
+fn check_forward_provenance() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_call_extern(0, ITY_PTR(), Vec::new(), String::from("__vow_vec_new")));
+    i.push(mk_inst_call_extern(1, ITY_PTR(), Vec::new(), String::from("__vow_string_new")));
+    i.push(mk_inst_phi(2, ITY_PTR()));
+    i.push(mk_inst_upsilon(3, 0, 2));
+    i.push(mk_inst_upsilon(4, 1, 2));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, i));
+    let f: IrFunction = mk_function(0, String::from("stored"), Vec::new(), ITY_UNIT(), blocks);
+    let o: VcObjects = vc_objects_analyze(f, dom_fill(5, ITY_PTR()));
+    if vc_objects_stored_class(o, 0) != VC_OV_VEC() { return 20; }
+    if vc_objects_stored_class(o, 1) != VC_OV_STRING() { return 21; }
+    if vc_objects_stored_class(o, 2) != (VC_OV_VEC() | VC_OV_STRING()) { return 22; }
+    0
+}
+
+fn check_parameter_keys() -> i64 {
+    let f: IrFunction = objects_fn();
+    if vc_overlay_param_class(f, 0) != VC_OV_VEC() { return 30; }
+    if vc_overlay_param_class(f, 1) != VC_OV_STRING() { return 31; }
+    if vc_overlay_param_class(f, 2) != VC_OV_STRUCT() { return 32; }
+    if vc_overlay_param_class(f, 3) != 0 || vc_overlay_param_class(f, 4) != 0 { return 33; }
+    if vc_overlay_param_class(f, -1) != 0 || vc_overlay_param_class(f, 6) != 0 { return 34; }
+    f.param_keys[0] = String::from("Vec");
+    if vc_overlay_param_class(f, 0) != VC_OV_VEC() { return 35; }
+    f.param_keys[0] = String::from("VecOwner");
+    if vc_overlay_param_class(f, 0) != VC_OV_STRUCT() { return 36; }
+    f.param_keys[0] = String::from("BTreeMap");
+    if vc_overlay_param_class(f, 0) != 0 { return 37; }
+    let block: IrBlock = f.blocks[0];
+    block.insts.push(mk_inst_field_get(19, ITY_I64(), 0, 0));
+    let o: VcObjects = vc_objects_analyze(f, dom_fill(20, ITY_PTR()));
+    let structs: Vec<i64> = vc_objects_params(o, VC_OV_STRUCT());
+    if structs.len() != 1 || structs[0] != 2 { return 38; }
+    0
+}
+
+fn check_empty() -> i64 {
+    let f: IrFunction = mk_function(0, String::from("empty"), Vec::new(), ITY_UNIT(), Vec::new());
+    let o: VcObjects = vc_objects_analyze(f, Vec::new());
+    if vc_objects_stored_class(o, 0) != 0 || vc_objects_is_collection_param(o, 0) { return 40; }
+    if vc_objects_params(o, VC_OV_VEC()).len() != 0 { return 41; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_objects();
+    if r == 0 { r = check_forward_provenance(); }
+    if r == 0 { r = check_parameter_keys(); }
+    if r == 0 { r = check_empty(); }
+    i64_to_i32_wrap(r)
+}

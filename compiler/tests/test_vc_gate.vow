@@ -4,7 +4,6 @@ use ir
 use ir_printer
 use vc_gate
 use vc_ops
-use vc_overlay
 use vc_ptrstore
 use tests.builders
 
@@ -755,33 +754,6 @@ fn check_pointer_elements() -> i64 {
     0
 }
 
-// The class an overlay entry of a parameter is declared under comes from the head of its type.
-fn check_param_class() -> i64 {
-    let f: IrFunction = ir_function_new(0, String::from("p"), ITY_UNIT(), 0, String::from(""));
-    f.param_keys.push(String::from("Vec"));
-    f.param_keys.push(String::from("String"));
-    f.param_keys.push(String::from("Person"));
-    f.param_keys.push(String::from("HashMap"));
-    f.param_keys.push(String::from(""));
-    if vc_overlay_param_class(f, 0) != VC_OV_VEC() { return 1; }
-    if vc_overlay_param_class(f, 1) != VC_OV_STRING() { return 2; }
-    if vc_overlay_param_class(f, 2) != VC_OV_STRUCT() { return 3; }
-    if vc_overlay_param_class(f, 3) != 0 { return 4; }
-    if vc_overlay_param_class(f, 4) != 0 { return 5; }
-    if vc_overlay_param_class(f, 5) != 0 { return 6; }
-    if vc_overlay_param_class(f, -1) != 0 { return 7; }
-    // a parameter's declared class, by the value that reads it
-    let insts: Vec<IrInst> = Vec::new();
-    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
-    insts.push(mk_inst_arg(1, ITY_PTR(), 2));
-    insts.push(mk_inst_const_i64(2, 0));
-    let g: IrFunction = one_block(String::from("g"), Vec::new(), ITY_I64(), insts);
-    g.param_keys = f.param_keys;
-    let table: Vec<i64> = vc_overlay_declared_table(g, 3);
-    if table[0] != VC_OV_VEC() || table[1] != VC_OV_STRUCT() || table[2] != 0 { return 8; }
-    0
-}
-
 // A pointer-typed `Return` may carry a handle (`i64`); every other type pair is a mismatch.
 fn check_handle_for_object() -> i64 {
     if !vc_handle_for_object(ITY_PTR(), ITY_I64()) { return 1; }
@@ -931,7 +903,6 @@ fn main() -> i32 {
     if r == 0 { r = check_vec_ops_accepted(); }
     if r == 0 { r = check_vec_ops_rejected(); }
     if r == 0 { r = check_pointer_elements(); }
-    if r == 0 { let c: i64 = check_param_class(); if c != 0 { r = 200 + c; } }
     if r == 0 { r = check_handle_for_object(); }
     if r == 0 { r = check_vec_sort(); }
     if r == 0 { r = check_vec_copy_ops(); }

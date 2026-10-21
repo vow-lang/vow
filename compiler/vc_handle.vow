@@ -10,6 +10,7 @@ use vc_heap
 use vc_wide
 use vc_held
 use vc_overlay
+use vc_objects
 
 // Reads through a handle (`VcHandleMemory`, `vc_overlay`): the never-written heap overlaid with the
 // parameter and object entries, one `ite` arm per entry of the class the read asks for.

@@ -6,6 +6,7 @@ use vc_gate
 use vc_exec
 use vc_smt
 use vc_overlay
+use vc_objects
 use vc_vecalias
 use verifier
 use tests.builders
