@@ -10,6 +10,7 @@ use vc_loops
 use vc_inline
 use vc_induct_agg
 use vc_agg_shape
+use vc_sources
 
 // Loop cut for inductive verification from user `invariant` clauses. Every loop
 // of a loop-closed function is replaced by three pieces, giving an acyclic
@@ -257,11 +258,13 @@ fn vc_induct_index_of(v: Vec<i64>, x: i64) -> i64 {
     -1
 }
 
-// The objects a mutated receiver may be (`vc_fh_leaves`), each of them a parameter, an
+// The objects a mutated receiver may be (`vc_sources_leaves`), each of them a parameter, an
 // allocation or a call result. Empty when a source is anything else (the function is then not
 // cut). A Phi inside a loop that merges an object born outside it is no object born in the loop.
-fn vc_induct_recv_leaves(r: i64, src: VcPhiSources, def_op: Vec<i64>, tys: Vec<i64>, seen: Vec<i64>, stamp: i64) -> Vec<i64> {
-    let leaves: Vec<i64> = vc_fh_leaves(r, src, def_op, seen, stamp);
+fn vc_induct_recv_leaves(r: i64, src: VcSources) -> Vec<i64> {
+    let leaves: Vec<i64> = vc_sources_leaves(src, r);
+    let def_op: Vec<i64> = src.op;
+    let tys: Vec<i64> = src.ty;
     let mut i: u64 = 0;
     while i < leaves.len() {
         let v: i64 = leaves[i];
@@ -314,10 +317,7 @@ fn vc_induct_vec_havocs(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, n_ids: u64
         j = j + 1;
     }
     let defs: VcDefs = vc_def_table(f, rpo, n_ids);
-    let src: VcPhiSources = vc_fh_phi_sources(f, rpo, n_ids);
-    let def_op: Vec<i64> = vc_agg_def_ops(f, n_ids);
-    let seen: Vec<i64> = dom_fill(n_ids, -1);
-    let mut stamp: i64 = 0;
+    let src: VcSources = vc_sources_new(f, rpo, n_ids);
     let mut b: u64 = 0;
     while b < f.blocks.len() {
         if rpo[b] >= 0 && vc_chain_len(li, b) > 0 {
@@ -331,8 +331,7 @@ fn vc_induct_vec_havocs(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, n_ids: u64
                     if inst.args.len() == 0 {
                         return out;
                     }
-                    stamp = stamp + 1;
-                    let leaves: Vec<i64> = vc_induct_recv_leaves(inst.args[0], src, def_op, tys, seen, stamp);
+                    let leaves: Vec<i64> = vc_induct_recv_leaves(inst.args[0], src);
                     if leaves.len() == 0 {
                         return out;
                     }

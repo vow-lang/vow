@@ -8,7 +8,7 @@ use vc_mapops
 use vc_gate
 use vc_loops
 use vc_agg_shape
-use vc_induct_agg
+use vc_sources
 use vc_inline
 use vc_overlay
 use vc_summary_ens
@@ -142,16 +142,10 @@ fn vc_reads_given(inst: IrInst) -> bool {
 }
 
 // True when value `inst` may point into given memory, from what `given` already says.
-fn vc_yields_given(inst: IrInst, given: Vec<i64>, src: VcPhiSources) -> bool {
+fn vc_yields_given(inst: IrInst, given: Vec<i64>, src: VcSources) -> bool {
     if inst.op == IOP_GET_ARG() { return inst.ty == ITY_PTR(); }
     if inst.op == IOP_PHI() {
-        let mut e: i64 = src.head[inst.id as u64];
-        while e >= 0 {
-            let v: i64 = src.val[e as u64];
-            if v >= 0 && given[v as u64] == 1 { return true; }
-            e = src.next[e as u64];
-        }
-        return false;
+        return vc_sources_any_input_marked(src, inst.id, given);
     }
     if vc_reads_given(inst) { return inst.args.len() > 0 && given[inst.args[0] as u64] == 1; }
     false
@@ -159,7 +153,7 @@ fn vc_yields_given(inst: IrInst, given: Vec<i64>, src: VcPhiSources) -> bool {
 
 // 1 for every value that may point into given memory (see the header), closed over Phis and
 // reads. Monotone, so it runs to a fixpoint.
-fn vc_given_table(f: IrFunction, rpo: Vec<i64>, n_ids: u64, src: VcPhiSources) -> Vec<i64> {
+fn vc_given_table(f: IrFunction, rpo: Vec<i64>, n_ids: u64, src: VcSources) -> Vec<i64> {
     let given: Vec<i64> = dom_fill(n_ids, 0);
     let mut changed: bool = true;
     while changed {
@@ -224,14 +218,11 @@ fn vc_mutates_collection(inst: IrInst) -> bool {
 fn vc_collection_alias_risk(flat: IrFunction) -> bool {
     let n_ids: u64 = (dom_max_inst_id(flat) + 1) as u64;
     let rpo: Vec<i64> = vc_cfg_rpo(flat);
-    let src: VcPhiSources = vc_fh_phi_sources(flat, rpo, n_ids);
-    let def_op: Vec<i64> = vc_agg_def_ops(flat, n_ids);
+    let src: VcSources = vc_sources_new(flat, rpo, n_ids);
     let given: Vec<i64> = vc_given_table(flat, rpo, n_ids, src);
     let param_of: Vec<i64> = vc_param_table(flat, n_ids);
-    let seen: Vec<i64> = dom_fill(n_ids, -1);
     let classes: Vec<i64> = dom_fill(flat.params.len(), 0);
     let mut mutated: bool = false;
-    let mut stamp: i64 = 0;
     let mut bi: u64 = 0;
     while bi < flat.blocks.len() {
         if rpo[bi] >= 0 {
@@ -251,8 +242,7 @@ fn vc_collection_alias_risk(flat: IrFunction) -> bool {
                     let writes: bool = vc_mutates_collection(inst);
                     let mut j: u64 = 0;
                     while j < objects && j < inst.args.len() {
-                        stamp = stamp + 1;
-                        let leaves: Vec<i64> = vc_fh_leaves(inst.args[j], src, def_op, seen, stamp);
+                        let leaves: Vec<i64> = vc_sources_leaves(src, inst.args[j]);
                         let mut li: u64 = 0;
                         while li < leaves.len() {
                             let l: i64 = leaves[li];
@@ -303,14 +293,11 @@ fn vc_trust_sound(g: IrFunction, m: IrModule) -> bool {
 fn vc_effects_of(g: IrFunction, flat: IrFunction) -> VcEffects {
     let n_ids: u64 = (dom_max_inst_id(flat) + 1) as u64;
     let rpo: Vec<i64> = vc_cfg_rpo(flat);
-    let src: VcPhiSources = vc_fh_phi_sources(flat, rpo, n_ids);
-    let def_op: Vec<i64> = vc_agg_def_ops(flat, n_ids);
+    let src: VcSources = vc_sources_new(flat, rpo, n_ids);
     let given: Vec<i64> = vc_given_table(flat, rpo, n_ids, src);
     let param_of: Vec<i64> = vc_param_table(flat, n_ids);
     let tys: Vec<i64> = vc_ty_table(flat);
-    let seen: Vec<i64> = dom_fill(n_ids, -1);
     let e: VcEffects = vc_effects_new();
-    let mut stamp: i64 = 0;
     let mut bi: u64 = 0;
     while bi < flat.blocks.len() {
         if rpo[bi] >= 0 {
@@ -327,8 +314,7 @@ fn vc_effects_of(g: IrFunction, flat: IrFunction) -> VcEffects {
                 }
                 let field_write: bool = inst.op == IOP_FIELD_SET();
                 if (field_write || vc_mutates_collection(inst)) && inst.args.len() > 0 {
-                    stamp = stamp + 1;
-                    let leaves: Vec<i64> = vc_fh_leaves(inst.args[0], src, def_op, seen, stamp);
+                    let leaves: Vec<i64> = vc_sources_leaves(src, inst.args[0]);
                     let mut li: u64 = 0;
                     while li < leaves.len() {
                         let l: i64 = leaves[li];

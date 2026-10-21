@@ -1,0 +1,110 @@
+module VcSources
+
+use ir
+use ir_dominance
+
+// Function-local Phi-source index. `op` and `ty` are read-only definition facts
+// for callers' distinct object policies. The remaining fields belong to the
+// implementation: reachable incoming edges and reusable traversal scratch.
+struct VcSources {
+    op: Vec<i64>,
+    ty: Vec<i64>,
+    head: Vec<i64>,
+    next: Vec<i64>,
+    val: Vec<i64>,
+    seen: Vec<i64>,
+    epoch: i64,
+}
+
+// Definitions include all blocks; only reachable Upsilons contribute edges.
+// `n_ids` covers the function's instruction ids, and `rpo` names every block.
+fn vc_sources_new(f: IrFunction, rpo: Vec<i64>, n_ids: u64) -> VcSources {
+    let s: VcSources = VcSources {
+        op: dom_fill(n_ids, -1),
+        ty: dom_fill(n_ids, -1),
+        head: dom_fill(n_ids, -1),
+        next: Vec::new(),
+        val: Vec::new(),
+        seen: dom_fill(n_ids, 0),
+        epoch: 0,
+    };
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let blk: IrBlock = f.blocks[b];
+        let mut i: u64 = 0;
+        while i < blk.insts.len() {
+            let inst: IrInst = blk.insts[i];
+            if inst.id >= 0 {
+                s.op[inst.id as u64] = inst.op;
+                s.ty[inst.id as u64] = inst.ty;
+            }
+            if rpo[b] >= 0 && inst.op == IOP_UPSILON() && inst.dv >= 0 && (inst.dv as u64) < n_ids && inst.args.len() == 1 {
+                let k: i64 = s.val.len() as i64;
+                s.next.push(s.head[inst.dv as u64]);
+                s.val.push(inst.args[0]);
+                s.head[inst.dv as u64] = k;
+            }
+            i = i + 1;
+        }
+        b = b + 1;
+    }
+    s
+}
+
+// Start an independent walk, clearing marks only when the generation is exhausted.
+fn vc_sources_begin(s: VcSources) {
+    if s.epoch == 9223372036854775807 {
+        let mut i: u64 = 0;
+        while i < s.seen.len() {
+            s.seen[i] = 0;
+            i = i + 1;
+        }
+        s.epoch = 0;
+    }
+    s.epoch = s.epoch + 1;
+}
+
+// Non-Phi sources in discovery order, with cycles and repeated valid ids visited
+// once per query. Invalid ids are returned as-is, including duplicates, so each
+// caller can refuse them. Results never borrow scratch from the next query.
+fn vc_sources_leaves(s: VcSources, t: i64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    if t < 0 || (t as u64) >= s.op.len() || s.op[t as u64] != IOP_PHI() {
+        out.push(t);
+        return out;
+    }
+    vc_sources_begin(s);
+    let stack: Vec<i64> = Vec::new();
+    stack.push(t);
+    while stack.len() > 0 {
+        let v: i64 = stack[stack.len() - 1];
+        stack.pop();
+        if v < 0 || (v as u64) >= s.op.len() {
+            out.push(v);
+        } else if s.seen[v as u64] != s.epoch {
+            s.seen[v as u64] = s.epoch;
+            if s.op[v as u64] == IOP_PHI() {
+                let mut e: i64 = s.head[v as u64];
+                while e >= 0 {
+                    stack.push(s.val[e as u64]);
+                    e = s.next[e as u64];
+                }
+            } else {
+                out.push(v);
+            }
+        }
+    }
+    out
+}
+
+// Whether an immediate incoming value is marked. This deliberately does not
+// follow Phis transitively: the summary's given-memory fixpoint owns propagation.
+fn vc_sources_any_input_marked(s: VcSources, phi: i64, marks: Vec<i64>) -> bool {
+    let mut e: i64 = s.head[phi as u64];
+    while e >= 0 {
+        let v: i64 = s.val[e as u64];
+        if v >= 0 && marks[v as u64] == 1 { return true; }
+        e = s.next[e as u64];
+    }
+    false
+}
