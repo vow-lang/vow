@@ -15,6 +15,10 @@ fn VC_OV_VEC() -> i64 { 1 }
 fn VC_OV_STRING() -> i64 { 2 }
 fn VC_OV_MAP() -> i64 { 8 }
 
+// The flag, beside the classes of a parameter (`vc_vecalias`, `vc_mapalias`), that a collection
+// operation changes it.
+fn VC_VA_CHANGED() -> i64 { 16 }
+
 // The receiver class of a collection operation. Further object operands are Strings.
 fn vc_overlay_op_class(inst: IrInst, k: i64) -> i64 {
     if k == VC_STR_JOIN() { return VC_OV_VEC(); }
@@ -23,11 +27,16 @@ fn vc_overlay_op_class(inst: IrInst, k: i64) -> i64 {
     VC_OV_VEC()
 }
 
+// Holds when a parameter type key (`HashMap<i64,i64>`, or the bare head) is a map's.
+fn vc_param_key_is_map(key: String) -> bool {
+    key == String::from("HashMap") || key == String::from("BTreeMap") || string_starts_with(key, String::from("HashMap<")) != 0 || string_starts_with(key, String::from("BTreeMap<")) != 0
+}
+
 // The declared class of a parameter, or zero for a map or a missing type key.
 fn vc_overlay_param_class(f: IrFunction, k: i64) -> i64 {
     if k < 0 || (k as u64) >= f.param_keys.len() { return 0; }
     let head: String = f.param_keys[k as u64];
-    if head.len() == 0 || head == String::from("HashMap") || head == String::from("BTreeMap") { return 0; }
+    if head.len() == 0 || vc_param_key_is_map(head) { return 0; }
     if head == String::from("Vec") || string_starts_with(head, String::from("Vec<")) != 0 { return VC_OV_VEC(); }
     if head == String::from("String") { return VC_OV_STRING(); }
     VC_OV_STRUCT()

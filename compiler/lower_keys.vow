@@ -2,23 +2,53 @@ module LowerKeys
 
 use ast
 
-// `IrFunction.param_keys` entry of a parameter declared as `tid` (aliases resolved): the head of
-// the type, with `str` and `String` one head, and a `Vec` keyed by the head of its element
-// `elem_tid` (aliases resolved, -1 when it has none) so that `Vec<Id>` and `Vec<i64>`, one type
-// under `type Id = i64`, are one key. "" when the head is not known. Different keys are never
-// one object.
-fn lower_param_key(a: AstArena, tid: i64, elem_tid: i64) -> String {
-    if tid == -1 { return String::from(""); }
-    let tag: i64 = type_tag(a, tid);
+fn lower_find_type_alias(alias_names: Vec<String>, name: String) -> i64 {
+    let mut i: u64 = 0;
+    while i < alias_names.len() {
+        if alias_names[i] == name { return i as i64; }
+        i = i + 1;
+    }
+    -1
+}
+
+fn lower_resolve_alias_tid(a: AstArena, tid: i64, alias_names: Vec<String>, alias_target_tids: Vec<i64>) -> i64 {
+    if tid == -1 || type_tag(a, tid) != TY_NAMED() { return tid; }
+    let name: String = arena_str(a, type_a(a, tid));
+    let index: i64 = lower_find_type_alias(alias_names, name);
+    if index == -1 { return tid; }
+    alias_target_tids[index as u64]
+}
+
+// The head of the type `tid` (aliases resolved) for a key: the name, with `str` and `String` one
+// head, `()` for the unit type, or "" when it has none.
+fn lower_key_head(a: AstArena, tid: i64, alias_names: Vec<String>, alias_target_tids: Vec<i64>) -> String {
+    let r: i64 = lower_resolve_alias_tid(a, tid, alias_names, alias_target_tids);
+    if r == -1 { return String::from(""); }
+    let tag: i64 = type_tag(a, r);
+    if tag == TY_UNIT() { return String::from("()"); }
     if tag != TY_NAMED() && tag != TY_GENERIC() { return String::from(""); }
-    let head: String = arena_str(a, type_a(a, tid));
+    let head: String = arena_str(a, type_a(a, r));
     if head == String::from("str") { return String::from("String"); }
-    if head != String::from("Vec") || tag != TY_GENERIC() { return head; }
-    let key: String = String::from("Vec<");
-    if elem_tid != -1 {
-        let etag: i64 = type_tag(a, elem_tid);
-        let ehead: String = { if etag == TY_NAMED() || etag == TY_GENERIC() { arena_str(a, type_a(a, elem_tid)) } else { String::from("") } };
-        key.push_str({ if ehead == String::from("str") { String::from("String") } else { ehead } });
+    head
+}
+
+// `IrFunction.param_keys` entry of a parameter declared as `tid` (aliases resolved): the head of
+// the type, with `str` and `String` one head. A `Vec` is keyed by the head of its element, and a
+// `HashMap` or `BTreeMap` by the heads of its key and value (`Vec<i64>`, `HashMap<i64,u8>`), each
+// with aliases resolved so that `Vec<Id>` and `Vec<i64>`, one type under `type Id = i64`, are one
+// key. "" when the head is not known. Different keys are never one object.
+fn lower_param_key(a: AstArena, tid: i64, alias_names: Vec<String>, alias_target_tids: Vec<i64>) -> String {
+    let head: String = lower_key_head(a, tid, alias_names, alias_target_tids);
+    if tid == -1 || type_tag(a, tid) != TY_GENERIC() { return head; }
+    if head != String::from("Vec") && head != String::from("HashMap") && head != String::from("BTreeMap") { return head; }
+    let args: i64 = type_b(a, tid);
+    let key: String = String::from(head);
+    key.push_str(String::from("<"));
+    let mut i: u64 = 0;
+    while i < list_len(a, args) as u64 {
+        if i > 0 { key.push_str(String::from(",")); }
+        key.push_str(lower_key_head(a, list_get(a, args, i as i64), alias_names, alias_target_tids));
+        i = i + 1;
     }
     key.push_str(String::from(">"));
     key
