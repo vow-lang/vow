@@ -1,0 +1,22 @@
+// TEST: counterexample-fn "drop_other"
+// TEST: counterexample-vow-id 2
+// TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures result"
+// A key removed through `q` is gone from `p` when they are one object.
+module MapParamsRemoveAliasWrong
+
+fn drop_other(p: HashMap<i64, i64>, q: HashMap<i64, i64>, k: i64) -> bool vow {
+  requires: p.contains_key(k),
+  requires: q.contains_key(k),
+  ensures: result
+} {
+  q.remove(k);
+  p.contains_key(k)
+}
+
+fn main() -> i32 [io] {
+  let a: HashMap<i64, i64> = HashMap::new();
+  a.insert(3, 1);
+  if drop_other(a, a, 3) { print_u64(1); }
+  0
+}

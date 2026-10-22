@@ -1,0 +1,65 @@
+module TestReplayMapKeys
+
+use replay_mapkeys
+
+// Splits `a=1,b=2` into the parallel name/value lists a counterexample carries.
+fn kv_part(kv: String, values: bool) -> Vec<String> {
+    let out: Vec<String> = Vec::new();
+    let mut start: u64 = 0u64;
+    let mut i: u64 = 0u64;
+    while i <= kv.len() {
+        if i == kv.len() || kv.byte_at(i) == 44 {
+            if i > start {
+                let pair: String = kv.substring(start, i);
+                let mut at: u64 = 0u64;
+                while pair.byte_at(at) != 61 { at = at + 1u64; }
+                if values { out.push(pair.substring(at + 1u64, pair.len())); } else { out.push(pair.substring(0u64, at)); }
+            }
+            start = i + 1u64;
+        }
+        i = i + 1u64;
+    }
+    out
+}
+
+fn state_of(pname: String, kv: String, keys: Vec<String>, held: Vec<String>) {
+    replay_map_state_entries(pname, kv_part(kv, false), kv_part(kv, true), keys, held);
+}
+
+fn joined(keys: Vec<String>, held: Vec<String>) -> String {
+    let out: String = String::from("");
+    let mut i: u64 = 0u64;
+    while i < keys.len() {
+        out.push_str(keys[i]);
+        out.push_str(String::from("="));
+        out.push_str(held[i]);
+        out.push_str(String::from(";"));
+        i = i + 1u64;
+    }
+    out
+}
+
+fn entries(pname: String, kv: String) -> String {
+    let keys: Vec<String> = Vec::new();
+    let held: Vec<String> = Vec::new();
+    state_of(pname, kv, keys, held);
+    joined(keys, held)
+}
+
+// The parameters the model gives one identity are one map: a key asked of either is a key of the
+// map the harness builds. Another identity, or none, shares nothing.
+fn check_peers_share_keys() -> i64 {
+    let one: String = String::from("p.alias=0,q.alias=0,p.len=1,q[5]=absent,p[2]=7");
+    if entries(String::from("p"), one) != String::from("2=7;5=absent;") { return 1; }
+    if entries(String::from("q"), one) != String::from("5=absent;2=7;") { return 2; }
+    let apart: String = String::from("p.alias=0,q.alias=1,q[5]=absent,p[2]=7");
+    if entries(String::from("p"), apart) != String::from("2=7;") { return 3; }
+    if entries(String::from("p"), String::from("p[2]=7,q[5]=absent")) != String::from("2=7;") { return 4; }
+    let both: String = String::from("p.alias=3,q.alias=3,r.alias=3,q[1]=7,p[1]=7,r[4]=absent");
+    if entries(String::from("p"), both) != String::from("1=7;4=absent;") { return 5; }
+    0
+}
+
+fn main() -> i32 {
+    i64_to_i32_wrap(check_peers_share_keys())
+}

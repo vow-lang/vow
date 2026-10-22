@@ -12,6 +12,8 @@ use vc_loops
 use vc_objects
 use vc_vec
 use vc_heap
+use vc_map
+use vc_mapalias
 
 // Parameters of one `Vec` or `String` type may be one object: a caller can pass one value for
 // two of them, so a change through one is a change of the other. The model gives each such
@@ -20,8 +22,9 @@ use vc_heap
 // and has two collection parameters of one declared type (`Vec<i64>` and `Vec<u8>` are two
 // types); a function that only reads them cannot tell.
 
-// Per parameter, the classes (`VC_OV_VEC`, `VC_OV_STRING`) it is used as an object of by a `Vec` or
-// `String` operation, looking through Phis, and `VC_VA_CHANGED` when such an operation changes it.
+// Per parameter, the classes (`VC_OV_VEC`, `VC_OV_STRING`, `VC_OV_MAP`) it is used as an object of by
+// a `Vec`, `String` or map operation, looking through Phis, and `VC_VA_CHANGED` when such an
+// operation changes it.
 fn vc_vecalias_classes(f: IrFunction, n_ids: u64) -> Vec<i64> {
     let rpo: Vec<i64> = vc_cfg_rpo(f);
     let src: VcSources = vc_sources_new(f, rpo, n_ids);
@@ -60,12 +63,11 @@ fn vc_vecalias_classes(f: IrFunction, n_ids: u64) -> Vec<i64> {
         }
         bi = bi + 1;
     }
+    vc_mapalias_classes(f, src, arg_param, n_ids, cls);
     cls
 }
 
-fn VC_VA_CHANGED() -> i64 { 16 }
-
-// The ascending indices of the `Vec` and `String` parameters that may be one object as another
+// The ascending indices of the `Vec`, `String` and map parameters that may be one object as another
 // parameter of their declared type, when the function changes one of the two (or a Phi of
 // them): the parameters of each type group that has two of them and one changed. `cls` is
 // `vc_vecalias_classes`.
@@ -155,9 +157,9 @@ fn vc_vecalias_enable(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed
     }
 }
 
-// Declares the identity of every aliasable parameter (structs, `Vec`s and `Strings`) and what
+// Declares the identity of every aliasable parameter (structs, `Vec`s, `Strings` and maps) and what
 // relates the collection parameters. The facts the identities need go to `assumed`.
-fn vc_vecalias_setup(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, f: IrFunction, n_ids: u64) {
+fn vc_vecalias_setup(vv: VcVec, mp: VcMap, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, f: IrFunction, n_ids: u64) {
     let mut cls: Vec<i64> = dom_fill(f.params.len(), 0);
     if f.params.len() >= 2 { cls = vc_vecalias_classes(f, n_ids); }
     let params: Vec<i64> = vc_vecalias_union(vc_agg_alias_params(f, n_ids), vc_vecalias_params(f, cls));
@@ -168,4 +170,5 @@ fn vc_vecalias_setup(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed:
         i = i + 1;
     }
     vc_vecalias_enable(vv, ag, ar, hdr, assumed, cls);
+    vc_mapalias_enable(mp, ag, ar, hdr, assumed, cls);
 }

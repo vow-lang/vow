@@ -1267,15 +1267,6 @@ fn lower_ast_ty(a: AstArena, tid: i64) -> i64 {
     lower_ast_ty_linear(a, tid, Vec::new(), Vec::new(), Vec::new())
 }
 
-fn lower_find_type_alias(alias_names: Vec<String>, name: String) -> i64 {
-    let mut i: u64 = 0;
-    while i < alias_names.len() {
-        if alias_names[i] == name { return i as i64; }
-        i = i + 1;
-    }
-    -1
-}
-
 fn lower_resolve_alias_index(a: AstArena, alias_names: Vec<String>, alias_target_tids: Vec<i64>, states: Vec<i64>, index: u64) -> i64 {
     if states[index] == 2 { return alias_target_tids[index]; }
     if states[index] == 1 { return alias_target_tids[index]; }
@@ -1305,14 +1296,6 @@ fn lower_resolve_type_aliases(a: AstArena, alias_names: Vec<String>, alias_targe
         lower_resolve_alias_index(a, alias_names, alias_target_tids, states, i);
         i = i + 1;
     }
-}
-
-fn lower_resolve_alias_tid(a: AstArena, tid: i64, alias_names: Vec<String>, alias_target_tids: Vec<i64>) -> i64 {
-    if tid == -1 || type_tag(a, tid) != TY_NAMED() { return tid; }
-    let name: String = arena_str(a, type_a(a, tid));
-    let index: i64 = lower_find_type_alias(alias_names, name);
-    if index == -1 { return tid; }
-    alias_target_tids[index as u64]
 }
 
 fn is_scalar_field_type_name(name: String) -> bool {
@@ -6091,7 +6074,6 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
         func.param_names.push(pname);
 
         let resolved_ptid: i64 = lower_resolve_alias_tid(a, ptid, ctx.type_alias_names, ctx.type_alias_target_tids);
-        let mut pkey_elem: i64 = -1;
         if resolved_ptid != -1 {
             let ptag: i64 = type_tag(a, resolved_ptid);
             if ptag == TY_NAMED() {
@@ -6117,7 +6099,6 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
                     let pargs_lid: i64 = type_b(a, resolved_ptid);
                     if list_len(a, pargs_lid) > 0 {
                         let pelem_tid: i64 = lower_resolve_alias_tid(a, list_get(a, pargs_lid, 0), ctx.type_alias_names, ctx.type_alias_target_tids);
-                        pkey_elem = pelem_tid;
                         let petag: i64 = type_tag(a, pelem_tid);
                         if petag == TY_NAMED() {
                             let pelem_sid: i64 = type_a(a, pelem_tid);
@@ -6140,7 +6121,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
             }
         }
 
-        func.param_keys.push(lower_param_key(a, resolved_ptid, pkey_elem));
+        func.param_keys.push(lower_param_key(a, resolved_ptid, ctx.type_alias_names, ctx.type_alias_target_tids));
         ctx.func.local_names_ids.push(arg_id);
         ctx.func.local_names_strs.push(pname);
         lctx_define(ctx, pname, arg_id);

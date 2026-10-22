@@ -1,0 +1,25 @@
+// TEST: replay-skipped the replay harness does not resolve the alias `Reg` of a map type
+// TEST: counterexample-fn "put"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures !result"
+// `Reg`, `HashMap<Id, i64>` and `HashMap<i64, i64>` are one type under the aliases, so a caller may
+// pass one value for all of them: the insert through `q` is what `p` reads back.
+module MapParamsTypeAliasWrong
+
+type Id = i64;
+type Reg = HashMap<i64, i64>;
+
+fn put(p: Reg, q: HashMap<Id, i64>, k: i64) -> bool vow {
+  requires: !p.contains_key(k),
+  ensures: !result
+} {
+  q.insert(k, 1);
+  p.contains_key(k)
+}
+
+fn main() -> i32 [io] {
+  let a: HashMap<i64, i64> = HashMap::new();
+  if put(a, a, 2) { print_u64(1); }
+  0
+}

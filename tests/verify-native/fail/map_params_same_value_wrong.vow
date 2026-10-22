@@ -1,0 +1,25 @@
+// TEST: counterexample-fn "grow"
+// TEST: counterexample-vow-id 3
+// TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures result == 1"
+// The two `HashMap` parameters may be one object, as `main` passes one value for both: then the
+// insert through `q` is the length `p.len()` reads back, so the clause fails. The counterexample
+// says so as equal identities.
+module MapParamsSameValueWrong
+
+fn grow(p: HashMap<i64, i64>, q: HashMap<i64, i64>, k: i64) -> u64 vow {
+  requires: p.len() == 1,
+  requires: q.len() < 10,
+  requires: !q.contains_key(k),
+  ensures: result == 1
+} {
+  q.insert(k, 7);
+  p.len()
+}
+
+fn main() -> i32 [io] {
+  let a: HashMap<i64, i64> = HashMap::new();
+  a.insert(1, 1);
+  print_u64(grow(a, a, 5));
+  0
+}

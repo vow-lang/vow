@@ -1,6 +1,6 @@
-# ADR-2026-10-19-1700: Vec and String parameters of one type may be one object
+# ADR-2026-10-19-1700: Vec, String and map parameters of one type may be one object
 
-Status: accepted (issue #1823, epic #1398)
+Status: accepted (issues #1823 and #1858, epic #1398)
 
 Addendum to [ADR-2026-10-08-1422](2026-10-08-1422-native-verification-semantics.md) and to
 the struct rule of #1810. Native verifier only (no Rust twin,
@@ -31,6 +31,18 @@ assumption (its C model declares each parameter as a local), so `verify_diff.py`
    review: keyed by the unresolved text, `Vec<Id>` and `Vec<i64>` under `type Id = i64` were two
    groups and the proof of their one-object case was lost. A parameter whose type has no known head
    puts every parameter in one group, as before.
+4. **Maps follow the same rule (#1858).** `HashMap` and `BTreeMap` parameters are grouped by their
+   declared type with aliases resolved, key and value included (`HashMap<i64,i64>`,
+   `BTreeMap<i64,i64>` and `HashMap<u8,i64>` are three types; `param_keys` carries the heads of
+   both arguments). A map parameter that the function changes (`insert`, `remove`, a loop cut's
+   havoc) and that has a second member in its group gets an identity, equal identities equate the
+   presence array, value array and length of the two, and every write through one is applied to the
+   other under the identity test. A map is never merged by a Phi or passed to a call (the map gate),
+   so its uses are all direct. `compiler/vc_mapalias.vow`; the write hook is `vc_map_spread` in
+   `compiler/vc_map.vow`. The members of a group share one key type, so what any of them shows of
+   its key width (the `unconstrained map state` rule of ADR-2026-10-08-1422) holds for the others.
+   `--replay-cex` builds the one map with the listed keys of every member
+   (`compiler/replay_mapkeys.vow`).
 
 ## Consequences
 
@@ -44,8 +56,14 @@ assumption (its C model declares each parameter as a local), so `verify_diff.py`
   of one type; no other query changes. Over 606 native fixtures, 168 ESBMC-corpus files and the 11
   compiler roots the only verdict that moved is the function row of
   `trust/alias_two_vec_params_failed.vow` (`tail`: `PROVEN` to `FAILED`).
-- **Not covered:** `HashMap` and `BTreeMap` parameters (the same wrong verdict), and objects reached
-  through a pointer loaded from a container or a field, which the heap model already fails or skips.
+- Maps (#1858): the identity machinery runs only for a function that changes a map and has two
+  parameters of one map type, so every other map query is built as before. A scan of the 2156 `.vow`
+  files of the repository (fixtures, ESBMC corpus, benchmarks, examples, compiler) for a signature
+  with two parameters of one spelled map type finds only the new fixtures; the 610 native fixtures
+  keep their verdicts. The verdict diff of the 11 compiler roots is measured with the bootstrap
+  gate, not here.
+- **Not covered:** objects reached through a pointer loaded from a container or a field, which the
+  heap model already fails or skips.
   ESBMC keeps its distinct-parameter model and is documented as unsound here until it is removed
   (epic #1398, P6).
 

@@ -1,0 +1,26 @@
+// Two map parameters of one type that the function only reads cannot tell whether they are one
+// object, and a map parameter alone in its type is no object but its own.
+module MapParamsReadOnlySameType
+
+fn same_size(a: HashMap<i64, i64>, b: HashMap<i64, i64>) -> bool vow {
+  requires: a.len() == b.len(),
+  ensures: result
+} {
+  a.len() == b.len()
+}
+
+fn alone(m: HashMap<i64, i64>, v: Vec<i64>) -> u64 vow {
+  requires: v.len() < 10,
+  ensures: result >= 1
+} {
+  v.push(1);
+  m.insert(1, 1);
+  m.len()
+}
+
+fn main() -> i32 [io] {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let v: Vec<i64> = Vec::new();
+  if same_size(a, a) { print_u64(alone(a, v)); }
+  0
+}
