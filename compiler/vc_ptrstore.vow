@@ -7,6 +7,7 @@ use vc_strops
 use vc_heap
 use vc_vec
 use vc_overlay
+use vc_objects
 
 // Gate rule for a pointer stored into a `Vec` (`outer.push(inner)`, `names.push(s)`,
 // `rows[i] = row`). The slot holds the object's address. When nothing looks at it again, `push`
@@ -181,9 +182,7 @@ fn vc_ptr_store_known(f: IrFunction, tys: Vec<i64>, calls: bool) -> Vec<i64> {
 fn vc_ptr_store_resolvable(f: IrFunction, held: Vec<i64>, tys: Vec<i64>, calls: bool) -> bool {
     let n_ids: u64 = tys.len();
     let known: Vec<i64> = vc_ptr_store_known(f, tys, calls);
-    let classes: Vec<i64> = vc_overlay_class_table(f, tys);
-    let built: Vec<i64> = vc_overlay_stored_table(f, n_ids);
-    let collection: Vec<i64> = vc_ptr_store_collection_params(f, n_ids);
+    let objects: VcObjects = vc_objects_analyze(f, tys);
     let foreign: Vec<i64> = dom_fill(n_ids, 0);
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
@@ -197,10 +196,10 @@ fn vc_ptr_store_resolvable(f: IrFunction, held: Vec<i64>, tys: Vec<i64>, calls: 
                 if !deferred && !(inst.op == IOP_CALL() && k == VC_VEC_NEW()) { return false; }
             }
             let stored: i64 = vc_inst_stored_operand(inst);
-            if stored >= 0 && (stored as u64) < n_ids && collection[stored as u64] == 1 { return false; }
+            if stored >= 0 && (stored as u64) < n_ids && vc_objects_is_collection_param(objects, stored) { return false; }
             if inst.op == IOP_CALL() && inst.args.len() > 0 && vc_ptr_store_is_held(held, inst.args[0]) && stored >= 0 {
                 if vc_heap_ty(tys, stored) != ITY_PTR() || known[stored as u64] == 0 { return false; }
-                if known[stored as u64] == 1 && classes[stored as u64] + built[stored as u64] == 0 { return false; }
+                if known[stored as u64] == 1 && vc_objects_stored_class(objects, stored) == 0 { return false; }
             }
             if inst.op == IOP_CALL() && k == VC_VEC_GET() && inst.id >= 0 && inst.args.len() > 0 && !vc_ptr_store_is_held(held, inst.args[0]) {
                 foreign[inst.id as u64] = 1;
@@ -222,20 +221,6 @@ fn vc_ptr_store_resolvable(f: IrFunction, held: Vec<i64>, tys: Vec<i64>, calls: 
         bi = bi + 1;
     }
     true
-}
-
-// 1 for every `Vec` or `String` parameter and every Phi that merges one. Such a parameter stored
-// anywhere (in a field, a `Vec` slot) keeps the function out of the address model, #1823.
-fn vc_ptr_store_collection_params(f: IrFunction, n_ids: u64) -> Vec<i64> {
-    let declared: Vec<i64> = vc_overlay_declared_table(f, n_ids);
-    let out: Vec<i64> = dom_fill(n_ids, 0);
-    let mut v: u64 = 0;
-    while v < n_ids {
-        if (declared[v] & (VC_OV_VEC() | VC_OV_STRING())) != 0 { out[v] = 1; }
-        v = v + 1;
-    }
-    vc_heap_close_over_phis(f, out);
-    out
 }
 
 // True when `inst` reads or writes an object through its first operand: a field access or an

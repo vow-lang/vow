@@ -1,0 +1,187 @@
+module VcObjects
+
+use ir
+use ir_dominance
+use vc_ops
+use vc_strops
+use vc_heap
+
+// Object classes have two sources: how a value is used, and what its constructor or
+// parameter declaration says it denotes. An observed use applies to every source of a
+// Phi; provenance travels only from a source to the Phi. Keeping those closures distinct
+// prevents an allocated object from inheriting a sibling's parameter provenance.
+fn VC_OV_STRUCT() -> i64 { 4 }
+fn VC_OV_VEC() -> i64 { 1 }
+fn VC_OV_STRING() -> i64 { 2 }
+fn VC_OV_MAP() -> i64 { 8 }
+
+// The receiver class of a collection operation. Further object operands are Strings.
+fn vc_overlay_op_class(inst: IrInst, k: i64) -> i64 {
+    if k == VC_STR_JOIN() { return VC_OV_VEC(); }
+    if string_starts_with(inst.ds, VC_STR_PREFIX()) == 1 { return VC_OV_STRING(); }
+    if k == VC_STR_HASH() || k == VC_STR_PARSE_F64() || k == VC_STR_HEX_DECODE() { return VC_OV_STRING(); }
+    VC_OV_VEC()
+}
+
+// The declared class of a parameter, or zero for a map or a missing type key.
+fn vc_overlay_param_class(f: IrFunction, k: i64) -> i64 {
+    if k < 0 || (k as u64) >= f.param_keys.len() { return 0; }
+    let head: String = f.param_keys[k as u64];
+    if head.len() == 0 || head == String::from("HashMap") || head == String::from("BTreeMap") { return 0; }
+    if head == String::from("Vec") || string_starts_with(head, String::from("Vec<")) != 0 { return VC_OV_VEC(); }
+    if head == String::from("String") { return VC_OV_STRING(); }
+    VC_OV_STRUCT()
+}
+
+// A finished analysis of one function. `stored` is the effective class of an address
+// stored for each value; `collection` marks declared Vec/String parameters and their
+// Phi results. `params` records observed classes by parameter, independent of declared
+// or constructed provenance. Consumers use the queries below, never combine tables.
+struct VcObjects {
+    stored: Vec<i64>,
+    collection: Vec<i64>,
+    params: Vec<i64>,
+}
+
+fn vc_objects_mark(classes: Vec<i64>, id: i64, cls: i64) {
+    if id >= 0 && (id as u64) < classes.len() {
+        classes[id as u64] = classes[id as u64] | cls;
+    }
+}
+
+// Provenance of a constructor result, before parameter declarations and Phi closure.
+fn vc_objects_built_class(inst: IrInst, k: i64) -> i64 {
+    let mut cls: i64 = 0;
+    if k == VC_VEC_NEW() || k == VC_VEC_SORT() { cls = VC_OV_VEC(); }
+    if vc_str_kind_creates(k) { cls = VC_OV_STRING(); }
+    if inst.op == IOP_REGION_ALLOC() { cls = VC_OV_STRUCT(); }
+    if k == VC_STR_SPLIT() || k == VC_STR_HEX_DECODE() { cls = VC_OV_VEC(); }
+    if k == VC_STR_FROM_RAW_PARTS() || k == VC_STR_CLONE() { cls = VC_OV_VEC() | VC_OV_STRING(); }
+    if inst.op == IOP_CONST_STR() { cls = VC_OV_STRING(); }
+    cls
+}
+
+fn vc_objects_seed(f: IrFunction, tys: Vec<i64>, used: Vec<i64>, stored: Vec<i64>, collection: Vec<i64>) {
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            let k: i64 = vc_inst_vec_kind(inst);
+            if k != VC_VEC_NONE() {
+                if !vc_str_kind_no_object_operand(k) && inst.args.len() > 0 {
+                    vc_objects_mark(used, inst.args[0], vc_overlay_op_class(inst, k));
+                }
+                let mut j: u64 = 1;
+                while j < vc_str_kind_object_operands(k) && j < inst.args.len() {
+                    vc_objects_mark(used, inst.args[j], VC_OV_STRING());
+                    j = j + 1;
+                }
+            }
+            if (inst.op == IOP_FIELD_GET() || inst.op == IOP_FIELD_SET()) && inst.args.len() > 0
+                && vc_heap_ty(tys, inst.args[0]) == ITY_PTR() {
+                vc_objects_mark(used, inst.args[0], VC_OV_STRUCT());
+            }
+            if inst.id >= 0 && (inst.id as u64) < tys.len() {
+                let mut cls: i64 = vc_objects_built_class(inst, k);
+                if inst.op == IOP_GET_ARG() && inst.ty == ITY_PTR() {
+                    let declared: i64 = vc_overlay_param_class(f, inst.dv);
+                    cls = cls | declared;
+                    if (declared & (VC_OV_VEC() | VC_OV_STRING())) != 0 { collection[inst.id as u64] = 1; }
+                }
+                stored[inst.id as u64] = cls;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+}
+
+// Used classes flow in both directions; stored classes and collection provenance
+// flow forward. No observed use can turn a fresh Phi source into a parameter.
+fn vc_objects_close(f: IrFunction, used: Vec<i64>, stored: Vec<i64>, collection: Vec<i64>) {
+    let mut changed: bool = true;
+    while changed {
+        changed = false;
+        let mut bi: u64 = 0;
+        while bi < f.blocks.len() {
+            let blk: IrBlock = f.blocks[bi];
+            let mut ii: u64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                if inst.op == IOP_UPSILON() && inst.args.len() == 1 && inst.dv >= 0 && inst.args[0] >= 0
+                    && (inst.dv as u64) < used.len() && (inst.args[0] as u64) < used.len() {
+                    let phi: u64 = inst.dv as u64;
+                    let val: u64 = inst.args[0] as u64;
+                    let use_cls: i64 = used[phi] | used[val];
+                    let store_cls: i64 = stored[phi] | stored[val];
+                    let coll: i64 = collection[phi] | collection[val];
+                    if used[phi] != use_cls || used[val] != use_cls || stored[phi] != store_cls || collection[phi] != coll {
+                        used[phi] = use_cls;
+                        used[val] = use_cls;
+                        stored[phi] = store_cls;
+                        collection[phi] = coll;
+                        changed = true;
+                    }
+                }
+                ii = ii + 1;
+            }
+            bi = bi + 1;
+        }
+    }
+}
+
+// Analyze once for the overlay and pointer-store admission. Projections share the
+// same observed-use closure; constructor and declared classes never add parameters.
+fn vc_objects_analyze(f: IrFunction, tys: Vec<i64>) -> VcObjects {
+    let used: Vec<i64> = dom_fill(tys.len(), 0);
+    let stored: Vec<i64> = dom_fill(tys.len(), 0);
+    let collection: Vec<i64> = dom_fill(tys.len(), 0);
+    vc_objects_seed(f, tys, used, stored, collection);
+    vc_objects_close(f, used, stored, collection);
+    let params: Vec<i64> = dom_fill(f.params.len(), 0);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_GET_ARG() && inst.ty == ITY_PTR() && inst.id >= 0 && (inst.id as u64) < used.len()
+                && inst.dv >= 0 && (inst.dv as u64) < params.len() {
+                params[inst.dv as u64] = params[inst.dv as u64] | used[inst.id as u64];
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    let mut v: u64 = 0;
+    while v < stored.len() {
+        stored[v] = stored[v] | used[v];
+        v = v + 1;
+    }
+    VcObjects { stored: stored, collection: collection, params: params }
+}
+
+// The classes the address stored for value `id` must carry; unknown ids have none.
+fn vc_objects_stored_class(objects: VcObjects, id: i64) -> i64 {
+    if id < 0 || (id as u64) >= objects.stored.len() { return 0; }
+    objects.stored[id as u64]
+}
+
+// A declared Vec/String parameter or a Phi fed by one cannot use the stored-address
+// model: distinct parameters may alias, even when their own observed uses differ.
+fn vc_objects_is_collection_param(objects: VcObjects, id: i64) -> bool {
+    id >= 0 && (id as u64) < objects.collection.len() && objects.collection[id as u64] == 1
+}
+
+// Pointer parameters observed as `cls`, ascending, with repeated reads deduplicated.
+fn vc_objects_params(objects: VcObjects, cls: i64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut k: u64 = 0;
+    while k < objects.params.len() {
+        if (objects.params[k] & cls) != 0 { out.push(k as i64); }
+        k = k + 1;
+    }
+    out
+}
