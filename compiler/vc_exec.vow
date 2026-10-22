@@ -15,6 +15,7 @@ use vc_agg
 use vc_vec
 use vc_vecalias
 use vc_wide
+use vc_wideref
 use vc_heap
 use vc_map
 use vc_mapkeys
@@ -168,14 +169,7 @@ struct VcWalk {
     memory: VcHandleMemory,
     var_of: Vec<i64>,
     obj_of: Vec<i64>,
-    // The element address a wide `Vec` call defined (`vc_wide`): the `Vec`'s slot,
-    // its object and the index term of the element; -1 for every other value.
-    wslot: Vec<i64>,
-    wobj: Vec<i64>,
-    widx: Vec<i64>,
-    // The address of an element of a collection at a handle (`vc_heap`), for the same ids: the
-    // handle term; -1 for every value that is not one. Such an address is only read through.
-    whandle: Vec<i64>,
+    wide_refs: VcWideRefs,
     // The object of the `Vec` a one-slot `get` read, for every value that read is,
     // and the float type of every value a float was stored into a slot as (`vc_fp`);
     // -1 for every other value. They tell a counterexample which parameters hold floats.
@@ -318,34 +312,7 @@ fn vc_walk_wide_call(w: VcWalk, bi: u64, inst: IrInst, pc: i64, kind: i64, s: i6
         idx = w.var_of[inst.args[1] as u64];
         vc_guard(cs, VC_CLAIM_VEC_BOUNDS(), VC_LABEL_VEC_BOUNDS(), pc, vc_vec_in_bounds(ar, idx, len), inst);
     }
-    w.wslot[inst.id as u64] = s;
-    w.wobj[inst.id as u64] = w.obj_of[inst.args[0] as u64];
-    w.widx[inst.id as u64] = idx;
-}
-
-// A `WideSlot` read or write through an element address: the two limbs of the
-// element in the array of the `Vec`, as the current block sees it.
-fn vc_walk_wide_access(w: VcWalk, bi: u64, inst: IrInst) {
-    let cs: VcClaims = w.cs;
-    let ar: VcArena = cs.arena;
-    let vv: VcVec = w.vv;
-    let b: i64 = bi as i64;
-    let r: u64 = inst.args[0] as u64;
-    if w.whandle[r] >= 0 {
-        if inst.op == IOP_FIELD_GET() { vc_held_mark_wide(w.memory.held, ar, w.whandle[r], inst.ty); }
-        vc_define(w, inst, vc_handle_wide(w.memory, b, w.whandle[r], w.widx[r]));
-        return;
-    }
-    let s: i64 = w.wslot[r];
-    let arr: i64 = vc_vec_cur_arr(vv, s, b);
-    if inst.op == IOP_FIELD_GET() {
-        vc_vec_mark_elem(vv, w.ag, w.wobj[r], inst.ty);
-        vc_define(w, inst, vc_wide_read(ar, arr, w.widx[r]));
-    } else {
-        let val: i64 = inst.args[1];
-        vc_vec_mark_elem(vv, w.ag, w.wobj[r], w.tys[val as u64]);
-        vc_vec_write(vv, ar, cs.header, s, b, vc_wide_write(ar, arr, w.widx[r], w.var_of[val as u64]), vc_vec_cur_len(vv, s, b));
-    }
+    vc_wideref_note(w.wide_refs, inst, idx);
 }
 
 // The address stored for `val`, carrying its analyzed object classes.
@@ -360,8 +327,9 @@ fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
     let cs: VcClaims = w.cs;
     let ag: VcAgg = w.ag;
     let op: i64 = inst.op;
-    if (op == IOP_FIELD_GET() || op == IOP_FIELD_SET()) && (w.wslot[inst.args[0] as u64] >= 0 || w.whandle[inst.args[0] as u64] >= 0) {
-        vc_walk_wide_access(w, bi, inst);
+    let wide: i64 = vc_wideref_access(w.wide_refs, bi as i64, inst);
+    if wide != -1 {
+        if wide >= 0 { vc_define(w, inst, wide); }
         return true;
     }
     if op == IOP_GET_ARG() && inst.ty == ITY_PTR() {
@@ -551,8 +519,7 @@ fn vc_walk_handle_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64, kind: i64) {
     let idx: i64 = w.var_of[inst.args[1] as u64];
     if kind == VC_VEC_GET_WIDE() {
         vc_guard(cs, VC_CLAIM_VEC_BOUNDS(), VC_LABEL_VEC_BOUNDS(), pc, vc_vec_in_bounds(ar, idx, len), inst);
-        w.whandle[inst.id as u64] = h;
-        w.widx[inst.id as u64] = idx;
+        vc_wideref_note(w.wide_refs, inst, idx);
         return;
     }
     if kind == VC_STR_BYTE_AT() {
@@ -958,6 +925,8 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
     let mp: VcMap = vc_map_new_state(fl, ar, nb);
     vc_vecalias_setup(vv, mp, ag, ar, hdr, cs.assumed, f, tys.len());
     let memory: VcHandleMemory = vc_handle_memory_new(f, tys, ag, vv, ar, hdr, cs.assumed, vc_ptr_store_reads_back(f, tys));
+    let var_of: Vec<i64> = dom_fill(tys.len(), -1);
+    let obj_of: Vec<i64> = dom_fill(tys.len(), -1);
     let w: VcWalk = VcWalk {
         cs: cs,
         fl: fl,
@@ -965,12 +934,9 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         vv: vv,
         mp: mp,
         memory: memory,
-        var_of: dom_fill(tys.len(), -1),
-        obj_of: dom_fill(tys.len(), -1),
-        wslot: dom_fill(tys.len(), -1),
-        wobj: dom_fill(tys.len(), -1),
-        widx: dom_fill(tys.len(), -1),
-        whandle: dom_fill(tys.len(), -1),
+        var_of: var_of,
+        obj_of: obj_of,
+        wide_refs: vc_wideref_new(memory, tys, var_of, obj_of),
         elem_obj: dom_fill(tys.len(), -1),
         bits_ty: dom_fill(tys.len(), -1),
         tys: tys,

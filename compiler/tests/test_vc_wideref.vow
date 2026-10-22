@@ -1,0 +1,130 @@
+module TestVcWideRef
+
+use ir
+use ir_dominance
+use vc_ops
+use vc_term
+use vc_smt
+use vc_flow
+use vc_agg
+use vc_vec
+use vc_heap
+use vc_held
+use vc_overlay
+use vc_handle
+use vc_wide
+use vc_wideref
+use tests.builders
+
+fn memory_new() -> VcHandleMemory {
+    let ar: VcArena = vc_arena_new();
+    let fl: VcFlow = vc_flow_new(2, 12);
+    VcHandleMemory {
+        heap: vc_heap_new(), held: vc_held_new(), overlay: vc_overlay_new(),
+        ag: vc_agg_new(fl), vv: vc_vec_new_state(fl, ar, 2),
+        ar: ar, header: vc_script_new(), assumed: Vec::new(),
+    }
+}
+
+fn args1(a: i64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    out.push(a);
+    out
+}
+
+fn address(id: i64, receiver: i64) -> IrInst {
+    let args: Vec<i64> = args1(receiver);
+    args.push(11);
+    mk_inst_call_extern(id, ITY_PTR(), args, String::from("__vow_vec_get_wide_ptr"))
+}
+
+// Ordinary instructions and untracked fields are declined without symbolic work.
+fn check_decline() -> i64 {
+    let m: VcHandleMemory = memory_new();
+    let hdr: SmtScript = m.header;
+    let refs: VcWideRefs = vc_wideref_new(m, dom_fill(12, ITY_PTR()), dom_fill(12, -1), dom_fill(12, -1));
+    if vc_wideref_access(refs, 0, mk_inst_const_i64(0, 7)) != -1 { return 1; }
+    if vc_wideref_access(refs, 0, mk_inst_field_get_wide(1, ITY_I128(), 0, 0)) != -1 { return 2; }
+    if hdr.kinds.len() != 0 || m.assumed.len() != 0 { return 3; }
+    0
+}
+
+// References capture their indices, but read current contents in the requested block.
+// Values defined after construction are shared with the write path. Parameter type
+// marks follow the read or stored value, and a write preserves the current length.
+fn check_owned() -> i64 {
+    let m: VcHandleMemory = memory_new();
+    let ar: VcArena = m.ar;
+    let hdr: SmtScript = m.header;
+    let vv: VcVec = m.vv;
+    let tys: Vec<i64> = dom_fill(12, ITY_PTR());
+    let vals: Vec<i64> = dom_fill(12, -1);
+    let objs: Vec<i64> = dom_fill(12, -1);
+    tys[1] = ITY_U128();
+    let refs: VcWideRefs = vc_wideref_new(m, tys, vals, objs);
+    let obj: i64 = vc_agg_param(m.ag, 0);
+    objs[0] = obj;
+    let s: i64 = vc_vec_slot(vv, m.ag, ar, m.header, m.assumed, obj);
+    let idx: i64 = vc_tm_bv(ar, 64, 1, 0);
+    let other: i64 = vc_tm_bv(ar, 64, 2, 0);
+    let nh: u64 = hdr.kinds.len();
+    let na: u64 = m.assumed.len();
+    vc_wideref_note(refs, address(3, 0), idx);
+    vc_wideref_note(refs, address(4, 0), other);
+    if hdr.kinds.len() != nh || m.assumed.len() != na { return 10; }
+    let rd: IrInst = mk_inst_field_get_wide(7, ITY_I128(), 3, 0);
+    let before: i64 = vc_wideref_access(refs, 0, rd);
+    if before < 0 || vv.pv_wide[0] != ITY_I128() { return 11; }
+    let len: i64 = vc_vec_cur_len(vv, s, 0);
+    vals[1] = vc_tm_bv(ar, 128, 17, 29);
+    if vc_wideref_access(refs, 0, mk_inst_field_set_wide(8, 3, 0, 1)) != -2 { return 12; }
+    if vc_vec_cur_len(vv, s, 0) != len || vv.pv_wide[0] != ITY_U128() { return 13; }
+    let now: i64 = vc_wideref_access(refs, 0, rd);
+    if now == before || now != vc_wide_read(ar, vc_vec_cur_arr(vv, s, 0), idx) { return 14; }
+    let second: i64 = vc_wideref_access(refs, 0, mk_inst_field_get_wide(9, ITY_U128(), 4, 0));
+    if second == now || second != vc_wide_read(ar, vc_vec_cur_arr(vv, s, 0), other) { return 15; }
+    let arr: i64 = vc_agg_declare(ar, m.header, String::from("later"), VC_SORT_ARRAY64());
+    vc_vec_write(vv, ar, m.header, s, 1, arr, vc_tm_bv(ar, 64, 5, 0));
+    if vc_wideref_access(refs, 1, rd) != vc_wide_read(ar, arr, idx) { return 16; }
+    if vc_wideref_access(refs, 0, rd) != now { return 17; }
+    let text: String = vc_smt_render(ar, m.header);
+    if !text.contains(String::from("(store (store p0_varr #x0000000000000002 #x0000000000000011) #x0000000000000003 ((_ extract 63 0) (bvlshr #x000000000000001d0000000000000011 #x00000000000000000000000000000040)))")) { return 18; }
+    0
+}
+
+// A field handle uses the heap/overlay model and publishes one wide counterexample
+// element. Recording a second handle must not change the first reference's target.
+fn check_handle() -> i64 {
+    let m: VcHandleMemory = memory_new();
+    let ar: VcArena = m.ar;
+    let hdr: SmtScript = m.header;
+    let tys: Vec<i64> = dom_fill(12, ITY_PTR());
+    let vals: Vec<i64> = dom_fill(12, -1);
+    tys[0] = ITY_I64();
+    let refs: VcWideRefs = vc_wideref_new(m, tys, vals, dom_fill(12, -1));
+    let obj: i64 = vc_agg_param(m.ag, 1);
+    let h: i64 = vc_agg_read_field(m.ag, ar, m.header, obj, 0, ITY_I64());
+    vals[0] = h;
+    let call: IrInst = address(3, 0);
+    vc_handle_len(m, 0, h, call, VC_VEC_GET_WIDE());
+    let nh: u64 = hdr.kinds.len();
+    let na: u64 = m.assumed.len();
+    let idx: i64 = vc_tm_bv(ar, 64, 2, 0);
+    vc_wideref_note(refs, call, idx);
+    if hdr.kinds.len() != nh || m.assumed.len() != na { return 20; }
+    vals[0] = vc_agg_read_field(m.ag, ar, m.header, obj, 1, ITY_I64());
+    vc_wideref_note(refs, address(4, 0), vc_tm_bv(ar, 64, 7, 0));
+    let got: i64 = vc_wideref_access(refs, 0, mk_inst_field_get_wide(5, ITY_U128(), 3, 0));
+    if got < 0 || got != vc_handle_wide(m, 0, h, idx) { return 21; }
+    let hd: VcHeld = m.held;
+    if hd.wide.len() != 1 || hd.wide[0] != ITY_U128() { return 22; }
+    if vc_wideref_access(refs, 0, mk_inst_field_get_wide(6, ITY_I128(), 4, 0)) == got { return 23; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_decline();
+    if r == 0 { r = check_owned(); }
+    if r == 0 { r = check_handle(); }
+    i64_to_i32_wrap(r)
+}

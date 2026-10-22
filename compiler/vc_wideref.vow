@@ -1,0 +1,84 @@
+module VcWideRef
+
+use ir
+use ir_dominance
+use vc_term
+use vc_smt
+use vc_agg
+use vc_vec
+use vc_held
+use vc_overlay
+use vc_handle
+use vc_wide
+
+// Deferred wide-element addresses. Each entry names either an object's Vec slot
+// or a heap handle, plus the index captured by its address-producing call. Array
+// contents are resolved at access time, in that block's current state. These
+// addresses are metadata, never SMT pointer terms (vc_wide's shape gate).
+//
+// The model owns its four aligned tables and shares the executor's operand
+// tables and memory for the walk's lifetime. It creates no per-access records.
+struct VcWideRefs {
+    slot: Vec<i64>,
+    object: Vec<i64>,
+    index: Vec<i64>,
+    handle: Vec<i64>,
+    memory: VcHandleMemory,
+    tys: Vec<i64>,
+    values: Vec<i64>,
+    objects: Vec<i64>,
+}
+
+fn vc_wideref_new(memory: VcHandleMemory, tys: Vec<i64>, values: Vec<i64>, objects: Vec<i64>) -> VcWideRefs {
+    VcWideRefs {
+        slot: dom_fill(tys.len(), -1),
+        object: dom_fill(tys.len(), -1),
+        index: dom_fill(tys.len(), -1),
+        handle: dom_fill(tys.len(), -1),
+        memory: memory, tys: tys, values: values, objects: objects,
+    }
+}
+
+// The caller has resolved the collection slot and performed the existing
+// bounds guard or push transition. Recording emits no terms or declarations,
+// so their claim prefixes retain exactly the same publication order.
+fn vc_wideref_note(refs: VcWideRefs, inst: IrInst, idx: i64) {
+    let id: u64 = inst.id as u64;
+    let receiver: u64 = inst.args[0] as u64;
+    refs.index[id] = idx;
+    if refs.tys[receiver] == ITY_I64() {
+        refs.handle[id] = refs.values[receiver];
+    } else {
+        let memory: VcHandleMemory = refs.memory;
+        let vv: VcVec = memory.vv;
+        let obj: i64 = refs.objects[receiver];
+        refs.slot[id] = vv.slot_of[obj as u64];
+        refs.object[id] = obj;
+    }
+}
+
+// -1 declines an ordinary instruction, -2 completes a write, and a nonnegative
+// result is a read term for the executor to define. The unchanged shape gate
+// admits only field accesses through these addresses, and only reads at handles.
+fn vc_wideref_access(refs: VcWideRefs, block: i64, inst: IrInst) -> i64 {
+    if inst.op != IOP_FIELD_GET() && inst.op != IOP_FIELD_SET() { return -1; }
+    let r: u64 = inst.args[0] as u64;
+    if refs.slot[r] < 0 && refs.handle[r] < 0 { return -1; }
+    let memory: VcHandleMemory = refs.memory;
+    let ar: VcArena = memory.ar;
+    if refs.handle[r] >= 0 {
+        if inst.op == IOP_FIELD_GET() { vc_held_mark_wide(memory.held, ar, refs.handle[r], inst.ty); }
+        return vc_handle_wide(memory, block, refs.handle[r], refs.index[r]);
+    }
+    let vv: VcVec = memory.vv;
+    let s: i64 = refs.slot[r];
+    let arr: i64 = vc_vec_cur_arr(vv, s, block);
+    if inst.op == IOP_FIELD_GET() {
+        vc_vec_mark_elem(vv, memory.ag, refs.object[r], inst.ty);
+        return vc_wide_read(ar, arr, refs.index[r]);
+    }
+    let val: u64 = inst.args[1] as u64;
+    vc_vec_mark_elem(vv, memory.ag, refs.object[r], refs.tys[val]);
+    vc_vec_write(vv, ar, memory.header, s, block, vc_wide_write(ar, arr, refs.index[r], refs.values[val]), vc_vec_cur_len(vv, s, block));
+    -2
+}
