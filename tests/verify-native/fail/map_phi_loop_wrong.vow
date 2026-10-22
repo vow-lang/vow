@@ -1,0 +1,26 @@
+// TEST: counterexample-fn "carried"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The map the Phi carries is `a` on even iterations and `b` on odd ones, so each of them gets one
+// key; `a.len() == 2` is refuted. A merge that wrote both maps in every iteration would prove it.
+module MapPhiLoopWrong
+
+fn carried() -> bool vow {
+  ensures: result
+} {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let b: HashMap<i64, i64> = HashMap::new();
+  let mut cur: HashMap<i64, i64> = a;
+  let mut i: u64 = 0;
+  while i < 5 {
+    cur.insert((i % 2) as i64, i as i64);
+    cur = if i % 2 == 0 { b } else { a };
+    i = i + 1;
+  }
+  a.len() == 2
+}
+
+fn main() -> i32 [io] {
+  if carried() { print_u64(1); }
+  0
+}

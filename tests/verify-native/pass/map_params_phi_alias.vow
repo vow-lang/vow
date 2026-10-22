@@ -1,0 +1,39 @@
+// TEST: category model-drift
+// TEST: esbmc-model-artifact fn="picked_has_the_key" blame=Callee vow_id=0 "ESBMC's C model copies a map at the merge, so an insert through the merged `t` never reaches `a` or `b` and the claim fails; at runtime `t` is the map that was picked, and a debug-mode run of every function in this file over every bool parameter and map parameters of sizes 0 to 3 satisfies every clause"
+// TEST: esbmc-model-artifact fn="either_has_the_key" blame=Callee vow_id=0 "ESBMC's C model copies a map at the merge, so an insert through the merged `t` never reaches `a` or `b` and the claim fails; at runtime `t` is the map that was picked, and a debug-mode run of every function in this file over every bool parameter and map parameters of sizes 0 to 3 satisfies every clause"
+// Map parameters merged by a Phi. The write through the merge reaches the parameter that was
+// picked, and every parameter of that type that may be the same object (the caller can pass one
+// value for two of them); a parameter of another type is never one.
+module MapParamsPhiAlias
+
+fn picked_has_the_key(a: HashMap<i64, i64>, b: HashMap<i64, i64>, k: bool, key: i64) -> bool vow {
+  ensures: result
+} {
+  let t: HashMap<i64, i64> = if k { a } else { b };
+  t.insert(key, 1);
+  if k { a.contains_key(key) } else { b.contains_key(key) }
+}
+
+fn either_has_the_key(a: HashMap<i64, i64>, b: HashMap<i64, i64>, c: HashMap<i64, i64>, k: bool, key: i64) -> bool vow {
+  ensures: result
+} {
+  let t: HashMap<i64, i64> = if k { a } else { b };
+  t.insert(key, 1);
+  t.contains_key(key) && (a.contains_key(key) || b.contains_key(key))
+}
+
+fn other_type_unchanged(a: HashMap<i64, i64>, b: HashMap<i64, i64>, c: BTreeMap<i64, i64>, k: bool) -> bool vow {
+  requires: c.len() == 0,
+  ensures: result
+} {
+  let t: HashMap<i64, i64> = if k { a } else { b };
+  t.insert(1, 1);
+  c.len() == 0
+}
+
+fn main() -> i32 [io] {
+  let x: HashMap<i64, i64> = HashMap::new();
+  let y: HashMap<i64, i64> = HashMap::new();
+  if picked_has_the_key(x, y, true, 3) { print_u64(1); }
+  0
+}

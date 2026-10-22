@@ -1,0 +1,20 @@
+// TEST: category model-drift
+// TEST: esbmc-model-artifact fn="insert_through" blame=Callee vow_id=0 "ESBMC's C model copies a map at the merge, so an insert through the merged `m` never reaches `a` or `b` and the claim fails; at runtime `m` is the map that was picked, and a debug-mode run of every function in this file over both values of every bool parameter satisfies every clause"
+// A write through a BTreeMap the function picks by a branch reaches exactly the map it stands for.
+module BTreeMapPhiWriteThrough
+
+fn insert_through(c: bool) -> u64 vow {
+  ensures: result == 2
+} {
+  let a: BTreeMap<i64, i64> = BTreeMap::new();
+  let b: BTreeMap<i64, i64> = BTreeMap::new();
+  b.insert(1, 1);
+  let m: BTreeMap<i64, i64> = if c { a } else { b };
+  m.insert(7, 7);
+  a.len() + b.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(insert_through(true));
+  0
+}

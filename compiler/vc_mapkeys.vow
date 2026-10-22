@@ -1,0 +1,268 @@
+module VcMapKeys
+
+use ir
+use ir_dominance
+use vc_term
+use vc_smt
+use vc_int
+use vc_flow
+use vc_agg
+use vc_vec
+use vc_mapops
+use vc_query
+use vc_map
+
+// The slots of the map model (`vc_map`): how a map object gets its slot and its arbitrary
+// bases (a parameter, the state a loop cut havocs), and what the function says of the keys it
+// asks about, which a counterexample lists and the exactness rule of `vc_map` reads. A pointer
+// Phi that supplies different maps has a slot of its own that merges the slots of those maps
+// (`vc_map_phi_slot`); a key or key width noted on it is noted on each of them.
+
+// An arbitrary `(presence, values, length)` named `prefix`, its length below the
+// capacity mask on every path, as a new base of slot `s`. Returns the three terms
+// in `out`.
+fn vc_map_declare_free(mp: VcMap, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, s: i64, prefix: String, out: Vec<i64>) {
+    let p_name: String = String::from(prefix);
+    p_name.push_str(String::from("_mpres"));
+    let v_name: String = String::from(prefix);
+    v_name.push_str(String::from("_mvals"));
+    let l_name: String = String::from(prefix);
+    l_name.push_str(String::from("_mlen"));
+    let pres: i64 = vc_agg_declare(ar, hdr, p_name, VC_SORT_ARRAY64());
+    let vals: i64 = vc_agg_declare(ar, hdr, v_name, VC_SORT_ARRAY64());
+    mp.len_hdr = hdr.kinds.len() as i64;
+    let len: i64 = vc_agg_declare(ar, hdr, l_name, 64);
+    assumed.push(vc_tm_app2(ar, VC_OP_BVULT(), len, vc_vec_len_mask(ar)));
+    out.push(pres);
+    out.push(vals);
+    out.push(len);
+    let ps: Vec<i64> = mp.fb_pres[s as u64];
+    ps.push(pres);
+    let ls: Vec<i64> = mp.fb_len[s as u64];
+    ls.push(len);
+    let accs: Vec<i64> = mp.fb_acc[s as u64];
+    accs.push(vc_map_zero(ar));
+    let qs: Vec<i64> = mp.qkeys[s as u64];
+    let mut i: u64 = 0;
+    while i < qs.len() {
+        vc_map_count_key(mp, ar, hdr, assumed, s, ps.len() - 1, i);
+        i = i + 1;
+    }
+}
+
+// Adds the `i`-th key of slot `s` to the count of distinct present keys of its
+// arbitrary base `j` and assumes the count is within the base's length. A real
+// map has one entry per present key, so the fact holds of every run.
+fn vc_map_count_key(mp: VcMap, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, s: i64, j: u64, i: u64) {
+    let qs: Vec<i64> = mp.qkeys[s as u64];
+    let key: i64 = qs[i];
+    let mut fresh: i64 = vc_tm_bool_const(ar, true);
+    let mut o: u64 = 0;
+    while o < i {
+        fresh = vc_tm_and(ar, fresh, vc_tm_app2(ar, VC_OP_DISTINCT(), key, qs[o]));
+        o = o + 1;
+    }
+    let ps: Vec<i64> = mp.fb_pres[s as u64];
+    let ls: Vec<i64> = mp.fb_len[s as u64];
+    let accs: Vec<i64> = mp.fb_acc[s as u64];
+    let hit: i64 = vc_tm_and(ar, vc_map_present(ar, ps[j], key), fresh);
+    let total: i64 = vc_tm_app2(ar, VC_OP_BVADD(), accs[j], vc_map_bit(ar, hit));
+    accs[j] = vc_flow_name(mp.fl, ar, hdr, 64, total);
+    assumed.push(vc_tm_app2(ar, VC_OP_BVULE(), accs[j], ls[j]));
+}
+
+// Records what an operand says of the key width of slot `s`: `bits` is the
+// width of a key operand, or -1 when it says nothing. A `BTreeMap`'s key is
+// always `i64`, so any operation on one says 64 even without a key operand.
+fn vc_map_note_width(mp: VcMap, s: i64, bits: i64) {
+    if mp.kinds[s as u64] == VC_OBJ_PHI() {
+        let mut e: i64 = mp.kid_head[s as u64];
+        while e >= 0 {
+            vc_map_note_width(mp, mp.kid_slot[e as u64], bits);
+            e = mp.kid_next[e as u64];
+        }
+        return;
+    }
+    if bits >= 0 && bits < 64 {
+        mp.key_wide[s as u64] = 2;
+    } else if bits == 64 && mp.key_wide[s as u64] == 0 {
+        mp.key_wide[s as u64] = 1;
+    }
+}
+
+// Adds one model entry of a map parameter: the symbol `name` defined as `term`.
+fn vc_map_list_entry(mp: VcMap, hdr: SmtScript, s: i64, name: String, slot: i64, term: i64) {
+    mp.ent_name.push(name);
+    mp.ent_param.push(mp.slot_param[s as u64]);
+    mp.ent_slot.push(slot);
+    mp.ent_hdr.push(hdr.kinds.len() as i64);
+    vc_script_define_fun(hdr, name, 64, term);
+}
+
+// The function asks the parameter map of slot `s` about its `i`-th key `key`: a counterexample
+// lists the key, whether the parameter's own state has it, and the value slot it holds.
+fn vc_map_list_key(mp: VcMap, ar: VcArena, hdr: SmtScript, s: i64, key: i64, i: u64) {
+    if mp.slot_param[s as u64] < 0 { return; }
+    let pres: i64 = vc_tm_app2(ar, VC_OP_SELECT(), mp.base_pres[s as u64], key);
+    let vals: i64 = vc_tm_app2(ar, VC_OP_SELECT(), mp.base_vals[s as u64], key);
+    vc_map_list_entry(mp, hdr, s, vc_map_entry_symbol(mp.slot_param[s as u64], String::from("k"), i), VC_SLOT_MAP_KEY(), key);
+    vc_map_list_entry(mp, hdr, s, vc_map_entry_symbol(mp.slot_param[s as u64], String::from("p"), i), VC_SLOT_MAP_PRES(), pres);
+    vc_map_list_entry(mp, hdr, s, vc_map_entry_symbol(mp.slot_param[s as u64], String::from("v"), i), VC_SLOT_MAP_VAL(), vals);
+}
+
+// `p<param>_m<kind><i>`: the symbol of the key (`k`), presence word (`p`) or value slot (`v`)
+// of the `i`-th key asked of map parameter `param`.
+fn vc_map_entry_symbol(param: i64, kind: String, i: u64) -> String {
+    let out: String = String::from("p");
+    out.push_str(i64_to_string(param));
+    out.push_str(String::from("_m"));
+    out.push_str(kind);
+    out.push_str(i64_to_string(i as i64));
+    out
+}
+
+// Records that the function uses `key` on the map of slot `s`, so every arbitrary
+// base of the slot counts it. `bits` is the width of the key operand, or -1 for an
+// `i64` literal, whose type says nothing about the map's key type.
+fn vc_map_note_key(mp: VcMap, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, s: i64, key: i64, bits: i64) {
+    if mp.kinds[s as u64] == VC_OBJ_PHI() {
+        let mut e: i64 = mp.kid_head[s as u64];
+        while e >= 0 {
+            vc_map_note_key(mp, ar, hdr, assumed, mp.kid_slot[e as u64], key, bits);
+            e = mp.kid_next[e as u64];
+        }
+        return;
+    }
+    vc_map_note_width(mp, s, bits);
+    let qs: Vec<i64> = mp.qkeys[s as u64];
+    let mut i: u64 = 0;
+    while i < qs.len() {
+        if qs[i] == key { return; }
+        i = i + 1;
+    }
+    qs.push(key);
+    vc_map_list_key(mp, ar, hdr, s, key, qs.len() - 1);
+    let bases: Vec<i64> = mp.fb_pres[s as u64];
+    let n: u64 = bases.len();
+    let mut j: u64 = 0;
+    while j < n {
+        vc_map_count_key(mp, ar, hdr, assumed, s, j, qs.len() - 1);
+        j = j + 1;
+    }
+}
+
+// The slot of `obj`, created on first use. A parameter, or an object nothing
+// created (the gate lets none through), starts as an arbitrary map valid in
+// every block.
+fn vc_map_slot(mp: VcMap, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, obj: i64) -> i64 {
+    if (obj as u64) < mp.slot_of.len() && mp.slot_of[obj as u64] >= 0 {
+        return mp.slot_of[obj as u64];
+    }
+    let kind: i64 = ag.kinds[obj as u64];
+    if kind == VC_OBJ_PHI() { return vc_map_phi_slot(mp, ag, ar, hdr, assumed, obj); }
+    let s: i64 = vc_map_push_slot(mp, obj, kind);
+    let prefix: String = {
+        if kind == VC_OBJ_PARAM() {
+            let p: String = String::from("p");
+            p.push_str(i64_to_string(ag.owners[obj as u64]));
+            p
+        } else {
+            vc_map_fresh_name(mp, String::from("mo"))
+        }
+    };
+    let st: Vec<i64> = Vec::new();
+    vc_map_declare_free(mp, ar, hdr, assumed, s, prefix, st);
+    mp.base_pres[s as u64] = st[0];
+    mp.base_vals[s as u64] = st[1];
+    mp.base_len[s as u64] = st[2];
+    if kind == VC_OBJ_PARAM() {
+        mp.slot_param[s as u64] = ag.owners[obj as u64];
+        mp.ent_name.push(vc_term_text(ar, st[2]));
+        mp.ent_param.push(ag.owners[obj as u64]);
+        mp.ent_slot.push(VC_SLOT_VEC_LEN());
+        mp.ent_hdr.push(mp.len_hdr);
+    }
+    s
+}
+
+// Forgets the state of `obj` in block `bi`: an arbitrary map. The loop cut puts
+// this at the top of a header proper for a map the loop writes.
+fn vc_map_havoc(mp: VcMap, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, obj: i64, bi: i64) {
+    let s: i64 = vc_map_slot(mp, ag, ar, hdr, assumed, obj);
+    let st: Vec<i64> = Vec::new();
+    vc_map_declare_free(mp, ar, hdr, assumed, s, vc_map_fresh_name(mp, String::from("mh")), st);
+    vc_map_write(mp, ar, hdr, s, bi, st[0], st[1], st[2]);
+}
+
+// The key width of slot `s` (`key_wide`), over every parameter slot that may be the same object:
+// those share one declared type, so what any of them says of its key says it of the others.
+fn vc_map_key_wide(mp: VcMap, s: u64) -> i64 {
+    let n: u64 = mp.al_slot.len();
+    let mut i: u64 = 0;
+    while i < n && mp.al_slot[i] != s as i64 { i = i + 1; }
+    let mut wide: i64 = mp.key_wide[s];
+    let mut j: u64 = 0;
+    while i < n && j < n {
+        if mp.al_same[i * n + j] >= 0 {
+            let w: i64 = mp.key_wide[mp.al_slot[j] as u64];
+            if w == 2 || (w == 1 && wide == 0) { wide = w; }
+        }
+        j = j + 1;
+    }
+    wide
+}
+
+// The presence arrays and lengths of the arbitrary bases whose keys are not known
+// to be 64-bit: a counterexample that depends on one may not be a run.
+fn vc_map_inexact_vars(mp: VcMap) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut s: u64 = 0;
+    while s < mp.kinds.len() {
+        if vc_map_key_wide(mp, s) != 1 {
+            let ps: Vec<i64> = mp.fb_pres[s];
+            let ls: Vec<i64> = mp.fb_len[s];
+            let mut j: u64 = 0;
+            while j < ps.len() {
+                out.push(ps[j]);
+                out.push(ls[j]);
+                j = j + 1;
+            }
+        }
+        s = s + 1;
+    }
+    out
+}
+
+// The slot of the pointer Phi `obj`: a slot of its own that stores no state, with the slot of
+// each map it merges (created if need be) and the condition of the edge that supplies it. The
+// Phi's block has been entered, so its edges are final (`vc_vec_phi_slot`).
+fn vc_map_phi_slot(mp: VcMap, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, obj: i64) -> i64 {
+    let fl: VcFlow = mp.fl;
+    let phi: i64 = ag.phis[obj as u64];
+    let edges: Vec<i64> = Vec::new();
+    let mut e: i64 = fl.in_head[ag.owners[obj as u64] as u64];
+    while e >= 0 {
+        edges.push(e);
+        e = fl.e_next[e as u64];
+    }
+    let kids: Vec<i64> = Vec::new();
+    let mut k: u64 = 0;
+    while k < edges.len() {
+        let child: i64 = vc_flow_upsilon_from(fl, phi, fl.e_src[edges[k] as u64]);
+        kids.push(vc_map_slot(mp, ag, ar, hdr, assumed, child));
+        k = k + 1;
+    }
+    let s: i64 = vc_map_push_slot(mp, obj, VC_OBJ_PHI());
+    let mut last: i64 = -1;
+    k = 0;
+    while k < kids.len() {
+        let entry: i64 = mp.kid_slot.len() as i64;
+        mp.kid_slot.push(kids[k]);
+        mp.kid_cond.push(fl.e_cond[edges[k] as u64]);
+        mp.kid_next.push(-1);
+        if last < 0 { mp.kid_head[s as u64] = entry; } else { mp.kid_next[last as u64] = entry; }
+        last = entry;
+        k = k + 1;
+    }
+    s
+}

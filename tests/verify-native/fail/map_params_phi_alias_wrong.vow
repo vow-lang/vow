@@ -1,0 +1,24 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 3
+// TEST: counterexample-blame Callee
+// The insert goes through `a` or `b` (a Phi of two parameters); the third parameter is the object
+// it reaches when the caller passes one value for `a` (or `b`) and `c`.
+module MapParamsPhiAliasWrong
+
+fn f(a: HashMap<i64, i64>, b: HashMap<i64, i64>, c: HashMap<i64, i64>, k: bool) -> u64 vow {
+  requires: a.len() == 0
+  requires: b.len() == 0
+  requires: c.len() == 0
+  ensures: result == 0
+} {
+  let t: HashMap<i64, i64> = if k { a } else { b };
+  t.insert(1, 1);
+  c.len()
+}
+
+fn main() -> i32 [io] {
+  let x: HashMap<i64, i64> = HashMap::new();
+  let y: HashMap<i64, i64> = HashMap::new();
+  print_u64(f(x, y, x, true));
+  0
+}

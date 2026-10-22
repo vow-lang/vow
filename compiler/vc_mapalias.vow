@@ -8,13 +8,15 @@ use vc_sources
 use vc_objects
 use vc_map
 use vc_mapops
+use vc_mapkeys
 
 // `HashMap` (or `BTreeMap`) parameters of one declared type may be one object, as `Vec` and
 // `String` parameters may (`vc_vecalias`, ADR-2026-10-19-1700): a change through one is a change
 // of the other, and two are one object exactly when their identities are equal. A function needs
 // identities when it changes a map it was given and has two map parameters of one declared type
-// (`HashMap<i64,i64>` and `BTreeMap<i64,i64>` are two types). A map is never merged by a Phi and
-// never passed to a call (`vc_mapgate`), so a parameter's uses are all direct.
+// (`HashMap<i64,i64>` and `BTreeMap<i64,i64>` are two types). A map is never passed to a call
+// (`vc_mapgate`); one merged by a Phi is each map it merges (`vc_sources_leaves`), and a write
+// through the Phi reaches each of them, spread to the parameters that may be one object.
 
 // Adds the class `VC_OV_MAP` to the parameters `f` uses as the object of a map operation, and
 // `VC_VA_CHANGED` to those it changes, in `cls` (per parameter). `src` and `arg_param` are the

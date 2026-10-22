@@ -89,7 +89,7 @@ fn check_merge() -> i64 {
     let vv: VcVec = memory.vv;
     let ov: VcOverlay = memory.overlay;
     let hd: VcHeld = memory.held;
-    let mp: VcMap = vc_map_new_state(ag.fl, 1);
+    let mp: VcMap = vc_map_new_state(ag.fl, cs.arena, 1);
     agg_row(ag, String::from("field64"), 0, String::from(".1"), 0, ITY_I64(), 64, 5);
     agg_row(ag, String::from("field_bool"), 0, String::from(".1"), 0, ITY_BOOL(), 0, 9);
     agg_row(ag, String::from("other_path"), 0, String::from(".2"), 0, ITY_I64(), 64, 10);
@@ -151,7 +151,7 @@ fn check_direct_only() -> i64 {
     let hd: VcHeld = memory.held;
     vec_row(vv, String::from("only_vec"), 0, 3, ITY_I128());
     held_row(hd, String::from("not_listed"), VC_HELD_BOTH(), 4);
-    vc_model_finish(cs, memory, vc_map_new_state(ag.fl, 1));
+    vc_model_finish(cs, memory, vc_map_new_state(ag.fl, cs.arena, 1));
     if cs.model_names.len() != 1 || cs.model_ambig.len() != 1 || cs.model_ambig[0] != 0 { return 1; }
     if cs.vec_path.len() != 0 || cs.vec_handle.len() != 0 || cs.vec_wide[0] != ITY_I128() { return 2; }
     cs.vec_len[0] = String::from("shared");
@@ -168,7 +168,7 @@ fn check_scalars() -> i64 {
     let memory: VcHandleMemory = memory_for(cs);
     let ag: VcAgg = memory.ag;
     agg_row(ag, String::from("lazy"), 1, String::from(""), 0, ITY_I64(), 64, 6);
-    vc_model_finish(cs, memory, vc_map_new_state(ag.fl, 1));
+    vc_model_finish(cs, memory, vc_map_new_state(ag.fl, cs.arena, 1));
     if cs.model_names.len() != 5 || cs.model_ambig.len() != 5 { return 1; }
     if !row_is(cs, 0, String::from("p0"), 0, String::from(""), ITY_BOOL(), 0, -1, 2, 0) { return 2; }
     if !row_is(cs, 1, String::from("p2"), 2, String::from(""), ITY_I8(), 8, -1, 3, 0) { return 3; }

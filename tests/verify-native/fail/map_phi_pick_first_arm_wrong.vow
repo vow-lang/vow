@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "pick_len"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The merge reads the map the branch picked: with `c > 0` that is `a`, which holds one key, so
+// `result == 2` is refuted. A merge that ignored `a`'s state would prove it.
+module MapPhiPickFirstArmWrong
+
+fn pick_len(c: i64) -> u64 vow {
+  ensures: result == 2
+} {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let b: HashMap<i64, i64> = HashMap::new();
+  a.insert(1, 1);
+  b.insert(2, 2);
+  b.insert(3, 3);
+  let m: HashMap<i64, i64> = if c > 0 { a } else { b };
+  m.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(pick_len(1));
+  0
+}
