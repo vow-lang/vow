@@ -4,6 +4,7 @@ use ir
 use vc_ops
 use vc_mapops
 use vc_map
+use vc_mapgate
 use vc_term
 use vc_smt
 use vc_gate

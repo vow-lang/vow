@@ -15,8 +15,8 @@ use vc_vecgate
 use vc_wide
 use vc_heap
 use vc_ptrstore
-use vc_map
 use vc_mapops
+use vc_mapgate
 use vc_strops
 use vc_str
 use vc_narrow
@@ -299,7 +299,7 @@ fn vc_map_value_ok(ty: i64) -> bool {
     ty == ITY_UNIT() || vc_vec_elem_ok(ty)
 }
 
-// Operand and result types of a map call (`vc_map`). The `Option` a `get` or a
+// Operand and result types of a map call. The `Option` a `get` or a
 // `BTreeMap` `insert` returns is a pointer; `contains` yields Bool, `len` `u64`.
 fn vc_map_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
     let n: u64 = inst.args.len();

@@ -106,8 +106,63 @@ fn check_param_class_of_key() -> i64 {
     0
 }
 
+// fn f(a, b) { b.insert(1, 2) (or `b.len()` when not `mutate`); a.len() == 3 } with the maps
+// declared as `ka` and `kb`.
+fn two_maps(ka: String, kb: String, mutate: bool) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_arg(1, ITY_PTR(), 1));
+    i.push(mk_inst_const_i64(2, 1));
+    i.push(mk_inst_const_i64(3, 2));
+    if mutate {
+        let a3: Vec<i64> = args2(1, 2);
+        a3.push(3);
+        i.push(mk_inst_call_extern(4, ITY_UNIT(), a3, String::from("__vow_map_insert")));
+    } else {
+        i.push(mk_inst_call_extern(4, ITY_U64(), args1(1), String::from("__vow_map_len")));
+    }
+    i.push(mk_inst_call_extern(5, ITY_U64(), args1(0), String::from("__vow_map_len")));
+    i.push(mk_inst_const_i64(6, 3));
+    i.push(mk_inst(7, IOP_EQ(), ITY_BOOL(), args2(5, 6)));
+    i.push(ir_inst_new(8, IOP_VOW_ENS(), ITY_UNIT(), args1(7), IDATA_VOW_ID(), 0, 0, String::from("")));
+    i.push(mk_inst_return(9, 5));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, i));
+    let f: IrFunction = mk_function(1, String::from("f"), two_ptrs(), ITY_U64(), blocks);
+    f.param_keys = keys2(ka, kb);
+    f
+}
+
+fn check_map_params_selected() -> i64 {
+    let hm: String = String::from("HashMap<i64,i64>");
+    if ids_text(two_maps(hm, hm, true)) != String::from("0,1,") { return 40; }
+    if ids_text(two_maps(hm, String::from("BTreeMap<i64,i64>"), true)).len() != 0 { return 41; }
+    if ids_text(two_maps(hm, String::from("HashMap<u8,i64>"), true)).len() != 0 { return 42; }
+    if ids_text(two_maps(hm, String::from("Vec<i64>"), true)).len() != 0 { return 43; }
+    if ids_text(two_maps(hm, hm, false)).len() != 0 { return 44; }
+    if ids_text(two_maps(String::from(""), String::from(""), true)) != String::from("0,1,") { return 45; }
+    0
+}
+
+// The insert through `b` is an insert into `a` when their identities are equal, so the claim on
+// the length of `a` can fail.
+fn check_identity_spreads_a_map_write() -> i64 {
+    let hm: String = String::from("HashMap<i64,i64>");
+    let aliased: VcClaims = vc_claims(two_maps(hm, hm, true));
+    let q: String = vc_smt_render(aliased.arena, vc_claim_script(aliased, 0));
+    if str_find_str(q, String::from("p0alias")) < 0 || str_find_str(q, String::from("p1alias")) < 0 { return 50; }
+    if str_find_str(q, String::from("(= p1_mlen p0_mlen)")) < 0 { return 52; }
+    if str_find_str(q, String::from("(ite g0 g4 p0_mlen)")) < 0 { return 53; }
+    let apart: VcClaims = vc_claims(two_maps(hm, String::from("BTreeMap<i64,i64>"), true));
+    let r: String = vc_smt_render(apart.arena, vc_claim_script(apart, 0));
+    if str_find_str(r, String::from("alias")) >= 0 { return 51; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_params_selected();
+    if r == 0 { r = check_map_params_selected(); }
+    if r == 0 { r = check_identity_spreads_a_map_write(); }
     if r == 0 { r = check_identity_spreads_a_write(); }
     if r == 0 { r = check_param_class_of_key(); }
     i64_to_i32_wrap(r)

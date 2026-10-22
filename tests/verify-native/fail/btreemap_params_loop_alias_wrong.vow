@@ -1,0 +1,27 @@
+// TEST: counterexample-fn "fill"
+// TEST: counterexample-vow-id 2
+// TEST: counterexample-blame Callee
+// A loop that inserts through `q` changes `p` when they are one object, so the length read after
+// the loop is not the one it had before.
+module BTreeMapParamsLoopAliasWrong
+
+fn fill(p: BTreeMap<i64, i64>, q: BTreeMap<i64, i64>, n: u64) -> bool vow {
+  requires: n > 0,
+  ensures: result
+} {
+  let before: u64 = p.len();
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n
+  } {
+    q.insert(i as i64, 1);
+    i = i + 1;
+  }
+  p.len() == before
+}
+
+fn main() -> i32 [io] {
+  let a: BTreeMap<i64, i64> = BTreeMap::new();
+  if fill(a, a, 2) { print_u64(1); }
+  0
+}

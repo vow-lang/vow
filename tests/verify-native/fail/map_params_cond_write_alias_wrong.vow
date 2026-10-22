@@ -1,0 +1,21 @@
+// TEST: counterexample-fn "maybe_add"
+// TEST: counterexample-vow-id 2
+// TEST: counterexample-blame Callee
+// The insert through `q` happens on one branch only; where it happens and the parameters are one
+// object, `p` has the key.
+module MapParamsCondWriteAliasWrong
+
+fn maybe_add(p: HashMap<i64, i64>, q: HashMap<i64, i64>, add: bool, k: i64) -> bool vow {
+  requires: !p.contains_key(k),
+  requires: add,
+  ensures: !result
+} {
+  if add { q.insert(k, 1); }
+  p.contains_key(k)
+}
+
+fn main() -> i32 [io] {
+  let a: HashMap<i64, i64> = HashMap::new();
+  if maybe_add(a, a, true, 9) { print_u64(1); }
+  0
+}

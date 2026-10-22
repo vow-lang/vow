@@ -84,6 +84,10 @@ struct VcMap {
     ent_param: Vec<i64>,
     ent_slot: Vec<i64>,
     ent_hdr: Vec<i64>,
+    // Parameter slots that may be one object (`vc_mapalias`); `al_same[i * n + j]`: "slots
+    // `al_slot[i]` and `al_slot[j]` are one", -1 when never.
+    al_slot: Vec<i64>,
+    al_same: Vec<i64>,
 }
 
 fn vc_map_new_state(fl: VcFlow, n_blocks: u64) -> VcMap {
@@ -110,6 +114,8 @@ fn vc_map_new_state(fl: VcFlow, n_blocks: u64) -> VcMap {
         ent_param: Vec::new(),
         ent_slot: Vec::new(),
         ent_hdr: Vec::new(),
+        al_slot: Vec::new(),
+        al_same: Vec::new(),
     }
 }
 
@@ -183,10 +189,37 @@ fn vc_map_cur_len(mp: VcMap, s: i64, bi: i64) -> i64 {
 }
 
 fn vc_map_write(mp: VcMap, ar: VcArena, hdr: SmtScript, s: i64, bi: i64, pres: i64, vals: i64, len: i64) {
+    vc_map_store(mp, ar, hdr, s, bi, pres, vals, len);
+    if mp.al_slot.len() > 0 { vc_map_spread(mp, ar, hdr, s, bi); }
+}
+
+// `vc_map_write` without the spread.
+fn vc_map_store(mp: VcMap, ar: VcArena, hdr: SmtScript, s: i64, bi: i64, pres: i64, vals: i64, len: i64) {
     let p: u64 = vc_map_pos(mp, s, bi);
     mp.pres[p] = vc_flow_name(mp.fl, ar, hdr, VC_SORT_ARRAY64(), pres);
     mp.vals[p] = vc_flow_name(mp.fl, ar, hdr, VC_SORT_ARRAY64(), vals);
     mp.len[p] = vc_flow_name(mp.fl, ar, hdr, 64, len);
+}
+
+// A write to parameter slot `s` is a write to each slot that may be the same object (`al_same`).
+fn vc_map_spread(mp: VcMap, ar: VcArena, hdr: SmtScript, s: i64, bi: i64) {
+    let n: u64 = mp.al_slot.len();
+    let mut i: u64 = 0;
+    while i < n && mp.al_slot[i] != s { i = i + 1; }
+    if i == n { return; }
+    let p: u64 = vc_map_pos(mp, s, bi);
+    let mut j: u64 = 0;
+    while j < n {
+        let same: i64 = mp.al_same[i * n + j];
+        if same >= 0 {
+            let t: i64 = mp.al_slot[j];
+            let pres: i64 = vc_tm_app3(ar, VC_OP_ITE(), same, mp.pres[p], vc_map_cur_pres(mp, t, bi));
+            let vals: i64 = vc_tm_app3(ar, VC_OP_ITE(), same, mp.vals[p], vc_map_cur_vals(mp, t, bi));
+            let len: i64 = vc_tm_app3(ar, VC_OP_ITE(), same, mp.len[p], vc_map_cur_len(mp, t, bi));
+            vc_map_store(mp, ar, hdr, t, bi, pres, vals, len);
+        }
+        j = j + 1;
+    }
 }
 
 // An arbitrary `(presence, values, length)` named `prefix`, its length below the
@@ -359,13 +392,31 @@ fn vc_map_havoc(mp: VcMap, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<
     vc_map_write(mp, ar, hdr, s, bi, st[0], st[1], st[2]);
 }
 
+// The key width of slot `s` (`key_wide`), over every parameter slot that may be the same object:
+// those share one declared type, so what any of them says of its key says it of the others.
+fn vc_map_key_wide(mp: VcMap, s: u64) -> i64 {
+    let n: u64 = mp.al_slot.len();
+    let mut i: u64 = 0;
+    while i < n && mp.al_slot[i] != s as i64 { i = i + 1; }
+    let mut wide: i64 = mp.key_wide[s];
+    let mut j: u64 = 0;
+    while i < n && j < n {
+        if mp.al_same[i * n + j] >= 0 {
+            let w: i64 = mp.key_wide[mp.al_slot[j] as u64];
+            if w == 2 || (w == 1 && wide == 0) { wide = w; }
+        }
+        j = j + 1;
+    }
+    wide
+}
+
 // The presence arrays and lengths of the arbitrary bases whose keys are not known
 // to be 64-bit: a counterexample that depends on one may not be a run.
 fn vc_map_inexact_vars(mp: VcMap) -> Vec<i64> {
     let out: Vec<i64> = Vec::new();
     let mut s: u64 = 0;
     while s < mp.kinds.len() {
-        if mp.key_wide[s] != 1 {
+        if vc_map_key_wide(mp, s) != 1 {
             let ps: Vec<i64> = mp.fb_pres[s];
             let ls: Vec<i64> = mp.fb_len[s];
             let mut j: u64 = 0;
@@ -423,7 +474,7 @@ fn vc_map_enter(mp: VcMap, ar: VcArena, hdr: SmtScript, bi: u64) {
             e = fl.e_next[e as u64];
         }
         if acc_p >= 0 {
-            vc_map_write(mp, ar, hdr, s as i64, bi as i64, acc_p, acc_v, acc_l);
+            vc_map_store(mp, ar, hdr, s as i64, bi as i64, acc_p, acc_v, acc_l);
         }
         s = s + 1;
     }
@@ -488,62 +539,4 @@ fn vc_map_fill_option(mp: VcMap, ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i6
     vc_agg_store(ag, obj, 1, 16, vc_cast(ar, ITY_U64(), ITY_U16(), payload));
     vc_agg_store(ag, obj, 1, 8, vc_cast(ar, ITY_U64(), ITY_U8(), payload));
     vc_agg_store(ag, obj, 1, VC_SORT_BOOL(), vc_tm_app2(ar, VC_OP_DISTINCT(), payload, vc_map_zero(ar)));
-}
-
-// Marks every map pointer: the result of `new` and the first operand of every
-// other operation. Returns whether the function has any.
-fn vc_map_mark_values(f: IrFunction, is_map: Vec<i64>) -> bool {
-    let mut any: bool = false;
-    let mut bi: u64 = 0;
-    while bi < f.blocks.len() {
-        let blk: IrBlock = f.blocks[bi];
-        let mut ii: u64 = 0;
-        while ii < blk.insts.len() {
-            let inst: IrInst = blk.insts[ii];
-            let k: i64 = vc_inst_map_kind(inst);
-            if k != VC_MAP_NONE() {
-                any = true;
-                if k == VC_MAP_NEW() {
-                    if inst.id >= 0 { is_map[inst.id as u64] = 1; }
-                } else if inst.args.len() > 0 {
-                    is_map[inst.args[0] as u64] = 1;
-                }
-            }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    any
-}
-
-// Gate rule: a map lives only in its own function, as an object no other
-// instruction can alias. A pointer used by a map operation must not also be a
-// struct (`FieldGet`/`FieldSet`) or be passed to a user call or to a builtin the
-// verifier does not model as a map operation, and a Phi may merge map pointers
-// only when every `Upsilon` feeding it supplies the same value. "" when the
-// shape is fine, else the detail of an `unsupported-opcode` skip.
-fn vc_map_shape_detail(f: IrFunction, n_ids: u64) -> String {
-    let is_map: Vec<i64> = dom_fill(n_ids, 0);
-    if !vc_map_mark_values(f, is_map) { return String::from(""); }
-    if vc_phi_merges_objects(f, is_map, n_ids, false) { return String::from("map merged by a Phi"); }
-    let mut bi: u64 = 0;
-    while bi < f.blocks.len() {
-        let blk: IrBlock = f.blocks[bi];
-        let mut ii: u64 = 0;
-        while ii < blk.insts.len() {
-            let inst: IrInst = blk.insts[ii];
-            if (inst.op == IOP_FIELD_GET() || inst.op == IOP_FIELD_SET()) && is_map[inst.args[0] as u64] == 1 {
-                return String::from("map used as a struct");
-            }
-            if inst.op == IOP_CALL() && vc_vec_any_arg(inst, is_map) {
-                if inst.dk == IDATA_CALL_TARGET() { return String::from("map passed to a call"); }
-                if inst.dk == IDATA_CALL_EXTERN() && vc_inst_map_kind(inst) == VC_MAP_NONE() {
-                    return String::from("map passed to an unmodelled builtin");
-                }
-            }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    String::from("")
 }

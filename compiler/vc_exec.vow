@@ -151,8 +151,7 @@ fn vc_assume(cs: VcClaims, pc: i64, t: i64) {
     cs.assumed.push(fact);
 }
 
-// A claim that `goal` holds on the paths reaching `inst`, then the assumption
-// that it does.
+// Claims `goal` on the paths reaching `inst`, then assumes it.
 fn vc_guard(cs: VcClaims, kind: i64, label: String, pc: i64, goal: i64, inst: IrInst) {
     vc_add_claim(cs, kind, -1, label, pc, goal, inst.ostart, inst.olen, vc_frame_of(inst));
     vc_assume(cs, pc, goal);
@@ -956,14 +955,15 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
     let ag: VcAgg = vc_agg_new(fl);
     let vv: VcVec = vc_vec_new_state(fl, ar, nb);
     vv.content = vc_str_reads_bytes(f);
-    vc_vecalias_setup(vv, ag, ar, hdr, cs.assumed, f, tys.len());
+    let mp: VcMap = vc_map_new_state(fl, nb);
+    vc_vecalias_setup(vv, mp, ag, ar, hdr, cs.assumed, f, tys.len());
     let memory: VcHandleMemory = vc_handle_memory_new(f, tys, ag, vv, ar, hdr, cs.assumed, vc_ptr_store_reads_back(f, tys));
     let w: VcWalk = VcWalk {
         cs: cs,
         fl: fl,
         ag: ag,
         vv: vv,
-        mp: vc_map_new_state(fl, nb),
+        mp: mp,
         memory: memory,
         var_of: dom_fill(tys.len(), -1),
         obj_of: dom_fill(tys.len(), -1),

@@ -1,0 +1,32 @@
+// Two map parameters of one type may be one object. Clauses that hold either way are proven: both
+// inserts happen, so the first parameter has its key and is not empty whatever the caller passed.
+module MapParamsAliasSafe
+
+fn both(a: HashMap<i64, i64>, b: HashMap<i64, i64>) -> u64 vow {
+  ensures: result >= 1,
+  ensures: a.contains_key(1),
+  ensures: b.contains_key(2)
+} {
+  a.insert(1, 1);
+  b.insert(2, 2);
+  a.len()
+}
+
+fn copy_key(dst: BTreeMap<i64, i64>, src: BTreeMap<i64, i64>, k: i64) -> bool vow {
+  requires: src.contains(k),
+  ensures: result
+} {
+  dst.insert(k, 0);
+  src.contains(k)
+}
+
+fn main() -> i32 [io] {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let b: HashMap<i64, i64> = HashMap::new();
+  b.insert(3, 3);
+  print_u64(both(a, b));
+  let x: BTreeMap<i64, i64> = BTreeMap::new();
+  x.insert(1, 1);
+  if copy_key(x, x, 1) { print_u64(1); }
+  0
+}

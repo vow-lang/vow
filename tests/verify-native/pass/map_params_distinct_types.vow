@@ -1,0 +1,35 @@
+// Map parameters of different declared types are never one object: a `HashMap` and a `BTreeMap`,
+// and two `HashMap`s of different key or value types, leave each other's contents alone.
+module MapParamsDistinctTypes
+
+fn mixed(h: HashMap<i64, i64>, t: BTreeMap<i64, i64>) -> bool vow {
+  requires: h.len() == 0,
+  requires: !h.contains_key(1),
+  ensures: !result
+} {
+  t.insert(1, 1);
+  h.contains_key(1)
+}
+
+fn keys(a: HashMap<i64, i64>, b: HashMap<u8, i64>) -> bool vow {
+  requires: !a.contains_key(1),
+  ensures: !result
+} {
+  b.insert(1, 1);
+  a.contains_key(1)
+}
+
+fn values(a: HashMap<i64, i64>, b: HashMap<i64, bool>) -> bool vow {
+  requires: !a.contains_key(1),
+  ensures: !result
+} {
+  b.insert(1, true);
+  a.contains_key(1)
+}
+
+fn main() -> i32 [io] {
+  let h: HashMap<i64, i64> = HashMap::new();
+  let t: BTreeMap<i64, i64> = BTreeMap::new();
+  if !mixed(h, t) { print_u64(1); }
+  0
+}
