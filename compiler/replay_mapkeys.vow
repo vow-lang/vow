@@ -1,0 +1,81 @@
+module ReplayMapKeys
+
+// The listed keys of the `HashMap` and `BTreeMap` parameters of a native counterexample, for the
+// replay harness (`replay_map_arg` in `replay_main`).
+
+// The keys a `HashMap` or `BTreeMap` parameter was asked about, listed by the native
+// counterexample as `<param>[<key>]` (see `vc_cex_retype_map_entry`): the value of a key the
+// parameter's own state has, `absent` for one it has not. `keys` and `vals` get one item each
+// per entry, in order.
+fn replay_map_entries(pname: String, names: Vec<String>, vals: Vec<String>, keys: Vec<String>, held: Vec<String>) {
+    let prefix: String = String::from(pname);
+    prefix.push_str(String::from("["));
+    let mut i: u64 = 0u64;
+    while i < names.len() && i < vals.len() {
+        let n: String = names[i];
+        if n.len() > prefix.len() + 1u64 && n.substring(0u64, prefix.len()) == prefix && n.byte_at(n.len() - 1u64) == 93 {
+            keys.push(n.substring(prefix.len(), n.len() - 1u64));
+            held.push(vals[i]);
+        }
+        i = i + 1u64;
+    }
+}
+
+// True when a key text of `keys` occurs twice: two slots of one narrow key type that read back as one key.
+fn replay_has_repeat(keys: Vec<String>) -> bool {
+    let mut i: u64 = 1u64;
+    while i < keys.len() {
+        let mut j: u64 = 0u64;
+        while j < i {
+            if keys[i] == keys[j] { return true; }
+            j = j + 1u64;
+        }
+        i = i + 1u64;
+    }
+    false
+}
+
+fn replay_has_key(keys: Vec<String>, key: String) -> bool {
+    let mut i: u64 = 0u64;
+    while i < keys.len() {
+        if keys[i] == key { return true; }
+        i = i + 1u64;
+    }
+    false
+}
+
+// The entries of the map the parameter `pname` is, in `keys` and `held`: its own (see
+// `replay_map_entries`) and those of every parameter the counterexample gives the same identity
+// (`<param>.alias`), which is the one map under another name: a key the claim asked of any of them
+// is a key of the map. Only the first value of a key is kept.
+fn replay_map_state_entries(pname: String, names: Vec<String>, vals: Vec<String>, keys: Vec<String>, held: Vec<String>) {
+    replay_map_entries(pname, names, vals, keys, held);
+    let own: String = String::from(pname);
+    own.push_str(String::from(".alias"));
+    let mut id: String = String::from("");
+    let mut i: u64 = 0u64;
+    while i < names.len() && i < vals.len() {
+        if names[i] == own { id = vals[i]; }
+        i = i + 1u64;
+    }
+    if id.len() == 0u64 { return; }
+    let suffix: String = String::from(".alias");
+    i = 0u64;
+    while i < names.len() && i < vals.len() {
+        let n: String = names[i];
+        if vals[i] == id && n != own && n.len() > suffix.len() && n.substring(n.len() - suffix.len(), n.len()) == suffix {
+            let more: Vec<String> = Vec::new();
+            let more_held: Vec<String> = Vec::new();
+            replay_map_entries(n.substring(0u64, n.len() - suffix.len()), names, vals, more, more_held);
+            let mut k: u64 = 0u64;
+            while k < more.len() {
+                if !replay_has_key(keys, more[k]) {
+                    keys.push(more[k]);
+                    held.push(more_held[k]);
+                }
+                k = k + 1u64;
+            }
+        }
+        i = i + 1u64;
+    }
+}

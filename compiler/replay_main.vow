@@ -5,6 +5,7 @@ use ast
 use diag
 use mutants_patch
 use contract_text
+use replay_mapkeys
 
 // Entry-`main` handling for `--replay-cex` (#1550). A replay harness is the
 // entry file's own text plus a synthesized `fn main`, so a file that already
@@ -1044,47 +1045,6 @@ fn replay_map_type_names(a: AstArena, tid: i64) -> Vec<String> {
     out
 }
 
-// The keys a `HashMap` or `BTreeMap` parameter was asked about, listed by the native
-// counterexample as `<param>[<key>]` (see `vc_cex_retype_map_entry`): the value of a key the
-// parameter's own state has, `absent` for one it has not. `keys` and `vals` get one item each
-// per entry, in order.
-fn replay_map_entries(pname: String, names: Vec<String>, vals: Vec<String>, keys: Vec<String>, held: Vec<String>) {
-    let prefix: String = String::from(pname);
-    prefix.push_str(String::from("["));
-    let mut i: u64 = 0u64;
-    while i < names.len() && i < vals.len() {
-        let n: String = names[i];
-        if n.len() > prefix.len() + 1u64 && n.substring(0u64, prefix.len()) == prefix && n.byte_at(n.len() - 1u64) == 93 {
-            keys.push(n.substring(prefix.len(), n.len() - 1u64));
-            held.push(vals[i]);
-        }
-        i = i + 1u64;
-    }
-}
-
-// True when a key text of `keys` occurs twice: two slots of one narrow key type that read back as one key.
-fn replay_has_repeat(keys: Vec<String>) -> bool {
-    let mut i: u64 = 1u64;
-    while i < keys.len() {
-        let mut j: u64 = 0u64;
-        while j < i {
-            if keys[i] == keys[j] { return true; }
-            j = j + 1u64;
-        }
-        i = i + 1u64;
-    }
-    false
-}
-
-fn replay_has_key(keys: Vec<String>, key: String) -> bool {
-    let mut i: u64 = 0u64;
-    while i < keys.len() {
-        if keys[i] == key { return true; }
-        i = i + 1u64;
-    }
-    false
-}
-
 // Candidate `c` of the keys of type `kt`: `false` and `true`, 0, 1, 2, ... for an unsigned integer,
 // and 0, -1, 1, -2, ... for a signed one. "" past the end of `bool`.
 fn replay_key_candidate(kt: String, c: i64) -> String {
@@ -1137,7 +1097,7 @@ fn replay_map_arg(a: AstArena, tid: i64, pname: String, names: Vec<String>, vals
     }
     let keys: Vec<String> = Vec::new();
     let held: Vec<String> = Vec::new();
-    replay_map_entries(pname, names, vals, keys, held);
+    replay_map_state_entries(pname, names, vals, keys, held);
     if replay_has_repeat(keys) {
         return replay_arg_skip(str3r(String::from("two keys of `"), pname, String::from("` are one key of the declared key type")));
     }
