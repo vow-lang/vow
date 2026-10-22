@@ -1,0 +1,28 @@
+// TEST: counterexample-fn "touched"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// A loop whose only writes go through a Phi of two maps cut by an invariant that says nothing of
+// them: the cut forgets both maps, so one iteration (`n == 1`) refutes "neither map was written".
+// A cut that left either map at its entry state would prove it.
+module MapPhiLoopHavocWrong
+
+fn touched(n: u64) -> bool vow {
+  ensures: result
+} {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let b: HashMap<i64, i64> = HashMap::new();
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n
+  } {
+    let m: HashMap<i64, i64> = if i % 2 == 0 { a } else { b };
+    m.insert((i % 2) as i64, 0);
+    i = i + 1;
+  }
+  a.len() == 0 && b.len() == 0
+}
+
+fn main() -> i32 [io] {
+  if touched(0) { print_u64(1); }
+  0
+}
