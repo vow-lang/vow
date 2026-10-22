@@ -1,0 +1,129 @@
+module TestVcCycle
+
+use ir
+use vc_term
+use vc_smt
+use vc_ops
+use vc_exec
+use vc_query
+use tests.builders
+
+// The exclusion of the uninhabitable field-address cycles from the native model (#1779,
+// option 3). A by-value struct-typed field that resolves back to an object the same path
+// already crosses is no state a program can reach, so a chain through such a field's
+// address assumes the value the field holds ranks below the object holding it
+// (`vc_cycle_assume`), each edge only on the paths that traverse it: a cycle's edges
+// would force the rank to decrease around it. The reachable aliasing a merge of two
+// field reads keeps is pinned by the corpus fixture
+// `tests/verify-native/fail/heap_param_phi_handle_alias_wrong.vow`, which must keep
+// refuting.
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn args2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v.push(b);
+    v
+}
+
+fn ptr_param() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    p
+}
+
+fn two_ptr_params() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    p.push(ITY_PTR());
+    p
+}
+
+fn one_block(name: String, params: Vec<i64>, insts: Vec<IrInst>) -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(1, name, params, ITY_BOOL(), blocks)
+}
+
+fn mk_ensures(id: i64, pred: i64) -> IrInst {
+    ir_inst_new(id, IOP_VOW_ENS(), ITY_UNIT(), args1(pred), IDATA_VOW_ID(), 0, 0, String::from(""))
+}
+
+// bump(p): `before = p.next.val; p.val = before + 1; p.next.val == before`. Refuted only
+// by the state where `p.next` is `p` itself.
+fn bump_fn() -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_field_get(1, ITY_I64(), 0, 1));
+    i.push(mk_inst_field_get(2, ITY_I64(), 1, 0));
+    i.push(mk_inst_const_i64(3, 1));
+    i.push(mk_inst_add(4, 2, 3));
+    i.push(mk_inst_field_set(5, 0, 0, 4));
+    i.push(mk_inst_field_get(6, ITY_I64(), 0, 1));
+    i.push(mk_inst_field_get(7, ITY_I64(), 6, 0));
+    i.push(mk_inst(8, IOP_EQ(), ITY_BOOL(), args2(7, 2)));
+    i.push(mk_ensures(9, 8));
+    i.push(mk_inst_return(10, 8));
+    one_block(String::from("bump"), ptr_param(), i)
+}
+
+// bump2(p, q): `before = p.next.next.val; p.val = before + 1; p.next.next.val == before`.
+// Refuted only by the two-node cycle where `p.next` is `q` and `q.next` is `p`.
+fn bump2_fn() -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_arg(1, ITY_PTR(), 1));
+    i.push(mk_inst_field_get(2, ITY_I64(), 0, 1));
+    i.push(mk_inst_field_get(3, ITY_I64(), 2, 1));
+    i.push(mk_inst_field_get(4, ITY_I64(), 3, 0));
+    i.push(mk_inst_const_i64(5, 1));
+    i.push(mk_inst_add(6, 4, 5));
+    i.push(mk_inst_field_set(7, 0, 0, 6));
+    i.push(mk_inst_field_get(8, ITY_I64(), 0, 1));
+    i.push(mk_inst_field_get(9, ITY_I64(), 8, 1));
+    i.push(mk_inst_field_get(10, ITY_I64(), 9, 0));
+    i.push(mk_inst(11, IOP_EQ(), ITY_BOOL(), args2(10, 4)));
+    i.push(mk_ensures(12, 11));
+    i.push(mk_inst_return(13, 11));
+    one_block(String::from("bump2"), two_ptr_params(), i)
+}
+
+// The one obligation either shape has: its `ensures` claim.
+fn query_of(f: IrFunction) -> String {
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return String::from(""); }
+    vc_smt_render(cs.arena, vc_claim_script(cs, 0))
+}
+
+// The self-containing cycle is not a state of the model: the read through `p.next` assumes
+// the value of the field to rank below `p`, so it cannot be `p`'s own address.
+fn check_self_cycle_excluded() -> i64 {
+    let q: String = query_of(bump_fn());
+    if q.len() == 0 { return 1; }
+    if !q.contains(String::from("(declare-const hranka (Array (_ BitVec 64) (_ BitVec 64)))")) { return 2; }
+    if !q.contains(String::from("(bvult (select hranka p0f1s64) (select hranka p0_haddr))")) { return 3; }
+    0
+}
+
+// The two-node mutual cycle `p.next = q, q.next = p` is excluded the same way: the second
+// hop reads the field through the heap array, and the cell ranks below the address it is
+// read at on the paths that read it there (the arm's own selector guards the edge), while
+// `p.next` ranks below `p` unconditionally. The cycle would need both to give way.
+fn check_mutual_cycle_excluded() -> i64 {
+    let q: String = query_of(bump2_fn());
+    if q.len() == 0 { return 10; }
+    if !q.contains(String::from("(bvult (select hranka p0f1s64) (select hranka p0_haddr))")) { return 11; }
+    if !q.contains(String::from("(or (= p0f1s64 p0_haddr) (bvult (select hranka (select hf1 p0f1s64)) (select hranka p0f1s64)))")) { return 12; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_self_cycle_excluded();
+    if r == 0 { r = check_mutual_cycle_excluded(); }
+    i64_to_i32_wrap(r)
+}

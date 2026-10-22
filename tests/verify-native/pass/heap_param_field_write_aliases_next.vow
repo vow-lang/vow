@@ -1,0 +1,23 @@
+// TEST: esbmc-model-artifact fn="bump" blame=Callee vow_id=0 "ESBMC's memory model lets a struct field hold the struct itself (a C pointer may alias its own object), so it refutes through a state no Vow program can build: a literal is a tree, and `p.next = p` needs a `p` whose `next` exists; the native model excludes the field-address cycle (#1779)"
+// The only state that refuted this claim was `p.next` being `p` itself. No program can
+// hold such a `Node`: a literal is a tree, the language has no null, no placeholder and
+// no uninitialised `let`, and `p.next = p` needs a `p` whose `next` exists. The model
+// excludes a field-address cycle (#1779): the value a by-value struct-typed field holds
+// ranks below the object holding it, so no read through `p.next` resolves to `p`. Writing
+// `p.val` cannot change what a field of `p` holds, and the two reads of `p.next.val` are
+// one value.
+module HeapParamFieldWriteAliasesNext
+
+struct Node { val: i64, next: Node }
+
+fn bump(p: Node) -> bool vow {
+  ensures: result
+} {
+  let before: i64 = p.next.val;
+  p.val = before + 1;
+  p.next.val == before
+}
+
+fn main() -> i32 [io] {
+  0
+}

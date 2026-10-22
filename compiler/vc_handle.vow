@@ -24,6 +24,17 @@ use vc_objects
 // no entry's, which costs a case split per stored object and per read, cubic in the object count.
 // A loop cut that havocs such a `Vec` keeps the free array: its elements are arbitrary there, and two
 // of them would both be the one entry the loop body made.
+//
+// A chain through a struct-typed field's address also assumes the field edges it was
+// produced by are ranked (#1779): the value a by-value struct-typed field holds ranks
+// below the object holding it. No program can hold a struct whose by-value struct field
+// resolves back to an object the same path already crosses: a literal is a tree, the
+// language has no null, no placeholder and no uninitialised `let`, and `p.next = p`
+// needs a `p` whose `next` exists, so every cycle through by-value struct-typed fields
+// needs a value of a self-containing struct type, and no such value can be built. A
+// cycle's edges would force the rank to decrease around it, and an acyclic state keeps
+// any topological ranking of its addresses, so the assumption removes only states no
+// program reaches.
 
 // Records `t`, the term of the `get` of the receiver `recv`, as an element of a `Vec` the function stored
 // pointers into. Terms are numbered as they are made, so a new one is above every one recorded and the
@@ -145,9 +156,113 @@ fn vc_overlay_elem(ov: VcOverlay, ag: VcAgg, vv: VcVec, ar: VcArena, hdr: SmtScr
     vc_overlay_chain_end(acc, base)
 }
 
-// Field `slot` at type `ty` of the struct at `h`, given the array's value `base`.
+// The rank of an address, for the field-cycle exclusion (#1779): one unconstrained
+// 64-bit array, declared once per script. A variable is never interned and the chains
+// that need the ranking are rebuilt per read, so the declared constants are scanned
+// before declaring.
+fn vc_cycle_rank_array(ar: VcArena, hdr: SmtScript) -> i64 {
+    let name: String = String::from("hranka");
+    let mut i: u64 = 0;
+    while i < hdr.kinds.len() {
+        if hdr.kinds[i] == VC_CMD_DECLARE_CONST() && hdr.names[i] == name {
+            return vc_tm_var(ar, name);
+        }
+        i = i + 1;
+    }
+    vc_agg_declare(ar, hdr, name, VC_SORT_ARRAY64())
+}
+
+// Collects the field edges the handle `h` was produced by, when they are by-value
+// struct-typed fields, as `(condition, head, tail)`: the head is the value the field
+// holds, the tail the address of the object holding it, and the condition the path on
+// which that edge is the one the read traverses (true for a handle with no selector).
+//
+//   - a 64-bit slot symbol of the aggregate model (`p0f1s64`) is the value of the field
+//     of the parameter or child it was declared for, whose overlay entry carries the
+//     container's address;
+//   - a `select hf<k> t` is the value of field `k` of the object at `t`, so `t` is the
+//     container's address;
+//   - an `ite` is followed into its arms, each under its own selector: the rank edge of
+//     an arm binds only on the paths that take it, never on the paths an unselected arm
+//     is not traversed on.
+//
+// Any other handle was produced by no struct field: a `Vec` element, a word the function
+// loaded and an allocation's address (`hbase + 16 n`) name no slot. The walk adds no
+// symbol, so a chain that names no field edge leaves the script alone.
+fn vc_cycle_edges(ar: VcArena, ov: VcOverlay, ag: VcAgg, cond: i64, h: i64, conds: Vec<i64>, heads: Vec<i64>, tails: Vec<i64>, depth: i64) {
+    if depth <= 0 || h < 0 || (h as u64) >= ar.kinds.len() { return; }
+    let kind: i64 = ar.kinds[h as u64];
+    if kind == VC_T_VAR() {
+        let si: i64 = ar.aux[h as u64];
+        if si >= 0 && (si as u64) < ar.strs.len() {
+            let name: String = ar.strs[si as u64];
+            let mut j: u64 = 0;
+            while j < ag.ps_name.len() {
+                if ag.ps_sort[j] == 64 && ag.ps_name[j] == name {
+                    let e: i64 = {
+                        if ag.ps_obj[j] >= 0 { vc_overlay_find_obj(ov, ag.ps_obj[j]) } else { vc_overlay_find_param(ov, ag.ps_param[j]) }
+                    };
+                    if e >= 0 {
+                        conds.push(cond);
+                        heads.push(h);
+                        tails.push(ov.addr[e as u64]);
+                    }
+                    return;
+                }
+                j = j + 1;
+            }
+        }
+        let named: i64 = ar.named[h as u64];
+        if named >= 0 && named != h {
+            vc_cycle_edges(ar, ov, ag, cond, named, conds, heads, tails, depth - 1);
+        }
+        return;
+    }
+    if kind == VC_T_APP() && ar.aux[h as u64] == VC_OP_ITE() {
+        let sel: i64 = ar.a[h as u64];
+        let under: i64 = vc_tm_app1(ar, VC_OP_NOT(), sel);
+        let then_c: i64 = { if vc_tm_is_true(ar, cond) { sel } else { vc_tm_and(ar, cond, sel) } };
+        let else_c: i64 = { if vc_tm_is_true(ar, cond) { under } else { vc_tm_and(ar, cond, under) } };
+        vc_cycle_edges(ar, ov, ag, then_c, ar.b[h as u64], conds, heads, tails, depth - 1);
+        vc_cycle_edges(ar, ov, ag, else_c, ar.c[h as u64], conds, heads, tails, depth - 1);
+        return;
+    }
+    if kind == VC_T_APP() && ar.aux[h as u64] == VC_OP_SELECT() {
+        let arr: i64 = ar.a[h as u64];
+        if ar.kinds[arr as u64] == VC_T_VAR() && string_starts_with(ar.strs[ar.aux[arr as u64] as u64], String::from("hf")) == 1 {
+            conds.push(cond);
+            heads.push(h);
+            tails.push(ar.b[h as u64]);
+        }
+    }
+}
+
+// Assumes the ranking along every field edge the handle `h` was produced by
+// (`vc_cycle_edges`), each only on the paths that traverse it: a cycle's traversed edges
+// would force the rank to decrease around it, and an acyclic state keeps any topological
+// ranking of its addresses, so only states no program reaches are removed. The rank of
+// an address is `hranka` at it, declared only when an edge was found.
+fn vc_cycle_assume(ov: VcOverlay, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, h: i64) {
+    let conds: Vec<i64> = Vec::new();
+    let heads: Vec<i64> = Vec::new();
+    let tails: Vec<i64> = Vec::new();
+    vc_cycle_edges(ar, ov, ag, vc_tm_bool_const(ar, true), h, conds, heads, tails, 8);
+    if heads.len() == 0 { return; }
+    let rank: i64 = vc_cycle_rank_array(ar, hdr);
+    let mut i: u64 = 0;
+    while i < heads.len() {
+        let rh: i64 = vc_tm_app2(ar, VC_OP_SELECT(), rank, heads[i]);
+        let rt: i64 = vc_tm_app2(ar, VC_OP_SELECT(), rank, tails[i]);
+        vc_heap_assume(ar, assumed, vc_tm_implies(ar, conds[i], vc_tm_app2(ar, VC_OP_BVULT(), rh, rt)));
+        i = i + 1;
+    }
+}
+
+// Field `slot` at type `ty` of the struct at `h`, given the array's value `base`. A chain
+// through a struct-typed field's address assumes the ranking first (`vc_cycle_assume`).
 fn vc_overlay_field(ov: VcOverlay, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, h: i64, slot: i64, ty: i64, base: i64) -> i64 {
     let loaded: bool = vc_overlay_is_loaded(ov, ag, ar, assumed, h);
+    vc_cycle_assume(ov, ag, ar, hdr, assumed, h);
     let mut acc: i64 = vc_overlay_chain_start(ov, ar, h, loaded, base);
     let mut i: u64 = 0;
     while i < ov.addr.len() {
