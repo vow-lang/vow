@@ -44,7 +44,7 @@ fn vc_vec_shape_detail(f: IrFunction, n_ids: u64, calls: bool) -> String {
         bi = bi + 1;
     }
     if !any { return String::from(""); }
-    vc_phi_merges_objects(f, is_vec, n_ids, true);
+    vc_phi_mark_objects(f, is_vec, n_ids);
     bi = 0;
     while bi < f.blocks.len() {
         let blk: IrBlock = f.blocks[bi];

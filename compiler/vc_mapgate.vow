@@ -42,7 +42,7 @@ fn vc_map_mark_values(f: IrFunction, is_map: Vec<i64>) -> bool {
 fn vc_map_shape_detail(f: IrFunction, n_ids: u64) -> String {
     let is_map: Vec<i64> = dom_fill(n_ids, 0);
     if !vc_map_mark_values(f, is_map) { return String::from(""); }
-    vc_phi_merges_objects(f, is_map, n_ids, true);
+    vc_phi_mark_objects(f, is_map, n_ids);
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
         let blk: IrBlock = f.blocks[bi];

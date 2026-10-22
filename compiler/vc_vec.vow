@@ -579,14 +579,11 @@ fn vc_vec_truncate(vv: VcVec, ar: VcArena, hdr: SmtScript, s: i64, bi: i64, n: i
     vc_vec_write(vv, ar, hdr, s, bi, vc_vec_cur_arr(vv, s, bi), next);
 }
 
-// True when a Phi that an object pointer (`is_obj[id] == 1`) feeds, or that reads
-// one, is supplied two different values: a differing merge would be two model
-// objects for one runtime object. `sup` is the one value a Phi gets (-1 none
-// yet). Marks every Phi and value it links as an object, iterated since a Phi
-// can feed another Phi. With `allow` a differing merge is not reported (the object
-// kind models one) and only the marking is done. Shared by the `Vec` and map gates.
-fn vc_phi_merges_objects(f: IrFunction, is_obj: Vec<i64>, n_ids: u64, allow: bool) -> bool {
-    let sup: Vec<i64> = dom_fill(n_ids, -1);
+// Marks every Phi that an object pointer (`is_obj[id] == 1`) feeds, or that reads one, and
+// every value it links, as an object; iterated since a Phi can feed another Phi. A Phi that
+// merges different objects is modelled by the `Vec` and map slots (`vc_vec_phi_slot`,
+// `vc_map_phi_slot`), so only the marking is done. Shared by the `Vec` and map gates.
+fn vc_phi_mark_objects(f: IrFunction, is_obj: Vec<i64>, n_ids: u64) {
     let mut changed: bool = true;
     while changed {
         changed = false;
@@ -599,17 +596,10 @@ fn vc_phi_merges_objects(f: IrFunction, is_obj: Vec<i64>, n_ids: u64, allow: boo
                 if inst.op == IOP_UPSILON() && inst.args.len() == 1 {
                     let phi: u64 = inst.dv as u64;
                     let val: u64 = inst.args[0] as u64;
-                    if is_obj[phi] == 1 || is_obj[val] == 1 {
-                        if sup[phi] == -1 {
-                            sup[phi] = inst.args[0];
-                        } else if sup[phi] != inst.args[0] && !allow {
-                            return true;
-                        }
-                        if is_obj[phi] != 1 || is_obj[val] != 1 {
-                            is_obj[phi] = 1;
-                            is_obj[val] = 1;
-                            changed = true;
-                        }
+                    if (is_obj[phi] == 1 || is_obj[val] == 1) && (is_obj[phi] != 1 || is_obj[val] != 1) {
+                        is_obj[phi] = 1;
+                        is_obj[val] = 1;
+                        changed = true;
                     }
                 }
                 ii = ii + 1;
@@ -617,7 +607,6 @@ fn vc_phi_merges_objects(f: IrFunction, is_obj: Vec<i64>, n_ids: u64, allow: boo
             bi = bi + 1;
         }
     }
-    false
 }
 
 fn vc_vec_any_arg(inst: IrInst, is_vec: Vec<i64>) -> bool {

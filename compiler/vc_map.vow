@@ -235,11 +235,7 @@ fn vc_map_phi_cur(mp: VcMap, s: i64, bi: i64, which: i64) -> i64 {
             }
         };
         if v >= 0 {
-            if acc < 0 {
-                acc = v;
-            } else if v != acc {
-                acc = vc_map_merge(mp.ar, mp.kid_cond[e as u64], v, acc);
-            }
+            if acc < 0 { acc = v; } else { acc = vc_map_merge(mp.ar, mp.kid_cond[e as u64], v, acc); }
         }
         e = mp.kid_next[e as u64];
     }

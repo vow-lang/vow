@@ -457,7 +457,7 @@ fn vc_ptr_store_held(f: IrFunction, tys: Vec<i64>) -> Vec<i64> {
         }
         bi = bi + 1;
     }
-    if any { vc_phi_merges_objects(f, held, n_ids, true); }
+    if any { vc_phi_mark_objects(f, held, n_ids); }
     held
 }
 
