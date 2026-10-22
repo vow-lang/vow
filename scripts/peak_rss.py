@@ -99,7 +99,7 @@ def sample_loop(root, stop, peaks, clock, series=None, origin=0.0):
         tree, single = sample_tree(root)
         peaks["tree"] = max(peaks["tree"], tree)
         peaks["single"] = max(peaks["single"], single)
-        if series is not None:
+        if series is not None and tree > 0:
             series.append((clock() - origin, tree))
         fast = clock() - started < FAST_WINDOW_S
         stop.wait(FAST_INTERVAL_S if fast else SLOW_INTERVAL_S)
@@ -110,7 +110,8 @@ class TreeSampler:
 
     With `origin` (a `clock()` instant) every sample is also kept in `series` as
     `(seconds since origin, summed VmRSS)`, so a caller can ask for the peak
-    inside a time window.
+    inside a time window. A tree with no resident pages has exited (a root left
+    unreaped reads as zero), so such samples are not recorded.
     """
 
     def __init__(self, root, clock, origin=None):
