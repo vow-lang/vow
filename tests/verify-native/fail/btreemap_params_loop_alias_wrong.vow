@@ -1,6 +1,7 @@
 // TEST: counterexample-fn "fill"
 // TEST: counterexample-vow-id 2
 // TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures result"
 // A loop that inserts through `q` changes `p` when they are one object, so the length read after
 // the loop is not the one it had before.
 module BTreeMapParamsLoopAliasWrong

@@ -1,6 +1,7 @@
 // TEST: counterexample-fn "maybe_add"
 // TEST: counterexample-vow-id 2
 // TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures !result"
 // The insert through `q` happens on one branch only; where it happens and the parameters are one
 // object, `p` has the key.
 module MapParamsCondWriteAliasWrong

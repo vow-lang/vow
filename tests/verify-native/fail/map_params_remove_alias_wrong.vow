@@ -1,6 +1,7 @@
 // TEST: counterexample-fn "drop_other"
 // TEST: counterexample-vow-id 2
 // TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures result"
 // A key removed through `q` is gone from `p` when they are one object.
 module MapParamsRemoveAliasWrong
 

@@ -56,10 +56,12 @@ assumption (its C model declares each parameter as a local), so `verify_diff.py`
   of one type; no other query changes. Over 606 native fixtures, 168 ESBMC-corpus files and the 11
   compiler roots the only verdict that moved is the function row of
   `trust/alias_two_vec_params_failed.vow` (`tail`: `PROVEN` to `FAILED`).
-- Maps (#1858): no function of the 2156 `.vow` files of the repository (the fixtures, the ESBMC corpus,
-  the benchmarks, the examples and the compiler) has two map parameters of one declared type besides
-  the new fixtures, so no existing verdict moves; the model of a function without such a pair is
-  untouched, and the existing map fixtures verify in the same time.
+- Maps (#1858): the identity machinery runs only for a function that changes a map and has two
+  parameters of one map type, so every other map query is built as before. A scan of the 2156 `.vow`
+  files of the repository (fixtures, ESBMC corpus, benchmarks, examples, compiler) for a signature
+  with two parameters of one spelled map type finds only the new fixtures; the 610 native fixtures
+  keep their verdicts. The verdict diff of the 11 compiler roots is measured with the bootstrap
+  gate, not here.
 - **Not covered:** objects reached through a pointer loaded from a container or a field, which the
   heap model already fails or skips.
   ESBMC keeps its distinct-parameter model and is documented as unsound here until it is removed
