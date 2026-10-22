@@ -200,6 +200,13 @@ fn vc_parse_value_at(out: String, pos: u64, width: i64) -> VcParsed {
     vc_parsed_bad()
 }
 
+// True for the answers after which no further claim is asked: the solver said
+// nothing usable (timeout, memory, missing binary, error) and the caller gives
+// up the round on it.
+fn vc_answer_halts(verdict: i64) -> bool {
+    verdict == VC_ANS_TIMEOUT() || verdict == VC_ANS_MEMORY() || verdict == VC_ANS_NOT_FOUND() || verdict == VC_ANS_ERROR()
+}
+
 // Values for `names`, in order, from a `get-value` answer; `widths[k]` is the
 // declared width of `names[k]`. Every name must be present with a well-formed
 // value of that width; otherwise `ok` is 0.

@@ -19,6 +19,7 @@ use vc_induct
 use vc_cex
 use vc_vecmodel
 use vc_clause
+use vc_recheck
 use vc_term
 
 // Native verification of one function inside the subset accepted by
@@ -144,13 +145,22 @@ fn vc_check_claim_full(cache: VcCache, bin: String, cs: VcClaims, k: u64, budget
 // sliced query is a relaxation of the full one. Any other answer says nothing
 // about the full query (the dropped assumptions may be contradictory on their
 // own, which makes the claim vacuously proven), so the full query is asked in
-// what is left of the budget and alone decides. The one exception is a soft
-// claim from which only definitions were dropped: that query is equisatisfiable
-// with the full one and its answer carries no model, so it stands.
+// what is left of the budget and alone decides. Two cases do not ask it twice.
+// A soft claim from which only definitions were dropped: that query is
+// equisatisfiable with the full one and its answer carries no model, so it
+// stands. And a hard claim in the same case: the slice kept every assumption
+// and dropped only definitions nothing kept references, so its ask re-decides
+// the full query's answer at the full query's cost -- a `sat` is discarded for
+// the full query anyway (the counterexample is the standalone model of the
+// claim's own text), and an `unsat` is the one the full query gives too. The
+// full query is asked directly, and it alone decides.
 fn vc_check_claim_oneshot(cache: VcCache, bin: String, cs: VcClaims, sx: VcSlicer, slicing: bool, k: u64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
     if slicing {
         let sl: VcSlice = vc_slice_claim(sx, cs, k);
         if sl.dropped_asserts || sl.dropped_defs {
+            if !vc_claim_is_soft(cs, k) && vc_slice_is_defs_only(sl) {
+                return vc_check_claim_full(cache, bin, cs, k, budget_ms, scratch);
+            }
             let started: i64 = time_micros();
             let small: String = vc_smt_render(cs.arena, vc_claim_script_sliced(cs, k, sl));
             let ans: VcSolverAnswer = vc_solver_check_cached(cache, bin, small, vc_claim_model_names(cs, k), vc_claim_model_widths(cs, k), budget_ms, scratch);
@@ -263,44 +273,6 @@ fn vc_check_claim_race(cache: VcCache, bin: String, cs: VcClaims, ss: VcSession,
     result
 }
 
-// True when the cone of claim `k` reaches one of the constants `vars`: the claim's
-// query then depends on a value the model leaves free. `cs.hook_vars` are the
-// constants a float-text hook declared (`vc_hooks`), `cs.map_vars` the presence
-// array and length of a map the function did not build (`vc_map`).
-fn vc_claim_reaches(cs: VcClaims, sx: VcSlicer, k: u64, vars: Vec<i64>) -> bool {
-    if vars.len() == 0 { return false; }
-    vc_slice_claim(sx, cs, k);
-    let mut i: u64 = 0;
-    while i < vars.len() {
-        if sx.tmark[vars[i] as u64] == sx.epoch { return true; }
-        i = i + 1;
-    }
-    false
-}
-
-// A `sat` on a hard claim whose cone reaches a float-text hook is a real failure
-// only if it does not depend on the hook's value: the model gives the hook an
-// arbitrary result, where the runtime computes one. The check pins the scalar
-// inputs of the counterexample, leaves every string and hook free, and asks
-// whether the claim can hold: `unsat` says it fails for every result of the hook
-// (and every string), so the counterexample stands. A timeout, memory limit or
-// solver error is passed on as such; any other answer, a `sat` included, leaves
-// the claim neither proven nor refuted: `unknown` for `reason`. A claim that
-// reaches a map the function did not build is rechecked the same way, with every
-// array and length free: a failure for every state is a failure for the states a
-// run can have.
-fn vc_hook_recheck(cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: VcSolverAnswer, budget_ms: i64, scratch: String, reason: String) -> VcSolverAnswer [io, read, write] {
-    let ar: VcArena = cs.arena;
-    let s: SmtScript = vc_claim_context_script(cs, k);
-    vc_pin_model(cs, ans, s);
-    vc_script_assert(s, vc_tm_app1(ar, VC_OP_NOT(), cs.negated_goals[k]));
-    vc_script_check_sat(s);
-    let again: VcSolverAnswer = vc_solver_check_cached(cache, bin, vc_smt_render(ar, s), Vec::new(), Vec::new(), budget_ms, scratch);
-    if again.verdict == VC_ANS_UNSAT() { return ans; }
-    if vc_answer_halts(again.verdict) { return again; }
-    vc_answer_plain(VC_ANS_UNKNOWN(), reason)
-}
-
 // Every unrolled copy of a checked operator repeats one source site.
 fn vc_has_site(sites: Vec<ParsedArithSite>, site: ParsedArithSite) -> bool {
     let mut i: u64 = 0;
@@ -332,10 +304,6 @@ struct VcRound {
 
 fn vc_round(result: VerifyResult, ended: bool, open: bool, frame: i64, halted: bool, soft: bool) -> VcRound {
     VcRound { result: result, ended: ended, open: open, frame: frame, halted: halted, soft: soft }
-}
-
-fn vc_answer_halts(verdict: i64) -> bool {
-    verdict == VC_ANS_TIMEOUT() || verdict == VC_ANS_MEMORY() || verdict == VC_ANS_NOT_FOUND() || verdict == VC_ANS_ERROR()
 }
 
 // Feeds the answer to claim `k` to the clause accumulator when `k` is a claim of
