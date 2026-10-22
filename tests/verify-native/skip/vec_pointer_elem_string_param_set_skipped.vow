@@ -1,6 +1,6 @@
 // TEST: skip-reason unsupported-opcode
 // A `String` parameter stored with `set` and read back stays `Skipped`, as a `Vec` parameter does:
-// two `String` parameters may be one value (#1823).
+// two `String` parameters may be one value (#1663).
 module VecPointerElemStringParamSetSkipped
 
 fn f(a: String, b: String) -> u64 vow {
