@@ -1,14 +1,13 @@
 // TEST: counterexample-fn "maybe_add"
-// TEST: counterexample-vow-id 2
+// TEST: counterexample-vow-id 1
 // TEST: counterexample-blame Callee
 // TEST: counterexample-violation "ensures !result"
-// The insert through `q` happens on one branch only; where it happens and the parameters are one
-// object, `p` has the key.
+// The insert through `q` happens on one branch only, so the state after the `if` is a join of a
+// state that changed `p` (the parameters are one object) and one that did not.
 module MapParamsCondWriteAliasWrong
 
 fn maybe_add(p: HashMap<i64, i64>, q: HashMap<i64, i64>, add: bool, k: i64) -> bool vow {
   requires: !p.contains_key(k),
-  requires: add,
   ensures: !result
 } {
   if add { q.insert(k, 1); }
