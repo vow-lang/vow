@@ -56,13 +56,10 @@ fn vc_mapdom_key_ty(key: String) -> i64 {
 // type the lowering did not record.
 fn vc_mapdom_param_tys(f: IrFunction) -> Vec<i64> {
     let out: Vec<i64> = Vec::new();
+    let known: bool = f.param_keys.len() == f.params.len();
     let mut i: u64 = 0;
     while i < f.params.len() {
-        if f.param_keys.len() == f.params.len() {
-            out.push(vc_mapdom_key_ty(f.param_keys[i]));
-        } else {
-            out.push(-1);
-        }
+        out.push({ if known { vc_mapdom_key_ty(f.param_keys[i]) } else { -1 } });
         i = i + 1;
     }
     out
