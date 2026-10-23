@@ -18,17 +18,22 @@ use vc_sources
 // before the gate: it changes which value an object operand names, never what an
 // instruction does.
 //
-// The rule is flow-insensitive on purpose, so that it is easy to see exact:
+// The rule is per read, and fail-closed:
 //
 //   - the field is read from an allocation `A` (a `RegionAlloc`, reached through the
 //     Phis a call result is after inlining, which must lead to nothing else);
-//   - exactly one `FieldSet` of that slot may name `A`: a store through `A`, through a
-//     Phi that merges `A`, through a receiver the rule cannot place, or, when `A` has
-//     escaped (it was stored into a field, pushed into a collection or passed as a value,
+//   - the stores of that slot that may name `A` are every `FieldSet` of the slot through `A`,
+//     through a Phi that merges `A`, through a receiver the rule cannot place, or, when `A`
+//     has escaped (it was stored into a field, pushed into a collection or passed as a value,
 //     so a pointer the function loaded may be it), through any pointer that is not a
-//     parameter or an allocation. A second such store leaves the read alone;
-//   - the stored value is a pointer and the store dominates the read, so on every path to
-//     the read the slot holds that value, and the value is defined where the read is.
+//     parameter or an allocation. A receiver the rule cannot place leaves the read alone;
+//   - the read is the value of the last store that dominates it (an earlier position in the
+//     read's own block, or a dominating block). With more than one store each must name `A`
+//     alone: a store through a Phi that merges `A` with another object may leave the slot as
+//     it was. Every store that does not dominate the read must be unable to reach it, in a
+//     block from which the read's block cannot be entered, so a store in one arm of a branch
+//     that merges before the read, or in a loop around it, leaves the read alone;
+//   - the stored value is a pointer, and it is defined where the read is.
 //
 // Only the object operands of a `Vec` or `String` operation are replaced. A read with
 // another use keeps its instruction; a read whose every use was replaced is dropped,
@@ -42,18 +47,23 @@ use vc_sources
 // `s_*`), and a store whose receiver is none of those is `loose` (`loose_any` when it has no
 // leaves at all, so it may be anything; `loose_loaded` when a leaf was loaded from memory,
 // which only an allocation that escaped may be). `escaped[v]` is 1 for an allocation that may
-// be reached by a pointer the function did not name. `nums` is the dominator numbering, built
-// when a store and a read in different blocks first need it (`nums` is empty until then).
+// be reached by a pointer the function did not name. `s_only[s]` is the one allocation or
+// parameter the receiver of store `s` leads to, -1 when it leads to several. `nums`, `poff` and
+// `plist` are the dominator numbering and the predecessor lists (offsets, then the blocks),
+// built when a store and a read in different blocks first need them (`nums` is empty until then).
 struct VcPfCtx {
     ok: bool,
     f: IrFunction,
     src: VcSources,
     tys: Vec<i64>,
     nums: Vec<i64>,
+    poff: Vec<i64>,
+    plist: Vec<i64>,
     s_val: Vec<i64>,
     s_slot: Vec<i64>,
     s_blk: Vec<i64>,
     s_pos: Vec<i64>,
+    s_only: Vec<i64>,
     a_head: Vec<i64>,
     a_next: Vec<i64>,
     a_store: Vec<i64>,
@@ -114,10 +124,13 @@ fn vc_pf_context(f: IrFunction, tys: Vec<i64>, rpo: Vec<i64>, n_ids: u64) -> VcP
         src: src,
         tys: tys,
         nums: Vec::new(),
+        poff: Vec::new(),
+        plist: Vec::new(),
         s_val: Vec::new(),
         s_slot: Vec::new(),
         s_blk: Vec::new(),
         s_pos: Vec::new(),
+        s_only: Vec::new(),
         a_head: dom_fill(n_ids, -1),
         a_next: Vec::new(),
         a_store: Vec::new(),
@@ -140,6 +153,7 @@ fn vc_pf_context(f: IrFunction, tys: Vec<i64>, rpo: Vec<i64>, n_ids: u64) -> VcP
                     c.s_blk.push(b as i64);
                     c.s_pos.push(i as i64);
                     let leaves: Vec<i64> = vc_sources_leaves(src, inst.args[0]);
+                    if leaves.len() == 1 { c.s_only.push(leaves[0]); } else { c.s_only.push(-1); }
                     let mut l: u64 = 0;
                     while l < leaves.len() {
                         let v: i64 = leaves[l];
@@ -171,19 +185,15 @@ fn vc_pf_context(f: IrFunction, tys: Vec<i64>, rpo: Vec<i64>, n_ids: u64) -> VcP
     c
 }
 
-// The value stored into slot `slot` of allocation `a` when exactly one store may name `a`
-// and it dominates the read at (`rb`, `ri`); -1 otherwise.
-fn vc_pf_single_store(c: VcPfCtx, a: i64, slot: i64, rb: i64, ri: i64) -> i64 {
-    let mut found: i64 = -1;
-    let mut e: i64 = c.a_head[a as u64];
-    while e >= 0 {
-        let s: i64 = c.a_store[e as u64];
-        if c.s_slot[s as u64] == slot {
-            if found >= 0 { return -1; }
-            found = s;
-        }
-        e = c.a_next[e as u64];
-    }
+// True when store `x` runs before store or read `y` (a block, a position) on every path to `y`.
+fn vc_pf_before(c: VcPfCtx, x: i64, yb: i64, yi: i64) -> bool {
+    if c.s_blk[x as u64] == yb { return c.s_pos[x as u64] < yi; }
+    vc_pf_dominates(c, c.s_blk[x as u64], yb)
+}
+
+// The value stored into slot `slot` of allocation `a` by the last store that dominates the
+// read at (`rb`, `ri`), when no other store can reach the read; -1 otherwise.
+fn vc_pf_last_store(c: VcPfCtx, a: i64, slot: i64, rb: i64, ri: i64) -> i64 {
     let mut n: u64 = 0;
     while n < c.loose_any.len() {
         if c.s_slot[c.loose_any[n] as u64] == slot { return -1; }
@@ -196,37 +206,105 @@ fn vc_pf_single_store(c: VcPfCtx, a: i64, slot: i64, rb: i64, ri: i64) -> i64 {
             n = n + 1;
         }
     }
-    if found < 0 { return -1; }
-    let k: u64 = found as u64;
-    let v: i64 = c.s_val[k];
-    if v < 0 || (v as u64) >= c.tys.len() || c.tys[v as u64] != ITY_PTR() { return -1; }
-    if c.s_blk[k] == rb {
-        if c.s_pos[k] >= ri { return -1; }
-    } else if !vc_pf_dominates(c, c.s_blk[k], rb) {
-        return -1;
+    let mut count: i64 = 0;
+    let mut last: i64 = -1;
+    let mut e: i64 = c.a_head[a as u64];
+    while e >= 0 {
+        let s: i64 = c.a_store[e as u64];
+        if c.s_slot[s as u64] == slot {
+            count = count + 1;
+            if vc_pf_before(c, s, rb, ri) {
+                if last < 0 || vc_pf_before(c, last, c.s_blk[s as u64], c.s_pos[s as u64]) {
+                    last = s;
+                } else if !vc_pf_before(c, s, c.s_blk[last as u64], c.s_pos[last as u64]) {
+                    return -1;
+                }
+            }
+        }
+        e = c.a_next[e as u64];
     }
+    if last < 0 { return -1; }
+    if count > 1 && !vc_pf_others_cannot_reach(c, a, slot, rb, ri) { return -1; }
+    let v: i64 = c.s_val[last as u64];
+    if v < 0 || (v as u64) >= c.tys.len() || c.tys[v as u64] != ITY_PTR() { return -1; }
     v
 }
 
-// True when block `a` dominates block `b`; the numbering is built on first use.
-fn vc_pf_dominates(c: VcPfCtx, a: i64, b: i64) -> bool {
-    let f: IrFunction = c.f;
-    let nb: u64 = f.blocks.len();
-    if c.nums.len() == 0 {
-        let id_to_idx: Vec<i64> = dom_block_id_table(f);
-        let succ: Vec<i64> = dom_successors(f, id_to_idx);
-        let rpo: Vec<i64> = dom_rpo_numbers(nb, succ);
-        let order: Vec<i64> = dom_rpo_order(rpo);
-        let off: Vec<i64> = dom_pred_offsets(nb, succ, rpo);
-        let preds: Vec<i64> = dom_pred_list(nb, succ, rpo, off);
-        let nums: Vec<i64> = dom_tree_numbers(nb, dom_idoms(nb, rpo, order, off, preds), order);
-        let mut i: u64 = 0;
-        while i < nums.len() {
-            c.nums.push(nums[i]);
-            i = i + 1;
+// With several stores of the slot: each names `a` alone, and each that is not before the read
+// is in a block the read's block cannot be entered from.
+fn vc_pf_others_cannot_reach(c: VcPfCtx, a: i64, slot: i64, rb: i64, ri: i64) -> bool {
+    let mut from: Vec<i64> = Vec::new();
+    let mut e: i64 = c.a_head[a as u64];
+    while e >= 0 {
+        let s: i64 = c.a_store[e as u64];
+        if c.s_slot[s as u64] == slot {
+            if c.s_only[s as u64] != a { return false; }
+            if !vc_pf_before(c, s, rb, ri) {
+                if from.len() == 0 { from = vc_pf_entering(c, rb); }
+                if from[c.s_blk[s as u64] as u64] == 1 { return false; }
+            }
+        }
+        e = c.a_next[e as u64];
+    }
+    true
+}
+
+// `out[b]` is 1 when block `rb` can be entered from block `b` along one or more edges.
+fn vc_pf_entering(c: VcPfCtx, rb: i64) -> Vec<i64> {
+    vc_pf_cfg(c);
+    let nb: u64 = c.f.blocks.len();
+    let out: Vec<i64> = dom_fill(nb, 0);
+    let work: Vec<i64> = Vec::new();
+    work.push(rb);
+    while work.len() > 0 {
+        let b: i64 = work[work.len() - 1];
+        work.pop();
+        let mut k: i64 = c.poff[b as u64];
+        while k < c.poff[(b + 1) as u64] {
+            let p: i64 = c.plist[k as u64];
+            if out[p as u64] == 0 {
+                out[p as u64] = 1;
+                work.push(p);
+            }
+            k = k + 1;
         }
     }
-    dom_dominates(c.nums, nb, a, b)
+    out
+}
+
+// True when block `a` dominates block `b`.
+fn vc_pf_dominates(c: VcPfCtx, a: i64, b: i64) -> bool {
+    vc_pf_cfg(c);
+    dom_dominates(c.nums, c.f.blocks.len(), a, b)
+}
+
+// Builds the dominator numbering and the predecessor lists on first use.
+fn vc_pf_cfg(c: VcPfCtx) {
+    if c.nums.len() > 0 { return; }
+    let f: IrFunction = c.f;
+    let nb: u64 = f.blocks.len();
+    let id_to_idx: Vec<i64> = dom_block_id_table(f);
+    let succ: Vec<i64> = dom_successors(f, id_to_idx);
+    let rpo: Vec<i64> = dom_rpo_numbers(nb, succ);
+    let order: Vec<i64> = dom_rpo_order(rpo);
+    let off: Vec<i64> = dom_pred_offsets(nb, succ, rpo);
+    let preds: Vec<i64> = dom_pred_list(nb, succ, rpo, off);
+    let nums: Vec<i64> = dom_tree_numbers(nb, dom_idoms(nb, rpo, order, off, preds), order);
+    let mut i: u64 = 0;
+    while i < nums.len() {
+        c.nums.push(nums[i]);
+        i = i + 1;
+    }
+    i = 0;
+    while i < off.len() {
+        c.poff.push(off[i]);
+        i = i + 1;
+    }
+    i = 0;
+    while i < preds.len() {
+        c.plist.push(preds[i]);
+        i = i + 1;
+    }
 }
 
 // `repl[id]` is the pointer value the field read `id` resolves to, -1 for a read left alone.
@@ -245,7 +323,7 @@ fn vc_pf_resolve(c: VcPfCtx, rpo: Vec<i64>, n_ids: u64) -> Vec<i64> {
                     && inst.args.len() == 1 && inst.args[0] >= 0 && (inst.args[0] as u64) < n_ids && c.tys[inst.args[0] as u64] == ITY_PTR() {
                     let leaves: Vec<i64> = vc_sources_leaves(src, inst.args[0]);
                     if leaves.len() == 1 && leaves[0] >= 0 && (leaves[0] as u64) < n_ids && src.op[leaves[0] as u64] == IOP_REGION_ALLOC() {
-                        repl[inst.id as u64] = vc_pf_single_store(c, leaves[0], inst.dv, b as i64, i as i64);
+                        repl[inst.id as u64] = vc_pf_last_store(c, leaves[0], inst.dv, b as i64, i as i64);
                     }
                 }
                 i = i + 1;
