@@ -24,9 +24,8 @@ SCRATCH="$TMP_ROOT/tmp"
 mkdir -p "$FAKE_DIR" "$EMPTY_DIR" "$SCRATCH"
 export VOW_VERIFY_NO_INCREMENTAL=1
 
-# The fake solver lives in fake_bitwuzla.sh. Its `mkdir` twin below succeeds for every
-# caller, as uutils 0.10 can under a race (#1885): the fake solver must not claim anything
-# with `mkdir`.
+# The fake solver is fake_bitwuzla.sh. The `mkdir` shim first on its PATH succeeds for
+# every caller, as uutils 0.10 can in a race (#1885): claiming with `mkdir` fails the suite.
 cp "$(dirname "${BASH_SOURCE[0]}")/fake_bitwuzla.sh" "$FAKE_DIR/bitwuzla"
 printf '#!/bin/sh\nexec %s -p "$@"\n' "$(command -v mkdir)" > "$FAKE_DIR/mkdir"
 chmod +x "$FAKE_DIR/mkdir" "$FAKE_DIR/bitwuzla"
