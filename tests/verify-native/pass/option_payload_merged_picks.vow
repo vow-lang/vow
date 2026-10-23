@@ -1,0 +1,34 @@
+// A payload read from the merge of two parameters is the payload of the parameter whose edge is
+// taken, whichever it is.
+module OptionPayloadMergedPicks
+
+struct Handle {
+  fd: i64,
+}
+
+fn pick_is_arm(c: bool, a: Option<Handle>, b: Option<Handle>) -> bool vow {
+  ensures: result
+} {
+  let o: Option<Handle> = if c { a } else { b };
+  let got: i64 = match o {
+    Option::Some(h) => h.fd,
+    Option::None => 0,
+  };
+  let want: i64 = if c {
+    match a {
+      Option::Some(h) => h.fd,
+      Option::None => 0,
+    }
+  } else {
+    match b {
+      Option::Some(h) => h.fd,
+      Option::None => 0,
+    }
+  };
+  got == want
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

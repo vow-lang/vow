@@ -1,0 +1,32 @@
+// TEST: replay-skipped a payload struct read through memory has no listed fields, so replay cannot rebuild it
+// TEST: counterexample-fn "second"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The merge takes the second parameter when the condition fails, so the claim that the payload is
+// the first parameter's whichever way the condition goes is refuted. A model that read only the
+// first arm would prove it.
+module OptionPayloadMergedFirstArmWrong
+
+struct Handle {
+  fd: i64,
+}
+
+fn second(c: bool, a: Option<Handle>, b: Option<Handle>) -> bool vow {
+  ensures: result
+} {
+  let o: Option<Handle> = if c { a } else { b };
+  let got: i64 = match o {
+    Option::Some(h) => h.fd,
+    Option::None => 0,
+  };
+  let first: i64 = match a {
+    Option::Some(h) => h.fd,
+    Option::None => 0,
+  };
+  got == first
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

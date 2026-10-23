@@ -1,0 +1,29 @@
+// TEST: counterexample-fn "stale"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// The payload is the object that was stored: the write to it after it went into the `Option`
+// changes what the payload reads, so the claim that the payload is the value it was built with is
+// refuted. A model that read the value at the store would prove it.
+module OptionPayloadBuiltStoredThenWrittenWrong
+
+struct Handle {
+  fd: i64,
+}
+
+fn stale(a: i64) -> i64 vow {
+  requires: a < 9223372036854775807
+  ensures: result == a
+} {
+  let h: Handle = Handle { fd: a };
+  let o: Option<Handle> = Option::Some(h);
+  h.fd = a + 1;
+  match o {
+    Option::Some(x) => x.fd,
+    Option::None => 0,
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(stale(4));
+  0
+}

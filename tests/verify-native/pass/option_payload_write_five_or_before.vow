@@ -1,0 +1,27 @@
+// A write to a parameter beside a payload read: the payload is the written object or it is not,
+// so after `h.fd = 5` it reads 5 or what it read before. A model that lost the payload after the
+// write, or that never let it be the object, fails here.
+module OptionPayloadWriteFiveOrBefore
+
+struct Handle {
+  fd: i64,
+}
+
+fn after(o: Option<Handle>, h: Handle) -> bool vow {
+  ensures: result
+} {
+  match o {
+    Option::Some(x) => {
+      let before: i64 = x.fd;
+      h.fd = 5;
+      x.fd == 5 || x.fd == before
+    },
+    Option::None => true,
+  }
+}
+
+fn main() -> i32 [io] {
+  let h: Handle = Handle { fd: 1 };
+  if after(Option::Some(Handle { fd: 2 }), h) { print_i64(1); }
+  0
+}

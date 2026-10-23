@@ -151,7 +151,7 @@ fn vc_handle_memory_new(f: IrFunction, tys: Vec<i64>, ag: VcAgg, vv: VcVec, ar: 
             vc_overlay_enable(ov, ag, ar, hdr, assumed, vc_objects_params(objects, VC_OV_VEC()), vc_objects_params(objects, VC_OV_STRING()), vc_objects_params(objects, VC_OV_STRUCT()));
         }
     }
-    VcHandleMemory { heap: vc_heap_new(), held: vc_held_new(), overlay: ov, ag: ag, vv: vv, ar: ar, header: hdr, assumed: assumed }
+    VcHandleMemory { heap: vc_heap_for(f), held: vc_held_new(), overlay: ov, ag: ag, vv: vv, ar: ar, header: hdr, assumed: assumed }
 }
 
 fn vc_handle_memory_used(m: VcHandleMemory) -> bool {

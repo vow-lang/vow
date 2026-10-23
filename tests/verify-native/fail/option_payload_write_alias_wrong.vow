@@ -1,0 +1,30 @@
+// TEST: counterexample-fn "unchanged"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The payload of `o` may be the very `Handle` that `h` names, and then the write to `h` changes
+// what the payload reads: the claim that it does not is refuted. A model that kept the payload
+// apart from the parameters would prove it.
+module OptionPayloadWriteAliasWrong
+
+struct Handle {
+  fd: i64,
+}
+
+fn unchanged(o: Option<Handle>, h: Handle) -> bool vow {
+  ensures: result
+} {
+  match o {
+    Option::Some(x) => {
+      let before: i64 = x.fd;
+      h.fd = before + 1;
+      x.fd == before
+    },
+    Option::None => true,
+  }
+}
+
+fn main() -> i32 [io] {
+  let h: Handle = Handle { fd: 1 };
+  if unchanged(Option::Some(Handle { fd: 2 }), h) { print_i64(1); }
+  0
+}

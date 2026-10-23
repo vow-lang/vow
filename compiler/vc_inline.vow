@@ -8,6 +8,8 @@ use vc_gate
 use vc_loops
 use vc_unroll
 use vc_ptrfield
+use vc_payload
+use vc_handle_phis
 
 // Callee inlining for the native verifier. A call of a user function is spliced
 // into its caller before symbolic execution, so the executor only ever sees one
@@ -441,76 +443,12 @@ fn vc_resolve_str_literals(f: IrFunction, m: IrModule) -> IrFunction {
 }
 
 // `f` as the gate and the executor read it: string literals resolved, and a collection held
-// in a field of a struct the function built named by the object it holds. Every decision
+// in a field of a struct the function built named by the object it holds, and the payloads of
+// a function the child model cannot serve read as handles (`vc_payload`). Every decision
 // about a function (the skip reason of the function and of each callee, the flattened body)
 // goes through this one rewrite, so they cannot disagree.
 fn vc_prepare_for_gate(f: IrFunction, m: IrModule) -> IrFunction {
-    vc_resolve_ptr_fields(vc_resolve_str_literals(f, m))
-}
-
-// True when `g` has a pointer-typed Phi: the only candidate `vc_retype_handle_phis` can change,
-// found without building the type table.
-fn vc_has_ptr_phi(g: IrFunction) -> bool {
-    let mut bi: u64 = 0;
-    while bi < g.blocks.len() {
-        let blk: IrBlock = g.blocks[bi];
-        let mut ii: u64 = 0;
-        while ii < blk.insts.len() {
-            let inst: IrInst = blk.insts[ii];
-            if inst.op == IOP_PHI() && inst.ty == ITY_PTR() { return true; }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    false
-}
-
-// The result Phi of a call is typed like the callee's declared return, but the IR
-// types a pointer loaded out of a field or a `Vec` element `i64` (a handle, see
-// `vc_heap`), so a callee declared to return an object may return handles on every
-// path. Such a Phi (and a Phi that merges only such Phis) is itself a handle:
-// retyped `i64`, it is read through the heap model like any other. A Phi that merges
-// a handle with an object keeps its type and the gate rejects the mismatch. Only the
-// Phis changed are copied; the blocks and the instructions of `g` are its own.
-fn vc_retype_handle_phis(g: IrFunction) {
-    let mut changed: bool = vc_has_ptr_phi(g);
-    while changed {
-        changed = false;
-        let tys: Vec<i64> = vc_ty_table(g);
-        let fed: Vec<i64> = dom_fill(tys.len(), 0);
-        let handles: Vec<i64> = dom_fill(tys.len(), 0);
-        let mut bi: u64 = 0;
-        while bi < g.blocks.len() {
-            let blk: IrBlock = g.blocks[bi];
-            let mut ii: u64 = 0;
-            while ii < blk.insts.len() {
-                let inst: IrInst = blk.insts[ii];
-                if inst.op == IOP_UPSILON() && inst.args.len() == 1 && inst.dv >= 0 && (inst.dv as u64) < tys.len() {
-                    fed[inst.dv as u64] = fed[inst.dv as u64] + 1;
-                    if vc_arg_ty(tys, inst, 0) == ITY_I64() { handles[inst.dv as u64] = handles[inst.dv as u64] + 1; }
-                }
-                ii = ii + 1;
-            }
-            bi = bi + 1;
-        }
-        bi = 0;
-        while bi < g.blocks.len() {
-            let blk: IrBlock = g.blocks[bi];
-            let mut ii: u64 = 0;
-            while ii < blk.insts.len() {
-                let inst: IrInst = blk.insts[ii];
-                if inst.op == IOP_PHI() && inst.ty == ITY_PTR() && inst.id >= 0 && fed[inst.id as u64] > 0 && fed[inst.id as u64] == handles[inst.id as u64] {
-                    let out: IrInst = vc_clone_inst(inst, inst.id, inst.args, inst.dv, inst.dv2);
-                    out.ty = ITY_I64();
-                    let insts: Vec<IrInst> = blk.insts;
-                    insts[ii] = out;
-                    changed = true;
-                }
-                ii = ii + 1;
-            }
-            bi = bi + 1;
-        }
-    }
+    vc_retype_payload_reads(vc_resolve_ptr_fields(vc_resolve_str_literals(f, m)))
 }
 
 // `f` with every call of a user function in `m` replaced by the callee's body,

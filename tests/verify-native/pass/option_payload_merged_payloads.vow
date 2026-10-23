@@ -1,0 +1,48 @@
+// Two payloads read from two parameters and merged by an `if` are one object: the larger of the
+// two, read through whichever edge is taken. With a write to a third parameter beside the reads
+// the payloads are handles and so is their merge.
+module OptionPayloadMergedPayloads
+
+struct Handle {
+  fd: i64,
+}
+
+fn larger(a: Option<Handle>, b: Option<Handle>) -> bool vow {
+  ensures: result
+} {
+  match a {
+    Option::Some(x) => {
+      match b {
+        Option::Some(y) => {
+          let z: Handle = if x.fd > y.fd { x } else { y };
+          z.fd >= x.fd && z.fd >= y.fd && (z.fd == x.fd || z.fd == y.fd)
+        },
+        Option::None => true,
+      }
+    },
+    Option::None => true,
+  }
+}
+
+fn larger_after_write(a: Option<Handle>, b: Option<Handle>, h: Handle) -> bool vow {
+  ensures: result
+} {
+  h.fd = 7;
+  match a {
+    Option::Some(x) => {
+      match b {
+        Option::Some(y) => {
+          let z: Handle = if x.fd > y.fd { x } else { y };
+          z.fd >= x.fd && z.fd >= y.fd && (z.fd == x.fd || z.fd == y.fd)
+        },
+        Option::None => true,
+      }
+    },
+    Option::None => true,
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

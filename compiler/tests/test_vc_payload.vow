@@ -1,0 +1,175 @@
+module TestVcPayload
+
+use ir
+use ir_dominance
+use vc_ops
+use vc_heap
+use vc_payload
+use tests.builders
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn ptr_params(n: i64) -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n {
+        p.push(ITY_PTR());
+        i = i + 1;
+    }
+    p
+}
+
+fn one_fn(params: Vec<i64>, ret: i64, insts: Vec<IrInst>) -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(1, String::from("f"), params, ret, blocks)
+}
+
+fn find(f: IrFunction, id: i64) -> IrInst {
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let blk: IrBlock = f.blocks[b];
+        let mut i: u64 = 0;
+        while i < blk.insts.len() {
+            if blk.insts[i].id == id { return blk.insts[i]; }
+            i = i + 1;
+        }
+        b = b + 1;
+    }
+    mk_inst_const_i64(0 - 1, 0)
+}
+
+// A payload read from an allocation has no parameter to be a child of: it becomes a marked
+// `i64` read of the same slot, and the read of its field is a read through that handle.
+fn check_allocation_base() -> i64 {
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_alloc(0, 16));
+    a.push(mk_inst_field_get(1, ITY_PTR(), 0, 1));
+    a.push(mk_inst_field_get(2, ITY_I64(), 1, 0));
+    a.push(mk_inst_return(3, 2));
+    let f: IrFunction = one_fn(Vec::new(), ITY_I64(), a);
+    let g: IrFunction = vc_retype_payload_reads(f);
+    let r: IrInst = find(g, 1);
+    if r.ty != ITY_I64() || r.dv != 1 || r.args.len() != 1 || r.args[0] != 0 { return 1; }
+    if !vc_heap_is_payload_read(r) { return 2; }
+    if find(g, 2).ty != ITY_I64() || vc_heap_is_payload_read(find(g, 2)) { return 3; }
+    if find(f, 1).ty != ITY_PTR() { return 4; }
+    if vc_heap_for(g).ranked || !vc_heap_for(f).ranked { return 5; }
+    0
+}
+
+// A payload read from the only parameter, in a function that writes none, is the child object:
+// nothing changes.
+fn check_child_model_kept() -> i64 {
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_arg(0, ITY_PTR(), 0));
+    a.push(mk_inst_field_get(1, ITY_PTR(), 0, 1));
+    a.push(mk_inst_field_get(2, ITY_I64(), 1, 0));
+    a.push(mk_inst_return(3, 2));
+    let f: IrFunction = one_fn(ptr_params(1), ITY_I64(), a);
+    let g: IrFunction = vc_retype_payload_reads(f);
+    if find(g, 1).ty != ITY_PTR() { return 1; }
+    if vc_heap_for(g).ranked == false { return 2; }
+    0
+}
+
+// A write to a parameter beside a payload read of another: the payload may be that parameter.
+fn check_param_write() -> i64 {
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_arg(0, ITY_PTR(), 0));
+    a.push(mk_inst_arg(1, ITY_PTR(), 1));
+    a.push(mk_inst_const_i64(2, 5));
+    a.push(mk_inst_field_set(3, 1, 0, 2));
+    a.push(mk_inst_field_get(4, ITY_PTR(), 0, 1));
+    a.push(mk_inst_field_get(5, ITY_I64(), 4, 0));
+    a.push(mk_inst_return(6, 5));
+    let f: IrFunction = one_fn(ptr_params(2), ITY_I64(), a);
+    let g: IrFunction = vc_retype_payload_reads(f);
+    if find(g, 4).ty != ITY_I64() || !vc_heap_is_payload_read(find(g, 4)) { return 1; }
+    if find(g, 3).op != IOP_FIELD_SET() || find(g, 3).args.len() != 2 { return 2; }
+    0
+}
+
+// A payload used as a `Vec` is not an object of the aggregate model and not a struct a handle
+// names: the function is left as it is, and stays skipped.
+fn check_collection_use_kept() -> i64 {
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_alloc(0, 16));
+    a.push(mk_inst_field_get(1, ITY_PTR(), 0, 1));
+    a.push(mk_inst_call_extern(2, ITY_U64(), args1(1), String::from("__vow_vec_len")));
+    a.push(mk_inst_return(3, 2));
+    let f: IrFunction = one_fn(Vec::new(), ITY_U64(), a);
+    if find(vc_retype_payload_reads(f), 1).ty != ITY_PTR() { return 1; }
+    0
+}
+
+// A payload read from a handle (the `i64` a field read returns) names no payload of a
+// parameter or an allocation: the read stays a pointer read, and the gate rejects it.
+fn check_handle_base_kept() -> i64 {
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_alloc(0, 16));
+    a.push(mk_inst_field_get(1, ITY_I64(), 0, 0));
+    a.push(mk_inst_field_get(2, ITY_PTR(), 1, 1));
+    a.push(mk_inst_field_get(3, ITY_I64(), 2, 0));
+    a.push(mk_inst_return(4, 3));
+    let f: IrFunction = one_fn(Vec::new(), ITY_I64(), a);
+    if find(vc_retype_payload_reads(f), 2).ty != ITY_PTR() { return 1; }
+    0
+}
+
+// A payload read from the merge of two parameters.
+fn check_merged_params() -> i64 {
+    let blocks: Vec<IrBlock> = Vec::new();
+    let b0: Vec<IrInst> = Vec::new();
+    b0.push(mk_inst_const_bool(0, 1));
+    b0.push(mk_inst_arg(1, ITY_PTR(), 0));
+    b0.push(mk_inst_arg(2, ITY_PTR(), 1));
+    b0.push(mk_inst_branch(3, 0, 1, 2));
+    blocks.push(mk_block(0, b0));
+    let b1: Vec<IrInst> = Vec::new();
+    b1.push(mk_inst_upsilon(4, 1, 8));
+    b1.push(mk_inst_jump(5, 3));
+    blocks.push(mk_block(1, b1));
+    let b2: Vec<IrInst> = Vec::new();
+    b2.push(mk_inst_upsilon(6, 2, 8));
+    b2.push(mk_inst_jump(7, 3));
+    blocks.push(mk_block(2, b2));
+    let b3: Vec<IrInst> = Vec::new();
+    b3.push(mk_inst_phi(8, ITY_PTR()));
+    b3.push(mk_inst_field_get(9, ITY_PTR(), 8, 1));
+    b3.push(mk_inst_field_get(10, ITY_I64(), 9, 0));
+    b3.push(mk_inst_return(11, 10));
+    blocks.push(mk_block(3, b3));
+    let f: IrFunction = mk_function(1, String::from("f"), ptr_params(2), ITY_I64(), blocks);
+    let g: IrFunction = vc_retype_payload_reads(f);
+    if find(g, 9).ty != ITY_I64() || !vc_heap_is_payload_read(find(g, 9)) { return 1; }
+    if find(g, 8).ty != ITY_PTR() { return 2; }
+    0
+}
+
+// A function with no payload read is returned as it is.
+fn check_no_payload() -> i64 {
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_alloc(0, 16));
+    a.push(mk_inst_field_get(1, ITY_I64(), 0, 0));
+    a.push(mk_inst_return(2, 1));
+    let f: IrFunction = one_fn(Vec::new(), ITY_I64(), a);
+    let g: IrFunction = vc_retype_payload_reads(f);
+    if find(g, 1).ty != ITY_I64() || vc_heap_is_payload_read(find(g, 1)) { return 1; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_allocation_base();
+    if r == 0 { r = check_child_model_kept() + 10; if r == 10 { r = 0; } }
+    if r == 0 { r = check_param_write() + 20; if r == 20 { r = 0; } }
+    if r == 0 { r = check_collection_use_kept() + 30; if r == 30 { r = 0; } }
+    if r == 0 { r = check_handle_base_kept() + 40; if r == 40 { r = 0; } }
+    if r == 0 { r = check_merged_params() + 50; if r == 50 { r = 0; } }
+    if r == 0 { r = check_no_payload() + 60; if r == 60 { r = 0; } }
+    i64_to_i32_wrap(r)
+}

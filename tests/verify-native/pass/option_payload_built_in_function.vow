@@ -1,0 +1,23 @@
+// An `Option` the function builds holds its payload in a field of an allocation. The payload
+// is read back as the address it was stored as, so the read is the object that was stored.
+module OptionPayloadBuiltInFunction
+
+struct Handle {
+  fd: i64,
+}
+
+fn rebuilt(fd: i64) -> i64 vow {
+  ensures: result >= 0
+} {
+  let o: Option<Handle> = Option::Some(Handle { fd: fd });
+  match o {
+    Option::Some(h) => {
+      if h.fd < 0 { 0 } else { h.fd }
+    },
+    Option::None => 0,
+  }
+}
+
+fn main() -> i32 {
+  0
+}
