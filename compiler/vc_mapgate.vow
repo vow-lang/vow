@@ -36,13 +36,13 @@ fn vc_map_mark_values(f: IrFunction, is_map: Vec<i64>) -> bool {
 // Gate rule: a map lives only in its own function, as an object no other
 // instruction can alias. A pointer used by a map operation must not also be a
 // struct (`FieldGet`/`FieldSet`) or be passed to a user call or to a builtin the
-// verifier does not model as a map operation, and a Phi may merge map pointers
-// only when every `Upsilon` feeding it supplies the same value. "" when the
-// shape is fine, else the detail of an `unsupported-opcode` skip.
+// verifier does not model as a map operation. A Phi that merges different maps is
+// modelled (`vc_map_phi_slot`), so every Phi it feeds is marked as a map, as for a Vec.
+// "" when the shape is fine, else the detail of an `unsupported-opcode` skip.
 fn vc_map_shape_detail(f: IrFunction, n_ids: u64) -> String {
     let is_map: Vec<i64> = dom_fill(n_ids, 0);
     if !vc_map_mark_values(f, is_map) { return String::from(""); }
-    if vc_phi_merges_objects(f, is_map, n_ids, false) { return String::from("map merged by a Phi"); }
+    vc_phi_mark_objects(f, is_map, n_ids);
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
         let blk: IrBlock = f.blocks[bi];

@@ -1,0 +1,60 @@
+// TEST: category model-drift
+// TEST: esbmc-model-artifact fn="insert_through" blame=Callee vow_id=0 "ESBMC's C model copies a map at the merge, so an insert or remove through the merged `m` never reaches `a` or `b` and the claim fails; at runtime `m` is the map that was picked, and a debug-mode run of every function in this file over both values of every bool parameter satisfies every clause"
+// TEST: esbmc-model-artifact fn="insert_in_a_later_block" blame=Callee vow_id=0 "ESBMC's C model copies a map at the merge, so an insert or remove through the merged `m` never reaches `a` or `b` and the claim fails; at runtime `m` is the map that was picked, and a debug-mode run of every function in this file over both values of every bool parameter satisfies every clause"
+// TEST: esbmc-model-artifact fn="insert_reaches_the_pick" blame=Callee vow_id=0 "ESBMC's C model copies a map at the merge, so an insert or remove through the merged `m` never reaches `a` or `b` and the claim fails; at runtime `m` is the map that was picked, and a debug-mode run of every function in this file over both values of every bool parameter satisfies every clause"
+// TEST: esbmc-model-artifact fn="remove_through" blame=Callee vow_id=0 "ESBMC's C model copies a map at the merge, so an insert or remove through the merged `m` never reaches `a` or `b` and the claim fails; at runtime `m` is the map that was picked, and a debug-mode run of every function in this file over both values of every bool parameter satisfies every clause"
+// A write through a HashMap the function picks by a branch reaches exactly the map it stands for,
+// which every other name for that map sees.
+module MapPhiWriteThrough
+
+fn insert_through(c: bool) -> u64 vow {
+  ensures: result == 2
+} {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let b: HashMap<i64, i64> = HashMap::new();
+  b.insert(1, 1);
+  let m: HashMap<i64, i64> = if c { a } else { b };
+  m.insert(7, 7);
+  a.len() + b.len()
+}
+
+fn insert_in_a_later_block(c: bool, d: bool) -> u64 vow {
+  ensures: (d && result == 3) || (!d && result == 2)
+} {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let b: HashMap<i64, i64> = HashMap::new();
+  b.insert(1, 1);
+  b.insert(2, 2);
+  let m: HashMap<i64, i64> = if c { a } else { b };
+  if d {
+    m.insert(7, 7);
+  }
+  a.len() + b.len()
+}
+
+fn insert_reaches_the_pick(c: bool) -> bool vow {
+  ensures: result
+} {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let b: HashMap<i64, i64> = HashMap::new();
+  let m: HashMap<i64, i64> = if c { a } else { b };
+  m.insert(7, 7);
+  if c { a.contains_key(7) && !b.contains_key(7) } else { b.contains_key(7) && !a.contains_key(7) }
+}
+
+fn remove_through(c: bool) -> u64 vow {
+  ensures: result == 1
+} {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let b: HashMap<i64, i64> = HashMap::new();
+  a.insert(1, 1);
+  b.insert(1, 1);
+  let m: HashMap<i64, i64> = if c { a } else { b };
+  m.remove(1);
+  a.len() + b.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(insert_through(true));
+  0
+}

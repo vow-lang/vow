@@ -1,0 +1,102 @@
+// A HashMap the function picks by a branch: reads see the picked one, and the map that was not
+// picked keeps its own state.
+module MapPhiMerge
+
+fn pick_len(c: i64) -> u64 vow {
+  ensures: (c > 0 && result == 1) || (c <= 0 && result == 2)
+} {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let b: HashMap<i64, i64> = HashMap::new();
+  a.insert(1, 1);
+  b.insert(2, 2);
+  b.insert(3, 3);
+  let m: HashMap<i64, i64> = if c > 0 { a } else { b };
+  m.len()
+}
+
+fn contains_of_the_pick(c: bool) -> bool vow {
+  ensures: result
+} {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let b: HashMap<i64, i64> = HashMap::new();
+  a.insert(1, 10);
+  b.insert(2, 20);
+  let m: HashMap<i64, i64> = if c { a } else { b };
+  if c { m.contains_key(1) && !m.contains_key(2) } else { m.contains_key(2) && !m.contains_key(1) }
+}
+
+fn value_of_the_pick(c: bool) -> i64 [panic] vow {
+  ensures: (c && result == 10) || (!c && result == 20)
+} {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let b: HashMap<i64, i64> = HashMap::new();
+  a.insert(5, 10);
+  b.insert(5, 20);
+  let m: HashMap<i64, i64> = if c { a } else { b };
+  m.get(5).unwrap()
+}
+
+fn untouched_one_keeps_its_state(c: bool) -> bool vow {
+  ensures: result
+} {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let b: HashMap<i64, i64> = HashMap::new();
+  a.insert(1, 1);
+  b.insert(2, 2);
+  let m: HashMap<i64, i64> = if c { a } else { b };
+  m.insert(9, 9);
+  if c { b.len() == 1 && b.contains_key(2) && !b.contains_key(9) } else { a.len() == 1 && a.contains_key(1) && !a.contains_key(9) }
+}
+
+fn overwrite_through(c: bool) -> i64 [panic] vow {
+  ensures: result == 5
+} {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let b: HashMap<i64, i64> = HashMap::new();
+  a.insert(1, 1);
+  b.insert(1, 2);
+  let m: HashMap<i64, i64> = if c { a } else { b };
+  m.insert(1, 5);
+  if c { a.get(1).unwrap() } else { b.get(1).unwrap() }
+}
+
+fn three_way(k: i64) -> u64 vow {
+  ensures: (k < 0 && result == 0) || (k == 0 && result == 1) || (k > 0 && result == 2)
+} {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let b: HashMap<i64, i64> = HashMap::new();
+  let c: HashMap<i64, i64> = HashMap::new();
+  b.insert(1, 1);
+  c.insert(1, 1);
+  c.insert(2, 2);
+  let m: HashMap<i64, i64> = if k < 0 { a } else if k == 0 { b } else { c };
+  m.len()
+}
+
+fn merge_of_a_merge(c: bool, d: bool) -> u64 vow {
+  ensures: (c && d && result == 1) || (c && !d && result == 2) || (!c && result == 3)
+} {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let b: HashMap<i64, i64> = HashMap::new();
+  let e: HashMap<i64, i64> = HashMap::new();
+  a.insert(1, 1);
+  b.insert(1, 1);
+  b.insert(2, 2);
+  e.insert(1, 1);
+  e.insert(2, 2);
+  e.insert(3, 3);
+  let m: HashMap<i64, i64> = if c { if d { a } else { b } } else { e };
+  m.len()
+}
+
+fn params(a: HashMap<i64, i64>, b: HashMap<i64, i64>, c: bool) -> u64 vow {
+  ensures: (c && result == a.len()) || (!c && result == b.len())
+} {
+  let m: HashMap<i64, i64> = if c { a } else { b };
+  m.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(pick_len(1));
+  0
+}

@@ -1107,10 +1107,10 @@ addendum is that model (`compiler/vc_map.vow`, op table `compiler/vc_mapops.vow`
   leaves it below. A cap such as `len <= 64` is never introduced. The ESBMC model's 64-entry
   `hashmap capacity`/`btreemap capacity` assertions have no native counterpart.
 - **State per block, merged at joins.** Like a `Vec`, a map is a `vc_agg` object and its state is
-  kept per block and merged on entry with the `ite` chain a Phi uses. A map merged by a Phi that
-  supplies two different maps, passed to a call, read as a struct, or handed to another builtin is
-  `Skipped` as `unsupported-opcode` with a named detail; a key or value that is not `bool`, an integer
-  of at most 64 bits or `()` (a `String`, `Vec`, struct or 128-bit value) is too.
+  kept per block and merged on entry with the `ite` chain a Phi uses. A Phi of different maps
+  is a slot (#1854): it reads as the `ite` of their states, a write reaches each
+  map whose edge is taken. A map passed to a call, read as a struct or handed to another builtin, or
+  a key or value not `bool`, an integer up to 64 bits or `()`, is `Skipped`: `unsupported-opcode`.
 - **Loops.** A loop body that writes a map is cut for invariant-based induction by a
   `__vc_havoc_map` marker, the way a Vec is (`__vc_havoc_vec`): the map is an arbitrary
   `(pres, vals, len)` at the top of the header proper. The k-induction step case is not built for

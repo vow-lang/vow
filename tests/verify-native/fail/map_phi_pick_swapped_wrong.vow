@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "pick_len"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The claim names the arms the wrong way round: `c > 0` picks `a` (one key) and `c <= 0` picks `b`
+// (two). A merge that read the other map for each edge would prove it.
+module MapPhiPickSwappedWrong
+
+fn pick_len(c: i64) -> u64 vow {
+  ensures: (c > 0 && result == 2) || (c <= 0 && result == 1)
+} {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let b: HashMap<i64, i64> = HashMap::new();
+  a.insert(1, 1);
+  b.insert(2, 2);
+  b.insert(3, 3);
+  let m: HashMap<i64, i64> = if c > 0 { a } else { b };
+  m.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(pick_len(1));
+  0
+}

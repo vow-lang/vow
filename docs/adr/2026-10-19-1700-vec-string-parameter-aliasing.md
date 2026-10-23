@@ -37,8 +37,8 @@ assumption (its C model declares each parameter as a local), so `verify_diff.py`
    both arguments). A map parameter that the function changes (`insert`, `remove`, a loop cut's
    havoc) and that has a second member in its group gets an identity, equal identities equate the
    presence array, value array and length of the two, and every write through one is applied to the
-   other under the identity test. A map is never merged by a Phi or passed to a call (the map gate),
-   so its uses are all direct. `compiler/vc_mapalias.vow`; the write hook is `vc_map_spread` in
+   other under the identity test. A map is never passed to a call (the map gate); one merged by a Phi is each map it
+   merges, and a write through the Phi reaches each of them (#1854). `compiler/vc_mapalias.vow`; the write hook is `vc_map_spread` in
    `compiler/vc_map.vow`. The members of a group share one key type, so what any of them shows of
    its key width (the `unconstrained map state` rule of ADR-2026-10-08-1422) holds for the others.
    `--replay-cex` builds the one map with the listed keys of every member

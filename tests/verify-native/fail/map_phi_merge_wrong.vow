@@ -1,0 +1,22 @@
+// TEST: counterexample-fn "insert_through"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The insert through the merge reaches exactly one of the two maps, so the lengths sum to 2, not
+// 3, whichever branch is taken. A merge that wrote both maps would prove it.
+module MapPhiMergeWrong
+
+fn insert_through(c: bool) -> u64 vow {
+  ensures: result == 3
+} {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let b: HashMap<i64, i64> = HashMap::new();
+  b.insert(1, 1);
+  let m: HashMap<i64, i64> = if c { a } else { b };
+  m.insert(7, 7);
+  a.len() + b.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(insert_through(true));
+  0
+}

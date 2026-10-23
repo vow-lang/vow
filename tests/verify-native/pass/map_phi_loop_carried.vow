@@ -1,0 +1,39 @@
+// TEST: category model-drift
+// TEST: esbmc-model-artifact fn="carried" blame=Callee vow_id=0 "ESBMC's C model copies a map at the merge, so an insert through the merged `cur` never reaches `a` or `b` and the claim fails; at runtime `cur` is the map that was picked, and a debug-mode run of every function in this file satisfies every clause"
+// A map carried across the back edge by a Phi in a loop that is unwound: the Phi reaches each map
+// it merges in every iteration.
+module MapPhiLoopCarried
+
+fn carried() -> bool vow {
+  ensures: result
+} {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let b: HashMap<i64, i64> = HashMap::new();
+  let mut cur: HashMap<i64, i64> = a;
+  let mut i: u64 = 0;
+  while i < 5 {
+    cur.insert((i % 2) as i64, i as i64);
+    cur = if i % 2 == 0 { b } else { a };
+    i = i + 1;
+  }
+  a.len() == 1 && a.contains_key(0) && b.len() == 1 && b.contains_key(1)
+}
+
+fn bounded_pick(c: bool) -> u64 vow {
+  ensures: result == 3
+} {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let b: HashMap<i64, i64> = HashMap::new();
+  let m: HashMap<i64, i64> = if c { a } else { b };
+  let mut i: u64 = 0;
+  while i < 3 {
+    m.insert(i as i64, 0);
+    i = i + 1;
+  }
+  m.len()
+}
+
+fn main() -> i32 [io] {
+  if carried() { print_u64(bounded_pick(true)); }
+  0
+}

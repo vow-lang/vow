@@ -1,0 +1,28 @@
+// TEST: category model-drift
+// TEST: esbmc-model-artifact fn="alternate" blame=Callee vow_id=1 "ESBMC's C model copies a map at the merge, so an insert through the merged `m` never reaches `a` or `b` and the claim fails; at runtime `m` is the map that was picked, and a debug-mode run of every function in this file over every bound n from 0 to 8 satisfies every clause"
+// A map picked by a branch inside a loop body: the loop cut forgets the state of both maps the
+// loop writes, and the Phi still reaches each of them.
+module MapPhiLoopBody
+
+fn alternate(n: u64) -> bool vow {
+  ensures: result
+} {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let b: HashMap<i64, i64> = HashMap::new();
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n,
+    invariant: i == 0 || a.contains_key(0),
+    invariant: i <= 1 || b.contains_key(1)
+  } {
+    let m: HashMap<i64, i64> = if i % 2 == 0 { a } else { b };
+    m.insert((i % 2) as i64, 0);
+    i = i + 1;
+  }
+  n < 2 || (a.contains_key(0) && b.contains_key(1))
+}
+
+fn main() -> i32 [io] {
+  if alternate(4) { print_u64(1); }
+  0
+}

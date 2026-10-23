@@ -1,0 +1,22 @@
+// TEST: counterexample-fn "pick_value"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The merge reads the BTreeMap the branch picked: with `c` false that is `b`, whose value for 5 is
+// 20, so `result == 10` is refuted. A merge that ignored `b`'s state would prove it.
+module BTreeMapPhiPickWrong
+
+fn pick_value(c: bool) -> i64 [panic] vow {
+  ensures: result == 10
+} {
+  let a: BTreeMap<i64, i64> = BTreeMap::new();
+  let b: BTreeMap<i64, i64> = BTreeMap::new();
+  a.insert(5, 10);
+  b.insert(5, 20);
+  let m: BTreeMap<i64, i64> = if c { a } else { b };
+  m.get(5).unwrap()
+}
+
+fn main() -> i32 [io, panic] {
+  print_i64(pick_value(true));
+  0
+}

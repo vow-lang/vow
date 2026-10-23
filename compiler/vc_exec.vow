@@ -17,6 +17,7 @@ use vc_vecalias
 use vc_wide
 use vc_heap
 use vc_map
+use vc_mapkeys
 use vc_mapops
 use vc_overlay
 use vc_objects
@@ -705,9 +706,8 @@ fn vc_map_key_bits(w: VcWalk, inst: IrInst) -> i64 {
     vc_ty_bits(w.tys[id])
 }
 
-// A map call (`vc_map`). `len` and `contains` define a value, `get` and a
-// `BTreeMap` `insert` build an `Option` object, `insert` and `remove` replace the
-// state of the map in this block.
+// A map call (`vc_map`): `len` and `contains` define a value, `get` and a `BTreeMap`
+// `insert` build an `Option`, `insert` and `remove` replace the map's state here.
 fn vc_walk_map(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
     let kind: i64 = vc_inst_map_kind(inst);
     if kind == VC_MAP_NONE() { return false; }
@@ -955,7 +955,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
     let ag: VcAgg = vc_agg_new(fl);
     let vv: VcVec = vc_vec_new_state(fl, ar, nb);
     vv.content = vc_str_reads_bytes(f);
-    let mp: VcMap = vc_map_new_state(fl, nb);
+    let mp: VcMap = vc_map_new_state(fl, ar, nb);
     vc_vecalias_setup(vv, mp, ag, ar, hdr, cs.assumed, f, tys.len());
     let memory: VcHandleMemory = vc_handle_memory_new(f, tys, ag, vv, ar, hdr, cs.assumed, vc_ptr_store_reads_back(f, tys));
     let w: VcWalk = VcWalk {

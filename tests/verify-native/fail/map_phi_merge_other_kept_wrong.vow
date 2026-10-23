@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "keeps"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The insert reaches the picked map only: when `c` holds `a` is the picked one, so `b` keeps its
+// one key and `result == 2` is refuted.
+module MapPhiMergeOtherKeptWrong
+
+fn keeps(c: bool) -> u64 vow {
+  ensures: result == 2
+} {
+  let a: HashMap<i64, i64> = HashMap::new();
+  let b: HashMap<i64, i64> = HashMap::new();
+  a.insert(1, 1);
+  b.insert(2, 2);
+  let m: HashMap<i64, i64> = if c { a } else { b };
+  m.insert(9, 9);
+  if c { b.len() } else { a.len() }
+}
+
+fn main() -> i32 [io] {
+  print_u64(keeps(true));
+  0
+}
