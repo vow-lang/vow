@@ -1,0 +1,142 @@
+module VcMapDom
+
+use ir
+use vc_term
+use vc_smt
+use vc_int
+use vc_flow
+use vc_map
+
+// The key domain of a `HashMap` parameter (#1853). A key type narrower than 64 bits bounds the
+// length of a map by its domain: a `HashMap<u8, V>` holds at most 256 entries. The lowering
+// records the declared key and value heads of every parameter (`IrFunction.param_keys`,
+// `HashMap<u8,i64>`), so the key type of a map the function did not build is a fact, not
+// something an operand has to show. A `BTreeMap` key is always `i64`.
+//
+// For an arbitrary base of a map whose key type has `D` values, every key the function names that
+// is not in the domain is absent, and, with `A` the number of distinct named keys that are in the
+// domain and absent, `len + A <= D`: the unnamed keys of the domain are the only room left for
+// the entries the named ones do not account for. Together with the count of present keys within the
+// length (`vc_map_count_key`) that is all a real map needs: any model of these facts extends to
+// a map of the declared key type with that length and presence at the named keys, so a
+// counterexample is a run and the base is exact. A key is in the domain when narrowing it to the key
+// type and widening it as `vc_vec_elem64` does gives it back, the same widening that keeps two keys
+// equal exactly when their slots are. Parameters that may be one object (`vc_mapalias`) share one
+// state whose named keys are spread over their slots, so the facts hold of it but do not make it exact.
+
+// The IR type of the key head `name`, or -1 for a head that is not a bool or an integer.
+fn vc_mapdom_ty_of_name(name: String) -> i64 {
+    if name == String::from("u8") { return ITY_U8(); }
+    if name == String::from("i8") { return ITY_I8(); }
+    if name == String::from("u16") { return ITY_U16(); }
+    if name == String::from("i16") { return ITY_I16(); }
+    if name == String::from("u32") { return ITY_U32(); }
+    if name == String::from("i32") { return ITY_I32(); }
+    if name == String::from("u64") { return ITY_U64(); }
+    if name == String::from("i64") { return ITY_I64(); }
+    if name == String::from("bool") { return ITY_BOOL(); }
+    -1
+}
+
+// The IR type of the key of the map type `key` (`HashMap<u8,i64>`), or -1 when it is not a map or
+// its key is not known.
+fn vc_mapdom_key_ty(key: String) -> i64 {
+    let is_hash: bool = string_starts_with(key, String::from("HashMap<")) != 0;
+    if !is_hash && string_starts_with(key, String::from("BTreeMap<")) == 0 { return -1; }
+    let n: u64 = key.len();
+    let mut lt: u64 = 0;
+    while lt < n && key.byte_at(lt) != 60 { lt = lt + 1; }
+    let mut comma: u64 = lt;
+    while comma < n && key.byte_at(comma) != 44 { comma = comma + 1; }
+    if comma >= n { return -1; }
+    vc_mapdom_ty_of_name(key.substring(lt + 1, comma))
+}
+
+// The declared key type of each parameter of `f`, -1 for one that is not a map or whose declared
+// type the lowering did not record.
+fn vc_mapdom_param_tys(f: IrFunction) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < f.params.len() {
+        if f.param_keys.len() == f.params.len() {
+            out.push(vc_mapdom_key_ty(f.param_keys[i]));
+        } else {
+            out.push(-1);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// The declared key type of the parameter `k`.
+fn vc_mapdom_param_kty(mp: VcMap, k: i64) -> i64 {
+    if k < 0 || (k as u64) >= mp.param_kty.len() { return -1; }
+    mp.param_kty[k as u64]
+}
+
+// A key type of 64 bits: its keys have no bound to speak of.
+fn vc_mapdom_wide(kty: i64) -> bool {
+    kty == ITY_I64() || kty == ITY_U64()
+}
+
+// A key type with fewer than 64 bits: a `bool`, or an integer of 8, 16 or 32 bits.
+fn vc_mapdom_narrow(kty: i64) -> bool {
+    kty == ITY_BOOL() || (vc_ty_is_int(kty) && vc_ty_bits(kty) < 64)
+}
+
+// The number of values of the narrow key type `kty`, as a 64-bit constant.
+fn vc_mapdom_size(ar: VcArena, kty: i64) -> i64 {
+    if kty == ITY_BOOL() { return vc_tm_bv(ar, 64, 2, 0); }
+    vc_tm_bv(ar, 64, 1 << vc_ty_bits(kty), 0)
+}
+
+// Holds when `key` (a 64-bit slot) is the widening of a value of the narrow key type `kty`.
+fn vc_mapdom_in_domain(ar: VcArena, kty: i64, key: i64) -> i64 {
+    if kty == ITY_BOOL() { return vc_tm_app2(ar, VC_OP_BVULE(), key, vc_tm_bv(ar, 64, 1, 0)); }
+    let narrowed: i64 = vc_cast(ar, ITY_I64(), kty, key);
+    vc_tm_app2(ar, VC_OP_EQ(), vc_cast(ar, kty, ITY_I64(), narrowed), key)
+}
+
+// Holds when slot `s` is one of the parameter slots that may be one object.
+fn vc_mapdom_aliased(mp: VcMap, s: u64) -> bool {
+    let mut i: u64 = 0;
+    while i < mp.al_slot.len() {
+        if mp.al_slot[i] == s as i64 { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// Holds when the facts of this module make every arbitrary base of slot `s` a real map.
+fn vc_mapdom_exact(mp: VcMap, s: u64) -> bool {
+    vc_mapdom_narrow(mp.slot_kty[s]) && !vc_mapdom_aliased(mp, s)
+}
+
+// A new arbitrary base with length `len` for slot `s`: no named key is absent yet, so the length
+// is within the domain.
+fn vc_mapdom_new_base(mp: VcMap, ar: VcArena, assumed: Vec<i64>, s: i64, len: i64) {
+    let abs: Vec<i64> = mp.fb_abs[s as u64];
+    abs.push(vc_map_zero(ar));
+    let kty: i64 = mp.slot_kty[s as u64];
+    if vc_mapdom_narrow(kty) {
+        assumed.push(vc_tm_app2(ar, VC_OP_BVULE(), len, vc_mapdom_size(ar, kty)));
+    }
+}
+
+// Names `key`, distinct from the keys before it exactly when `fresh`, on the `j`-th base of slot
+// `s`: a key outside the domain is absent, a distinct absent one inside it takes room from the
+// length.
+fn vc_mapdom_count_key(mp: VcMap, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, s: i64, j: u64, key: i64, fresh: i64) {
+    let kty: i64 = mp.slot_kty[s as u64];
+    if !vc_mapdom_narrow(kty) { return; }
+    let in_domain: i64 = vc_mapdom_in_domain(ar, kty, key);
+    let ps: Vec<i64> = mp.fb_pres[s as u64];
+    let ls: Vec<i64> = mp.fb_len[s as u64];
+    let present: i64 = vc_map_present(ar, ps[j], key);
+    assumed.push(vc_tm_implies(ar, present, in_domain));
+    let room: i64 = vc_tm_and(ar, vc_tm_and(ar, fresh, in_domain), vc_tm_app1(ar, VC_OP_NOT(), present));
+    let abs: Vec<i64> = mp.fb_abs[s as u64];
+    abs[j] = vc_flow_name(mp.fl, ar, hdr, 64, vc_tm_app2(ar, VC_OP_BVADD(), abs[j], vc_map_bit(ar, room)));
+    let used: i64 = vc_tm_app2(ar, VC_OP_BVADD(), ls[j], abs[j]);
+    assumed.push(vc_tm_app2(ar, VC_OP_BVULE(), used, vc_mapdom_size(ar, kty)));
+}

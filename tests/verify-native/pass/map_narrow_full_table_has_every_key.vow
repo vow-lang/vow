@@ -1,0 +1,16 @@
+module MapNarrowFullTableHasEveryKey
+
+// A map of 256 entries with `u8` keys holds every key: a key it lacked would leave room for only
+// 255. The length and the distinct absent keys the function names share the domain.
+fn has_key(m: HashMap<u8, i64>, k: u8) -> bool vow {
+  requires: m.len() == 256,
+  ensures: result
+} {
+  m.contains_key(k)
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<u8, i64> = HashMap::new();
+  if has_key(m, 1) { print_u64(1); }
+  0
+}

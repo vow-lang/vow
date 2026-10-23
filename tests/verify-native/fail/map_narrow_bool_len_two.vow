@@ -1,0 +1,18 @@
+// TEST: counterexample-fn "at_most_one"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value m.len 2
+module MapNarrowBoolLenTwo
+
+// A `bool` key has two values and a map can hold both.
+fn at_most_one(m: HashMap<bool, i64>) -> u64 vow {
+  ensures: result <= 1
+} {
+  m.len()
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<bool, i64> = HashMap::new();
+  print_u64(at_most_one(m));
+  0
+}

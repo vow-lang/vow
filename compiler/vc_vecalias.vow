@@ -14,6 +14,7 @@ use vc_vec
 use vc_heap
 use vc_map
 use vc_mapalias
+use vc_mapdom
 
 // Parameters of one `Vec` or `String` type may be one object: a caller can pass one value for
 // two of them, so a change through one is a change of the other. The model gives each such
@@ -160,6 +161,7 @@ fn vc_vecalias_enable(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed
 // Declares the identity of every aliasable parameter (structs, `Vec`s, `Strings` and maps) and what
 // relates the collection parameters. The facts the identities need go to `assumed`.
 fn vc_vecalias_setup(vv: VcVec, mp: VcMap, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, f: IrFunction, n_ids: u64) {
+    mp.param_kty = vc_mapdom_param_tys(f);
     let mut cls: Vec<i64> = dom_fill(f.params.len(), 0);
     if f.params.len() >= 2 { cls = vc_vecalias_classes(f, n_ids); }
     let params: Vec<i64> = vc_vecalias_union(vc_agg_alias_params(f, n_ids), vc_vecalias_params(f, cls));

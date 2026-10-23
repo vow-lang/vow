@@ -1,0 +1,21 @@
+// TEST: counterexample-fn "lookup"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value k -5
+// TEST: counterexample-value m.len 1
+module MapNarrowParamPresentKeyWrong
+
+// A real run exists (a map holding `-5`). An `i32` key has 2^32 values, so the declared key type
+// does not bound the length of this map, and the claim fails because the map may hold `k`.
+fn lookup(m: HashMap<i32, i32>, k: i32) -> bool vow {
+  requires: k == 0i32 - 5i32
+  ensures: !m.contains_key(k)
+} {
+  m.contains_key(k)
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<i32, i32> = HashMap::new();
+  if lookup(m, 0i32 - 5i32) { print_u64(1); }
+  0
+}

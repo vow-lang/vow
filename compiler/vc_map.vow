@@ -42,10 +42,13 @@ use vc_query
 // present key. With 64-bit keys that is also all a real map needs: any model of
 // it extends to a map with that length (there are keys to spare outside the ones
 // named), so a counterexample is a run. A key narrower than 64 bits bounds the
-// length by its domain, and the IR does not say what the key type of a map the
-// function did not build is unless an operand shows it; then the presence array
-// and the length are `vc_map_inexact_vars`, and the driver reports a failure that
-// reaches them only when it holds for every state (`vc_native`). The two maps
+// length by its domain. The lowering records the declared key type of a parameter
+// (`IrFunction.param_keys`), and `vc_mapdom` adds what that bounds for every base of
+// the parameter: the base is then exact too. Where the key type is not known (a map the
+// function built and a loop cut havocs, whose keys only an operand shows, or
+// parameters that may be one object) the presence array and the length are
+// `vc_map_inexact_vars`, and the driver reports a failure that reaches them only
+// when it holds for every state (`vc_native`). The two maps
 // follow one model because the runtime has no iteration API: neither the order of
 // a `BTreeMap` nor the slot a `HashMap` key hashes to can be observed.
 //
@@ -78,8 +81,15 @@ struct VcMap {
     fb_pres: Vec<Vec<i64>>,
     fb_len: Vec<Vec<i64>>,
     fb_acc: Vec<Vec<i64>>,
+    // Per slot, per arbitrary base: the number of distinct named keys of a narrow key domain that
+    // are in the domain and absent from the base (`vc_mapdom`).
+    fb_abs: Vec<Vec<i64>>,
     // Per slot: the parameter the map is, -1 for a map the function built.
     slot_param: Vec<i64>,
+    // The IR type of the declared key of each parameter that is a map (-1 when it is not known),
+    // and of each slot (`vc_mapdom`).
+    param_kty: Vec<i64>,
+    slot_kty: Vec<i64>,
     // Model entries of the map parameters, in declaration order: the length of each parameter's
     // state, and for each key the function asks it about, the key, its presence word and its
     // value slot in the parameter's own state, so a counterexample can list the map.
@@ -120,7 +130,10 @@ fn vc_map_new_state(fl: VcFlow, ar: VcArena, n_blocks: u64) -> VcMap {
         fb_pres: Vec::new(),
         fb_len: Vec::new(),
         fb_acc: Vec::new(),
+        fb_abs: Vec::new(),
         slot_param: Vec::new(),
+        param_kty: Vec::new(),
+        slot_kty: Vec::new(),
         ent_name: Vec::new(),
         ent_param: Vec::new(),
         ent_slot: Vec::new(),
@@ -166,7 +179,10 @@ fn vc_map_push_slot(mp: VcMap, obj: i64, kind: i64) -> i64 {
     mp.fb_len.push(none_len);
     let none_acc: Vec<i64> = Vec::new();
     mp.fb_acc.push(none_acc);
+    let none_abs: Vec<i64> = Vec::new();
+    mp.fb_abs.push(none_abs);
     mp.slot_param.push(-1);
+    mp.slot_kty.push(-1);
     mp.kid_head.push(-1);
     let mut k: u64 = 0;
     while k < mp.n_blocks {

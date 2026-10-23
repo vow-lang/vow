@@ -1,0 +1,19 @@
+// TEST: counterexample-fn "len_below_domain"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value m.len 256
+module MapNarrowU8LenOffByOne
+
+// A `u8` key has 256 values and a map can hold all of them, so a length of 256 is a run. A model
+// that gave the key domain 255 values would prove the claim.
+fn len_below_domain(m: HashMap<u8, i64>) -> u64 vow {
+  ensures: result <= 255
+} {
+  m.len()
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<u8, i64> = HashMap::new();
+  print_u64(len_below_domain(m));
+  0
+}

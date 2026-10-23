@@ -1,0 +1,22 @@
+module MapNarrowLoopHavocLen
+
+// The loop writes the parameter, so its state at the top of the header is a new arbitrary map of the
+// same declared key type, and the length after the loop is within the domain.
+fn fill(m: HashMap<u8, i64>, n: u64) -> u64 vow {
+  ensures: result <= 256
+} {
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n
+  } {
+    m.insert(7, 1);
+    i = i + 1;
+  }
+  m.len()
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<u8, i64> = HashMap::new();
+  print_u64(fill(m, 3));
+  0
+}

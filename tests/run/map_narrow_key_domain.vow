@@ -1,0 +1,67 @@
+// TEST: stdout "i8_len=256\ni8_has_minus_one=true\ni8_has_min=true\ni8_has_max=true\nu8_len=256\nu8_has_255=true\nbool_len=2\nbool_both=true\ni16_len=65536\ni16_has_minus_one=true\n"
+// The native verifier bounds the length of a map by the domain of its declared key type and widens a
+// key as the runtime does (a signed key by its sign, an unsigned one by zero): a map holds every value
+// of a narrow key type at once, a negative literal key is the signed value, and no key is twice.
+module MapNarrowKeyDomain
+
+fn fill_i8(m: HashMap<i8, i64>) {
+    let mut i: i64 = 0 - 128;
+    while i < 128 {
+        m.insert(i64_to_i8_wrap(i), i);
+        i = i + 1;
+    }
+}
+
+fn fill_u8(m: HashMap<u8, i64>) {
+    let mut i: i64 = 0;
+    while i < 256 {
+        m.insert(i64_to_u8_wrap(i), i);
+        i = i + 1;
+    }
+}
+
+fn fill_i16(m: HashMap<i16, i64>) {
+    let mut i: i64 = 0 - 32768;
+    while i < 32768 {
+        m.insert(i64_to_i16_wrap(i), i);
+        i = i + 1;
+    }
+}
+
+fn show(name: String, v: u64) [io] {
+    print_str(name);
+    print_str(String::from("="));
+    print_u64(v);
+    print_str(String::from("\n"));
+}
+
+fn show_bool(name: String, v: bool) [io] {
+    print_str(name);
+    print_str(String::from("="));
+    if v { print_str(String::from("true")); } else { print_str(String::from("false")); }
+    print_str(String::from("\n"));
+}
+
+fn main() -> i32 [io] {
+    let a: HashMap<i8, i64> = HashMap::new();
+    fill_i8(a);
+    show(String::from("i8_len"), a.len());
+    show_bool(String::from("i8_has_minus_one"), a.contains_key(-1));
+    show_bool(String::from("i8_has_min"), a.contains_key(-128));
+    show_bool(String::from("i8_has_max"), a.contains_key(127));
+    let b: HashMap<u8, i64> = HashMap::new();
+    fill_u8(b);
+    show(String::from("u8_len"), b.len());
+    show_bool(String::from("u8_has_255"), b.contains_key(255));
+    let c: HashMap<bool, i64> = HashMap::new();
+    c.insert(true, 1);
+    c.insert(false, 0);
+    c.insert(true, 2);
+    show(String::from("bool_len"), c.len());
+    show_bool(String::from("bool_both"), c.contains_key(true) && c.contains_key(false));
+    let d: HashMap<i16, i64> = HashMap::new();
+    fill_i16(d);
+    show(String::from("i16_len"), d.len());
+    show_bool(String::from("i16_has_minus_one"), d.contains_key(-1));
+    0
+}

@@ -1,0 +1,18 @@
+module MapNarrowKeyFoldedLiteral
+
+// True for every real map: an `i8` key has 256 values, and a map of length 256 holds all of
+// them. A negative literal key reaches the IR as `0 - 1` at type `i64`, whatever the key type is,
+// but the key type of the parameter is known, so `-1` is the widening of the `i8` value `-1`, a
+// key that takes room from the length when the map lacks it.
+fn full_table_has_minus_one(m: HashMap<i8, i64>) -> bool vow {
+  requires: m.len() == 256,
+  ensures: result
+} {
+  m.contains_key(-1)
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<i8, i64> = HashMap::new();
+  if full_table_has_minus_one(m) { print_u64(1); }
+  0
+}

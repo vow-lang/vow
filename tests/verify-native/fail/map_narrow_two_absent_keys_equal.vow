@@ -1,0 +1,21 @@
+// TEST: counterexample-fn "distinct_absent"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value m.len 255
+module MapNarrowTwoAbsentKeysEqual
+
+// A map of 255 of the 256 `u8` keys lacks exactly one key, so two absent keys are one key. They are
+// a run when they are equal; a model that counted a key it names twice as two would leave no room for
+// the map and prove the claim.
+fn distinct_absent(m: HashMap<u8, i64>, a: u8, b: u8) -> bool vow {
+  requires: m.len() == 255 && !m.contains_key(a) && !m.contains_key(b),
+  ensures: a != b
+} {
+  a != b
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<u8, i64> = HashMap::new();
+  if distinct_absent(m, 1, 2) { print_u64(1); }
+  0
+}

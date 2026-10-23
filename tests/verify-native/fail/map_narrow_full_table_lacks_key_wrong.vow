@@ -1,0 +1,20 @@
+// TEST: counterexample-fn "has_key"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value m.len 255
+module MapNarrowFullTableLacksKeyWrong
+
+// One entry short of a full table: the map may lack `k`, and then holds the other 255 keys. A model
+// that counted a named key against the length whether it was present or not would prove the claim.
+fn has_key(m: HashMap<u8, i64>, k: u8) -> bool vow {
+  requires: m.len() == 255,
+  ensures: result
+} {
+  m.contains_key(k)
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<u8, i64> = HashMap::new();
+  if has_key(m, 1) { print_u64(1); }
+  0
+}

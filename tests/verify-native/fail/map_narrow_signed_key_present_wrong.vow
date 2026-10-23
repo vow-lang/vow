@@ -1,0 +1,21 @@
+// TEST: counterexample-fn "lookup"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value k -5
+// TEST: counterexample-value m.len 1
+module MapNarrowSignedKeyPresentWrong
+
+// The negative half of an `i8` key's domain is in the domain: a map holding `-5` is a run, and a
+// model that took the domain of `i8` for `0..=255` would rule it out and prove the claim.
+fn lookup(m: HashMap<i8, i64>, k: i8) -> bool vow {
+  requires: k == 0i8 - 5i8
+  ensures: !m.contains_key(k)
+} {
+  m.contains_key(k)
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<i8, i64> = HashMap::new();
+  if lookup(m, 0i8 - 5i8) { print_u64(1); }
+  0
+}
