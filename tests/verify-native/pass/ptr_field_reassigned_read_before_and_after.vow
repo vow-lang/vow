@@ -1,0 +1,24 @@
+// The field is read before and after it is assigned a second Vec. Each read is the Vec the last
+// store before it put there: the first push lands in the first Vec, which keeps its element, and
+// the two pushes after the assignment land in the second.
+module PtrFieldReassignedReadBeforeAndAfter
+
+struct Block { id: i64, insts: Vec<i64> }
+
+fn fill() -> bool vow {
+  ensures: result
+} {
+  let first: Vec<i64> = Vec::new();
+  let b: Block = Block { id: 7, insts: first };
+  b.insts.push(1);
+  let before: u64 = b.insts.len();
+  b.insts = Vec::new();
+  b.insts.push(2);
+  b.insts.push(3);
+  before == 1 && b.insts.len() == 2 && first.len() == 1
+}
+
+fn main() -> i32 [io] {
+  if fill() { print_i64(1); }
+  0
+}

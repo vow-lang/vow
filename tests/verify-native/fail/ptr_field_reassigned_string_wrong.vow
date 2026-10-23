@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "relabel"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The push after the assignment is on the second String, so the first keeps its two bytes: a
+// length of 3 is what a read resolved to the first store would give.
+module PtrFieldReassignedStringWrong
+
+struct Label { id: i64, text: String }
+
+fn relabel() -> bool vow {
+  ensures: result
+} {
+  let first: String = String::from("ab");
+  let l: Label = Label { id: 1, text: first };
+  l.text = String::from("xyz");
+  l.text.push_str(String::from("!"));
+  first.len() == 3
+}
+
+fn main() -> i32 [io] {
+  if relabel() { print_i64(1); }
+  0
+}

@@ -1,0 +1,20 @@
+// A String held in a field and assigned a second String: a push after the assignment is on the
+// second, and the first is as it was.
+module PtrFieldReassignedString
+
+struct Label { id: i64, text: String }
+
+fn relabel() -> bool vow {
+  ensures: result
+} {
+  let first: String = String::from("ab");
+  let l: Label = Label { id: 1, text: first };
+  l.text = String::from("xyz");
+  l.text.push_str(String::from("!"));
+  l.text.len() == 4 && first.len() == 2
+}
+
+fn main() -> i32 [io] {
+  if relabel() { print_i64(1); }
+  0
+}

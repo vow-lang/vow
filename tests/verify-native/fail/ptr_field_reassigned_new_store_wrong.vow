@@ -1,0 +1,25 @@
+// TEST: counterexample-fn "fill"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The read before the assignment is the first Vec, which has one element: a length of 0 is
+// what a read resolved to the last store of the function would give.
+module PtrFieldReassignedNewStoreWrong
+
+struct Block { id: i64, insts: Vec<i64> }
+
+fn fill() -> bool vow {
+  ensures: result
+} {
+  let b: Block = Block { id: 7, insts: Vec::new() };
+  b.insts.push(1);
+  let before: u64 = b.insts.len();
+  b.insts = Vec::new();
+  b.insts.push(2);
+  b.insts.push(3);
+  before == 0
+}
+
+fn main() -> i32 [io] {
+  if fill() { print_i64(1); }
+  0
+}
