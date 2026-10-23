@@ -199,13 +199,22 @@ fn check_later_store_and_loop() -> i64 {
 }
 
 // A store through a Phi that merges the allocation with another one may not store into it: it
-// cannot take the place of the earlier store, so the read is left alone.
+// cannot take the place of an earlier store, nor stand alone as the one store, so the read is
+// left alone.
 fn check_merged_receiver_store() -> i64 {
+    if merged_receiver_store_resolved(true) { return 1; }
+    if merged_receiver_store_resolved(false) { return 2; }
+    0
+}
+
+fn merged_receiver_store_resolved(earlier_store: bool) -> bool {
     let e: Vec<IrInst> = Vec::new();
     e.push(mk_inst_alloc(1, 16));
     e.push(mk_inst_alloc(20, 16));
-    e.push(vec_new(2));
-    e.push(mk_inst_field_set(3, 1, 0, 2));
+    if earlier_store {
+        e.push(vec_new(2));
+        e.push(mk_inst_field_set(3, 1, 0, 2));
+    }
     e.push(mk_inst_const_bool(4, 1));
     e.push(mk_inst_branch(5, 4, 1, 2));
     let a: Vec<IrInst> = Vec::new();
@@ -228,8 +237,7 @@ fn check_merged_receiver_store() -> i64 {
     blocks.push(mk_block(2, b));
     blocks.push(mk_block(3, j));
     let g: IrFunction = vc_resolve_ptr_fields(mk_function(1, String::from("f"), Vec::new(), ITY_UNIT(), blocks));
-    if count_op(g, IOP_FIELD_GET()) != 1 { return 1; }
-    0
+    count_op(g, IOP_FIELD_GET()) == 0
 }
 
 // A store after the read does not dominate it.

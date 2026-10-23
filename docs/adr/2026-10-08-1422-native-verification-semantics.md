@@ -1229,15 +1229,14 @@ Three small rules, each sound for proofs and none a cap or a havoc.
   operation the value of the last `FieldSet` of the slot dominating the read (an earlier position
   in its block, or a dominating block), so a field stored twice is resolved per read: the push
   after `b.insts = Vec::new()` is on the new `Vec`, the read between the two stores is the first.
-  The stores that may name the
-  allocation are wider than the truth: a store through it or a Phi that merges it, through a
+  The stores that may name the allocation are wider than the truth: a store through it or a Phi that merges it, through a
   receiver the rule cannot place, and, once it has escaped (stored into a field, pushed into a
   collection or passed as a value, so a loaded pointer may be it), through any pointer that is not
-  a parameter or an allocation. With more than one, each must name the allocation alone (a store
+  a parameter or an allocation. Each must name the allocation alone (a store
   through a Phi that merges it with another object may leave the slot as it was), and each that
   does not dominate the read must be unable to reach it (`vc_pf_entering`), so a store in one arm
   of a branch that merges before the read, or in a loop around it, leaves the read a handle, and
-  the write through it `Skipped` (the merge of two stored objects would need a Phi built here). So
+  the write through it `Skipped` (the merge of two stored objects would need a Phi built here: see #1888). So
   does a pointer value of another type and a parameter's field (another parameter may be the same
   object). The pre-inline gate of one function of a call tree (`calls`) accepts a write through a
   handle for the same reason, since the struct is built by a callee. Pinned by

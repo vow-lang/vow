@@ -28,11 +28,12 @@ use vc_sources
 //     so a pointer the function loaded may be it), through any pointer that is not a
 //     parameter or an allocation. A receiver the rule cannot place leaves the read alone;
 //   - the read is the value of the last store that dominates it (an earlier position in the
-//     read's own block, or a dominating block). With more than one store each must name `A`
+//     read's own block, or a dominating block). Each store must name `A`
 //     alone: a store through a Phi that merges `A` with another object may leave the slot as
 //     it was. Every store that does not dominate the read must be unable to reach it, in a
 //     block from which the read's block cannot be entered, so a store in one arm of a branch
-//     that merges before the read, or in a loop around it, leaves the read alone;
+//     that merges before the read, or in a loop around it, leaves the read alone (the merge
+//     of two stored objects would need a Phi built here: see #1888);
 //   - the stored value is a pointer, and it is defined where the read is.
 //
 // Only the object operands of a `Vec` or `String` operation are replaced. A read with
@@ -206,13 +207,11 @@ fn vc_pf_last_store(c: VcPfCtx, a: i64, slot: i64, rb: i64, ri: i64) -> i64 {
             n = n + 1;
         }
     }
-    let mut count: i64 = 0;
     let mut last: i64 = -1;
     let mut e: i64 = c.a_head[a as u64];
     while e >= 0 {
         let s: i64 = c.a_store[e as u64];
         if c.s_slot[s as u64] == slot {
-            count = count + 1;
             if vc_pf_before(c, s, rb, ri) {
                 if last < 0 || vc_pf_before(c, last, c.s_blk[s as u64], c.s_pos[s as u64]) {
                     last = s;
@@ -224,14 +223,15 @@ fn vc_pf_last_store(c: VcPfCtx, a: i64, slot: i64, rb: i64, ri: i64) -> i64 {
         e = c.a_next[e as u64];
     }
     if last < 0 { return -1; }
-    if count > 1 && !vc_pf_others_cannot_reach(c, a, slot, rb, ri) { return -1; }
+    if !vc_pf_others_cannot_reach(c, a, slot, rb, ri) { return -1; }
     let v: i64 = c.s_val[last as u64];
     if v < 0 || (v as u64) >= c.tys.len() || c.tys[v as u64] != ITY_PTR() { return -1; }
     v
 }
 
-// With several stores of the slot: each names `a` alone, and each that is not before the read
-// is in a block the read's block cannot be entered from.
+// Every store of the slot names `a` alone (a store through a Phi that merges `a` with another
+// object may leave the slot as it was), and each that is not before the read is in a block the
+// read's block cannot be entered from.
 fn vc_pf_others_cannot_reach(c: VcPfCtx, a: i64, slot: i64, rb: i64, ri: i64) -> bool {
     let mut from: Vec<i64> = Vec::new();
     let mut e: i64 = c.a_head[a as u64];
