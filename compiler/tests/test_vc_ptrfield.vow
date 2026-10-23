@@ -82,23 +82,162 @@ fn check_single_store() -> i64 {
     0
 }
 
-// Two stores of the same slot: the read has no single value, so nothing changes.
+// Two stores of the same slot in one block: the read is the value of the later one, and a read
+// between them is the earlier one.
 fn check_two_stores() -> i64 {
     let insts: Vec<IrInst> = Vec::new();
     insts.push(mk_inst_alloc(1, 16));
     insts.push(vec_new(2));
     insts.push(mk_inst_field_set(3, 1, 0, 2));
-    insts.push(vec_new(8));
-    insts.push(mk_inst_field_set(9, 1, 0, 8));
     insts.push(mk_inst_const_i64(4, 9));
     insts.push(mk_inst_field_get(5, ITY_I64(), 1, 0));
     insts.push(push_call(6, 5, 4));
+    insts.push(vec_new(8));
+    insts.push(mk_inst_field_set(9, 1, 0, 8));
+    insts.push(mk_inst_field_get(10, ITY_I64(), 1, 0));
+    insts.push(push_call(11, 10, 4));
     insts.push(mk_inst(7, IOP_RETURN(), ITY_UNIT(), Vec::new()));
-    let f: IrFunction = one_block(insts);
-    let g: IrFunction = vc_resolve_ptr_fields(f);
-    if count_op(g, IOP_FIELD_GET()) != 1 { return 1; }
-    if find_call(g, 6).args[0] != 5 { return 2; }
+    let g: IrFunction = vc_resolve_ptr_fields(one_block(insts));
+    if count_op(g, IOP_FIELD_GET()) != 0 { return 1; }
+    if find_call(g, 6).args[0] != 2 { return 2; }
+    if find_call(g, 11).args[0] != 8 { return 3; }
     0
+}
+
+// The later store is in a block the earlier one dominates, and the read is in a third.
+fn check_stores_across_blocks() -> i64 {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_alloc(1, 16));
+    e.push(vec_new(2));
+    e.push(mk_inst_field_set(3, 1, 0, 2));
+    e.push(mk_inst_jump(4, 1));
+    let m: Vec<IrInst> = Vec::new();
+    m.push(vec_new(8));
+    m.push(mk_inst_field_set(9, 1, 0, 8));
+    m.push(mk_inst_jump(10, 2));
+    let r: Vec<IrInst> = Vec::new();
+    r.push(mk_inst_const_i64(5, 9));
+    r.push(mk_inst_field_get(6, ITY_I64(), 1, 0));
+    r.push(push_call(7, 6, 5));
+    r.push(mk_inst(11, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, m));
+    blocks.push(mk_block(2, r));
+    let g: IrFunction = vc_resolve_ptr_fields(mk_function(1, String::from("f"), Vec::new(), ITY_UNIT(), blocks));
+    if count_op(g, IOP_FIELD_GET()) != 0 { return 1; }
+    if find_call(g, 7).args[0] != 8 { return 2; }
+    0
+}
+
+// A second store in one arm of a branch reaches the join without dominating it: the read has
+// two values, so it is left alone.
+fn check_store_in_one_arm() -> i64 {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_alloc(1, 16));
+    e.push(vec_new(2));
+    e.push(mk_inst_field_set(3, 1, 0, 2));
+    e.push(mk_inst_const_bool(4, 1));
+    e.push(mk_inst_branch(5, 4, 1, 2));
+    let t: Vec<IrInst> = Vec::new();
+    t.push(vec_new(8));
+    t.push(mk_inst_field_set(9, 1, 0, 8));
+    t.push(mk_inst_jump(10, 2));
+    let j: Vec<IrInst> = Vec::new();
+    j.push(mk_inst_const_i64(6, 9));
+    j.push(mk_inst_field_get(7, ITY_I64(), 1, 0));
+    j.push(push_call(11, 7, 6));
+    j.push(mk_inst(12, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, t));
+    blocks.push(mk_block(2, j));
+    let g: IrFunction = vc_resolve_ptr_fields(mk_function(1, String::from("f"), Vec::new(), ITY_UNIT(), blocks));
+    if count_op(g, IOP_FIELD_GET()) != 1 { return 1; }
+    0
+}
+
+// A store after the read is no value of it when the read cannot be reached again, and is one
+// when a loop brings the store back to the read.
+fn check_later_store_and_loop() -> i64 {
+    let straight: Vec<IrInst> = Vec::new();
+    straight.push(mk_inst_alloc(1, 16));
+    straight.push(vec_new(2));
+    straight.push(mk_inst_field_set(3, 1, 0, 2));
+    straight.push(mk_inst_const_i64(4, 9));
+    straight.push(mk_inst_field_get(5, ITY_I64(), 1, 0));
+    straight.push(push_call(6, 5, 4));
+    straight.push(vec_new(8));
+    straight.push(mk_inst_field_set(9, 1, 0, 8));
+    straight.push(mk_inst(7, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let g: IrFunction = vc_resolve_ptr_fields(one_block(straight));
+    if count_op(g, IOP_FIELD_GET()) != 0 { return 1; }
+    if find_call(g, 6).args[0] != 2 { return 2; }
+
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_alloc(1, 16));
+    e.push(vec_new(2));
+    e.push(mk_inst_field_set(3, 1, 0, 2));
+    e.push(mk_inst_const_bool(4, 1));
+    e.push(mk_inst_jump(5, 1));
+    let l: Vec<IrInst> = Vec::new();
+    l.push(mk_inst_const_i64(6, 9));
+    l.push(mk_inst_field_get(7, ITY_I64(), 1, 0));
+    l.push(push_call(8, 7, 6));
+    l.push(vec_new(10));
+    l.push(mk_inst_field_set(11, 1, 0, 10));
+    l.push(mk_inst_branch(12, 4, 1, 2));
+    let x: Vec<IrInst> = Vec::new();
+    x.push(mk_inst(13, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, l));
+    blocks.push(mk_block(2, x));
+    let h: IrFunction = vc_resolve_ptr_fields(mk_function(1, String::from("f"), Vec::new(), ITY_UNIT(), blocks));
+    if count_op(h, IOP_FIELD_GET()) != 1 { return 3; }
+    0
+}
+
+// A store through a Phi that merges the allocation with another one may not store into it: it
+// cannot take the place of an earlier store, nor stand alone as the one store, so the read is
+// left alone.
+fn check_merged_receiver_store() -> i64 {
+    if merged_receiver_store_resolved(true) { return 1; }
+    if merged_receiver_store_resolved(false) { return 2; }
+    0
+}
+
+fn merged_receiver_store_resolved(earlier_store: bool) -> bool {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_alloc(1, 16));
+    e.push(mk_inst_alloc(20, 16));
+    if earlier_store {
+        e.push(vec_new(2));
+        e.push(mk_inst_field_set(3, 1, 0, 2));
+    }
+    e.push(mk_inst_const_bool(4, 1));
+    e.push(mk_inst_branch(5, 4, 1, 2));
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_upsilon(21, 1, 30));
+    a.push(mk_inst_jump(22, 3));
+    let b: Vec<IrInst> = Vec::new();
+    b.push(mk_inst_upsilon(23, 20, 30));
+    b.push(mk_inst_jump(24, 3));
+    let j: Vec<IrInst> = Vec::new();
+    j.push(mk_inst_phi(30, ITY_PTR()));
+    j.push(vec_new(8));
+    j.push(mk_inst_field_set(9, 30, 0, 8));
+    j.push(mk_inst_const_i64(6, 9));
+    j.push(mk_inst_field_get(7, ITY_I64(), 1, 0));
+    j.push(push_call(11, 7, 6));
+    j.push(mk_inst(12, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, a));
+    blocks.push(mk_block(2, b));
+    blocks.push(mk_block(3, j));
+    let g: IrFunction = vc_resolve_ptr_fields(mk_function(1, String::from("f"), Vec::new(), ITY_UNIT(), blocks));
+    count_op(g, IOP_FIELD_GET()) == 0
 }
 
 // A store after the read does not dominate it.
@@ -275,5 +414,9 @@ fn main() -> i32 {
     if r == 0 { r = check_escape() + 50; if r == 50 { r = 0; } }
     if r == 0 { r = check_across_blocks() + 60; if r == 60 { r = 0; } }
     if r == 0 { r = check_collection_escape_and_unplaced() + 70; if r == 70 { r = 0; } }
+    if r == 0 { r = check_stores_across_blocks() + 80; if r == 80 { r = 0; } }
+    if r == 0 { r = check_store_in_one_arm() + 90; if r == 90 { r = 0; } }
+    if r == 0 { r = check_later_store_and_loop() + 100; if r == 100 { r = 0; } }
+    if r == 0 { r = check_merged_receiver_store() + 110; if r == 110 { r = 0; } }
     i64_to_i32_wrap(r)
 }

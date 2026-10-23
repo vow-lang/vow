@@ -1,0 +1,19 @@
+// The field is stored twice, by the struct literal and by the assignment. The push after the
+// assignment is on the Vec the assignment stored, and the length read back is that Vec's.
+module PtrFieldReassignedNotResolved
+
+struct Block { id: i64, insts: Vec<i64> }
+
+fn fill() -> u64 vow {
+  ensures: result == 1
+} {
+  let b: Block = Block { id: 7, insts: Vec::new() };
+  b.insts = Vec::new();
+  b.insts.push(1);
+  b.insts.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill());
+  0
+}

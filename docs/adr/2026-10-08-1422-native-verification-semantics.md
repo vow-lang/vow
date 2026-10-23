@@ -1221,28 +1221,27 @@ Three small rules, each sound for proofs and none a cap or a havoc.
   array defined by a quantified assumption over the heap. Pinned by `pass/handle_return_getter.vow`,
   `pass/heap_handle_returned_as_object.vow` (moved out of `skip/`),
   `skip/handle_object_merge_skipped.vow` and the `_wrong` twins.
-- **A field read that has one value is that object (`vc_ptrfield`, #1771).** The IR types a
+- **A field read that has one value is that object (`vc_ptrfield`, #1771, #1852).** The IR types a
   `Vec` or `String` held in a field `i64`, so `b.insts.push(x)` is a write whose receiver is a
-  handle, and the heap model only reads through a handle: its arrays are never stored to, so a
-  write through one would be lost to every later read. When the struct is an allocation (reached
-  through the Phi a call result is after inlining) and exactly one `FieldSet` of the slot may name
-  it, with a pointer value whose store dominates the read, the slot holds that value on every path
-  to the read, and `vc_resolve_ptr_fields` makes the object operand of the `Vec` or `String`
-  operation that value. This is a substitution on the inlined function before the gate: the
-  executor, the loop cut and the counterexample model see an ordinary object. What counts as a
-  store that may name the allocation is deliberately wider than the truth: a store through the
-  allocation or a Phi that merges it, a store through a receiver the rule cannot place, and, once
-  the allocation has been stored into a field, pushed into a collection or passed as a value (so
-  a pointer the function loaded may be it), any store through a pointer that is not a parameter
-  or an allocation. A second such store, a store that does not dominate the read, a
-  pointer value of another type and the field of a parameter (another parameter may be the same
-  object and store the slot too) leave the read a handle, and the write through it `Skipped`, which
-  is the fail-closed answer. The pre-inline gate of one function of a call tree
-  (`calls`) accepts a write through a handle for the same reason, since the struct is built by a
-  callee, and the gate of the flattened function does not. Pinned by `pass/ptr_field_vec_push_via_field.vow`,
-  `pass/ptr_field_vec_loop_len_invariant.vow`, `pass/heap_pointer_field_read_back.vow` (moved out
-  of `skip/`), `skip/ptr_field_reassigned_not_resolved.vow`, the `_wrong` twins and
-  `compiler/tests/test_vc_ptrfield.vow`.
+  handle, and the heap model only reads through a handle: a write through one would be lost to
+  every later read. When the struct is an allocation (reached through the Phi a call result is
+  after inlining), `vc_resolve_ptr_fields` makes the object operand of the `Vec` or `String`
+  operation the value of the last `FieldSet` of the slot dominating the read (an earlier position
+  in its block, or a dominating block), so a field stored twice is resolved per read: the push
+  after `b.insts = Vec::new()` is on the new `Vec`, the read between the two stores is the first.
+  The stores that may name the allocation are wider than the truth: a store through it or a Phi that merges it, through a
+  receiver the rule cannot place, and, once it has escaped (stored into a field, pushed into a
+  collection or passed as a value, so a loaded pointer may be it), through any pointer that is not
+  a parameter or an allocation. Each must name the allocation alone (a store
+  through a Phi that merges it with another object may leave the slot as it was), and each that
+  does not dominate the read must be unable to reach it (`vc_pf_entering`), so a store in one arm
+  of a branch that merges before the read, or in a loop around it, leaves the read a handle, and
+  the write through it `Skipped` (the merge of two stored objects would need a Phi built here: see #1888). So
+  does a pointer value of another type and a parameter's field (another parameter may be the same
+  object). The pre-inline gate of one function of a call tree (`calls`) accepts a write through a
+  handle for the same reason, since the struct is built by a callee. Pinned by
+  `pass/ptr_field_vec_push_via_field.vow`, `pass/ptr_field_reassigned_*.vow`, the `_wrong` twins
+  (a wrong-store read is refuted) and `compiler/tests/test_vc_ptrfield.vow`.
 - **A loop with no `invariant` is also cut, with the clause `true`.** After the bounded rounds end
   open at the largest bound, when the inductive attempt did not prove and some loop has no clause,
   the cut is made again with `ConstBool true; VowInvariant` after each such header's Phis

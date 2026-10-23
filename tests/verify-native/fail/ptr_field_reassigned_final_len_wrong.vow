@@ -1,0 +1,24 @@
+// TEST: counterexample-fn "fill"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The length read after the assignment is the second Vec's, which has two elements: a length of
+// 3 is what a read resolved to the first store would give.
+module PtrFieldReassignedFinalLenWrong
+
+struct Block { id: i64, insts: Vec<i64> }
+
+fn fill() -> bool vow {
+  ensures: result
+} {
+  let b: Block = Block { id: 7, insts: Vec::new() };
+  b.insts.push(1);
+  b.insts = Vec::new();
+  b.insts.push(2);
+  b.insts.push(3);
+  b.insts.len() == 3
+}
+
+fn main() -> i32 [io] {
+  if fill() { print_i64(1); }
+  0
+}
