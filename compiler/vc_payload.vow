@@ -36,9 +36,8 @@ use vc_handle_phis
 // a payload stored in a field it is not the address of, or a returned payload the signature
 // does not take is still skipped there.
 
-// True when `f` is a function whose pointer reads `vc_retype_payload_reads` retypes.
+// True when `f` has pointer reads and `vc_retype_payload_reads` retypes them.
 fn vc_payload_applicable(f: IrFunction, n_ids: u64, tys: Vec<i64>) -> bool {
-    let mut any: bool = false;
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
         let blk: IrBlock = f.blocks[bi];
@@ -46,7 +45,6 @@ fn vc_payload_applicable(f: IrFunction, n_ids: u64, tys: Vec<i64>) -> bool {
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
             if vc_agg_is_ptr_read(inst) {
-                any = true;
                 if inst.args.len() != 1 || inst.args[0] < 0 || (inst.args[0] as u64) >= tys.len() || tys[inst.args[0] as u64] != ITY_PTR() {
                     return false;
                 }
@@ -55,7 +53,7 @@ fn vc_payload_applicable(f: IrFunction, n_ids: u64, tys: Vec<i64>) -> bool {
         }
         bi = bi + 1;
     }
-    if !any || !vc_agg_ptr_reads_used_ok(f, n_ids) { return false; }
+    if !vc_agg_ptr_reads_used_ok(f, n_ids) { return false; }
     vc_agg_child_detail(f, n_ids).len() > 0
 }
 

@@ -11,7 +11,7 @@ struct Handle {
 }
 
 fn stale(a: i64) -> i64 vow {
-  requires: a < 1000
+  requires: a < 9223372036854775807
   ensures: result == a
 } {
   let h: Handle = Handle { fd: a };
