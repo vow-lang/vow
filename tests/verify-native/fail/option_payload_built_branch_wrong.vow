@@ -1,0 +1,25 @@
+// TEST: counterexample-fn "pick"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The `Option` holds one of two objects, by the branch taken: the claim that it is the first
+// whichever way the branch goes is refuted. A model that read the first store would prove it.
+module OptionPayloadBuiltBranchWrong
+
+struct Handle {
+  fd: i64,
+}
+
+fn pick(c: bool) -> i64 vow {
+  ensures: result == 1
+} {
+  let o: Option<Handle> = if c { Option::Some(Handle { fd: 1 }) } else { Option::Some(Handle { fd: 2 }) };
+  match o {
+    Option::Some(x) => x.fd,
+    Option::None => 0,
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(pick(true));
+  0
+}

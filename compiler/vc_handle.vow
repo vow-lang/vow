@@ -80,7 +80,7 @@ fn vc_overlay_arm(ov: VcOverlay, ar: VcArena, acc: i64, i: u64, h: i64, val: i64
 
 fn vc_handle_field(m: VcHandleMemory, h: i64, slot: i64, ty: i64) -> i64 {
     let base: i64 = vc_heap_field(m.heap, m.ar, m.header, h, slot, ty);
-    let t: i64 = vc_overlay_field(m.overlay, m.ag, m.ar, m.header, m.assumed, h, slot, ty, base);
+    let t: i64 = vc_overlay_field(m.overlay, m.ag, m.ar, m.header, m.assumed, h, slot, ty, base, m.heap.ranked);
     vc_handle_note_loaded(m, base, ty);
     t
 }
@@ -260,9 +260,9 @@ fn vc_cycle_assume(ov: VcOverlay, ag: VcAgg, ar: VcArena, hdr: SmtScript, assume
 
 // Field `slot` at type `ty` of the struct at `h`, given the array's value `base`. A chain
 // through a struct-typed field's address assumes the ranking first (`vc_cycle_assume`).
-fn vc_overlay_field(ov: VcOverlay, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, h: i64, slot: i64, ty: i64, base: i64) -> i64 {
+fn vc_overlay_field(ov: VcOverlay, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, h: i64, slot: i64, ty: i64, base: i64, ranked: bool) -> i64 {
     let loaded: bool = vc_overlay_is_loaded(ov, ag, ar, assumed, h);
-    vc_cycle_assume(ov, ag, ar, hdr, assumed, h);
+    if ranked { vc_cycle_assume(ov, ag, ar, hdr, assumed, h); }
     let mut acc: i64 = vc_overlay_chain_start(ov, ar, h, loaded, base);
     let mut i: u64 = 0;
     while i < ov.addr.len() {

@@ -1,0 +1,28 @@
+// Two `Option`s the function builds hold two objects: each payload is read back from the
+// object it was stored as, never from the other.
+module OptionPayloadBuiltTwo
+
+struct Handle {
+  fd: i64,
+}
+
+fn diff(a: i64, b: i64) -> i64 vow {
+  ensures: result == a - b
+} {
+  let x: Option<Handle> = Option::Some(Handle { fd: a });
+  let y: Option<Handle> = Option::Some(Handle { fd: b });
+  let p: i64 = match x {
+    Option::Some(h) => h.fd,
+    Option::None => 0,
+  };
+  let q: i64 = match y {
+    Option::Some(h) => h.fd,
+    Option::None => 0,
+  };
+  p - q
+}
+
+fn main() -> i32 [io] {
+  print_i64(diff(5, 3));
+  0
+}

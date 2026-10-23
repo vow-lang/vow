@@ -1,0 +1,25 @@
+// The payload is the object that was stored, not a copy of it: a write to the object after it
+// went into the `Option` is what the payload reads.
+module OptionPayloadBuiltStoredThenWritten
+
+struct Handle {
+  fd: i64,
+}
+
+fn bumped(a: i64) -> i64 vow {
+  requires: a < 1000
+  ensures: result == a + 1
+} {
+  let h: Handle = Handle { fd: a };
+  let o: Option<Handle> = Option::Some(h);
+  h.fd = a + 1;
+  match o {
+    Option::Some(x) => x.fd,
+    Option::None => 0,
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(bumped(4));
+  0
+}

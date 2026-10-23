@@ -1,0 +1,38 @@
+// TEST: replay-skipped a payload struct read through memory has no listed fields, so replay cannot rebuild it
+// TEST: counterexample-fn "pick_is_arm"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The merge takes the first parameter when the condition holds, so the claim that it takes the
+// second is refuted. A model that swapped the edges would prove it.
+module OptionPayloadMergedSwappedWrong
+
+struct Handle {
+  fd: i64,
+}
+
+fn pick_is_arm(c: bool, a: Option<Handle>, b: Option<Handle>) -> bool vow {
+  ensures: result
+} {
+  let o: Option<Handle> = if c { a } else { b };
+  let got: i64 = match o {
+    Option::Some(h) => h.fd,
+    Option::None => 0,
+  };
+  let want: i64 = if c {
+    match b {
+      Option::Some(h) => h.fd,
+      Option::None => 0,
+    }
+  } else {
+    match a {
+      Option::Some(h) => h.fd,
+      Option::None => 0,
+    }
+  };
+  got == want
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

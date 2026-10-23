@@ -221,6 +221,41 @@ fn vc_agg_read_use_ok(inst: IrInst, a: u64) -> bool {
     op == IOP_FIELD_SET() || op == IOP_UPSILON() || op == IOP_RETURN() || op == IOP_LINEAR_CONSUME()
 }
 
+// True when every use of a pointer read out of a field (and of the Phis merging them) is one the
+// aggregate model understands (`vc_agg_read_use_ok`).
+fn vc_agg_ptr_reads_used_ok(f: IrFunction, n_ids: u64) -> bool {
+    let held: Vec<i64> = dom_fill(n_ids, 0);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if vc_agg_is_ptr_read(inst) { held[inst.id as u64] = 1; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    vc_heap_close_over_phis(f, held);
+    bi = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            let mut a: u64 = 0;
+            while a < inst.args.len() {
+                let id: i64 = inst.args[a];
+                if id >= 0 && (id as u64) < n_ids && held[id as u64] == 1 && !vc_agg_read_use_ok(inst, a) { return false; }
+                a = a + 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    true
+}
+
 // Gate rule for a pointer read out of a field of a parameter (`FieldGet[ptr]`,
 // the payload of an enum, `Option` or `Result` parameter): the read is a child
 // object of the parameter, one per slot (`vc_agg_child`), whose fields are
@@ -262,36 +297,8 @@ fn vc_agg_child_detail(f: IrFunction, n_ids: u64) -> String {
         bi = bi + 1;
     }
     if !any { return String::from(""); }
-    let held: Vec<i64> = dom_fill(n_ids, 0);
-    bi = 0;
-    while bi < f.blocks.len() {
-        let blk: IrBlock = f.blocks[bi];
-        let mut ii: u64 = 0;
-        while ii < blk.insts.len() {
-            let inst: IrInst = blk.insts[ii];
-            if vc_agg_is_ptr_read(inst) { held[inst.id as u64] = 1; }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    vc_heap_close_over_phis(f, held);
-    bi = 0;
-    while bi < f.blocks.len() {
-        let blk: IrBlock = f.blocks[bi];
-        let mut ii: u64 = 0;
-        while ii < blk.insts.len() {
-            let inst: IrInst = blk.insts[ii];
-            let mut a: u64 = 0;
-            while a < inst.args.len() {
-                let id: i64 = inst.args[a];
-                if id >= 0 && (id as u64) < n_ids && held[id as u64] == 1 && !vc_agg_read_use_ok(inst, a) {
-                    return String::from("a pointer read out of a field is used as a collection, a string or a value");
-                }
-                a = a + 1;
-            }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
+    if !vc_agg_ptr_reads_used_ok(f, n_ids) {
+        return String::from("a pointer read out of a field is used as a collection, a string or a value");
     }
     if vc_agg_alias_marked(f, n_ids).len() > 0 {
         return String::from("a pointer read out of a field in a function whose parameters may be one object");

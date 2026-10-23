@@ -40,6 +40,7 @@ struct VcHeap {
     len_arr: i64,
     elem_arr: i64,
     byte_arr: i64,
+    ranked: bool,
 }
 
 fn vc_heap_new() -> VcHeap {
@@ -49,7 +50,34 @@ fn vc_heap_new() -> VcHeap {
         len_arr: -1,
         elem_arr: -1,
         byte_arr: -1,
+        ranked: true,
     }
+}
+
+// The marker `vc_payload` leaves on the field read it retyped from a pointer to a handle.
+fn vc_heap_payload_marker() -> String { String::from("payload") }
+
+fn vc_heap_is_payload_read(inst: IrInst) -> bool {
+    inst.op == IOP_FIELD_GET() && inst.ty == ITY_I64() && inst.ds == vc_heap_payload_marker()
+}
+
+// The heap of one function. Its field-address cycle exclusion (#1779, `ranked`) is for
+// by-value struct-typed fields: an `Option` or enum payload can hold the object that holds it
+// (`p.next = Option::Some(p)` needs only a `p` whose `next` is `None`), so a function that
+// reads a payload as a handle ranks no field edge.
+fn vc_heap_for(f: IrFunction) -> VcHeap {
+    let hp: VcHeap = vc_heap_new();
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            if vc_heap_is_payload_read(blk.insts[ii]) { hp.ranked = false; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    hp
 }
 
 // True when the function read memory through a handle: its query needs arrays.
