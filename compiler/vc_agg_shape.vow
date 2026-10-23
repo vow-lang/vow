@@ -265,9 +265,10 @@ fn vc_agg_ptr_reads_used_ok(f: IrFunction, n_ids: u64) -> bool {
 //   - the pointer is only used as the base of a field access, a merge, a return,
 //     a consume or an argument of a user call, never as a `Vec` or `String`
 //     (those are modelled per parameter, `vc_vec`);
-//   - no parameter may be the very object a child names, which `vc_heap` rules
-//     out by forbidding writes to parameters in a function that reads a pointer
-//     out of a field. The gate uses `vc_agg_alias_marked`, not the type-narrowed
+//   - no parameter may be the very object a child names: a function that writes
+//     a parameter beside such a read has the payload read as a handle instead
+//     (`vc_payload`, which asks this gate), so the last rule below never reaches
+//     a skip. It uses `vc_agg_alias_marked`, not the type-narrowed
 //     `vc_agg_alias_params`: a child pointer is not typed here, so a parameter
 //     of another type may still be the object it names.
 // "" when it holds, else the detail of an `unsupported-opcode` skip.
