@@ -17,10 +17,10 @@ use vc_objects
 // read of the variable that was pushed, another element holding it and a later read through a
 // handle all see (`vc_agg_read_field`).
 //
-// A handle that names no entry would be a write the model drops. That cannot happen while the
-// walk is exact (`VcOverlay.exact`): every element of such a `Vec` is a stored address, and a
-// function with a write through an element is never cut (`vc_fh_writes_handle`), the only
-// way an element becomes an arbitrary word.
+// A handle that names no entry drops the write. In an exact walk that cannot happen: every
+// element of such a `Vec` is a stored address. A loop cut gives the `Vec` arbitrary elements; a
+// handle naming no entry then only adds states (every real handle names an entry, and a
+// counterexample there is `unknown`). `vc_fh_writes_handle` keeps such a function from being cut.
 
 fn vc_elem_write(ov: VcOverlay, ag: VcAgg, ar: VcArena, hdr: SmtScript, h: i64, slot: i64, ty: i64, term: i64, pc: i64) {
     let mut i: u64 = 0;
