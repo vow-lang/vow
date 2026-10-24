@@ -30,9 +30,14 @@ was pushed, so a handle read from it names exactly one overlay entry.
    the first draft proved `4` (found by review; `skip/vec_pointer_elem_field_param_stored_skipped`).
    Marking both would also model it; left to a follow-up.
 4. **A function with such a write is never cut** (`vc_fh_writes_handle`, anywhere in the function).
-   The loop cut gives a `Vec` of pointers arbitrary words, and a handle that names no entry would be a
-   write the model drops. The bounded rounds are exact, so a symbolic loop is `unknown` (`unwinding
-   assertion`), never proven (`unknown/vec_pointer_elem_field_write_in_loop_unknown`).
+   The loop cut gives a `Vec` of pointers arbitrary words, and a handle that names no entry drops the
+   write. That only widens the states, since every real handle names an entry, and a cut counterexample
+   is `unknown`; the function is still left to the bounded rounds, which are exact, so a symbolic
+   loop is `unknown` (`unwinding assertion`), never proven
+   (`unknown/vec_pointer_elem_field_write_in_loop_unknown`, `..._write_after_pushing_loop_unknown`).
+   Defence in depth: the mutation that removes the refusal changes no fixture, because the cut
+   already refuses a write whose receiver is no parameter or allocation (`vc_fh_roots`) and the
+   spurious branch above is `unknown`.
 
 ## Not covered, still `Skipped`
 

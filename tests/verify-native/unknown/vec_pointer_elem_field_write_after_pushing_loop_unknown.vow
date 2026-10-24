@@ -1,8 +1,8 @@
 // TEST: unknown-reason unwinding assertion
-// The loop pushes pointers, so a loop cut would give the `Vec` arbitrary elements and the write through
-// slot 0 after it would name no object the model knows. A function with a write through an element
-// is never cut, so the claim, false only for 100 or more pushes (the age of `a` is 5, not 4), is
-// unknown, never proven.
+// The loop pushes pointers, so a loop cut would give the `Vec` arbitrary elements, and the claim is
+// false only for 100 or more pushes (the age of `a` is 5, not 4). The bounded rounds reach 64
+// iterations and the function is never cut, so the verdict is unknown; a model that dropped the
+// write through slot 0 would prove the claim.
 module VecPointerElemFieldWriteAfterPushingLoopUnknown
 
 struct Person { age: i64 }

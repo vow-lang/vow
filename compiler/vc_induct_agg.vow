@@ -111,9 +111,9 @@ fn vc_fh_record(h: VcFieldHavocs, li: VcLoopInfo, defs: VcDefs, b: u64, roots: V
 }
 
 // True when a reachable `FieldSet` writes through a handle (`i64`): a field written through a
-// pointer element (`vc_elemwrite`). It names the objects its handle may be by an address
-// equation the loop cut does not keep (the cut gives a `Vec` of pointers arbitrary elements), so
-// the function is not cut, wherever the write is.
+// pointer element (`vc_elemwrite`). The loop cut gives a `Vec` of pointers arbitrary elements, so
+// a handle may name no entry and the write is dropped there. That only widens the states, but
+// the function is not cut, wherever the write is: nothing the cut proves depends on it.
 fn vc_fh_writes_handle(f: IrFunction, rpo: Vec<i64>, tys: Vec<i64>) -> bool {
     let mut b: u64 = 0;
     while b < f.blocks.len() {
