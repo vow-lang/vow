@@ -22,7 +22,8 @@ fn vc_elem_write_ok(inst: IrInst, t0: i64, t1: i64) -> bool {
         && inst.dk == IDATA_FIELD() && (t1 == ITY_BOOL() || (vc_ty_is_int(t1) && vc_ty_bits(t1) <= 64))
 }
 
-// The receiver of the `Vec` `get` that defines each value, -1 for every other value.
+// The receiver of the `Vec` `get` (a handle, typed `i64`) that defines each value, -1 for every
+// other value.
 fn vc_elem_get_recv(f: IrFunction, n_ids: u64) -> Vec<i64> {
     let recv: Vec<i64> = dom_fill(n_ids, -1);
     let mut bi: u64 = 0;
@@ -32,7 +33,7 @@ fn vc_elem_get_recv(f: IrFunction, n_ids: u64) -> Vec<i64> {
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
             if inst.op == IOP_CALL() && inst.id >= 0 && (inst.id as u64) < n_ids && inst.args.len() == 2
-                && vc_inst_vec_kind(inst) == VC_VEC_GET() {
+                && inst.ty == ITY_I64() && vc_inst_vec_kind(inst) == VC_VEC_GET() {
                 recv[inst.id as u64] = inst.args[0];
             }
             ii = ii + 1;
@@ -40,23 +41,6 @@ fn vc_elem_get_recv(f: IrFunction, n_ids: u64) -> Vec<i64> {
         bi = bi + 1;
     }
     recv
-}
-
-// 1 for every value of type `i64` (a handle when it names an object), 0 for every other value.
-fn vc_elem_handle_ids(f: IrFunction, n_ids: u64) -> Vec<i64> {
-    let ids: Vec<i64> = dom_fill(n_ids, 0);
-    let mut bi: u64 = 0;
-    while bi < f.blocks.len() {
-        let blk: IrBlock = f.blocks[bi];
-        let mut ii: u64 = 0;
-        while ii < blk.insts.len() {
-            let inst: IrInst = blk.insts[ii];
-            if inst.id >= 0 && (inst.id as u64) < n_ids && inst.ty == ITY_I64() { ids[inst.id as u64] = 1; }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    ids
 }
 
 // "" when every field written through a handle is written through an element of a `Vec` a
