@@ -1,0 +1,20 @@
+// A Bool and a narrow integer field written through an element.
+module VecPointerElemFieldBoolAndNarrow
+
+struct Flags { on: bool, level: u8 }
+
+fn flip() -> u8 vow {
+  ensures: result == 7
+} {
+  let all: Vec<Flags> = Vec::new();
+  all.push(Flags { on: false, level: 3 });
+  all[0].on = true;
+  all[0].level = 7;
+  let f: Flags = all[0];
+  if f.on { f.level } else { 0 }
+}
+
+fn main() -> i32 [io] {
+  print_i64(flip() as i64);
+  0
+}

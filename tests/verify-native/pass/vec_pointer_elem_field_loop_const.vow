@@ -1,0 +1,26 @@
+// A write through an element in a loop with a constant trip count is decided by unrolling.
+module VecPointerElemFieldLoopConst
+
+struct Cell { v: i64 }
+
+fn fill() -> i64 vow {
+  ensures: result == 14
+} {
+  let cells: Vec<Cell> = Vec::new();
+  let mut i: u64 = 0;
+  while i < 3 {
+    cells.push(Cell { v: 0 });
+    i = i + 1;
+  }
+  let mut j: u64 = 0;
+  while j < 3 {
+    cells[j].v = 7;
+    j = j + 1;
+  }
+  cells[0].v + cells[2].v
+}
+
+fn main() -> i32 [io] {
+  print_i64(fill());
+  0
+}

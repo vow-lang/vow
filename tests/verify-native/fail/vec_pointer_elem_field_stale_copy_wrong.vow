@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "earlier"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// `p` is the object in slot 0, not a copy of it: a write through the element after `p` was taken
+// shows in `p`, so the claim that `p` keeps the old age is false.
+module VecPointerElemFieldStaleCopyWrong
+
+struct Person { age: i64 }
+
+fn earlier() -> i64 vow {
+  ensures: result == 4
+} {
+  let people: Vec<Person> = Vec::new();
+  people.push(Person { age: 4 });
+  let p: Person = people[0];
+  people[0].age = 5;
+  p.age
+}
+
+fn main() -> i32 [io] {
+  print_i64(earlier());
+  0
+}
