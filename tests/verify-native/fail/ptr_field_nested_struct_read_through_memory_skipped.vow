@@ -1,4 +1,4 @@
-// TEST: replay-skipped a struct held in a field and read through memory has no listed fields
+// TEST: replay-skipped a struct held in a field and read through memory has no listed fields, so replay cannot rebuild it (#1890)
 // TEST: counterexample-fn "get_id"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee

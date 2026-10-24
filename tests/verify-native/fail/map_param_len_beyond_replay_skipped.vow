@@ -1,4 +1,4 @@
-// TEST: replay-skipped a map of more than 512 entries is not built by the replay harness
+// TEST: replay-skipped a map of more than 512 entries is not built by the replay harness (by design: the bound of the listing)
 // TEST: counterexample-fn "len_below_thousand"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee

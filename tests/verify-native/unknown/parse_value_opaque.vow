@@ -1,5 +1,5 @@
 // TEST: unknown-reason opaque builtin result
-// TEST: native-gap "parse_u8 is an opaque result, so a payload above 99 is not shown to be a run; ESBMC refutes it with an unconstrained result" #1654
+// TEST: native-gap "parse_u8 is an opaque total function, an accepted model choice (ADR-2026-10-08-1422): a payload above 99 is not shown to be a run, so native stays unknown where ESBMC refutes it with an unconstrained result" #1890
 // `parse_u8` is a total function of its string, but the model does not say which: the Some flag
 // and the payload are fresh constants (of the width of `u8`). A counterexample that needs the
 // payload to be a particular value above 99 is not a run the program can be shown to have, and the

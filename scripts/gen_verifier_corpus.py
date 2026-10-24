@@ -72,7 +72,8 @@ KNOWN_DISAGREEMENTS = {}
 
 # (shape, class) -> why the replay harness cannot confirm a counterexample of
 # that shape, with its issue. Rendered as `// TEST: replay-skipped`, which the
-# runner already reports instead of failing.
+# runner already reports instead of failing. Empty: every generated shape replays;
+# a residual replay gap of a hand-written fixture is tracked in #1890.
 REPLAY_SKIPS = {}
 
 _ISSUE = re.compile(r"^#\d+$")

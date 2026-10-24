@@ -1,4 +1,4 @@
-// TEST: replay-skipped a held Vec of Strings with an element is not rebuilt
+// TEST: replay-skipped a Vec<String> held in a struct field is listed with an element that is an address, which replay cannot rebuild (#1890)
 // TEST: counterexample-fn "firstlen"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee

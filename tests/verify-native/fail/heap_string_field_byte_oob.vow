@@ -1,4 +1,4 @@
-// TEST: replay-skipped field 0 is a String, which the replay harness cannot build
+// TEST: replay-skipped byte_at past the end returns -1 at runtime, so there is no abort to confirm: a verifier obligation, by design
 // TEST: counterexample-fn "first_byte"
 // TEST: counterexample-vow-id 4294967293
 // TEST: counterexample-blame None
