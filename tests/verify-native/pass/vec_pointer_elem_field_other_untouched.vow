@@ -1,0 +1,21 @@
+// A field written through the second element changes that object only.
+module VecPointerElemFieldOtherUntouched
+
+struct Person { age: i64 }
+
+fn second() -> i64 vow {
+  ensures: result == 49
+} {
+  let people: Vec<Person> = Vec::new();
+  let a: Person = Person { age: 4 };
+  let b: Person = Person { age: 7 };
+  people.push(a);
+  people.push(b);
+  people[1].age = 9;
+  a.age * 10 + b.age
+}
+
+fn main() -> i32 [io] {
+  print_i64(second());
+  0
+}

@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "maybe"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The write happens on the branch that takes it only: with `flag` false the age is still 4.
+module VecPointerElemFieldConditionalWrong
+
+struct Person { age: i64 }
+
+fn maybe(flag: bool) -> i64 vow {
+  ensures: result == 5
+} {
+  let people: Vec<Person> = Vec::new();
+  people.push(Person { age: 4 });
+  if flag {
+    people[0].age = 5;
+  }
+  people[0].age
+}
+
+fn main() -> i32 [io] {
+  print_i64(maybe(false));
+  0
+}

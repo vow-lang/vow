@@ -1,0 +1,20 @@
+// A field written through an element (`people[0].age = 5`) is a write to the object the slot holds,
+// so the read after it sees the new age.
+module VecPointerElemFieldThroughElement
+
+struct Person { age: i64 }
+
+fn birthday() -> i64 vow {
+  ensures: result == 5
+} {
+  let people: Vec<Person> = Vec::new();
+  people.push(Person { age: 4 });
+  people[0].age = 5;
+  let p: Person = people[0];
+  p.age
+}
+
+fn main() -> i32 [io] {
+  print_i64(birthday());
+  0
+}

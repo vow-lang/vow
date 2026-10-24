@@ -1,0 +1,21 @@
+// TEST: skip-reason unsupported-opcode
+// An element of a `Vec` the caller gave may be any object, and the model does not tell which: a
+// field written through it stays `Skipped`.
+module VecPointerElemFieldForeignElemSkipped
+
+struct Person { age: i64 }
+
+fn bump(people: Vec<Person>) -> i64 vow {
+  requires: people.len() == 1
+  ensures: result == 5
+} {
+  people[0].age = 5;
+  people[0].age
+}
+
+fn main() -> i32 [io] {
+  let people: Vec<Person> = Vec::new();
+  people.push(Person { age: 4 });
+  print_i64(bump(people));
+  0
+}

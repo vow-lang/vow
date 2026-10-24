@@ -1,0 +1,20 @@
+// A write under a branch happens on that path only.
+module VecPointerElemFieldConditional
+
+struct Person { age: i64 }
+
+fn maybe(flag: bool) -> i64 vow {
+  ensures: (flag && result == 5) || (!flag && result == 4)
+} {
+  let people: Vec<Person> = Vec::new();
+  people.push(Person { age: 4 });
+  if flag {
+    people[0].age = 5;
+  }
+  people[0].age
+}
+
+fn main() -> i32 [io] {
+  print_i64(maybe(true));
+  0
+}

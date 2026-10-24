@@ -1,0 +1,28 @@
+// TEST: unknown-reason unwinding assertion
+// The loop pushes pointers, so a loop cut would give the `Vec` arbitrary elements, and the claim is
+// false only for 100 or more pushes (the age of `a` is 5, not 4). The bounded rounds reach 64
+// iterations and the function is never cut, so the verdict is unknown; a model that dropped the
+// write through slot 0 would prove the claim.
+module VecPointerElemFieldWriteAfterPushingLoopUnknown
+
+struct Person { age: i64 }
+
+fn grow(n: u64) -> i64 vow {
+  ensures: n < 100 || result == 4
+} {
+  let people: Vec<Person> = Vec::new();
+  let a: Person = Person { age: 4 };
+  people.push(a);
+  let mut i: u64 = 0;
+  while i < n {
+    people.push(Person { age: 1 });
+    i = i + 1;
+  }
+  people[0].age = 5;
+  a.age
+}
+
+fn main() -> i32 [io] {
+  print_i64(grow(2));
+  0
+}
