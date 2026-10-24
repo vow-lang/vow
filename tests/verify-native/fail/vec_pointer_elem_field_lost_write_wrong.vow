@@ -1,0 +1,22 @@
+// TEST: counterexample-fn "birthday"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The write through the element is not lost: the age is 5, so the claim that it is still 4 is false.
+module VecPointerElemFieldLostWriteWrong
+
+struct Person { age: i64 }
+
+fn birthday() -> i64 vow {
+  ensures: result == 4
+} {
+  let people: Vec<Person> = Vec::new();
+  people.push(Person { age: 4 });
+  people[0].age = 5;
+  let p: Person = people[0];
+  p.age
+}
+
+fn main() -> i32 [io] {
+  print_i64(birthday());
+  0
+}

@@ -1,0 +1,24 @@
+// TEST: counterexample-fn "pick"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// The index is symbolic, so the written element is slot 0 or slot 1: the claim that slot 0 is
+// always written is false (the run with `i == 1` leaves it at 1).
+module VecPointerElemFieldSymbolicIndexWrong
+
+struct Person { age: i64 }
+
+fn pick(i: u64) -> i64 vow {
+  requires: i < 2
+  ensures: result == 9
+} {
+  let people: Vec<Person> = Vec::new();
+  people.push(Person { age: 1 });
+  people.push(Person { age: 2 });
+  people[i].age = 9;
+  people[0].age
+}
+
+fn main() -> i32 [io] {
+  print_i64(pick(0));
+  0
+}

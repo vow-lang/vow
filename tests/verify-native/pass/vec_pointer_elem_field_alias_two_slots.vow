@@ -1,0 +1,20 @@
+// One object in two slots: a write through slot 0 shows through slot 1.
+module VecPointerElemFieldAliasTwoSlots
+
+struct Person { age: i64 }
+
+fn twice() -> i64 vow {
+  ensures: result == 55
+} {
+  let people: Vec<Person> = Vec::new();
+  let a: Person = Person { age: 4 };
+  people.push(a);
+  people.push(a);
+  people[0].age = 5;
+  people[0].age * 10 + people[1].age
+}
+
+fn main() -> i32 [io] {
+  print_i64(twice());
+  0
+}

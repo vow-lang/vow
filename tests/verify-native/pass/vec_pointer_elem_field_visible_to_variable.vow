@@ -1,0 +1,22 @@
+// The object pushed is the object the element names: a write through the element shows in the
+// variable it was pushed from, and a write through the variable shows in the element.
+module VecPointerElemFieldVisibleToVariable
+
+struct Person { age: i64 }
+
+fn both() -> i64 vow {
+  ensures: result == 5 * 100 + 8 * 10 + 8
+} {
+  let people: Vec<Person> = Vec::new();
+  let a: Person = Person { age: 4 };
+  people.push(a);
+  people[0].age = 5;
+  let seen: i64 = a.age;
+  a.age = 8;
+  seen * 100 + people[0].age * 10 + a.age
+}
+
+fn main() -> i32 [io] {
+  print_i64(both());
+  0
+}

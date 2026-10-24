@@ -1,0 +1,21 @@
+// After `set` replaces slot 0 with `b`, a write through slot 0 is a write to `b`, not to `a`.
+module VecPointerElemFieldSetSlot
+
+struct Person { age: i64 }
+
+fn replaced() -> i64 vow {
+  ensures: result == 4 * 10 + 5
+} {
+  let people: Vec<Person> = Vec::new();
+  let a: Person = Person { age: 4 };
+  let b: Person = Person { age: 6 };
+  people.push(a);
+  people[0] = b;
+  people[0].age = 5;
+  a.age * 10 + b.age
+}
+
+fn main() -> i32 [io] {
+  print_i64(replaced());
+  0
+}
