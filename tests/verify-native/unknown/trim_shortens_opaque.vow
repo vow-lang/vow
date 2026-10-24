@@ -1,5 +1,5 @@
 // TEST: unknown-reason opaque builtin result
-// TEST: native-gap "string_trim is an opaque result, so a string with nothing to trim is not shown to be a run; ESBMC refutes it with an unconstrained result" #1654
+// TEST: native-gap "string_trim is an opaque total function, an accepted model choice (ADR-2026-10-08-1422): a string with nothing to trim is not shown to be a run, so native stays unknown where ESBMC refutes it with an unconstrained result" #1890
 // `string_trim` never grows a string (a fact the model keeps), but whether it shortens one depends
 // on the Unicode white space the model does not encode: a counterexample "a string with nothing to
 // trim" is the result of the call being as long as its operand, which the opaque result allows and

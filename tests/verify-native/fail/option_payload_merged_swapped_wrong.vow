@@ -1,4 +1,4 @@
-// TEST: replay-skipped a payload struct read through memory has no listed fields, so replay cannot rebuild it
+// TEST: replay-skipped a payload struct read through memory has no listed fields, so replay cannot rebuild it (#1890)
 // TEST: counterexample-fn "pick_is_arm"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee

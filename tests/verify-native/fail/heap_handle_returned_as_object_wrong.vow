@@ -1,7 +1,7 @@
 // TEST: counterexample-fn "size"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
-// TEST: replay-skipped a struct holding a struct is not rebuilt by replay
+// TEST: replay-skipped the counterexample lists the address of the struct `Outer.bag` holds, not its fields, so replay cannot rebuild it (#1890)
 // The handle a callee returns is the object the argument named, so its length is the field's
 // length and never one more.
 module HeapHandleReturnedAsObjectWrong

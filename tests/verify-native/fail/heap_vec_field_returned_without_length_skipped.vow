@@ -1,4 +1,4 @@
-// TEST: replay-skipped a Vec field read only as an address has no listed length
+// TEST: replay-skipped a Vec field read only as an address has no listed length, so there is nothing to rebuild (by design)
 // TEST: counterexample-fn "pass"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
