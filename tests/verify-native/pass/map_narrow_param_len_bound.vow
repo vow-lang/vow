@@ -1,0 +1,16 @@
+module MapNarrowParamLenBound
+
+// True for every real map: a `u8` key has 256 values, so a `HashMap<u8, i64>` holds at most 256
+// entries. The key type of the parameter is the one the lowering recorded
+// (`IrFunction.param_keys`), not one an operand shows, so a length above 256 is not a state.
+fn len_at_most_domain(m: HashMap<u8, i64>) -> u64 vow {
+  ensures: result <= 256
+} {
+  m.len()
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<u8, i64> = HashMap::new();
+  print_u64(len_at_most_domain(m));
+  0
+}

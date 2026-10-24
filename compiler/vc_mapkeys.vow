@@ -11,6 +11,7 @@ use vc_vec
 use vc_mapops
 use vc_query
 use vc_map
+use vc_mapdom
 
 // The slots of the map model (`vc_map`): how a map object gets its slot and its arbitrary
 // bases (a parameter, the state a loop cut havocs), and what the function says of the keys it
@@ -42,6 +43,7 @@ fn vc_map_declare_free(mp: VcMap, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>
     ls.push(len);
     let accs: Vec<i64> = mp.fb_acc[s as u64];
     accs.push(vc_map_zero(ar));
+    vc_mapdom_new_base(mp, ar, assumed, s, len);
     let qs: Vec<i64> = mp.qkeys[s as u64];
     let mut i: u64 = 0;
     while i < qs.len() {
@@ -69,6 +71,7 @@ fn vc_map_count_key(mp: VcMap, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, s
     let total: i64 = vc_tm_app2(ar, VC_OP_BVADD(), accs[j], vc_map_bit(ar, hit));
     accs[j] = vc_flow_name(mp.fl, ar, hdr, 64, total);
     assumed.push(vc_tm_app2(ar, VC_OP_BVULE(), accs[j], ls[j]));
+    vc_mapdom_count_key(mp, ar, hdr, assumed, s, j, key, fresh);
 }
 
 // Records what an operand says of the key width of slot `s`: `bits` is the
@@ -161,6 +164,7 @@ fn vc_map_slot(mp: VcMap, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i
     let kind: i64 = ag.kinds[obj as u64];
     if kind == VC_OBJ_PHI() { return vc_map_phi_slot(mp, ag, ar, hdr, assumed, obj); }
     let s: i64 = vc_map_push_slot(mp, obj, kind);
+    if kind == VC_OBJ_PARAM() { mp.slot_kty[s as u64] = vc_mapdom_param_kty(mp, ag.owners[obj as u64]); }
     let prefix: String = {
         if kind == VC_OBJ_PARAM() {
             let p: String = String::from("p");
@@ -197,6 +201,7 @@ fn vc_map_havoc(mp: VcMap, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<
 // The key width of slot `s` (`key_wide`), over every parameter slot that may be the same object:
 // those share one declared type, so what any of them says of its key says it of the others.
 fn vc_map_key_wide(mp: VcMap, s: u64) -> i64 {
+    if vc_mapdom_wide(mp.slot_kty[s]) { return 1; }
     let n: u64 = mp.al_slot.len();
     let mut i: u64 = 0;
     while i < n && mp.al_slot[i] != s as i64 { i = i + 1; }
@@ -218,7 +223,7 @@ fn vc_map_inexact_vars(mp: VcMap) -> Vec<i64> {
     let out: Vec<i64> = Vec::new();
     let mut s: u64 = 0;
     while s < mp.kinds.len() {
-        if vc_map_key_wide(mp, s) != 1 {
+        if vc_map_key_wide(mp, s) != 1 && !vc_mapdom_exact(mp, s) {
             let ps: Vec<i64> = mp.fb_pres[s];
             let ls: Vec<i64> = mp.fb_len[s];
             let mut j: u64 = 0;

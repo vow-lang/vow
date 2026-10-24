@@ -1,0 +1,20 @@
+// TEST: counterexample-fn "has_both"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value m.len 1
+module MapNarrowBoolAbsentKeyWrong
+
+// A `bool` map of one entry lacks one of its two keys, so it need not hold `k`: a run. A model that
+// bounded the length by 2 and then found no room for an absent key would prove the claim.
+fn has_both(m: HashMap<bool, i64>, k: bool) -> bool vow {
+  requires: m.len() == 1,
+  ensures: result
+} {
+  m.contains_key(k)
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<bool, i64> = HashMap::new();
+  if has_both(m, true) { print_u64(1); }
+  0
+}

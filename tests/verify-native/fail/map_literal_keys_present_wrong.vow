@@ -1,0 +1,19 @@
+// TEST: counterexample-fn "not_both"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value m.len 2
+module MapLiteralKeysPresentWrong
+
+// Both keys are literals, which say nothing about the key type, but the parameter is declared
+// `HashMap<i64, i64>`, a 64-bit key type with keys to spare: a map holding `1` and `2` is a run.
+fn not_both(m: HashMap<i64, i64>) -> bool vow {
+  ensures: !result
+} {
+  m.contains_key(1) && m.contains_key(2)
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<i64, i64> = HashMap::new();
+  if not_both(m) { print_u64(1); }
+  0
+}

@@ -1,0 +1,19 @@
+// TEST: counterexample-fn "len_within_byte_range"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value m.len 257
+module MapNarrowU16LenPastU8
+
+// A `u16` key has 65536 values: a map of 257 entries is a run. A model that bounded the length by
+// the width of the narrowest key type, or by the capacity of the other model, would prove it.
+fn len_within_byte_range(m: HashMap<u16, i64>) -> u64 vow {
+  ensures: result <= 256
+} {
+  m.len()
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<u16, i64> = HashMap::new();
+  print_u64(len_within_byte_range(m));
+  0
+}

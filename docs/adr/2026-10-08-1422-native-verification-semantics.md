@@ -1122,26 +1122,20 @@ addendum is that model (`compiler/vc_map.vow`, op table `compiler/vc_mapops.vow`
   most `len` (`vc_map_count_key`), which keeps `requires: m.len() == 0` from admitting a present key.
   That is also all a real map with 64-bit keys needs (any model of it extends to a map of that
   length, with keys to spare), so with `i64`/`u64` keys, and always for `BTreeMap`, a counterexample is a
-  run and is reported. A `HashMap` key narrower than 64 bits, or one no operand shows (the IR types a
-  parameter map as a bare pointer; an `i64` literal, or a key that folds to a constant such as a
-  negative literal's `0 - 1`, says nothing about the key type), bounds the
-  length by its domain, which the model does not know. The presence array and length of such a base
-  are listed in `VcClaims.map_vars`, and a hard `sat` that reaches them goes through the same re-check
-  as a float-text hook (`vc_hook_recheck`): it is reported only when the claim fails for every array
-  and length, and otherwise is `unknown` with `unconstrained map state: ...`, never a proof.
-  The re-check shows only that the claim fails for every model state that satisfies the
-  `requires`; it cannot show that a real map does. A `requires` no real narrow-key map can meet
-  (a `HashMap<u8, _>` with `m.len() == 300`) is therefore reported as a failure instead of being
-  vacuously true, as ESBMC reports it. Closing it needs the key type of a map parameter in the IR.
-  `tests/verify-native/unknown/map_narrow_param_len_bound.vow` pins the case; ESBMC decides it
-  only through its 64-entry capacity.
+  run and is reported. A key narrower than 64 bits bounds the length by its domain: the declared key type of a map
+  parameter is a fact (`IrFunction.param_keys`) and `vc_mapdom` states the bound
+  (ADR-2026-10-23-2253), so such a parameter is exact too. The base of a map whose key width only an
+  operand shows (a built map that a loop cut forgets), of a parameter whose declared type is not
+  recorded, and of parameters that may be one object is listed in `VcClaims.map_vars`, and a hard
+  `sat` that reaches it goes through the same re-check as a float-text hook (`vc_hook_recheck`): it is
+  reported only when the claim fails for every array and length, and otherwise is `unknown` with
+  `unconstrained map state: ...`, never a proof.
 - **Two map parameters are distinct**, as for `Vec` (the rule of the "Collections" bullet of
   `cli.md`); a function called with one map for both is outside what a per-function proof says.
 
 *Verdict impact:* a function that only builds and queries maps, or takes `i64`/`u64`-keyed or
 `BTreeMap` parameters, is decided like ESBMC (the 14 weaker rows of the gate report and
-`M08`/`M09`). A property over a `HashMap<u8, _>` parameter's length or keys can degrade from
-ESBMC's `Verified` (an artifact of its capacity) to `unknown`. Maps stored in a struct field, passed
+`M08`/`M09`); so is a `HashMap<u8, _>` parameter's length or keys (#1853). Maps stored in a struct field, passed
 to a function, or with a `String`/`Vec`/struct value stay `Skipped`.
 
 ## Addendum (#1726): loops and handle reads of the `.vmod` writers
