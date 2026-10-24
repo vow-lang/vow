@@ -578,9 +578,10 @@ stamps matching programs with `// TEST: known-control-gap #N` or
 There are no entries today: the controls that fill a `Vec` in a loop past the
 unrolling bound (#1645) verify through the loop cut. `REPLAY_SKIPS` is empty
 too: `--replay-cex` rebuilds `Vec`, `String`, aggregate, narrow, 128-bit and `f64`
-parameters (#1649), so no generated shape needs a `replay-skipped` line (an entry is
-`(shape, class) -> "why (#N)"`, rendered at the end of the file). A hand-written
-fixture keeps one for an `f32` parameter, which no source text denotes (#1782). Only a `known-control-gap` goes stale (a control that now
+parameters, so no generated shape needs a `replay-skipped` line (an entry is
+`(shape, class) -> "why (#N)"`, rendered at the file's end). A hand-written
+fixture keeps one for a residual replay gap (#1890) and for an `f32` parameter
+(`cli.md`). Only a `known-control-gap` goes stale (a control that now
 verifies fails the run); a `known-soundness-gap` that stops reproducing
 is not detected. The runner does not apply `ulimit -v`: the native verifier worker carries its
 own address-space cap and the generated programs are small and bounded. A real
