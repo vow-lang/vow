@@ -110,9 +110,34 @@ fn vc_fh_record(h: VcFieldHavocs, li: VcLoopInfo, defs: VcDefs, b: u64, roots: V
     true
 }
 
+// True when a reachable `FieldSet` writes through a handle (`i64`): a field written through a
+// pointer element (`vc_elemwrite`). It names the objects its handle may be by an address
+// equation the loop cut does not keep (the cut gives a `Vec` of pointers arbitrary elements), so
+// the function is not cut, wherever the write is.
+fn vc_fh_writes_handle(f: IrFunction, rpo: Vec<i64>, tys: Vec<i64>) -> bool {
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        if rpo[b] >= 0 {
+            let blk: IrBlock = f.blocks[b];
+            let mut i: u64 = 0;
+            while i < blk.insts.len() {
+                let inst: IrInst = blk.insts[i];
+                if inst.op == IOP_FIELD_SET() && inst.args.len() > 0 && inst.args[0] >= 0 && (inst.args[0] as u64) < tys.len()
+                    && tys[inst.args[0] as u64] == ITY_I64() {
+                    return true;
+                }
+                i = i + 1;
+            }
+        }
+        b = b + 1;
+    }
+    false
+}
+
 // `tys` is the type of every value (`vc_ty_table`), `n_ids` the size of the id space.
 fn vc_induct_field_havocs(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, n_ids: u64, tys: Vec<i64>) -> VcFieldHavocs {
     let h: VcFieldHavocs = VcFieldHavocs { ok: false, obj: Vec::new(), slot: Vec::new(), ty: Vec::new() };
+    if vc_fh_writes_handle(f, rpo, tys) { return h; }
     let mut j: i64 = 0;
     while j < li.n_loops {
         let o: Vec<i64> = Vec::new();

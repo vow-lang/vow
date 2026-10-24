@@ -1,0 +1,119 @@
+module VcElemGate
+
+use ir
+use ir_dominance
+use vc_ops
+use vc_int
+use vc_heap
+
+// Gate for a field written through a pointer element (`people[i].age = v`, #1663). The IR
+// types the element `i64` (a handle), so the write is a `FieldSet` whose receiver is the result
+// of a `Vec` `get`. The write is modelled (`vc_elem_write`, `vc_elemwrite`) only when that
+// handle can name nothing but an object the function stored into a `Vec` it built: the
+// receiver of the `get` is a receiver of a pointer store (`held`), and the function is one the
+// address model reads exactly (`vc_ptr_store_resolvable`). Everything else stays `Skipped`.
+// The value written is a Bool or an integer of up to 64 bits, the fields a read through a
+// handle can return; a pointer or a float written through an element is not modelled.
+
+// True when `inst` is a `FieldSet` of a Bool or an integer of up to 64 bits through a handle:
+// the shape `vc_elem_write` writes. `t0` and `t1` are the types of its operands.
+fn vc_elem_write_ok(inst: IrInst, t0: i64, t1: i64) -> bool {
+    inst.op == IOP_FIELD_SET() && inst.args.len() == 2 && t0 == ITY_I64() && inst.dv >= 0 && inst.ty == ITY_UNIT()
+        && inst.dk == IDATA_FIELD() && (t1 == ITY_BOOL() || (vc_ty_is_int(t1) && vc_ty_bits(t1) <= 64))
+}
+
+// The receiver of the `Vec` `get` that defines each value, -1 for every other value.
+fn vc_elem_get_recv(f: IrFunction, n_ids: u64) -> Vec<i64> {
+    let recv: Vec<i64> = dom_fill(n_ids, -1);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_CALL() && inst.id >= 0 && (inst.id as u64) < n_ids && inst.args.len() == 2
+                && vc_inst_vec_kind(inst) == VC_VEC_GET() {
+                recv[inst.id as u64] = inst.args[0];
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    recv
+}
+
+// 1 for every value of type `i64` (a handle when it names an object), 0 for every other value.
+fn vc_elem_handle_ids(f: IrFunction, n_ids: u64) -> Vec<i64> {
+    let ids: Vec<i64> = dom_fill(n_ids, 0);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.id >= 0 && (inst.id as u64) < n_ids && inst.ty == ITY_I64() { ids[inst.id as u64] = 1; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    ids
+}
+
+// "" when every field written through a handle is written through an element of a `Vec` a
+// pointer is stored into (`held[v]`, closed over Phis) with the shape `vc_elem_write_ok`, and
+// no parameter object is stored into such a `Vec`; else the detail of an `unsupported-opcode`
+// skip. A stored parameter may be another parameter (`vc_agg_alias_marked`) and the write
+// through the element reaches both, which the alias analysis only sees for a write whose
+// receiver is a parameter. The caller checks that the address model reads the function exactly.
+fn vc_elem_write_detail(f: IrFunction, tys: Vec<i64>, held: Vec<i64>) -> String {
+    let n_ids: u64 = tys.len();
+    let recv: Vec<i64> = vc_elem_get_recv(f, n_ids);
+    let mut writes: bool = false;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_FIELD_SET() && inst.args.len() == 2 && inst.args[0] >= 0 && (inst.args[0] as u64) < n_ids
+                && tys[inst.args[0] as u64] == ITY_I64() {
+                writes = true;
+                let r: i64 = recv[inst.args[0] as u64];
+                if r < 0 || (r as u64) >= held.len() || held[r as u64] != 1 {
+                    return String::from("a field is written through an element of a Vec that holds no stored pointer");
+                }
+                if inst.args[1] < 0 || (inst.args[1] as u64) >= n_ids || !vc_elem_write_ok(inst, ITY_I64(), tys[inst.args[1] as u64]) {
+                    return String::from("a field of this type is written through a pointer element");
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    if writes && vc_elem_stores_param(f, held, n_ids) {
+        return String::from("a field is written through an element of a Vec that holds a parameter");
+    }
+    String::from("")
+}
+
+// True when a parameter object (or a pointer read out of one, or a Phi merging them) is stored
+// into a `Vec` that receives pointers.
+fn vc_elem_stores_param(f: IrFunction, held: Vec<i64>, n_ids: u64) -> bool {
+    let param: Vec<i64> = vc_heap_param_table(f, n_ids);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            let v: i64 = vc_inst_stored_operand(inst);
+            if inst.op == IOP_CALL() && v >= 0 && (v as u64) < n_ids && inst.args.len() > 0 && inst.args[0] >= 0
+                && (inst.args[0] as u64) < held.len() && held[inst.args[0] as u64] == 1 && param[v as u64] == 1 {
+                return true;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    false
+}

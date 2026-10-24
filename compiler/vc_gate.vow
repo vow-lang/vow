@@ -9,6 +9,7 @@ use vc_fp
 use vc_cfg
 use vc_loops
 use vc_agg_shape
+use vc_elemgate
 use vc_agg
 use vc_vec
 use vc_vecgate
@@ -233,15 +234,14 @@ fn vc_vec_elem_ok(ty: i64) -> bool {
 // model: the IR types a pointer loaded out of a field or a `Vec` element `i64` (a
 // handle, see `vc_heap`), so such a value is passed and returned where an object is
 // declared. A consumer that needs the object itself (a write, a merge with an object)
-// has its own gate and rejects the handle.
+// has its own gate; a field write through an element is `vc_elemgate`'s.
 fn vc_handle_for_object(want: i64, have: i64) -> bool {
     want == ITY_PTR() && have == ITY_I64()
 }
 
 // A value a `push` or `set` may store: an element (`vc_vec_elem_ok`) or an object
-// (`String`, `Vec`, struct), which the slot holds as a constant or as the address of the object
-// (`vc_ptr_store_detail` decides, and keeps every function that could mistake it out of the
-// subset).
+// (`String`, `Vec`, struct), held as a constant or as the object's address
+// (`vc_ptr_store_detail` decides and keeps out every function that could mistake it).
 fn vc_vec_store_ok(ty: i64) -> bool {
     vc_vec_elem_ok(ty) || ty == ITY_PTR()
 }
@@ -250,12 +250,11 @@ fn vc_vec_index_ok(ty: i64) -> bool {
     vc_ty_is_int(ty) && vc_ty_bits(ty) == 64
 }
 
-// Operand and result types of a `Vec` call. `get` yields the raw 8-byte slot as
-// `i64`; the lowerer narrows it with its own cast. With `calls` (the check of one
-// function of a call tree, before `vc_inline` flattens it) a write whose receiver is a
-// handle is taken as a write on the object it may resolve to once the callee that
-// builds the struct is inlined (`vc_resolve_ptr_fields`); the gate of the flattened
-// function, which has no `calls`, rejects it when it did not.
+// Operand and result types of a `Vec` call. `get` yields the raw 8-byte slot as `i64`
+// (the lowerer narrows it with its own cast). With `calls` (one function of a call tree,
+// before `vc_inline` flattens it) a write whose receiver is a handle is taken as a write
+// on the object it resolves to once the callee that builds the struct is inlined
+// (`vc_resolve_ptr_fields`); the gate of the flattened function rejects it if it did not.
 fn vc_vec_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64, calls: bool) -> bool {
     let n: u64 = inst.args.len();
     let mut t0: i64 = vc_arg_ty(tys, inst, 0);
@@ -382,8 +381,8 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
             || vc_heap_field_get_ok(inst, t0);
     }
     if op == IOP_FIELD_SET() {
-        return n == 2 && t0 == ITY_PTR() && inst.dv >= 0 && inst.ty == ITY_UNIT()
-            && (vc_field_access_ok(inst.dk, t1) || (inst.dk == IDATA_FIELD() && t1 == ITY_PTR()));
+        return vc_elem_write_ok(inst, t0, t1) || (n == 2 && t0 == ITY_PTR() && inst.dv >= 0 && inst.ty == ITY_UNIT()
+            && (vc_field_access_ok(inst.dk, t1) || (inst.dk == IDATA_FIELD() && t1 == ITY_PTR())));
     }
     if op == IOP_CALL() {
         if vc_is_unwrap_abort(inst) { return n == 0 && inst.ty == ITY_UNIT(); }

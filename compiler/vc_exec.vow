@@ -23,6 +23,7 @@ use vc_mapops
 use vc_overlay
 use vc_objects
 use vc_handle
+use vc_elemwrite
 use vc_ptrstore
 use vc_held
 use vc_strops
@@ -343,6 +344,10 @@ fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
     }
     if op == IOP_FIELD_SET() {
         let val: i64 = inst.args[1];
+        if w.tys[inst.args[0] as u64] == ITY_I64() {
+            vc_elem_write(w.memory.overlay, ag, cs.arena, cs.header, w.var_of[inst.args[0] as u64], inst.dv, w.tys[val as u64], w.var_of[val as u64], w.fl.block_pc[bi]);
+            return true;
+        }
         let mut term: i64 = w.var_of[val as u64];
         let mut ty: i64 = w.tys[val as u64];
         if ty == ITY_PTR() {
@@ -820,22 +825,6 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
     } else if op != IOP_RETURN() && op != IOP_UNREACHABLE() {
         vc_define(w, inst, vc_exec_value(w, inst, pc));
     }
-}
-
-// True when a parameter or a value of the function is a float: its query needs
-// the floating-point theory.
-fn vc_function_has_float(f: IrFunction, tys: Vec<i64>) -> bool {
-    let mut i: u64 = 0;
-    while i < f.params.len() {
-        if vc_ty_is_float(f.params[i]) { return true; }
-        i = i + 1;
-    }
-    let mut k: u64 = 0;
-    while k < tys.len() {
-        if vc_ty_is_float(tys[k]) { return true; }
-        k = k + 1;
-    }
-    false
 }
 
 // The SMT-LIB logic of a query: bit-vectors, plus arrays when a `Vec` is
