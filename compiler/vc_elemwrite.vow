@@ -1,0 +1,34 @@
+module VcElemWrite
+
+use vc_term
+use vc_smt
+use vc_flow
+use vc_agg
+use vc_overlay
+use vc_objects
+
+// A field written through a pointer element (`people[i].age = v`, gate: `vc_elemgate`). The handle
+// `h` the `get` returned is the address of one object the function stored into a `Vec` it built
+// (`vc_ptr_store_resolvable`), and no such object is a parameter (`vc_elem_write_detail`): each is
+// an allocation whose address was stored when the pointer was pushed or set, so it is an entry
+// of the overlay (`vc_overlay`). The write is the write to each allocated struct entry under
+// `pc` and `h == address(entry)`, the reach of a write through a pointer Phi (`vc_agg_write_phi`).
+// Exactly one condition holds, so exactly one object is written, and it is the object a direct
+// read of the variable that was pushed, another element holding it and a later read through a
+// handle all see (`vc_agg_read_field`).
+//
+// A handle that names no entry would be a write the model drops. That cannot happen while the
+// walk is exact (`VcOverlay.exact`): every element of such a `Vec` is a stored address, and a
+// function with a write through an element is never cut (`vc_fh_writes_handle`), the only
+// way an element becomes an arbitrary word.
+
+fn vc_elem_write(ov: VcOverlay, ag: VcAgg, ar: VcArena, hdr: SmtScript, h: i64, slot: i64, ty: i64, term: i64, pc: i64) {
+    let mut i: u64 = 0;
+    while i < ov.addr.len() {
+        if ov.param[i] < 0 && (ov.cls[i] & VC_OV_STRUCT()) != 0 {
+            let at: i64 = vc_flow_and(ag.fl, ar, hdr, pc, vc_overlay_hit(ov, ar, i, h));
+            vc_agg_write_field(ag, ar, hdr, vc_overlay_entry_obj(ov, ag, i), slot, ty, term, at);
+        }
+        i = i + 1;
+    }
+}
