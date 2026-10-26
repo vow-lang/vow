@@ -209,3 +209,19 @@ fn vc_fp_widen_f32(b: i64) -> i64 {
     }
     (sign << 63) | (e64 << 52) | m64
 }
+
+// True when a parameter or a value of the function is a float: its query needs
+// the floating-point theory.
+fn vc_function_has_float(f: IrFunction, tys: Vec<i64>) -> bool {
+    let mut i: u64 = 0;
+    while i < f.params.len() {
+        if vc_ty_is_float(f.params[i]) { return true; }
+        i = i + 1;
+    }
+    let mut k: u64 = 0;
+    while k < tys.len() {
+        if vc_ty_is_float(tys[k]) { return true; }
+        k = k + 1;
+    }
+    false
+}

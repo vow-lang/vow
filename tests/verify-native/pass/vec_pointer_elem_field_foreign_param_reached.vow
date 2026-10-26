@@ -1,0 +1,22 @@
+// A struct parameter may be an element of the `Vec` the caller gave: its age is the new value or
+// what it was, and it is read directly, with no read through a handle.
+module VecPointerElemFieldForeignParamReached
+
+struct Person { age: i64 }
+
+fn bump(p: Person, people: Vec<Person>) -> bool vow {
+  requires: people.len() == 1
+  ensures: result
+} {
+  let before: i64 = p.age;
+  people[0].age = 5;
+  p.age == before || p.age == 5
+}
+
+fn main() -> i32 [io] {
+  let p: Person = Person { age: 4 };
+  let people: Vec<Person> = Vec::new();
+  people.push(p);
+  if bump(p, people) { print_i64(1); }
+  0
+}

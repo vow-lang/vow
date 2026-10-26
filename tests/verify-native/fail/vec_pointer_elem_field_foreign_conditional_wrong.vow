@@ -1,0 +1,23 @@
+// TEST: replay-skipped the elements of a `Vec<Person>` parameter are not rebuilt by replay (#1890)
+// TEST: counterexample-fn "bump"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// The write under the branch does not happen when the branch is not taken.
+module VecPointerElemFieldForeignConditionalWrong
+
+struct Person { age: i64 }
+
+fn bump(c: bool, people: Vec<Person>) -> i64 vow {
+  requires: people.len() == 1 && people[0].age == 4
+  ensures: result == 5
+} {
+  if c { people[0].age = 5; }
+  people[0].age
+}
+
+fn main() -> i32 [io] {
+  let people: Vec<Person> = Vec::new();
+  people.push(Person { age: 4 });
+  print_i64(bump(false, people));
+  0
+}

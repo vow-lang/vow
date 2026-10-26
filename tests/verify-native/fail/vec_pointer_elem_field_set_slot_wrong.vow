@@ -1,0 +1,25 @@
+// TEST: counterexample-fn "replaced"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// Slot 0 holds `b` after the assignment, so the write through it is a write to `b`: `a` keeps
+// its age and the claim that `a` changed is false.
+module VecPointerElemFieldSetSlotWrong
+
+struct Person { age: i64 }
+
+fn replaced() -> i64 vow {
+  ensures: result == 5
+} {
+  let people: Vec<Person> = Vec::new();
+  let a: Person = Person { age: 4 };
+  let b: Person = Person { age: 6 };
+  people.push(a);
+  people[0] = b;
+  people[0].age = 5;
+  a.age
+}
+
+fn main() -> i32 [io] {
+  print_i64(replaced());
+  0
+}

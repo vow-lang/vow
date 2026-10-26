@@ -1,0 +1,23 @@
+// A pointer read out of a field of a parameter is a 64-bit word: stored in a field of the element, it
+// is read back as the same word, and what it names is read through it.
+module VecPointerElemFieldForeignHandleValue
+
+struct Pair { lo: i64 }
+struct Node { p: Pair, n: i64 }
+
+fn f(q: Node, people: Vec<Node>) -> i64 vow {
+  requires: people.len() == 1
+  ensures: result == q.p.lo
+} {
+  let x: Pair = q.p;
+  people[0].p = x;
+  people[0].p.lo
+}
+
+fn main() -> i32 [io] {
+  let q: Node = Node { p: Pair { lo: 7 }, n: 1 };
+  let people: Vec<Node> = Vec::new();
+  people.push(Node { p: Pair { lo: 1 }, n: 0 });
+  print_i64(f(q, people));
+  0
+}

@@ -1,0 +1,26 @@
+// TEST: replay-skipped the elements of a `Vec<Person>` parameter are not rebuilt by replay (#1890)
+// TEST: counterexample-fn "bump"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// Two elements of the `Vec` the caller gave may be one object: the write through the first shows in
+// the second, so it is not still what it was.
+module VecPointerElemFieldForeignTwoElementsWrong
+
+struct Person { age: i64 }
+
+fn bump(people: Vec<Person>) -> i64 vow {
+  requires: people.len() == 2 && people[1].age == 4
+  ensures: result == 4
+} {
+  people[0].age = 5;
+  people[1].age
+}
+
+fn main() -> i32 [io] {
+  let people: Vec<Person> = Vec::new();
+  let p: Person = Person { age: 4 };
+  people.push(p);
+  people.push(p);
+  print_i64(bump(people));
+  0
+}

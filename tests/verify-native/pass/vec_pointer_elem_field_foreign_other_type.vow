@@ -1,0 +1,24 @@
+// An element of a `Vec<Person>` is never a `Config`, whatever slot they write: the parameter keeps its field.
+module VecPointerElemFieldForeignOtherType
+
+// TEST: esbmc-model-artifact fn="bump" blame=Callee vow_id=1 "ESBMC models a field write through a Vec element as a store to its one heap array and gives a Config parameter and a Person element the same handle, so the write reaches cfg.limit; the two objects are of different struct types and never the same, which the native model keeps apart"
+
+struct Person { age: i64 }
+struct Config { limit: i64 }
+
+fn bump(cfg: Config, people: Vec<Person>) -> bool vow {
+  requires: people.len() == 1
+  ensures: result
+} {
+  let before: i64 = cfg.limit;
+  people[0].age = 5;
+  cfg.limit == before
+}
+
+fn main() -> i32 [io] {
+  let cfg: Config = Config { limit: 3 };
+  let people: Vec<Person> = Vec::new();
+  people.push(Person { age: 4 });
+  if bump(cfg, people) { print_i64(1); }
+  0
+}

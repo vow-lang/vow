@@ -1,0 +1,26 @@
+// TEST: replay-skipped the elements of a `Vec<Person>` parameter are not rebuilt by replay (#1890)
+// TEST: counterexample-fn "bump"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// A struct parameter may be an element of the `Vec` the caller gave, and then the write through
+// the element changes it: the claim that it does not is refuted.
+module VecPointerElemFieldForeignParamWrong
+
+struct Person { age: i64 }
+
+fn bump(p: Person, people: Vec<Person>) -> bool vow {
+  requires: people.len() == 1
+  ensures: result
+} {
+  let before: i64 = p.age;
+  people[0].age = before + 1;
+  p.age == before
+}
+
+fn main() -> i32 [io] {
+  let p: Person = Person { age: 4 };
+  let people: Vec<Person> = Vec::new();
+  people.push(p);
+  if bump(p, people) { print_i64(1); }
+  0
+}

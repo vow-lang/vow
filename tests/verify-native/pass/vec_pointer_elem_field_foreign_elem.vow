@@ -1,0 +1,19 @@
+// A field written through an element of a `Vec` the caller gave is seen by the next read of the element.
+module VecPointerElemFieldForeignElem
+
+struct Person { age: i64 }
+
+fn bump(people: Vec<Person>) -> i64 vow {
+  requires: people.len() == 1
+  ensures: result == 5
+} {
+  people[0].age = 5;
+  people[0].age
+}
+
+fn main() -> i32 [io] {
+  let people: Vec<Person> = Vec::new();
+  people.push(Person { age: 4 });
+  print_i64(bump(people));
+  0
+}

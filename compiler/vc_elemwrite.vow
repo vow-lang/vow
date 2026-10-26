@@ -1,0 +1,55 @@
+module VcElemWrite
+
+use ir
+use vc_term
+use vc_heap
+use vc_smt
+use vc_flow
+use vc_agg
+use vc_overlay
+use vc_objects
+
+// A field written through a pointer element (`people[i].age = v`, gate: `vc_elemgate`). The handle
+// `h` the `get` returned is the address of one object the function stored into a `Vec` it built
+// (`vc_ptr_store_resolvable`): an allocation or a struct parameter, whose address was stored when
+// the pointer was pushed or set, so it is an entry of the overlay (`vc_overlay`). The write is the
+// write to each struct entry under `pc` and `h == address(entry)`, the reach of a write through a
+// pointer Phi (`vc_agg_write_phi`). Exactly one condition holds per object, so exactly one object
+// is written, and it is the object a direct read of the variable that was pushed, another element
+// holding it and a later read through a handle all see (`vc_agg_read_field`). The write to a
+// parameter entry is a write to a parameter (`vc_agg_write`): it reaches every parameter that
+// may be that object (`vc_agg_write_aliased`), which is why a function with such a write marks
+// its stored parameters for the alias analysis (`vc_agg_alias_marked`) and, when it reads through
+// a handle, lays the parameters over the heap (`vc_heap_overlay_needed`).
+//
+// A handle that names no entry drops the write to the objects the function holds. In an exact walk
+// that cannot happen: every element of such a `Vec` is a stored address. A loop cut gives the `Vec`
+// arbitrary elements; a handle naming no entry then only adds states (every real handle names an
+// entry, and a counterexample there is `unknown`). `vc_fh_writes_handle` keeps such a function from
+// being cut.
+//
+// An element of a `Vec` the function was given (a `Vec` parameter, `vc_elem_foreign_ok`) is a
+// handle that names memory the function did not build: it may be any parameter (an entry above,
+// under `h == address(entry)`) or an object nothing else names. The write is also a store to the
+// heap array of its slot (`vc_heap_store`), so every read through a handle that may be equal to `h`
+// sees it, and reads before it do not. The two cannot disagree: a read through a handle consults
+// the entries first and the array only for a handle that is no entry's address. The element of a
+// `Vec<Person>` is never a parameter declared as another type (`param_keys`: different heads are
+// never one object), so a parameter whose head differs is not written.
+
+fn vc_elem_write(m: VcHandleMemory, ag: VcAgg, ar: VcArena, hdr: SmtScript, set: IrInst, h: i64, ty: i64, term: i64, pc: i64) {
+    let slot: i64 = set.dv;
+    let ov: VcOverlay = m.overlay;
+    let want: String = vc_heap_elem_head(m.heap, set.args[0]);
+    if !ov.exact { vc_heap_store(m.heap, ar, hdr, h, slot, term, pc); }
+    let mut i: u64 = 0;
+    while i < ov.addr.len() {
+        let have: String = vc_heap_param_head(m.heap, ov.param[i]);
+        let other_type: bool = ov.param[i] >= 0 && want.len() > 0 && have.len() > 0 && want != have;
+        if (ov.cls[i] & VC_OV_STRUCT()) != 0 && !other_type {
+            let at: i64 = vc_flow_and(ag.fl, ar, hdr, pc, vc_overlay_hit(ov, ar, i, h));
+            vc_agg_write_field(ag, ar, hdr, vc_overlay_entry_obj(ov, ag, i), slot, ty, term, at);
+        }
+        i = i + 1;
+    }
+}

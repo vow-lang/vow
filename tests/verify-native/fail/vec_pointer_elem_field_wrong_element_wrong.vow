@@ -1,0 +1,25 @@
+// TEST: counterexample-fn "second"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The write goes to the second element only: the first object keeps its age, so the claim that
+// it changed is false.
+module VecPointerElemFieldWrongElementWrong
+
+struct Person { age: i64 }
+
+fn second() -> i64 vow {
+  ensures: result == 5
+} {
+  let people: Vec<Person> = Vec::new();
+  let a: Person = Person { age: 4 };
+  let b: Person = Person { age: 7 };
+  people.push(a);
+  people.push(b);
+  people[1].age = 5;
+  a.age
+}
+
+fn main() -> i32 [io] {
+  print_i64(second());
+  0
+}

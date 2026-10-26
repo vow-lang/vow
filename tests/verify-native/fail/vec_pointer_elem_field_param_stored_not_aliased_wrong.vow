@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// Two parameters of one type need not be one object: `t.age` can still be 4.
+module VecPointerElemFieldParamStoredNotAliasedWrong
+
+struct Person { age: i64 }
+
+fn f(s: Person, t: Person) -> i64 vow {
+  requires: t.age == 4
+  ensures: result == 5
+} {
+  let people: Vec<Person> = Vec::new();
+  people.push(s);
+  people[0].age = 5;
+  t.age
+}
+
+fn main() -> i32 [io] {
+  let p: Person = Person { age: 4 };
+  print_i64(f(p, p));
+  0
+}

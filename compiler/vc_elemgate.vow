@@ -1,0 +1,147 @@
+module VcElemGate
+
+use ir
+use ir_dominance
+use vc_ops
+use vc_int
+use vc_loops
+use vc_heap
+use vc_objects
+
+// Gate for a field written through an element (`people[i].age = v`, #1663). The IR types the
+// element `i64` (a handle), so the write is a `FieldSet` whose receiver is the result of a `Vec`
+// `get`. The write is modelled (`vc_elem_write`, `vc_elemwrite`) in two cases only:
+//   - the handle can name nothing but an object the function stored into a `Vec` it built: the
+//     receiver of the `get` is a receiver of a pointer store (`held`), and the function is one the
+//     address model reads exactly (`vc_ptr_store_resolvable`). The value is a Bool or an integer
+//     of up to 64 bits, the fields a read through a handle can return;
+//   - the `Vec` is a parameter, so the handle names memory the function was given, in a function
+//     that stores no pointer and reads no child object (`vc_elem_foreign_ok`). The value is a
+//     64-bit integer, the width of the slot the heap array holds.
+// Everything else stays `Skipped`; a pointer or a float written through an element is not modelled.
+
+// True when `inst` is a `FieldSet` of a Bool or an integer of up to 64 bits through a handle:
+// the shape `vc_elem_write` writes. `t0` and `t1` are the types of its operands.
+fn vc_elem_write_ok(inst: IrInst, t0: i64, t1: i64) -> bool {
+    inst.op == IOP_FIELD_SET() && inst.args.len() == 2 && t0 == ITY_I64() && inst.dv >= 0 && inst.ty == ITY_UNIT()
+        && inst.dk == IDATA_FIELD() && (t1 == ITY_BOOL() || (vc_ty_is_int(t1) && vc_ty_bits(t1) <= 64))
+}
+
+// The receiver of the `Vec` `get` (a handle, typed `i64`) that defines each value, -1 for every
+// other value.
+fn vc_elem_get_recv(f: IrFunction, n_ids: u64) -> Vec<i64> {
+    let recv: Vec<i64> = dom_fill(n_ids, -1);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_CALL() && inst.id >= 0 && (inst.id as u64) < n_ids && inst.args.len() == 2
+                && inst.ty == ITY_I64() && vc_inst_vec_kind(inst) == VC_VEC_GET() {
+                recv[inst.id as u64] = inst.args[0];
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    recv
+}
+
+// True when a pointer read out of a field (`FieldGet[ptr]`, the payload of an enum, `Option` or
+// `Result`) occurs: a child object of a parameter, whose state a write through a handle would not reach.
+fn vc_elem_reads_child(f: IrFunction) -> bool {
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_FIELD_GET() && inst.ty == ITY_PTR() { return true; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    false
+}
+
+// True when two `Vec` parameters have different declared element heads (`Vec<Person>` and
+// `Vec<Pair>`). The heap arrays are keyed by slot, not by type, so a write through an element of one
+// would be seen through an element of the other, which are never one object: a false counterexample.
+fn vc_elem_mixed_vecs(f: IrFunction) -> bool {
+    let mut first: String = String::from("");
+    let mut i: u64 = 0;
+    while i < f.param_keys.len() {
+        let head: String = vc_heap_key_elem(f.param_keys[i]);
+        if head.len() > 0 {
+            if first.len() == 0 { first = head; } else if first != head { return true; }
+        }
+        i = i + 1;
+    }
+    false
+}
+
+// "" when a write through an element of a `Vec` no pointer is stored into is one `vc_elem_write`
+// models: the `Vec` is the `Vec` parameter `k` (-1 when it is none), the value is a 64-bit
+// integer (the width of the slot the heap array holds), the function stores no pointer anywhere
+// (`stores`: nothing it built is an address an element could name), reads no child object, and the
+// write is not in a loop (`in_loop`: the unrolled copies would store to the heap array one after
+// another, which the solver does not decide at the unwinding bound in reasonable time).
+fn vc_elem_foreign_ok(f: IrFunction, k: i64, t1: i64, stores: bool, in_loop: bool) -> String {
+    if in_loop { return String::from("a field is written through an element of a Vec parameter in a loop"); }
+    if stores { return String::from("a field is written through an element of a Vec in a function that stores a pointer"); }
+    if k < 0 || vc_overlay_param_class(f, k) != VC_OV_VEC() {
+        return String::from("a field is written through an element of a Vec that is no parameter and holds no stored pointer");
+    }
+    if vc_elem_mixed_vecs(f) {
+        return String::from("a field is written through an element of a Vec parameter in a function with Vec parameters of different element types");
+    }
+    if !(vc_ty_is_int(t1) && vc_ty_bits(t1) == 64) {
+        return String::from("a field of this type is written through an element of a Vec parameter");
+    }
+    if vc_elem_reads_child(f) {
+        return String::from("a field is written through an element of a Vec parameter in a function that reads a payload object");
+    }
+    String::from("")
+}
+
+// "" when every field written through a handle is written through an element of a `Vec` with the
+// shape `vc_elem_write_ok`: one a pointer is stored into (`held[v]`, closed over Phis), whose
+// elements are the objects stored, or, in a function that stores no pointer (`stores` false), a
+// `Vec` parameter (`vc_elem_foreign_ok`); else the detail of an `unsupported-opcode` skip. The element
+// may be a parameter that was stored, and then another parameter may be that object: the write
+// reaches both because the alias analysis and the heap overlay count a write through an element as
+// a write of a parameter (`vc_agg_alias_marked`, `vc_heap_overlay_needed`). The caller checks that
+// the address model reads the function exactly.
+fn vc_elem_write_detail(f: IrFunction, tys: Vec<i64>, held: Vec<i64>, stores: bool) -> String {
+    let n_ids: u64 = tys.len();
+    let recv: Vec<i64> = vc_elem_get_recv(f, n_ids);
+    let from: Vec<i64> = vc_heap_get_params(f);
+    let succ: Vec<i64> = dom_successors(f, dom_block_id_table(f));
+    let li: VcLoopInfo = vc_loop_analysis(f.blocks.len(), succ, dom_rpo_numbers(f.blocks.len(), succ));
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_FIELD_SET() && inst.args.len() == 2 && inst.args[0] >= 0 && (inst.args[0] as u64) < n_ids
+                && tys[inst.args[0] as u64] == ITY_I64() {
+                let r: i64 = recv[inst.args[0] as u64];
+                if r < 0 || (r as u64) >= held.len() {
+                    return String::from("a field is written through a handle that is no element of a Vec");
+                }
+                if inst.args[1] < 0 || (inst.args[1] as u64) >= n_ids || !vc_elem_write_ok(inst, ITY_I64(), tys[inst.args[1] as u64]) {
+                    return String::from("a field of this type is written through a pointer element");
+                }
+                if held[r as u64] != 1 {
+                    let why: String = vc_elem_foreign_ok(f, { if (inst.args[0] as u64) < from.len() { from[inst.args[0] as u64] } else { -1 } }, tys[inst.args[1] as u64], stores, vc_chain_len(li, bi) > 0);
+                    if why.len() > 0 { return why; }
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    String::from("")
+}

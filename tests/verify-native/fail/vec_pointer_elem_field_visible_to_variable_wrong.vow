@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "seen"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The element names the object that was pushed, so a write through it shows in the variable: the
+// claim that the variable still has the old age is false.
+module VecPointerElemFieldVisibleToVariableWrong
+
+struct Person { age: i64 }
+
+fn seen() -> i64 vow {
+  ensures: result == 4
+} {
+  let people: Vec<Person> = Vec::new();
+  let a: Person = Person { age: 4 };
+  people.push(a);
+  people[0].age = 5;
+  a.age
+}
+
+fn main() -> i32 [io] {
+  print_i64(seen());
+  0
+}

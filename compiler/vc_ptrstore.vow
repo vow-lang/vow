@@ -8,6 +8,7 @@ use vc_heap
 use vc_vec
 use vc_overlay
 use vc_objects
+use vc_elemgate
 
 // Gate rule for a pointer stored into a `Vec` (`outer.push(inner)`, `names.push(s)`,
 // `rows[i] = row`). The slot holds the object's address. When nothing looks at it again, `push`
@@ -40,6 +41,8 @@ use vc_objects
 // reads it exactly (`vc_walk_slot_word` then stores addresses).
 fn vc_ptr_store_detail(f: IrFunction, tys: Vec<i64>, calls: bool) -> String {
     let held: Vec<i64> = vc_ptr_store_held(f, tys);
+    let elem_write: String = vc_elem_write_detail(f, tys, held, vc_heap_count_marked(held) > 0 || vc_overlay_stores_pointer(f, tys));
+    if elem_write.len() > 0 { return elem_write; }
     if vc_heap_count_marked(held) == 0 { return String::from(""); }
     let mut reads: bool = false;
     let mut gets: bool = false;

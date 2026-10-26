@@ -1,0 +1,20 @@
+// A symbolic index writes whichever object is stored at that index, one of the two.
+module VecPointerElemFieldSymbolicIndex
+
+struct Person { age: i64 }
+
+fn pick(i: u64) -> i64 vow {
+  requires: i < 2
+  ensures: (i == 0 && result == 92) || (i == 1 && result == 19)
+} {
+  let people: Vec<Person> = Vec::new();
+  people.push(Person { age: 1 });
+  people.push(Person { age: 2 });
+  people[i].age = 9;
+  people[0].age * 10 + people[1].age
+}
+
+fn main() -> i32 [io] {
+  print_i64(pick(1));
+  0
+}

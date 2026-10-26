@@ -1,0 +1,20 @@
+// A parameter of another struct type is never the stored object, so the write cannot reach it.
+module VecPointerElemFieldParamStoredDistinctType
+
+struct Person { age: i64 }
+struct Other { age: i64 }
+
+fn f(s: Person, t: Other) -> i64 vow {
+  requires: t.age == 4
+  ensures: result == 4
+} {
+  let people: Vec<Person> = Vec::new();
+  people.push(s);
+  people[0].age = 5;
+  t.age
+}
+
+fn main() -> i32 [io] {
+  print_i64(f(Person { age: 4 }, Other { age: 4 }));
+  0
+}

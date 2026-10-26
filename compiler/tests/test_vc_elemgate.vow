@@ -1,0 +1,211 @@
+module TestVcElemGate
+
+use ir
+use vc_ops
+use vc_gate
+use vc_induct_agg
+use vc_loops
+use vc_heap
+use tests.builders
+
+fn two(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v.push(b);
+    v
+}
+
+fn one_block(params: Vec<i64>, insts: Vec<IrInst>) -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(1, String::from("f"), params, ITY_UNIT(), blocks)
+}
+
+// ids 0-2: a `Vec::new`; 3: an allocation (a struct) given a field; 6: the push of `stored`;
+// 8: the `get` of slot 0; 10: the write of `val` (type given by the caller's instruction) through it.
+fn prefix(stored: i64) -> Vec<IrInst> {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_const_i64(0, 8));
+    i.push(mk_inst_const_i64(1, 3));
+    i.push(mk_inst_call_extern(2, ITY_PTR(), two(0, 1), String::from("__vow_vec_new")));
+    i.push(mk_inst_alloc(3, 16));
+    i.push(mk_inst_const_i64(4, 4));
+    i.push(mk_inst_field_set(5, 3, 0, 4));
+    i.push(mk_inst_call_extern(6, ITY_UNIT(), two(2, stored), String::from("__vow_vec_push_val")));
+    i.push(mk_inst_const_i64(7, 0));
+    i.push(mk_inst_call_extern(8, ITY_I64(), two(2, 7), String::from("__vow_vec_get_val")));
+    i.push(mk_inst_const_i64(9, 5));
+    i
+}
+
+fn finish(i: Vec<IrInst>, params: Vec<i64>) -> String {
+    i.push(mk_inst(11, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    vc_skip_reason(one_block(params, i))
+}
+
+// A write through the element of a `Vec` the function built and stored an allocation into.
+fn check_admitted() -> i64 {
+    let i: Vec<IrInst> = prefix(3);
+    i.push(mk_inst_field_set(10, 8, 0, 9));
+    if finish(i, Vec::new()) != String::from("") { return 1; }
+    0
+}
+
+// The `get` of a `Vec` no pointer is stored into, a pointer value and a write through a
+// handle that is no `get` keep their reasons.
+fn check_refused() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_const_i64(0, 8));
+    i.push(mk_inst_const_i64(1, 3));
+    i.push(mk_inst_call_extern(2, ITY_PTR(), two(0, 1), String::from("__vow_vec_new")));
+    i.push(mk_inst_const_i64(7, 0));
+    i.push(mk_inst_call_extern(8, ITY_I64(), two(2, 7), String::from("__vow_vec_get_val")));
+    i.push(mk_inst_const_i64(9, 5));
+    i.push(mk_inst_field_set(10, 8, 0, 9));
+    if finish(i, Vec::new()) != String::from("unsupported-opcode: a field is written through an element of a Vec that is no parameter and holds no stored pointer") { return 1; }
+    let p: Vec<IrInst> = prefix(3);
+    p.push(mk_inst_alloc(12, 16));
+    p.push(mk_inst_field_set(10, 8, 0, 12));
+    if finish(p, Vec::new()) != String::from("unsupported-opcode: FieldSet") { return 2; }
+    let q: Vec<IrInst> = prefix(3);
+    q.push(mk_inst_field_get(12, ITY_I64(), 3, 1));
+    q.push(mk_inst_field_set(10, 12, 0, 9));
+    if finish(q, Vec::new()) != String::from("unsupported-opcode: FieldSet on a value that is neither an allocation, a parameter nor a merge of them") { return 3; }
+    0
+}
+
+// A parameter stored into the `Vec` may be another parameter, which the write through the
+// element reaches too (`vc_agg_alias_marked`): the write is modelled.
+fn check_param_admitted() -> i64 {
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_PTR());
+    let i: Vec<IrInst> = prefix(3);
+    i.push(mk_inst_arg(12, ITY_PTR(), 0));
+    i.push(mk_inst_call_extern(13, ITY_UNIT(), two(2, 12), String::from("__vow_vec_push_val")));
+    i.push(mk_inst_field_set(10, 8, 0, 9));
+    i.push(mk_inst(11, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let f: IrFunction = one_block(params, i);
+    f.param_keys.push(String::from("Person"));
+    if vc_skip_reason(f) != String::from("") { return 1; }
+    0
+}
+
+// A write through the element of a `Vec` parameter: ids 0: the parameter, 1-2: the index and its
+// `get`, 3: the value written.
+fn foreign(val_ty_ok: bool, stores: bool) -> IrFunction {
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_PTR());
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_const_i64(1, 0));
+    i.push(mk_inst_call_extern(2, ITY_I64(), two(0, 1), String::from("__vow_vec_get_val")));
+    if val_ty_ok { i.push(mk_inst_const_i64(3, 5)); } else { i.push(mk_inst_const_bool(3, 1)); }
+    i.push(mk_inst_field_set(4, 2, 0, 3));
+    if stores {
+        i.push(mk_inst_alloc(5, 16));
+        i.push(mk_inst_alloc(6, 16));
+        i.push(mk_inst_field_set(7, 5, 0, 6));
+    }
+    i.push(mk_inst(8, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let f: IrFunction = one_block(params, i);
+    f.param_keys.push(String::from("Vec<Person>"));
+    f
+}
+
+// The element of a `Vec` parameter is written when the function stores no pointer, and the
+// overlay is needed for it although nothing is read through a handle.
+fn check_foreign() -> i64 {
+    let f: IrFunction = foreign(true, false);
+    if vc_skip_reason(f) != String::from("") { return 1; }
+    if !vc_heap_overlay_needed(f, vc_ty_table(f)) { return 2; }
+    let s: IrFunction = foreign(true, true);
+    if vc_skip_reason(s) != String::from("unsupported-opcode: a field is written through an element of a Vec in a function that stores a pointer") { return 3; }
+    let b: IrFunction = foreign(false, false);
+    if vc_skip_reason(b) != String::from("unsupported-opcode: a field of this type is written through an element of a Vec parameter") { return 4; }
+    let p: IrFunction = foreign(true, false);
+    p.param_keys.clear();
+    p.param_keys.push(String::from(""));
+    if vc_skip_reason(p) != String::from("unsupported-opcode: a field is written through an element of a Vec that is no parameter and holds no stored pointer") { return 5; }
+    0
+}
+
+// The write sits in a loop body: ids 0: the parameter, 3: the `get` of the header, 7: the value.
+fn foreign_in_loop() -> IrFunction {
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_PTR());
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_arg(0, ITY_PTR(), 0));
+    a.push(mk_inst_const_i64(1, 0));
+    a.push(mk_inst_jump(2, 1));
+    let h: Vec<IrInst> = Vec::new();
+    h.push(mk_inst_call_extern(3, ITY_I64(), two(0, 1), String::from("__vow_vec_get_val")));
+    h.push(mk_inst_const_bool(5, 1));
+    h.push(mk_inst_branch(6, 5, 2, 3));
+    let b: Vec<IrInst> = Vec::new();
+    b.push(mk_inst_const_i64(7, 5));
+    b.push(mk_inst_field_set(8, 3, 0, 7));
+    b.push(mk_inst_jump(9, 1));
+    let x: Vec<IrInst> = Vec::new();
+    x.push(mk_inst(10, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, a));
+    blocks.push(mk_block(1, h));
+    blocks.push(mk_block(2, b));
+    blocks.push(mk_block(3, x));
+    let f: IrFunction = mk_function(1, String::from("f"), params, ITY_UNIT(), blocks);
+    f.param_keys.push(String::from("Vec<Person>"));
+    f
+}
+
+// A payload object read out of a parameter (`FieldGet[ptr]`) is a symbol that ignores the write.
+fn foreign_with_payload() -> IrFunction {
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_PTR());
+    params.push(ITY_PTR());
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_arg(20, ITY_PTR(), 1));
+    i.push(mk_inst_field_get(21, ITY_PTR(), 20, 0));
+    i.push(mk_inst_const_i64(1, 0));
+    i.push(mk_inst_call_extern(2, ITY_I64(), two(0, 1), String::from("__vow_vec_get_val")));
+    i.push(mk_inst_const_i64(3, 5));
+    i.push(mk_inst_field_set(4, 2, 0, 3));
+    i.push(mk_inst(8, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let f: IrFunction = one_block(params, i);
+    f.param_keys.push(String::from("Vec<Person>"));
+    f.param_keys.push(String::from("Option<Person>"));
+    f
+}
+
+// What stays refused: a write in a loop, and in a function that reads a payload object.
+fn check_foreign_refused() -> i64 {
+    if vc_skip_reason(foreign_in_loop()) != String::from("unsupported-opcode: a field is written through an element of a Vec parameter in a loop") { return 1; }
+    if vc_skip_reason(foreign_with_payload()) != String::from("unsupported-opcode: a field is written through an element of a Vec parameter in a function that reads a payload object") { return 2; }
+    0
+}
+
+// A second `Vec` parameter: of the same element type its elements may be the ones written, of another
+// they never are, and the heap arrays (keyed by slot) would say they may be.
+fn with_second_vec(key: String) -> IrFunction {
+    let f: IrFunction = foreign(true, false);
+    f.params.push(ITY_PTR());
+    f.param_keys.push(key);
+    f
+}
+
+fn check_mixed_vecs() -> i64 {
+    if vc_skip_reason(with_second_vec(String::from("Vec<Person>"))) != String::from("") { return 1; }
+    if vc_skip_reason(with_second_vec(String::from("Person"))) != String::from("") { return 2; }
+    if vc_skip_reason(with_second_vec(String::from("Vec<Pair>"))) != String::from("unsupported-opcode: a field is written through an element of a Vec parameter in a function with Vec parameters of different element types") { return 3; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_admitted();
+    if r == 0 { r = check_refused() + 10; if r == 10 { r = 0; } }
+    if r == 0 { r = check_param_admitted() + 20; if r == 20 { r = 0; } }
+    if r == 0 { r = check_foreign() + 30; if r == 30 { r = 0; } }
+    if r == 0 { r = check_foreign_refused() + 40; if r == 40 { r = 0; } }
+    if r == 0 { r = check_mixed_vecs() + 50; if r == 50 { r = 0; } }
+    i64_to_i32_wrap(r)
+}

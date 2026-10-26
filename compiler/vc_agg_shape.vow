@@ -5,6 +5,7 @@ use ir_dominance
 use vc_wide
 use vc_heap
 use vc_ops
+use vc_elemgate
 
 // Gate and set-up for the aggregate model (`vc_agg`): which writes it accepts and
 // which parameters it must treat as possibly one object. Both read the IR only.
@@ -51,12 +52,14 @@ fn vc_agg_user_call_ids(f: IrFunction, n_ids: u64) -> Vec<i64> {
 // Gate rule for writes: a `FieldSet` must target a `RegionAlloc`, a pointer
 // parameter, a pointer Phi merging such objects, or the result of a call of a
 // user function (the inliner turns it into such a Phi; an extern call's result
-// is none of these). "" when every write is, else the detail of an
+// is none of these), or a pointer element read by a `get`, the one handle (`i64`) a write may
+// name (`vc_elemgate` decides it). "" when every write is, else the detail of an
 // `unsupported-opcode` skip. `n_ids` is the size of the instruction-id space.
 fn vc_agg_shape_detail(f: IrFunction, n_ids: u64) -> String {
     let def_op: Vec<i64> = vc_agg_def_ops(f, n_ids);
     let user_call: Vec<i64> = vc_agg_user_call_ids(f, n_ids);
     let elem_ref: Vec<i64> = vc_wide_ref_ids(f, n_ids);
+    let elem_get: Vec<i64> = vc_elem_get_recv(f, n_ids);
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
         let blk: IrBlock = f.blocks[bi];
@@ -65,7 +68,8 @@ fn vc_agg_shape_detail(f: IrFunction, n_ids: u64) -> String {
             let inst: IrInst = blk.insts[ii];
             if inst.op == IOP_FIELD_SET() && elem_ref[inst.args[0] as u64] == 0 {
                 let op: i64 = def_op[inst.args[0] as u64];
-                if op != IOP_REGION_ALLOC() && op != IOP_GET_ARG() && op != IOP_PHI() && user_call[inst.args[0] as u64] == 0 {
+                let handle: bool = elem_get[inst.args[0] as u64] >= 0;
+                if !handle && op != IOP_REGION_ALLOC() && op != IOP_GET_ARG() && op != IOP_PHI() && user_call[inst.args[0] as u64] == 0 {
                     return String::from("FieldSet on a value that is neither an allocation, a parameter nor a merge of them");
                 }
             }
@@ -97,13 +101,15 @@ fn vc_agg_arg_params(f: IrFunction, n_ids: u64) -> Vec<i64> {
 
 // The ascending indices of the pointer parameters the function reads or writes a
 // field of, or merges in a Phi, when it also writes a field through a parameter
-// or a Phi and there are at least two of them; else none. A caller can pass one
+// or a Phi, or through an element of a `Vec` (a pointer element may be a parameter that was
+// stored, `vc_elemwrite`), and there are at least two of them; else none. A caller can pass one
 // value twice, so a write through one is a write through the others whenever they
 // are one object (`vc_agg_alias_params` narrows this to the parameters of one type).
 // A function that writes only objects it allocated needs no identity.
 fn vc_agg_alias_marked(f: IrFunction, n_ids: u64) -> Vec<i64> {
     let def_op: Vec<i64> = vc_agg_def_ops(f, n_ids);
     let arg_param: Vec<i64> = vc_agg_arg_params(f, n_ids);
+    let elem_get: Vec<i64> = vc_elem_get_recv(f, n_ids);
     let marked: Vec<i64> = dom_fill(f.params.len(), 0);
     let mut writes_param: bool = false;
     let mut bi: u64 = 0;
@@ -124,7 +130,7 @@ fn vc_agg_alias_marked(f: IrFunction, n_ids: u64) -> Vec<i64> {
             }
             if inst.op == IOP_FIELD_SET() {
                 let op: i64 = def_op[inst.args[0] as u64];
-                if op == IOP_GET_ARG() || op == IOP_PHI() { writes_param = true; }
+                if op == IOP_GET_ARG() || op == IOP_PHI() || elem_get[inst.args[0] as u64] >= 0 { writes_param = true; }
             }
             ii = ii + 1;
         }
