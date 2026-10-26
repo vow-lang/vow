@@ -1,0 +1,37 @@
+// TEST: stdout "18\nouter\n"
+module LoopControlNesting
+
+fn nested(xs: Vec<i64>) -> i64 {
+    let mut total: i64 = 0;
+    let x: i64 = 10;
+    let result: i64 = loop {
+        for x in xs {
+            if x == 2 { continue; }
+            total = total + x;
+        }
+        let inner: i64 = loop { break 2; };
+        while total < 6 {
+            total = total + 1;
+            let x: i64 = 99;
+            continue;
+        }
+        break total + x + inner;
+    };
+    result
+}
+
+fn main() -> i32 [io] {
+    let xs: Vec<i64> = Vec::new();
+    xs.push(1);
+    xs.push(2);
+    xs.push(3);
+    print_i64(nested(xs));
+    print_str("\n");
+    let result: String = loop {
+        let inner: String = loop { break String::from("inner"); };
+        break String::from("outer");
+    };
+    print_str(result);
+    print_str("\n");
+    0
+}

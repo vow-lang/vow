@@ -1,0 +1,154 @@
+module TestLowerLoopControl
+
+use ast
+use diag
+use lexer
+use parser
+use ir
+use lower
+use lower_loops
+
+fn test_body(ctx: LowerCtx, source: String) -> i64 {
+    let parsed: Module = parse_module_into(lex(source), ctx.arena, diag_ctx_new(), String::from("loop_control.vow"));
+    let a: AstArena = ctx.arena;
+    fn_body_bid(a, item_id(parsed.items[0]))
+}
+
+fn constant(ctx: LowerCtx, value: i64) -> i64 {
+    lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), Vec::new(), IDATA_CONST_I64(), value, 0, String::from(""), 0)
+}
+
+fn test_edges(ctx: LowerCtx, carried: bool) -> LoopEdges {
+    let header: i64 = lctx_new_block(ctx);
+    let exit: i64 = lctx_new_block(ctx);
+    let names: Vec<String> = Vec::new();
+    let phis: Vec<i64> = Vec::new();
+    let exit_names: Vec<String> = Vec::new();
+    let exits: Vec<i64> = Vec::new();
+    if carried {
+        names.push(String::from("x"));
+        exit_names.push(String::from("x"));
+        lctx_switch_to_block(ctx, header);
+        phis.push(lctx_emit(ctx, IOP_PHI(), ITY_I64(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""), 0));
+        lctx_switch_to_block(ctx, exit);
+        exits.push(lctx_emit(ctx, IOP_PHI(), ITY_I64(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""), 0));
+    }
+    lctx_switch_to_block(ctx, 0);
+    LoopEdges { header: header, exit: exit, carried: LoopPhis { names: names, ids: phis }, outgoing: LoopPhis { names: exit_names, ids: exits } }
+}
+
+fn check_foreach_transfer(explicit: bool) -> i64 {
+    let ctx: LowerCtx = lctx_new(String::from("foreach"), ITY_UNIT(), 0, arena_new(), Vec::new());
+    let original: i64 = constant(ctx, 7);
+    lctx_define(ctx, String::from("x"), original);
+    let edges: LoopEdges = test_edges(ctx, true);
+    let carried: LoopPhis = edges.carried;
+    let outgoing: LoopPhis = edges.outgoing;
+    let index: i64 = lctx_emit(ctx, IOP_PHI(), ITY_U64(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""), 0);
+    let element: i64 = constant(ctx, 99);
+    let body: i64 = test_body(ctx, {
+        if explicit { String::from("module T\nfn f() { x = x + 1; continue; }") }
+        else { String::from("module T\nfn f() { x = x + 1; }") }
+    });
+    let result: i64 = lower_foreach_body(ctx, body, edges, String::from("x"), element, index, 0);
+    if ctx.current_block != edges.exit { return 1; }
+    if lctx_lookup(ctx, String::from("x")) != outgoing.ids[0] { return 2; }
+    let f: IrFunction = ctx.func;
+    let block: IrBlock = f.blocks[0];
+    let mut mut_at: i64 = -1;
+    let mut idx_at: i64 = -1;
+    let mut jumps: i64 = 0;
+    let mut pi: u64 = 0;
+    while pi < block.insts.len() {
+        let inst: IrInst = block.insts[pi];
+        let args: Vec<i64> = inst.args;
+        if inst.op == IOP_UPSILON() && inst.dv == carried.ids[0] {
+            if args.len() != 1 || args[0] != original { return 3; }
+            mut_at = pi as i64;
+        }
+        if inst.op == IOP_UPSILON() && inst.dv == index {
+            if inst.ty != ITY_U64() { return 4; }
+            idx_at = pi as i64;
+        }
+        if inst.op == IOP_JUMP() {
+            if inst.dv != edges.header { return 5; }
+            jumps = jumps + 1;
+        }
+        pi = pi + 1;
+    }
+    if mut_at < 0 || idx_at < 0 || jumps != 1 { return 6; }
+    if explicit && mut_at >= idx_at { return 7; }
+    if !explicit && idx_at >= mut_at { return 8; }
+    if lctx_inst_ty(ctx, result) != ITY_UNIT() { return 9; }
+    0
+}
+
+fn check_break_and_metadata() -> i64 {
+    let ctx: LowerCtx = lctx_new(String::from("break_value"), ITY_PTR(), 0, arena_new(), Vec::new());
+    let edges: LoopEdges = test_edges(ctx, false);
+    let body: i64 = test_body(ctx, String::from("module T\nfn f() { let inner: String = loop { break \"inner\"; }; break \"outer\"; }"));
+    let result: i64 = lower_loop_body(ctx, body, edges, 0);
+    if lctx_get_tag(ctx, result) != String::from("String") { return 20; }
+    if ctx.current_block != edges.exit { return 21; }
+    let f: IrFunction = ctx.func;
+    let mut matched: i64 = 0;
+    let mut result_phis: i64 = 0;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let block: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < block.insts.len() {
+            let inst: IrInst = block.insts[ii];
+            let args: Vec<i64> = inst.args;
+            if inst.op == IOP_UPSILON() && inst.dv == result {
+                if args.len() != 1 || lctx_get_tag(ctx, args[0]) != String::from("String") { return 22; }
+                matched = matched + 1;
+            }
+            if inst.op == IOP_PHI() && inst.ty == ITY_PTR() { result_phis = result_phis + 1; }
+            if inst.op == IOP_UPSILON() && inst.dv == 2147483647 { return 23; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    if matched != 1 || result_phis != 2 { return 24; }
+    0
+}
+
+fn check_while_shadow() -> i64 {
+    let ctx: LowerCtx = lctx_new(String::from("while"), ITY_UNIT(), 0, arena_new(), Vec::new());
+    let original: i64 = constant(ctx, 7);
+    lctx_define(ctx, String::from("x"), original);
+    let edges: LoopEdges = test_edges(ctx, true);
+    let outgoing: LoopPhis = edges.outgoing;
+    let body: i64 = test_body(ctx, String::from("module T\nfn f() { let x: i64 = 99; break; }"));
+    lower_while_body(ctx, body, edges, 0);
+    let f: IrFunction = ctx.func;
+    let block: IrBlock = f.blocks[0];
+    let mut ups: i64 = 0;
+    let mut jumps: i64 = 0;
+    let mut i: u64 = 0;
+    while i < block.insts.len() {
+        let inst: IrInst = block.insts[i];
+        let args: Vec<i64> = inst.args;
+        if inst.op == IOP_UPSILON() {
+            if inst.dv != outgoing.ids[0] || args[0] != original { return 30; }
+            ups = ups + 1;
+        }
+        if inst.op == IOP_JUMP() {
+            if inst.dv != edges.exit { return 31; }
+            jumps = jumps + 1;
+        }
+        i = i + 1;
+    }
+    if ups != 1 || jumps != 1 { return 32; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let mut code: i64 = check_foreach_transfer(true);
+    if code == 0 { code = check_foreach_transfer(false); }
+    if code == 0 { code = check_break_and_metadata(); }
+    if code == 0 { code = check_while_shadow(); }
+    if code != 0 { print_i64(code); return 1; }
+    0
+}
