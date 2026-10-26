@@ -1,4 +1,9 @@
+mod loop_control;
 pub mod vow;
+
+#[cfg(test)]
+#[path = "loop_control/tests.rs"]
+mod loop_control_tests;
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -1158,24 +1163,8 @@ pub(crate) struct LowerCtx {
     // const name → (128-bit two's-complement pattern of the literal, declared
     // type); the emitters truncate the pattern to the declared width
     const_map: HashMap<String, (u128, Ty)>,
-    // loop exit block stack for break
-    loop_exit_blocks: Vec<BlockId>,
-    // loop header block stack for continue
-    loop_header_blocks: Vec<BlockId>,
-    // Per-loop Phi IDs for back-edge Upsilons on continue
-    loop_continue_phis: Vec<Vec<(String, InstId)>>,
-    // For for-each: the index Phi to increment on continue (None for while/loop)
-    loop_continue_idx_phi: Vec<Option<InstId>>,
-    // Scope depth at loop header (before body scope push) for correct continue resolution.
-    // continue must resolve loop-carried vars from this depth, not the current scope, to
-    // avoid picking up shadowed bindings in inner blocks.
-    loop_continue_scope_depth: Vec<usize>,
-    // Per-loop break-value Upsilon collector.  `Some(vec)` for `loop` (collects
-    // BreakUpsilon entries), `None` for `while`.
-    loop_break_upsilons: Vec<Option<Vec<BreakUpsilon>>>,
-    // Per-loop exit-block Phi IDs for mutation variables.  Break emits Upsilons
-    // targeting these so the exit block receives updated values.
-    loop_exit_phis: Vec<Vec<(String, InstId)>>,
+    // Innermost-loop state and control transfers are owned by loop_control.
+    loop_frames: Vec<loop_control::LoopFrame>,
     // InstId of a Vec allocation → aggregate element type names, outermost first.
     // A Vec<Vec<Box>> carries ["Vec", "Box"], so each index can consume one
     // name and retain the rest for deeper indexing.
@@ -1268,13 +1257,7 @@ impl LowerCtx {
             struct_field_ast_types,
             string_exprs,
             const_map: HashMap::new(),
-            loop_exit_blocks: Vec::new(),
-            loop_header_blocks: Vec::new(),
-            loop_continue_phis: Vec::new(),
-            loop_continue_idx_phi: Vec::new(),
-            loop_continue_scope_depth: Vec::new(),
-            loop_break_upsilons: Vec::new(),
-            loop_exit_phis: Vec::new(),
+            loop_frames: Vec::new(),
             inst_vec_elem_types: HashMap::new(),
             inst_vec_option_elem_tys: HashMap::new(),
             inst_vec_variant_payload_tys: HashMap::new(),
@@ -1699,10 +1682,6 @@ fn block_result_is_coercible_int_marker(block: &Block) -> bool {
     }
     false
 }
-
-/// A `break value` feeding a `loop` result Phi: `(source_block, upsilon_id,
-/// value_ty, value)`.
-type BreakUpsilon = (BlockId, InstId, Ty, InstId);
 
 /// A match arm that reaches the merge block: `(exit_block, result_upsilon,
 /// result_ty, mutated_variable_values, mutated_variable_upsilons)`.
@@ -2699,54 +2678,18 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 span,
             );
 
-            // Body: lower body (push/pop scope handles lets inside body).
             ctx.switch_to_block(body_block);
-            ctx.loop_exit_blocks.push(exit_block);
-            ctx.loop_header_blocks.push(header_block);
-            ctx.loop_continue_phis.push(phi_ids.clone());
-            ctx.loop_exit_phis.push(exit_phi_ids.clone());
-            ctx.loop_continue_idx_phi.push(None);
-            ctx.loop_continue_scope_depth.push(ctx.scope.len());
-            ctx.loop_break_upsilons.push(None);
-            lower_block(ctx, body);
-            ctx.loop_break_upsilons.pop();
-            ctx.loop_continue_scope_depth.pop();
-            ctx.loop_continue_idx_phi.pop();
-            ctx.loop_exit_phis.pop();
-            ctx.loop_continue_phis.pop();
-            ctx.loop_header_blocks.pop();
-            ctx.loop_exit_blocks.pop();
-
-            // Emit back-edge Upsilons with the current scope values.
-            if !ctx.is_terminated() {
-                for (name, phi_id) in &phi_ids {
-                    if let Some(cur_val) = ctx.lookup(name) {
-                        ctx.emit(
-                            Opcode::Upsilon,
-                            ctx.inst_ty(cur_val),
-                            vec![cur_val],
-                            InstData::PhiTarget(*phi_id),
-                            span,
-                        );
-                    }
-                }
-                ctx.emit(
-                    Opcode::Jump,
-                    Ty::Unit,
-                    vec![],
-                    InstData::JumpTarget(header_block),
-                    span,
-                );
-            }
-
-            // Bind names to exit-block Phis so post-loop code reads correct values.
-            for (name, exit_phi) in &exit_phi_ids {
-                ctx.assign(name, *exit_phi);
-            }
-
-            // Exit block (Phis already emitted above).
-            ctx.switch_to_block(exit_block);
-            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+            loop_control::lower_while_body(
+                ctx,
+                loop_control::LoopEdges {
+                    header: header_block,
+                    exit: exit_block,
+                    carried_phis: phi_ids,
+                    exit_phis: exit_phi_ids,
+                },
+                body,
+                span,
+            )
         }
         ExprKind::ForEach {
             binding,
@@ -2909,82 +2852,20 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             project_vec_index_metadata(ctx, iter_id, elem_id);
             record_collection_foreach_element(ctx, iter_id, elem_id);
 
-            // Save scope depth before pushing the for-each binding scope.
-            // Loop-carried phis track outer mutation variables whose bindings
-            // live at this depth; the for-each binding is a new scope that must
-            // be excluded from continue's lookup to avoid resolving to it.
-            let for_scope_depth = ctx.scope.len();
-
-            ctx.push_scope();
-            ctx.define(binding.clone(), elem_id);
-
-            ctx.loop_exit_blocks.push(exit_block);
-            ctx.loop_header_blocks.push(header_block);
-            ctx.loop_continue_phis.push(phi_ids.clone());
-            ctx.loop_exit_phis.push(exit_phi_ids.clone());
-            ctx.loop_continue_idx_phi.push(Some(idx_phi));
-            ctx.loop_continue_scope_depth.push(for_scope_depth);
-            lower_block(ctx, body);
-            ctx.loop_continue_scope_depth.pop();
-            ctx.loop_continue_idx_phi.pop();
-            ctx.loop_exit_phis.pop();
-            ctx.loop_continue_phis.pop();
-            ctx.loop_header_blocks.pop();
-            ctx.loop_exit_blocks.pop();
-
-            ctx.pop_scope();
-
-            // Increment index and emit back-edge
-            if !ctx.is_terminated() {
-                let one = ctx.emit(
-                    Opcode::ConstU64,
-                    Ty::U64,
-                    vec![],
-                    InstData::ConstU64(1),
-                    span,
-                );
-                let idx_next = ctx.emit(
-                    Opcode::WrappingAdd,
-                    Ty::U64,
-                    vec![idx_phi, one],
-                    InstData::Integer(IntegerType::U64),
-                    span,
-                );
-                ctx.emit(
-                    Opcode::Upsilon,
-                    Ty::U64,
-                    vec![idx_next],
-                    InstData::PhiTarget(idx_phi),
-                    span,
-                );
-                for (name, phi_id) in &phi_ids {
-                    if let Some(cur_val) = ctx.lookup(name) {
-                        ctx.emit(
-                            Opcode::Upsilon,
-                            ctx.inst_ty(cur_val),
-                            vec![cur_val],
-                            InstData::PhiTarget(*phi_id),
-                            span,
-                        );
-                    }
-                }
-                ctx.emit(
-                    Opcode::Jump,
-                    Ty::Unit,
-                    vec![],
-                    InstData::JumpTarget(header_block),
-                    span,
-                );
-            }
-
-            // Bind names to exit-block Phis so post-loop code reads correct values.
-            for (name, exit_phi) in &exit_phi_ids {
-                ctx.assign(name, *exit_phi);
-            }
-
-            // Exit block (Phis already emitted above).
-            ctx.switch_to_block(exit_block);
-            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+            loop_control::lower_foreach_body(
+                ctx,
+                loop_control::LoopEdges {
+                    header: header_block,
+                    exit: exit_block,
+                    carried_phis: phi_ids,
+                    exit_phis: exit_phi_ids,
+                },
+                binding,
+                elem_id,
+                idx_phi,
+                body,
+                span,
+            )
         }
         ExprKind::Loop {
             body,
@@ -3048,184 +2929,20 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
             ctx.switch_to_block(header_block);
 
-            ctx.loop_exit_blocks.push(exit_block);
-            ctx.loop_header_blocks.push(header_block);
-            ctx.loop_continue_phis.push(phi_ids.clone());
-            ctx.loop_exit_phis.push(exit_phi_ids.clone());
-            ctx.loop_continue_idx_phi.push(None);
-            ctx.loop_continue_scope_depth.push(ctx.scope.len());
-            ctx.loop_break_upsilons.push(Some(Vec::new()));
-            lower_block(ctx, body);
-            let break_ups = ctx.loop_break_upsilons.pop().unwrap();
-            ctx.loop_continue_scope_depth.pop();
-            ctx.loop_continue_idx_phi.pop();
-            ctx.loop_exit_phis.pop();
-            ctx.loop_continue_phis.pop();
-            ctx.loop_header_blocks.pop();
-            ctx.loop_exit_blocks.pop();
-
-            // Back-edge Upsilons
-            if !ctx.is_terminated() {
-                for (name, phi_id) in &phi_ids {
-                    if let Some(cur_val) = ctx.lookup(name) {
-                        ctx.emit(
-                            Opcode::Upsilon,
-                            ctx.inst_ty(cur_val),
-                            vec![cur_val],
-                            InstData::PhiTarget(*phi_id),
-                            span,
-                        );
-                    }
-                }
-                ctx.emit(
-                    Opcode::Jump,
-                    Ty::Unit,
-                    vec![],
-                    InstData::JumpTarget(header_block),
-                    span,
-                );
-            }
-
-            // Bind names to exit-block Phis so post-loop code reads correct values.
-            for (name, exit_phi) in &exit_phi_ids {
-                ctx.assign(name, *exit_phi);
-            }
-
-            ctx.switch_to_block(exit_block);
-
-            // If any break carried a value, emit a Phi to merge them.
-            if let Some(ups) = break_ups {
-                if ups.is_empty() {
-                    ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                } else {
-                    let ty = ups[0].2;
-                    let phi_id = ctx.emit(Opcode::Phi, ty, vec![], InstData::None, span);
-                    for (block, up_id, _, _) in &ups {
-                        backpatch_upsilon(ctx, *block, *up_id, phi_id);
-                    }
-                    let break_vals: Vec<InstId> = ups.iter().map(|up| up.3).collect();
-                    merge_compatible_aggregate_metadata(ctx, &break_vals, phi_id);
-                    phi_id
-                }
-            } else {
-                ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-            }
-        }
-        ExprKind::Break { value } => {
-            let exit_block = ctx
-                .loop_exit_blocks
-                .last()
-                .copied()
-                .expect("break outside of loop");
-
-            if let Some(val_expr) = value {
-                let val_id = lower_expr(ctx, val_expr);
-                // If inside a `loop` (Some), emit Upsilon for the break-value Phi.
-                let is_loop = matches!(ctx.loop_break_upsilons.last(), Some(Some(_)));
-                if is_loop {
-                    let val_ty = ctx.inst_ty(val_id);
-                    let up_id = ctx.emit(
-                        Opcode::Upsilon,
-                        val_ty,
-                        vec![val_id],
-                        InstData::PhiTarget(InstId(u32::MAX)),
-                        span,
-                    );
-                    let block = ctx.current_block;
-                    if let Some(Some(ups)) = ctx.loop_break_upsilons.last_mut() {
-                        ups.push((block, up_id, val_ty, val_id));
-                    }
-                }
-            }
-
-            // Emit Upsilons for loop mutation variables targeting the
-            // exit-block Phis so the exit block receives updated values.
-            // Use lookup_at_depth to resolve from the loop header scope,
-            // not the current scope, to avoid picking up shadowed bindings.
-            let exit_phis = ctx.loop_exit_phis.last().cloned().unwrap_or_default();
-            let scope_depth = ctx.loop_continue_scope_depth.last().copied().unwrap_or(0);
-            for (name, exit_phi) in &exit_phis {
-                if let Some(cur_val) = ctx.lookup_at_depth(name, scope_depth) {
-                    ctx.emit(
-                        Opcode::Upsilon,
-                        ctx.inst_ty(cur_val),
-                        vec![cur_val],
-                        InstData::PhiTarget(*exit_phi),
-                        span,
-                    );
-                }
-            }
-
-            ctx.emit(
-                Opcode::Jump,
-                Ty::Unit,
-                vec![],
-                InstData::JumpTarget(exit_block),
+            loop_control::lower_loop_body(
+                ctx,
+                loop_control::LoopEdges {
+                    header: header_block,
+                    exit: exit_block,
+                    carried_phis: phi_ids,
+                    exit_phis: exit_phi_ids,
+                },
+                body,
                 span,
             )
         }
-        ExprKind::Continue => {
-            let header_block = ctx
-                .loop_header_blocks
-                .last()
-                .copied()
-                .expect("continue outside of loop");
-            let phis = ctx.loop_continue_phis.last().cloned().unwrap_or_default();
-            let idx_phi = ctx.loop_continue_idx_phi.last().copied().flatten();
-            let scope_depth = ctx
-                .loop_continue_scope_depth
-                .last()
-                .copied()
-                .expect("continue outside of loop");
-
-            // Emit back-edge Upsilons for mutation variables.
-            // Use lookup_at_depth to resolve from the loop header scope, not the
-            // current scope, so that shadowed bindings in inner blocks are skipped.
-            for (name, phi_id) in &phis {
-                if let Some(cur_val) = ctx.lookup_at_depth(name, scope_depth) {
-                    ctx.emit(
-                        Opcode::Upsilon,
-                        ctx.inst_ty(cur_val),
-                        vec![cur_val],
-                        InstData::PhiTarget(*phi_id),
-                        span,
-                    );
-                }
-            }
-
-            // For for-each: increment index and emit Upsilon for index Phi.
-            if let Some(ip) = idx_phi {
-                let one = ctx.emit(
-                    Opcode::ConstU64,
-                    Ty::U64,
-                    vec![],
-                    InstData::ConstU64(1),
-                    span,
-                );
-                let idx_next = ctx.emit(
-                    Opcode::WrappingAdd,
-                    Ty::U64,
-                    vec![ip, one],
-                    InstData::Integer(IntegerType::U64),
-                    span,
-                );
-                ctx.emit(
-                    Opcode::Upsilon,
-                    Ty::U64,
-                    vec![idx_next],
-                    InstData::PhiTarget(ip),
-                    span,
-                );
-            }
-
-            ctx.emit(
-                Opcode::Jump,
-                Ty::Unit,
-                vec![],
-                InstData::JumpTarget(header_block),
-                span,
-            )
-        }
+        ExprKind::Break { value } => loop_control::lower_loop_break(ctx, value.as_deref(), span),
+        ExprKind::Continue => loop_control::lower_loop_continue(ctx, span),
         ExprKind::FieldAccess { base, field } => {
             let ptr_id = lower_expr(ctx, base);
             let struct_name = ctx

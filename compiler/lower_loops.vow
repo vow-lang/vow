@@ -1,0 +1,148 @@
+module LowerLoops
+
+use ast
+use ir
+use lower
+
+// Loop syntax constructs the edges and Phis. This module owns the body lifetime,
+// lexical lookup depth, transfers and expression result; callers never inspect active frames.
+struct LoopPhis {
+    names: Vec<String>,
+    ids: Vec<i64>,
+}
+
+struct LoopEdges {
+    header: i64,
+    exit: i64,
+    carried: LoopPhis,
+    outgoing: LoopPhis,
+}
+
+struct LoopBreak {
+    block: i64,
+    upsilon: i64,
+    ty: i64,
+    value: i64,
+}
+
+struct LoopFrame {
+    edges: LoopEdges,
+    scope_depth: u64,
+    index_phi: i64,
+    collects_values: bool,
+    breaks: Vec<LoopBreak>,
+}
+
+fn lower_while_body(ctx: LowerCtx, body: i64, edges: LoopEdges, origin: i64) -> i64 {
+    lower_loop_body_inner(ctx, body, edges, false, String::from(""), -1, -1, origin)
+}
+
+fn lower_loop_body(ctx: LowerCtx, body: i64, edges: LoopEdges, origin: i64) -> i64 {
+    lower_loop_body_inner(ctx, body, edges, true, String::from(""), -1, -1, origin)
+}
+
+fn lower_foreach_body(ctx: LowerCtx, body: i64, edges: LoopEdges, binding: String, element: i64, index_phi: i64, origin: i64) -> i64 {
+    lower_loop_body_inner(ctx, body, edges, false, binding, element, index_phi, origin)
+}
+
+fn lower_loop_body_inner(ctx: LowerCtx, body: i64, edges: LoopEdges, collects_values: bool, binding: String, element: i64, index_phi: i64, origin: i64) -> i64 {
+    // Capture before introducing the foreach binding: it may shadow a carried variable.
+    let depth: u64 = ctx.scope_vars.len();
+    if index_phi != -1 {
+        lctx_push_scope(ctx);
+        lctx_define(ctx, binding, element);
+    }
+    let frame: LoopFrame = LoopFrame { edges: edges, scope_depth: depth, index_phi: index_phi, collects_values: collects_values, breaks: Vec::new() };
+    ctx.loop_frames.push(frame);
+    lower_block(ctx, body);
+    ctx.loop_frames.pop();
+    if index_phi != -1 { lctx_pop_scope(ctx); }
+
+    if !lctx_is_terminated(ctx) {
+        // Natural foreach backedges step before mutation Phis. Explicit continue
+        // retains the reverse order below, preserving the existing IR exactly.
+        lower_loop_step_index(ctx, index_phi, origin);
+        lower_loop_emit_phis(ctx, edges.carried, ctx.scope_vars.len(), false, origin);
+        lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), Vec::new(), IDATA_JUMP_TARGET(), edges.header, 0, String::from(""), origin);
+    }
+
+    let outgoing: LoopPhis = edges.outgoing;
+    let mut i: u64 = 0;
+    while i < outgoing.names.len() {
+        lctx_assign(ctx, outgoing.names[i], outgoing.ids[i]);
+        i = i + 1;
+    }
+    lctx_switch_to_block(ctx, edges.exit);
+    let breaks: Vec<LoopBreak> = frame.breaks;
+    if breaks.len() == 0 {
+        return lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""), origin);
+    }
+    let first: LoopBreak = breaks[0];
+    let phi: i64 = lctx_emit(ctx, IOP_PHI(), first.ty, Vec::new(), IDATA_NONE(), 0, 0, String::from(""), origin);
+    let values: Vec<i64> = Vec::new();
+    i = 0;
+    while i < breaks.len() {
+        let br: LoopBreak = breaks[i];
+        backpatch_upsilon(ctx, br.block, br.upsilon, phi);
+        values.push(br.value);
+        i = i + 1;
+    }
+    lctx_merge_compatible_aggregate_metadata(ctx, values, phi);
+    phi
+}
+
+fn lower_loop_emit_phis(ctx: LowerCtx, phis: LoopPhis, depth: u64, ignore_missing: bool, origin: i64) {
+    let mut i: u64 = 0;
+    while i < phis.names.len() {
+        let value: i64 = lctx_lookup_at_depth(ctx, phis.names[i], depth);
+        if !ignore_missing || value != -1 {
+            let args: Vec<i64> = Vec::new();
+            args.push(value);
+            lctx_emit(ctx, IOP_UPSILON(), lctx_inst_ty(ctx, value), args, IDATA_PHI_TARGET(), phis.ids[i], 0, String::from(""), origin);
+        }
+        i = i + 1;
+    }
+}
+
+fn lower_loop_step_index(ctx: LowerCtx, index: i64, origin: i64) {
+    if index == -1 { return; }
+    let one: i64 = lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_U64(), 1, 0, String::from(""), origin);
+    let add: Vec<i64> = Vec::new();
+    add.push(index);
+    add.push(one);
+    let next: i64 = lctx_emit(ctx, IOP_WADD(), ITY_U64(), add, IDATA_INTEGER(), ITY_U64(), 0, String::from(""), origin);
+    let args: Vec<i64> = Vec::new();
+    args.push(next);
+    lctx_emit(ctx, IOP_UPSILON(), ITY_U64(), args, IDATA_PHI_TARGET(), index, 0, String::from(""), origin);
+}
+
+fn lower_loop_break(ctx: LowerCtx, value_expr: i64, origin: i64) -> i64 {
+    if ctx.loop_frames.len() == 0 {
+        return lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""), origin);
+    }
+    let frame: LoopFrame = ctx.loop_frames[ctx.loop_frames.len() - 1];
+    let edges: LoopEdges = frame.edges;
+    if value_expr != -1 {
+        let value: i64 = lower_expr(ctx, value_expr);
+        if frame.collects_values {
+            let ty: i64 = lctx_inst_ty(ctx, value);
+            let args: Vec<i64> = Vec::new();
+            args.push(value);
+            let up: i64 = lctx_emit(ctx, IOP_UPSILON(), ty, args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""), origin);
+            frame.breaks.push(LoopBreak { block: ctx.current_block, upsilon: up, ty: ty, value: value });
+        }
+    }
+    lower_loop_emit_phis(ctx, edges.outgoing, frame.scope_depth, true, origin);
+    lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), Vec::new(), IDATA_JUMP_TARGET(), edges.exit, 0, String::from(""), origin)
+}
+
+fn lower_loop_continue(ctx: LowerCtx, origin: i64) -> i64 {
+    if ctx.loop_frames.len() == 0 {
+        return lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""), origin);
+    }
+    let frame: LoopFrame = ctx.loop_frames[ctx.loop_frames.len() - 1];
+    let edges: LoopEdges = frame.edges;
+    lower_loop_emit_phis(ctx, edges.carried, frame.scope_depth, false, origin);
+    lower_loop_step_index(ctx, frame.index_phi, origin);
+    lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), Vec::new(), IDATA_JUMP_TARGET(), edges.header, 0, String::from(""), origin)
+}
