@@ -1,0 +1,25 @@
+// TEST: skip-reason unsupported-opcode
+// A function that stores a pointer into a field of an object it built is one whose objects have
+// addresses of their own: a write through an element of a `Vec` the caller gave stays `Skipped`.
+module VecPointerElemFieldForeignFieldStoreSkipped
+
+struct Pair { lo: i64 }
+struct Node { next: Pair, n: i64 }
+
+fn f(people: Vec<Pair>) -> i64 vow {
+  requires: people.len() == 1
+  ensures: result == 5
+} {
+  let b: Pair = Pair { lo: 1 };
+  let a: Node = Node { next: Pair { lo: 2 }, n: 0 };
+  a.next = b;
+  people[0].lo = 5;
+  people[0].lo + a.next.lo - 1
+}
+
+fn main() -> i32 [io] {
+  let people: Vec<Pair> = Vec::new();
+  people.push(Pair { lo: 1 });
+  print_i64(f(people));
+  0
+}

@@ -50,10 +50,50 @@ was pushed, so a handle read from it names exactly one overlay entry.
    already refuses a write whose receiver is no parameter or allocation (`vc_fh_roots`) and the
    spurious branch above is `unknown`.
 
+5. **An element of a `Vec` parameter is a write to the heap** (`vc_elem_foreign_ok`,
+   `vc_heap_store`). The handle names memory the function was given. The write is the write to
+   every struct entry of the overlay under `h == address(entry)` (a parameter that is that object),
+   **and** a store to the heap array of its slot: `hf<k> := ite(pc, store(hf<k>, h, v), hf<k>)`,
+   the one place the arrays are written, so a read through any handle that may equal `h` sees it
+   and a read made before it does not. A read consults the entries first and the array only for a
+   handle that is no entry's address, so the two cannot disagree. The overlay is needed for a
+   handle write whether or not the function reads through a handle (`p.age` is read directly, and
+   `p` may be the element), so `vc_heap_overlay_needed` answers true before it asks for a read.
+   Gate: the `Vec` is a `Vec` parameter (not one read out of a field), the value is a 64-bit
+   integer (the slot the array holds; a narrower or `Bool` write would have to merge into the slot),
+   the function stores no pointer anywhere (an object it built has an address of its own),
+   reads no payload object (`FieldGet[ptr]`: a child of a parameter is a symbol that ignores the
+   write) and the write is not in a loop. A loop is refused for cost: the unrolled copies store to
+   the array one after another and neither the memory nor the time bound holds (a bounded run
+   timed out after 5 minutes); the loop cut cannot help (it would give the array arbitrary
+   contents), so such a function stays `Skipped` as before rather than becoming a timeout.
+   The counterexample of a function with such a write is not replayed (a `Vec` of structs is not
+   rebuilt, #1890); each `fail/vec_pointer_elem_field_foreign_*` was checked by running its `main`
+   in debug mode, which aborts on the violation the model names.
+
+   Adversarial cases pinned by fixtures: two elements one object (`..._two_elements_wrong`), a
+   parameter that is the element (`..._param_wrong`, `..._two_params_wrong`), an object reached
+   through another parameter's field (`..._heap_wrong`), a callee's write seen by the caller
+   (`..._callee_wrong`), a read before the write (`..._read_before_wrong`), a conditional write,
+   an untouched sibling field, and the payload of an `Option` parameter that is a stored parameter
+   (`..._param_stored_payload_wrong`; `vc_payload` reads it as a handle because the write counts
+   as a write of a parameter). Mutations, each rebuilt and run over `vec_pointer_elem_field`: no
+   array store (5 fixtures fail), no overlay for a write without a read (3 proofs of a false claim),
+   an unconditional store (2), no child refusal, no `Vec` parameter test, no 64-bit test and no
+   loop refusal (one `skip/` fixture each). The refusal of a function that stores a pointer is
+   covered twice over: a `Vec` the function pushes into is also refused by
+   `vc_ptr_store_resolvable`, and a pointer stored into a field by
+   `skip/..._foreign_field_store_skipped`.
+
 ## Not covered, still `Skipped`
 
-A field written through an element of a `Vec` parameter, a pointer or float written through an
-element, an element of an element, a write through a Phi of handles.
+A field written through an element of a `Vec` read out of a field, or of a `Vec` parameter in a
+function that stores a pointer, reads a payload object or loops; a pointer, float, `Bool` or
+narrower integer written through the element of a `Vec` parameter; an element of an element; a
+write through a Phi of handles; a pointer written through any element
+(`skip/..._pointer_value_skipped`, tracked in #1663: the C emitter cannot store a `Vec` in a field
+either, ESBMC rejects the emitted C with a parse error, as it does for
+`skip/..._collection_param_in_field_skipped`).
 
 ## Guards
 
