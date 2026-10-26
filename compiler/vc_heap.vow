@@ -42,6 +42,8 @@ struct VcHeap {
     elem_arr: i64,
     byte_arr: i64,
     ranked: bool,
+    get_param: Vec<i64>,
+    param_keys: Vec<String>,
 }
 
 fn vc_heap_new() -> VcHeap {
@@ -52,6 +54,8 @@ fn vc_heap_new() -> VcHeap {
         elem_arr: -1,
         byte_arr: -1,
         ranked: true,
+        get_param: Vec::new(),
+        param_keys: Vec::new(),
     }
 }
 
@@ -68,6 +72,8 @@ fn vc_heap_is_payload_read(inst: IrInst) -> bool {
 // reads a payload as a handle ranks no field edge.
 fn vc_heap_for(f: IrFunction) -> VcHeap {
     let hp: VcHeap = vc_heap_new();
+    hp.get_param = vc_heap_get_params(f);
+    hp.param_keys = f.param_keys;
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
         let blk: IrBlock = f.blocks[bi];
@@ -79,6 +85,54 @@ fn vc_heap_for(f: IrFunction) -> VcHeap {
         bi = bi + 1;
     }
     hp
+}
+
+// For each value, the parameter whose elements it is read from by a `Vec` `get`, -1 for every other value.
+fn vc_heap_get_params(f: IrFunction) -> Vec<i64> {
+    let n_ids: u64 = (dom_max_inst_id(f) + 1) as u64;
+    let arg_param: Vec<i64> = dom_fill(n_ids, -1);
+    let out: Vec<i64> = dom_fill(n_ids, -1);
+    let mut pass: i64 = 0;
+    while pass < 2 {
+        let mut bi: u64 = 0;
+        while bi < f.blocks.len() {
+            let blk: IrBlock = f.blocks[bi];
+            let mut ii: u64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                if inst.id >= 0 && (inst.id as u64) < n_ids {
+                    if pass == 0 && inst.op == IOP_GET_ARG() && inst.ty == ITY_PTR() { arg_param[inst.id as u64] = inst.dv; }
+                    if pass == 1 && inst.op == IOP_CALL() && inst.args.len() == 2 && inst.args[0] >= 0 && (inst.args[0] as u64) < n_ids
+                        && vc_inst_vec_kind(inst) == VC_VEC_GET() {
+                        out[inst.id as u64] = arg_param[inst.args[0] as u64];
+                    }
+                }
+                ii = ii + 1;
+            }
+            bi = bi + 1;
+        }
+        pass = pass + 1;
+    }
+    out
+}
+
+// The declared type head of parameter `k` (`param_keys`), "" when it is not recorded.
+fn vc_heap_param_head(hp: VcHeap, k: i64) -> String {
+    if k < 0 || (k as u64) >= hp.param_keys.len() { return String::from(""); }
+    hp.param_keys[k as u64]
+}
+
+// The element head of a `Vec` parameter key (`Vec<Person>` gives `Person`), "" for any other key.
+fn vc_heap_key_elem(key: String) -> String {
+    if string_starts_with(key, String::from("Vec<")) == 0 || key.len() < 6 { return String::from(""); }
+    key.substring(4, key.len() - 1)
+}
+
+// The declared element head of the `Vec` parameter that value `id` is an element of, "" when `id`
+// is no element of a `Vec` parameter or its type is not recorded.
+fn vc_heap_elem_head(hp: VcHeap, id: i64) -> String {
+    if id < 0 || (id as u64) >= hp.get_param.len() { return String::from(""); }
+    vc_heap_key_elem(vc_heap_param_head(hp, hp.get_param[id as u64]))
 }
 
 // True when the function read memory through a handle: its query needs arrays.

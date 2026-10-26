@@ -184,11 +184,28 @@ fn check_foreign_refused() -> i64 {
     0
 }
 
+// A second `Vec` parameter: of the same element type its elements may be the ones written, of another
+// they never are, and the heap arrays (keyed by slot) would say they may be.
+fn with_second_vec(key: String) -> IrFunction {
+    let f: IrFunction = foreign(true, false);
+    f.params.push(ITY_PTR());
+    f.param_keys.push(key);
+    f
+}
+
+fn check_mixed_vecs() -> i64 {
+    if vc_skip_reason(with_second_vec(String::from("Vec<Person>"))) != String::from("") { return 1; }
+    if vc_skip_reason(with_second_vec(String::from("Person"))) != String::from("") { return 2; }
+    if vc_skip_reason(with_second_vec(String::from("Vec<Pair>"))) != String::from("unsupported-opcode: a field is written through an element of a Vec parameter in a function with Vec parameters of different element types") { return 3; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_admitted();
     if r == 0 { r = check_refused() + 10; if r == 10 { r = 0; } }
     if r == 0 { r = check_param_admitted() + 20; if r == 20 { r = 0; } }
     if r == 0 { r = check_foreign() + 30; if r == 30 { r = 0; } }
     if r == 0 { r = check_foreign_refused() + 40; if r == 40 { r = 0; } }
+    if r == 0 { r = check_mixed_vecs() + 50; if r == 50 { r = 0; } }
     i64_to_i32_wrap(r)
 }

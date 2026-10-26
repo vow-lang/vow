@@ -1,5 +1,6 @@
 module VcElemWrite
 
+use ir
 use vc_term
 use vc_heap
 use vc_smt
@@ -32,14 +33,20 @@ use vc_objects
 // under `h == address(entry)`) or an object nothing else names. The write is also a store to the
 // heap array of its slot (`vc_heap_store`), so every read through a handle that may be equal to `h`
 // sees it, and reads before it do not. The two cannot disagree: a read through a handle consults
-// the entries first and the array only for a handle that is no entry's address.
+// the entries first and the array only for a handle that is no entry's address. The element of a
+// `Vec<Person>` is never a parameter declared as another type (`param_keys`: different heads are
+// never one object), so a parameter whose head differs is not written.
 
-fn vc_elem_write(m: VcHandleMemory, ag: VcAgg, ar: VcArena, hdr: SmtScript, h: i64, slot: i64, ty: i64, term: i64, pc: i64) {
+fn vc_elem_write(m: VcHandleMemory, ag: VcAgg, ar: VcArena, hdr: SmtScript, set: IrInst, h: i64, ty: i64, term: i64, pc: i64) {
+    let slot: i64 = set.dv;
     let ov: VcOverlay = m.overlay;
+    let want: String = vc_heap_elem_head(m.heap, set.args[0]);
     if !ov.exact { vc_heap_store(m.heap, ar, hdr, h, slot, term, pc); }
     let mut i: u64 = 0;
     while i < ov.addr.len() {
-        if (ov.cls[i] & VC_OV_STRUCT()) != 0 {
+        let have: String = vc_heap_param_head(m.heap, ov.param[i]);
+        let other_type: bool = ov.param[i] >= 0 && want.len() > 0 && have.len() > 0 && want != have;
+        if (ov.cls[i] & VC_OV_STRUCT()) != 0 && !other_type {
             let at: i64 = vc_flow_and(ag.fl, ar, hdr, pc, vc_overlay_hit(ov, ar, i, h));
             vc_agg_write_field(ag, ar, hdr, vc_overlay_entry_obj(ov, ag, i), slot, ty, term, at);
         }

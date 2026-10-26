@@ -90,6 +90,19 @@ was pushed, so a handle read from it names exactly one overlay entry.
    pushes into is also refused by `vc_ptr_store_resolvable`, and a pointer stored into a field
    makes the refusal observable only through a spurious counterexample.
 
+6. **The heap arrays are keyed by slot, not by type** (found by review). Every handle that is not an
+   entry's address reads `hf<k>[h]` whatever object it names, so a write to slot 0 through an element
+   of a `Vec<Person>` is seen by a read of slot 0 of an unrelated `Config` or `Pair`: a counterexample
+   that equates two handles of different types is not a run. Two refusals and one rule keep it out of
+   the common shapes. A struct parameter declared as another type than the element's is not written
+   (`vc_heap_elem_head`, `param_keys`: different heads are never one object,
+   `pass/..._foreign_other_type`; before, `cfg.limit` was refuted by `people[0] == cfg`). A function
+   with two `Vec` parameters of different element types is refused (`vc_elem_mixed_vecs`, unit-tested).
+   What remains is a handle loaded out of a field, whose type the IR does not record: if it is read at
+   a slot written through an element of another type, the model can equate them and report a
+   counterexample that no run has. That is a false `fail`, never a false `proven` (the extra states
+   only add counterexamples), and it needs two struct types reached by handle in one function.
+
 ## Not covered, still `Skipped`
 
 A field written through an element of a `Vec` read out of a field, or of a `Vec` parameter in a
