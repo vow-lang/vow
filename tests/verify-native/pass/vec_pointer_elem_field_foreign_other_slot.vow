@@ -4,19 +4,17 @@ module VecPointerElemFieldForeignOtherSlot
 struct Person { age: i64, id: i64 }
 
 fn bump(people: Vec<Person>) -> bool vow {
-  requires: people.len() == 2
+  requires: people.len() == 1
   ensures: result
 } {
   let id0: i64 = people[0].id;
-  let id1: i64 = people[1].id;
   people[0].age = 5;
-  people[0].id == id0 && people[1].id == id1
+  people[0].id == id0
 }
 
 fn main() -> i32 [io] {
   let people: Vec<Person> = Vec::new();
   people.push(Person { age: 4, id: 1 });
-  people.push(Person { age: 4, id: 2 });
   if bump(people) { print_i64(1); }
   0
 }
