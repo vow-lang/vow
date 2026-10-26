@@ -67,6 +67,9 @@ was pushed, so a handle read from it names exactly one overlay entry.
    the array one after another and neither the memory nor the time bound holds (a bounded run
    timed out after 5 minutes); the loop cut cannot help (it would give the array arbitrary
    contents), so such a function stays `Skipped` as before rather than becoming a timeout.
+   A pointer read out of given memory is typed `i64` and is admitted as a value: it is a 64-bit word
+   in the model and at run time, stored as one and read back as the same word (`pass/..._foreign_handle_value`,
+   `fail/..._foreign_handle_value_wrong`). A pointer-typed object value is not (`pointer_value`).
    The counterexample of a function with such a write is not replayed (a `Vec` of structs is not
    rebuilt, #1890); each `fail/vec_pointer_elem_field_foreign_*` was checked by running its `main`
    in debug mode, which aborts on the violation the model names.

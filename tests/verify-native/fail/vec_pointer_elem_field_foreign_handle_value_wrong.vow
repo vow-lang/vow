@@ -1,0 +1,26 @@
+// TEST: replay-skipped the elements of a `Vec<Node>` parameter are not rebuilt by replay (#1890)
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// The element now names the object `q.p` names, not the one it was built with.
+module VecPointerElemFieldForeignHandleValueWrong
+
+struct Pair { lo: i64 }
+struct Node { p: Pair, n: i64 }
+
+fn f(q: Node, people: Vec<Node>) -> i64 vow {
+  requires: people.len() == 1
+  ensures: result == 1
+} {
+  let x: Pair = q.p;
+  people[0].p = x;
+  people[0].p.lo
+}
+
+fn main() -> i32 [io] {
+  let q: Node = Node { p: Pair { lo: 7 }, n: 1 };
+  let people: Vec<Node> = Vec::new();
+  people.push(Node { p: Pair { lo: 1 }, n: 0 });
+  print_i64(f(q, people));
+  0
+}
