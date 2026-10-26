@@ -209,17 +209,23 @@ fn vc_answer_halts(verdict: i64) -> bool {
 
 // Values for `names`, in order, from a `get-value` answer; `widths[k]` is the
 // declared width of `names[k]`. Every name must be present with a well-formed
-// value of that width; otherwise `ok` is 0.
+// value of that width; otherwise `ok` is 0. Each name is searched from the end
+// of the previous match (the solver prints in request order), and from the
+// start of the answer when it is not found there, so the scan is linear in the
+// answer for an in-order answer.
 fn vc_parse_model(out: String, names: Vec<String>, widths: Vec<i64>) -> VcModel {
     let values: Vec<i64> = Vec::new();
     let highs: Vec<i64> = Vec::new();
     let mut ok: i64 = 1;
+    let mut cursor: i64 = 0;
     let mut k: u64 = 0;
     while k < names.len() {
         let key: String = String::from("(");
         key.push_str(names[k]);
         key.push_str(String::from(" "));
-        let at: i64 = str_find_from(out, 0, key);
+        let mut at: i64 = str_find_from(out, cursor, key);
+        if at < 0 && cursor > 0 { at = str_find_from(out, 0, key); }
+        if at >= 0 { cursor = at + key.len() as i64; }
         if at < 0 {
             ok = 0;
             values.push(0);

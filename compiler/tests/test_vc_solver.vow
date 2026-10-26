@@ -185,6 +185,105 @@ fn check_bool_literals() -> i64 {
     0
 }
 
+fn names3(a: String, b: String, c: String) -> Vec<String> {
+    let v: Vec<String> = Vec::new();
+    v.push(a);
+    v.push(b);
+    v.push(c);
+    v
+}
+
+fn w3() -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(64);
+    v.push(64);
+    v.push(64);
+    v
+}
+
+fn bv64(n: i64) -> String {
+    let s: String = String::from("(_ bv");
+    s.push_str(int_to_string(n));
+    s.push_str(String::from(" 64)"));
+    s
+}
+
+fn entry(name: String, n: i64) -> String {
+    let s: String = String::from("  (");
+    s.push_str(name);
+    s.push_str(String::from(" "));
+    s.push_str(bv64(n));
+    s.push_str(String::from(")\n"));
+    s
+}
+
+// Each name is looked up from the end of the previous match, falling back to
+// the start of the answer, so names asked in a different order than the solver
+// printed them, and names asked twice, still resolve to their own values.
+fn check_out_of_order_and_repeated_names() -> i64 {
+    let rev: String = String::from("sat\n(\n");
+    rev.push_str(entry(String::from("p2"), 30));
+    rev.push_str(entry(String::from("p1"), 20));
+    rev.push_str(entry(String::from("p0"), 10));
+    rev.push_str(String::from(")\n"));
+    let a: VcModel = vc_parse_model(rev, names3(String::from("p0"), String::from("p1"), String::from("p2")), w3());
+    if a.ok != 1 { return 140; }
+    if a.values[0] != 10 { return 141; }
+    if a.values[1] != 20 { return 142; }
+    if a.values[2] != 30 { return 143; }
+    let mixed: String = String::from("sat\n(\n");
+    mixed.push_str(entry(String::from("p1"), 20));
+    mixed.push_str(entry(String::from("p10"), 100));
+    mixed.push_str(entry(String::from("p0"), 10));
+    mixed.push_str(String::from(")\n"));
+    let b: VcModel = vc_parse_model(mixed, names3(String::from("p0"), String::from("p1"), String::from("p10")), w3());
+    if b.ok != 1 { return 144; }
+    if b.values[0] != 10 { return 145; }
+    if b.values[1] != 20 { return 146; }
+    if b.values[2] != 100 { return 147; }
+    let inorder: String = String::from("sat\n(\n");
+    inorder.push_str(entry(String::from("p0"), 10));
+    inorder.push_str(entry(String::from("p1"), 20));
+    inorder.push_str(String::from(")\n"));
+    let rep: VcModel = vc_parse_model(inorder, names3(String::from("p1"), String::from("p0"), String::from("p1")), w3());
+    if rep.ok != 1 { return 148; }
+    if rep.values[0] != 20 { return 149; }
+    if rep.values[1] != 10 { return 150; }
+    if rep.values[2] != 20 { return 151; }
+    let miss: VcModel = vc_parse_model(inorder, names3(String::from("p1"), String::from("p0"), String::from("p2")), w3());
+    if miss.ok != 0 { return 152; }
+    if miss.values[0] != 20 { return 153; }
+    if miss.values[1] != 10 { return 154; }
+    0
+}
+
+// A large answer printed in request order resolves every name.
+fn check_long_model_in_order() -> i64 {
+    let n: i64 = 600;
+    let out: String = String::from("sat\n(\n");
+    let ns: Vec<String> = Vec::new();
+    let ws: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n {
+        let name: String = String::from("p");
+        name.push_str(int_to_string(i));
+        out.push_str(entry(name, i * 7));
+        ns.push(name);
+        ws.push(64);
+        i = i + 1;
+    }
+    out.push_str(String::from(")\n"));
+    let m: VcModel = vc_parse_model(out, ns, ws);
+    if m.ok != 1 { return 160; }
+    if m.values.len() != 600 { return 161; }
+    let mut k: i64 = 0;
+    while k < n {
+        if m.values[k as u64] != k * 7 { return 162; }
+        k = k + 1;
+    }
+    0
+}
+
 fn args_text(args: Vec<String>) -> String {
     let s: String = String::from("");
     let mut i: u64 = 0;
@@ -230,5 +329,7 @@ fn main() -> i32 {
     if r == 0 { r = check_classify_run(); }
     if r == 0 { r = check_wide_and_narrow_widths(); }
     if r == 0 { r = check_bool_literals(); }
+    if r == 0 { r = check_out_of_order_and_repeated_names(); }
+    if r == 0 { r = check_long_model_in_order(); }
     i64_to_i32_wrap(r)
 }
