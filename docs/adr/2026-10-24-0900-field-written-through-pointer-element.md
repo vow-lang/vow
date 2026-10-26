@@ -24,11 +24,22 @@ was pushed, so a handle read from it names exactly one overlay entry.
    reads exactly (`vc_ptr_store_resolvable`), the value is a `Bool` or an integer of at most 64
    bits, and no parameter is stored into such a `Vec`. Every other write through a handle keeps its
    `Skipped` reason, with a detail of its own for the new refusals.
-3. **A parameter stored into the `Vec` is refused.** `f(s, t)` that pushes `s`, writes
-   `people[0].age` and reads `t.age` is `5` for `f(p, p)`. The alias analysis (`vc_agg_alias_marked`)
-   and the overlay need (`vc_heap_overlay_needed`) key on a write whose receiver is a parameter, so
-   the first draft proved `4` (found by review; `skip/vec_pointer_elem_field_param_stored_skipped`).
-   Marking both would also model it; left to a follow-up.
+3. **A parameter stored into the `Vec` is the caller's object, and the write reaches every parameter
+   that may be it.** `f(s, t)` that pushes `s`, writes `people[0].age` and reads `t.age` is `5` for
+   `f(p, p)`. The first draft proved `4` (found by review): the alias analysis
+   (`vc_agg_alias_marked`) and the overlay need (`vc_heap_overlay_needed`) keyed on a write whose
+   receiver is a parameter. Now a `FieldSet` through an element of a `Vec` counts as a write of a
+   parameter in both, `vc_elem_write` writes the parameter entries of the overlay too, and
+   `vc_agg_write` reaches the other parameters of the same type group under the identity test
+   (`pass/vec_pointer_elem_field_param_stored_*`, `fail/..._param_stored_wrong`, `..._not_aliased_wrong`,
+   `..._phi_wrong`, `..._heap_wrong`). A `Vec` or `String` parameter stored into a `Vec` stays refused
+   (`vc_ptr_store_resolvable`, #1823). Mutations: ignoring the alias marking is caught by
+   `fail/..._param_stored_wrong`, writing no parameter entry by 6 fixtures, writing every entry
+   whatever the handle by 9. Marking `vc_heap_overlay_needed` is **not** observable for a stored
+   parameter: its entry is added when it is stored, before any write the walk reaches, and an
+   unstored parameter that is the same object is the stored one, so a handle read through it names
+   the stored entry. The marking is kept because it is what a write through an element the function
+   did not store needs (a parameter may be that element).
 4. **A function with such a write is never cut** (`vc_fh_writes_handle`, anywhere in the function).
    The loop cut gives a `Vec` of pointers arbitrary words, and a handle that names no entry drops the
    write. That only widens the states, since every real handle names an entry, and a cut counterexample
