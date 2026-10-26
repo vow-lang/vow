@@ -1,0 +1,19 @@
+// The element is the parameter that was pushed: a write through it is the caller's object.
+module VecPointerElemFieldParamStoredVisible
+
+struct Person { age: i64 }
+
+fn f(s: Person) -> i64 vow {
+  ensures: result == 5 && s.age == 5
+} {
+  let people: Vec<Person> = Vec::new();
+  people.push(s);
+  people[0].age = 5;
+  s.age
+}
+
+fn main() -> i32 [io] {
+  let p: Person = Person { age: 4 };
+  print_i64(f(p));
+  0
+}

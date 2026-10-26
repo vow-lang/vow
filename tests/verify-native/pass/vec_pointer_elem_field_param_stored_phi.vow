@@ -1,0 +1,19 @@
+// A merge of two parameters stored and written through: the one the branch chose is written.
+module VecPointerElemFieldParamStoredPhi
+
+struct Person { age: i64 }
+
+fn f(c: bool, s: Person, t: Person) -> i64 vow {
+  ensures: result == 9
+} {
+  let x: Person = { if c { s } else { t } };
+  let people: Vec<Person> = Vec::new();
+  people.push(x);
+  people[0].age = 9;
+  if c { s.age } else { t.age }
+}
+
+fn main() -> i32 [io] {
+  print_i64(f(true, Person { age: 4 }, Person { age: 5 }));
+  0
+}

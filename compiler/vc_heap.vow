@@ -271,7 +271,8 @@ fn vc_heap_param_table(f: IrFunction, n_ids: u64) -> Vec<i64> {
 
 // True when the function reads memory through a handle and also writes a
 // parameter (`FieldSet` on a struct parameter, or a mutating `Vec` or `String`
-// operation on a `Vec` or `String` parameter). A parameter may be the very object a
+// operation on a `Vec` or `String` parameter) or writes through a handle (a field of a pointer
+// element, `vc_elemwrite`, which reaches a parameter the `Vec` holds). A parameter may be the very object a
 // handle names (`q.child` is `p`), so such a function is modelled with the
 // parameters' own state laid over the arrays (`vc_overlay`); any other function reads
 // the arrays alone. A fresh object cannot be at a handle the function loaded, so
@@ -297,7 +298,7 @@ fn vc_heap_overlay_needed(f: IrFunction, tys: Vec<i64>) -> bool {
         let mut ii: u64 = 0;
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
-            if inst.op == IOP_FIELD_SET() && param[inst.args[0] as u64] == 1 { return true; }
+            if inst.op == IOP_FIELD_SET() && (param[inst.args[0] as u64] == 1 || vc_heap_ty(tys, inst.args[0]) == ITY_I64()) { return true; }
             if inst.op == IOP_CALL() && inst.args.len() > 0 && vc_vec_kind_mutates(vc_inst_vec_kind(inst)) && param[inst.args[0] as u64] == 1 {
                 return true;
             }

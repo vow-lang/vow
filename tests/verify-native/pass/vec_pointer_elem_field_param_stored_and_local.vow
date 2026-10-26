@@ -1,0 +1,23 @@
+// The write reaches the object the element names only: the local pushed first is written, the
+// parameter pushed second is not, whatever another parameter is.
+module VecPointerElemFieldParamStoredAndLocal
+
+struct Person { age: i64 }
+
+fn f(s: Person, t: Person) -> i64 vow {
+  requires: s.age == 4 && t.age == 4
+  ensures: result == 4 && s.age == 4 && t.age == 4
+} {
+  let people: Vec<Person> = Vec::new();
+  let a: Person = Person { age: 1 };
+  people.push(a);
+  people.push(s);
+  people[0].age = 5;
+  t.age
+}
+
+fn main() -> i32 [io] {
+  let p: Person = Person { age: 4 };
+  print_i64(f(p, p));
+  0
+}

@@ -74,21 +74,21 @@ fn check_refused() -> i64 {
 }
 
 // A parameter stored into the `Vec` may be another parameter, which the write through the
-// element reaches too.
-fn check_param_refused() -> i64 {
+// element reaches too (`vc_agg_alias_marked`): the write is modelled.
+fn check_param_admitted() -> i64 {
     let params: Vec<i64> = Vec::new();
     params.push(ITY_PTR());
     let i: Vec<IrInst> = prefix(3);
     i.push(mk_inst_arg(12, ITY_PTR(), 0));
     i.push(mk_inst_call_extern(13, ITY_UNIT(), two(2, 12), String::from("__vow_vec_push_val")));
     i.push(mk_inst_field_set(10, 8, 0, 9));
-    if finish(i, params) != String::from("unsupported-opcode: a field is written through an element of a Vec that holds a parameter") { return 1; }
+    if finish(i, params) != String::from("") { return 1; }
     0
 }
 
 fn main() -> i32 {
     let mut r: i64 = check_admitted();
     if r == 0 { r = check_refused() + 10; if r == 10 { r = 0; } }
-    if r == 0 { r = check_param_refused() + 20; if r == 20 { r = 0; } }
+    if r == 0 { r = check_param_admitted() + 20; if r == 20 { r = 0; } }
     i64_to_i32_wrap(r)
 }

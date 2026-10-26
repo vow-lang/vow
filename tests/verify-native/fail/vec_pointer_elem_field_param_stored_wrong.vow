@@ -1,7 +1,9 @@
-// TEST: skip-reason unsupported-opcode
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
 // A parameter pushed into the `Vec` and written through the element: a caller may pass one value
-// for `s` and `t` (`f(p, p)` returns 5), so the function stays `Skipped`.
-module VecPointerElemFieldParamStoredSkipped
+// for `s` and `t` (`f(p, p)` returns 5), so `t.age` is not still 4.
+module VecPointerElemFieldParamStoredWrong
 
 struct Person { age: i64 }
 

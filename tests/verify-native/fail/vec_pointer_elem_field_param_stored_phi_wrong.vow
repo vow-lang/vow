@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// The merge of `s` and `t` stored: when the branch takes `s` the write changes `s.age`.
+module VecPointerElemFieldParamStoredPhiWrong
+
+struct Person { age: i64 }
+
+fn f(c: bool, s: Person, t: Person) -> i64 vow {
+  requires: s.age == 4
+  ensures: result == 4
+} {
+  let x: Person = { if c { s } else { t } };
+  let people: Vec<Person> = Vec::new();
+  people.push(x);
+  people[0].age = 9;
+  s.age
+}
+
+fn main() -> i32 [io] {
+  print_i64(f(true, Person { age: 4 }, Person { age: 5 }));
+  0
+}

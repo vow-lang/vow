@@ -101,13 +101,15 @@ fn vc_agg_arg_params(f: IrFunction, n_ids: u64) -> Vec<i64> {
 
 // The ascending indices of the pointer parameters the function reads or writes a
 // field of, or merges in a Phi, when it also writes a field through a parameter
-// or a Phi and there are at least two of them; else none. A caller can pass one
+// or a Phi, or through an element of a `Vec` (a pointer element may be a parameter that was
+// stored, `vc_elemwrite`), and there are at least two of them; else none. A caller can pass one
 // value twice, so a write through one is a write through the others whenever they
 // are one object (`vc_agg_alias_params` narrows this to the parameters of one type).
 // A function that writes only objects it allocated needs no identity.
 fn vc_agg_alias_marked(f: IrFunction, n_ids: u64) -> Vec<i64> {
     let def_op: Vec<i64> = vc_agg_def_ops(f, n_ids);
     let arg_param: Vec<i64> = vc_agg_arg_params(f, n_ids);
+    let elem_get: Vec<i64> = vc_elem_get_recv(f, n_ids);
     let marked: Vec<i64> = dom_fill(f.params.len(), 0);
     let mut writes_param: bool = false;
     let mut bi: u64 = 0;
@@ -128,7 +130,7 @@ fn vc_agg_alias_marked(f: IrFunction, n_ids: u64) -> Vec<i64> {
             }
             if inst.op == IOP_FIELD_SET() {
                 let op: i64 = def_op[inst.args[0] as u64];
-                if op == IOP_GET_ARG() || op == IOP_PHI() { writes_param = true; }
+                if op == IOP_GET_ARG() || op == IOP_PHI() || elem_get[inst.args[0] as u64] >= 0 { writes_param = true; }
             }
             ii = ii + 1;
         }
