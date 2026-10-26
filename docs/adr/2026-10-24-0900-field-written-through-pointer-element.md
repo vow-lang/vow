@@ -77,13 +77,15 @@ was pushed, so a handle read from it names exactly one overlay entry.
    (`..._callee_wrong`), a read before the write (`..._read_before_wrong`), a conditional write,
    an untouched sibling field, and the payload of an `Option` parameter that is a stored parameter
    (`..._param_stored_payload_wrong`; `vc_payload` reads it as a handle because the write counts
-   as a write of a parameter). Mutations, each rebuilt and run over `vec_pointer_elem_field`: no
-   array store (5 fixtures fail), no overlay for a write without a read (3 proofs of a false claim),
-   an unconditional store (2), no child refusal, no `Vec` parameter test, no 64-bit test and no
-   loop refusal (one `skip/` fixture each). The refusal of a function that stores a pointer is
-   covered twice over: a `Vec` the function pushes into is also refused by
-   `vc_ptr_store_resolvable`, and a pointer stored into a field by
-   `skip/..._foreign_field_store_skipped`.
+   as a write of a parameter). Mutations of the model, each rebuilt and run over
+   `vec_pointer_elem_field`: no array store (5 fixtures fail), no overlay for a write without a
+   read (3 proofs of a false claim), an unconditional store (2). The refusals are pinned by
+   `compiler/tests/test_vc_elemgate.vow` (the payload, stored-pointer, `Vec`-parameter, 64-bit
+   and loop refusals, and the overlay rule; each mutation fails it), not by `skip/` fixtures: ESBMC
+   decides those programs, so each would be a `weaker` row of the differential report and need a
+   `native-gap` line. A function that stores a pointer is refused twice over: a `Vec` the function
+   pushes into is also refused by `vc_ptr_store_resolvable`, and a pointer stored into a field
+   makes the refusal observable only through a spurious counterexample.
 
 ## Not covered, still `Skipped`
 
