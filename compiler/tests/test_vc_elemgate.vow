@@ -61,7 +61,7 @@ fn check_refused() -> i64 {
     i.push(mk_inst_call_extern(8, ITY_I64(), two(2, 7), String::from("__vow_vec_get_val")));
     i.push(mk_inst_const_i64(9, 5));
     i.push(mk_inst_field_set(10, 8, 0, 9));
-    if finish(i, Vec::new()) != String::from("unsupported-opcode: a field is written through an element of a Vec that holds no stored pointer") { return 1; }
+    if finish(i, Vec::new()) != String::from("unsupported-opcode: a field is written through an element of a Vec that is no parameter and holds no stored pointer") { return 1; }
     let p: Vec<IrInst> = prefix(3);
     p.push(mk_inst_alloc(12, 16));
     p.push(mk_inst_field_set(10, 8, 0, 12));

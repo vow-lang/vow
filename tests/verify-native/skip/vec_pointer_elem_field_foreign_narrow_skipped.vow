@@ -1,0 +1,21 @@
+// TEST: skip-reason unsupported-opcode
+// The heap arrays hold 64-bit slots: a narrower field written through an element of a `Vec` the
+// caller gave stays `Skipped`.
+module VecPointerElemFieldForeignNarrowSkipped
+
+struct Person { age: i32 }
+
+fn bump(people: Vec<Person>) -> i32 vow {
+  requires: people.len() == 1
+  ensures: result == 5
+} {
+  people[0].age = 5;
+  people[0].age
+}
+
+fn main() -> i32 [io] {
+  let people: Vec<Person> = Vec::new();
+  people.push(Person { age: 4 });
+  print_i64(bump(people) as i64);
+  0
+}

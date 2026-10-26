@@ -1,0 +1,22 @@
+// Two elements of the `Vec` the caller gave may be one object: the second is the new value or
+// what it was, never anything else.
+module VecPointerElemFieldForeignTwoElements
+
+struct Person { age: i64 }
+
+fn bump(people: Vec<Person>) -> i64 vow {
+  requires: people.len() == 2
+  ensures: result == 5 || result == 4
+} {
+  let before: i64 = people[1].age;
+  people[0].age = 5;
+  if before == 4 { people[1].age } else { 4 }
+}
+
+fn main() -> i32 [io] {
+  let people: Vec<Person> = Vec::new();
+  people.push(Person { age: 4 });
+  people.push(Person { age: 4 });
+  print_i64(bump(people));
+  0
+}

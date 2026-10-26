@@ -1,0 +1,29 @@
+// TEST: skip-reason unsupported-opcode
+// A payload object read out of a parameter may be the very element written through, and the model
+// reads it as a symbol that ignores the write: the function stays `Skipped`.
+module VecPointerElemFieldForeignChildSkipped
+
+struct Pair { lo: i64 }
+
+fn f(o: Option<Pair>, people: Vec<Pair>) -> bool vow {
+  requires: people.len() == 1
+  ensures: result
+} {
+  let before: i64 = match o {
+    Option::Some(x) => x.lo,
+    Option::None => 0,
+  };
+  people[0].lo = before + 1;
+  match o {
+    Option::Some(x) => x.lo == before,
+    Option::None => true,
+  }
+}
+
+fn main() -> i32 [io] {
+  let p: Pair = Pair { lo: 1 };
+  let people: Vec<Pair> = Vec::new();
+  people.push(p);
+  if f(Option::Some(p), people) { print_i64(1); }
+  0
+}

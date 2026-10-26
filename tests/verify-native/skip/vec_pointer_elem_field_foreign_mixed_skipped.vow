@@ -1,0 +1,24 @@
+// TEST: skip-reason unsupported-opcode
+// A function that stores a pointer into a `Vec` it built and writes through an element of a `Vec`
+// it was given is not modelled: it stays `Skipped`.
+module VecPointerElemFieldForeignMixedSkipped
+
+struct Person { age: i64 }
+
+fn f(people: Vec<Person>) -> i64 vow {
+  requires: people.len() == 1
+  ensures: result == 4
+} {
+  let mine: Vec<Person> = Vec::new();
+  let a: Person = Person { age: 4 };
+  mine.push(a);
+  people[0].age = 5;
+  mine[0].age
+}
+
+fn main() -> i32 [io] {
+  let people: Vec<Person> = Vec::new();
+  people.push(Person { age: 1 });
+  print_i64(f(people));
+  0
+}

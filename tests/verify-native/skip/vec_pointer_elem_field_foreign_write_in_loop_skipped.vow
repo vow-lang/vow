@@ -1,0 +1,27 @@
+// TEST: skip-reason unsupported-opcode
+// A write through an element of a `Vec` the caller gave inside a loop stays `Skipped`: the unrolled
+// copies would store to the heap array one after another, which the solver does not decide at the
+// unwinding bound in reasonable time, and the loop is never cut (the cut would give the array
+// arbitrary contents).
+module VecPointerElemFieldForeignWriteInLoopSkipped
+
+struct Person { age: i64 }
+
+fn fill(n: u64, people: Vec<Person>) -> i64 vow {
+  requires: n >= 1 && people.len() >= 1 && people[0].age == 0
+  ensures: result >= 1
+} {
+  let mut i: u64 = 0;
+  while i < n {
+    people[0].age = people[0].age + 1;
+    i = i + 1;
+  }
+  people[0].age
+}
+
+fn main() -> i32 [io] {
+  let people: Vec<Person> = Vec::new();
+  people.push(Person { age: 0 });
+  print_i64(fill(1, people));
+  0
+}

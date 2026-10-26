@@ -1,7 +1,5 @@
-// TEST: skip-reason unsupported-opcode
-// An element of a `Vec` the caller gave may be any object, and the model does not tell which: a
-// field written through it stays `Skipped`.
-module VecPointerElemFieldForeignElemSkipped
+// A field written through an element of a `Vec` the caller gave is seen by the next read of the element.
+module VecPointerElemFieldForeignElem
 
 struct Person { age: i64 }
 

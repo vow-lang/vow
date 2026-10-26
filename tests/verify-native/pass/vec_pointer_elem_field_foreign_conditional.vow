@@ -1,0 +1,19 @@
+// A write under a branch happens on that path only.
+module VecPointerElemFieldForeignConditional
+
+struct Person { age: i64 }
+
+fn bump(c: bool, people: Vec<Person>) -> i64 vow {
+  requires: people.len() == 1 && people[0].age == 4
+  ensures: result == { if c { 5 } else { 4 } }
+} {
+  if c { people[0].age = 5; }
+  people[0].age
+}
+
+fn main() -> i32 [io] {
+  let people: Vec<Person> = Vec::new();
+  people.push(Person { age: 4 });
+  print_i64(bump(true, people));
+  0
+}

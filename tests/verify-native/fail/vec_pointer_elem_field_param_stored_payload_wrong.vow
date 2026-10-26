@@ -1,0 +1,29 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The payload of `o` may be the parameter that was pushed: the write through the element changes it.
+module VecPointerElemFieldParamStoredPayloadWrong
+
+struct Pair { lo: i64 }
+
+fn f(o: Option<Pair>, s: Pair) -> bool vow {
+  ensures: result
+} {
+  let before: i64 = match o {
+    Option::Some(x) => x.lo,
+    Option::None => 0,
+  };
+  let people: Vec<Pair> = Vec::new();
+  people.push(s);
+  people[0].lo = before + 1;
+  match o {
+    Option::Some(x) => x.lo == before,
+    Option::None => true,
+  }
+}
+
+fn main() -> i32 [io] {
+  let p: Pair = Pair { lo: 1 };
+  if f(Option::Some(p), p) { print_i64(1); }
+  0
+}

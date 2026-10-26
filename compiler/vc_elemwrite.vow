@@ -1,6 +1,7 @@
 module VcElemWrite
 
 use vc_term
+use vc_heap
 use vc_smt
 use vc_flow
 use vc_agg
@@ -20,12 +21,22 @@ use vc_objects
 // its stored parameters for the alias analysis (`vc_agg_alias_marked`) and, when it reads through
 // a handle, lays the parameters over the heap (`vc_heap_overlay_needed`).
 //
-// A handle that names no entry drops the write. In an exact walk that cannot happen: every
-// element of such a `Vec` is a stored address. A loop cut gives the `Vec` arbitrary elements; a
-// handle naming no entry then only adds states (every real handle names an entry, and a
-// counterexample there is `unknown`). `vc_fh_writes_handle` keeps such a function from being cut.
+// A handle that names no entry drops the write to the objects the function holds. In an exact walk
+// that cannot happen: every element of such a `Vec` is a stored address. A loop cut gives the `Vec`
+// arbitrary elements; a handle naming no entry then only adds states (every real handle names an
+// entry, and a counterexample there is `unknown`). `vc_fh_writes_handle` keeps such a function from
+// being cut.
+//
+// An element of a `Vec` the function was given (a `Vec` parameter, `vc_elem_foreign_ok`) is a
+// handle that names memory the function did not build: it may be any parameter (an entry above,
+// under `h == address(entry)`) or an object nothing else names. The write is also a store to the
+// heap array of its slot (`vc_heap_store`), so every read through a handle that may be equal to `h`
+// sees it, and reads before it do not. The two cannot disagree: a read through a handle consults
+// the entries first and the array only for a handle that is no entry's address.
 
-fn vc_elem_write(ov: VcOverlay, ag: VcAgg, ar: VcArena, hdr: SmtScript, h: i64, slot: i64, ty: i64, term: i64, pc: i64) {
+fn vc_elem_write(m: VcHandleMemory, ag: VcAgg, ar: VcArena, hdr: SmtScript, h: i64, slot: i64, ty: i64, term: i64, pc: i64) {
+    let ov: VcOverlay = m.overlay;
+    if !ov.exact { vc_heap_store(m.heap, ar, hdr, h, slot, term, pc); }
     let mut i: u64 = 0;
     while i < ov.addr.len() {
         if (ov.cls[i] & VC_OV_STRUCT()) != 0 {

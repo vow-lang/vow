@@ -1,0 +1,23 @@
+// TEST: skip-reason unsupported-opcode
+// A `Vec` read out of a field of a parameter is not a `Vec` parameter: a field written through its
+// element stays `Skipped`.
+module VecPointerElemFieldForeignFieldVecSkipped
+
+struct Person { age: i64 }
+struct Bag { people: Vec<Person>, n: i64 }
+
+fn bump(b: Bag) -> i64 vow {
+  requires: b.people.len() == 1
+  ensures: result == 5
+} {
+  b.people[0].age = 5;
+  b.people[0].age
+}
+
+fn main() -> i32 [io] {
+  let people: Vec<Person> = Vec::new();
+  people.push(Person { age: 4 });
+  let b: Bag = Bag { people: people, n: 1 };
+  print_i64(bump(b));
+  0
+}

@@ -1,0 +1,23 @@
+// TEST: replay-skipped the elements of a `Vec<Person>` parameter are not rebuilt by replay (#1890)
+// TEST: counterexample-fn "bump"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// The write is not lost: the element is no longer 4.
+module VecPointerElemFieldForeignLostWriteWrong
+
+struct Person { age: i64 }
+
+fn bump(people: Vec<Person>) -> i64 vow {
+  requires: people.len() == 1 && people[0].age == 4
+  ensures: result == 4
+} {
+  people[0].age = 5;
+  people[0].age
+}
+
+fn main() -> i32 [io] {
+  let people: Vec<Person> = Vec::new();
+  people.push(Person { age: 4 });
+  print_i64(bump(people));
+  0
+}

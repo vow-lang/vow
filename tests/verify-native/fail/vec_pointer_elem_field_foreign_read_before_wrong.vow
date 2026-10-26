@@ -1,0 +1,24 @@
+// TEST: replay-skipped the elements of a `Vec<Person>` parameter are not rebuilt by replay (#1890)
+// TEST: counterexample-fn "bump"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// The read before the write is the old value, not the one written.
+module VecPointerElemFieldForeignReadBeforeWrong
+
+struct Person { age: i64 }
+
+fn bump(people: Vec<Person>) -> i64 vow {
+  requires: people.len() == 1 && people[0].age == 4
+  ensures: result == 5
+} {
+  let before: i64 = people[0].age;
+  people[0].age = 5;
+  before
+}
+
+fn main() -> i32 [io] {
+  let people: Vec<Person> = Vec::new();
+  people.push(Person { age: 4 });
+  print_i64(bump(people));
+  0
+}

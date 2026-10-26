@@ -1,0 +1,25 @@
+// TEST: replay-skipped the elements of a `Vec<Person>` parameter are not rebuilt by replay (#1890)
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// Only the element written through changes: of two parameters that were equal, one may now differ.
+module VecPointerElemFieldForeignTwoParamsWrong
+
+struct Person { age: i64 }
+
+fn f(p: Person, q: Person, people: Vec<Person>) -> bool vow {
+  requires: people.len() == 1 && p.age == q.age
+  ensures: result
+} {
+  people[0].age = p.age + 1;
+  p.age == q.age
+}
+
+fn main() -> i32 [io] {
+  let p: Person = Person { age: 4 };
+  let q: Person = Person { age: 4 };
+  let people: Vec<Person> = Vec::new();
+  people.push(p);
+  if f(p, q, people) { print_i64(1); }
+  0
+}

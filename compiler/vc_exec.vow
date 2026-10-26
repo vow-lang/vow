@@ -345,7 +345,7 @@ fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
     if op == IOP_FIELD_SET() {
         let val: i64 = inst.args[1];
         if w.tys[inst.args[0] as u64] == ITY_I64() {
-            vc_elem_write(w.memory.overlay, ag, cs.arena, cs.header, w.var_of[inst.args[0] as u64], inst.dv, w.tys[val as u64], w.var_of[val as u64], w.fl.block_pc[bi]);
+            vc_elem_write(w.memory, ag, cs.arena, cs.header, w.var_of[inst.args[0] as u64], inst.dv, w.tys[val as u64], w.var_of[val as u64], w.fl.block_pc[bi]);
             return true;
         }
         let mut term: i64 = w.var_of[val as u64];

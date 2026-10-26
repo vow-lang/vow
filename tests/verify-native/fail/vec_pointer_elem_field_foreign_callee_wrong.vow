@@ -1,0 +1,32 @@
+// TEST: replay-skipped the elements of a `Vec<Person>` parameter are not rebuilt by replay (#1890)
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// The callee writes through an element of the `Vec` it is given, which may be the caller's parameter.
+module VecPointerElemFieldForeignCalleeWrong
+
+struct Person { age: i64 }
+
+fn g(people: Vec<Person>) vow {
+  requires: people.len() == 1
+  ensures: true
+} {
+  people[0].age = 5;
+}
+
+fn f(p: Person, people: Vec<Person>) -> bool vow {
+  requires: people.len() == 1
+  ensures: result
+} {
+  let before: i64 = p.age;
+  g(people);
+  p.age == before
+}
+
+fn main() -> i32 [io] {
+  let p: Person = Person { age: 4 };
+  let people: Vec<Person> = Vec::new();
+  people.push(p);
+  if f(p, people) { print_i64(1); }
+  0
+}
