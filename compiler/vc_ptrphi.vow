@@ -99,9 +99,9 @@ fn vc_phi_at_end(last: Vec<i64>, memo: Vec<i64>, p: i64) -> i64 {
     memo[p as u64]
 }
 
-// The value at the start of block `b`, whose predecessors' values are `at_end` (the last
-// store of the block when it has one, else the value computed for it). Adds the Phi and its
-// Upsilons when the predecessors disagree; -1 when `b` has no predecessor.
+// The value at the start of block `b`, whose predecessors' values are those at their ends (the
+// last store of the block when it has one, else the value computed for it). Adds the Phi and its
+// Upsilons when the predecessors disagree; -1 when `b` has no predecessor or is a loop header.
 fn vc_phi_join(plan: VcPhiPlan, b: i64, last: Vec<i64>, memo: Vec<i64>, poff: Vec<i64>, plist: Vec<i64>, nums: Vec<i64>) -> i64 {
     let lo: i64 = poff[b as u64];
     let hi: i64 = poff[(b + 1) as u64];
@@ -140,7 +140,8 @@ fn vc_phi_join(plan: VcPhiPlan, b: i64, last: Vec<i64>, memo: Vec<i64>, poff: Ve
 
 // The value of the field at the start of block `rb`, where `last[b]` is the value of the last
 // store in block `b` (-1: none; for `rb`, the last store before the read). `poff`/`plist` are
-// the predecessor lists (CSR) and `nums` the dominator numbering. -1 when the walk fails; the plan is then as it was.
+// the predecessor lists (CSR) and `nums` the dominator numbering. -1 when the walk fails; the
+// plan is then as it was.
 fn vc_phi_reach(plan: VcPhiPlan, last: Vec<i64>, poff: Vec<i64>, plist: Vec<i64>, nums: Vec<i64>, rb: i64) -> i64 {
     if last[rb as u64] >= 0 { return last[rb as u64]; }
     let nb: u64 = last.len();
