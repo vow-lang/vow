@@ -65,6 +65,9 @@ fn check_rows() -> i32 {
     if replay_listed_is_row(String::from("o.0"), String::from("o.0")) { return 3; }
     if replay_listed_is_row(String::from("o.0.len"), String::from("o.0")) { return 4; }
     if replay_listed_is_row(String::from("o.01.1"), String::from("o.0")) { return 5; }
+    if replay_listed_is_row(String::from("o.0.0.len"), String::from("o.0")) { return 11; }
+    if replay_listed_is_row(String::from("o.0.0[3]"), String::from("o.0")) { return 12; }
+    if replay_listed_is_row(String::from("o.0.0.0"), String::from("o.0")) { return 13; }
     if replay_listed_row_dot(String::from("o.0.1")) != 3 { return 6; }
     if replay_listed_row_dot(String::from("o.0.1:bool")) != 3 { return 7; }
     if replay_listed_row_dot(String::from("people[1].0")) != 9 { return 8; }
@@ -90,6 +93,19 @@ fn check_through_memory() -> i32 {
     vals.push(String::from("6"));
     if replay_through_memory(names, vals, String::from("o.0"), none).len() == 0 { return 24; }
     if replay_through_memory(names, vals, String::from("o.0"), String::from("p.")).len() != 0 { return 25; }
+    let held: Vec<String> = Vec::new();
+    let held_vals: Vec<String> = Vec::new();
+    held.push(String::from("o.0"));
+    held_vals.push(String::from("-1"));
+    held.push(String::from("o.0.0.len"));
+    held_vals.push(String::from("2"));
+    if replay_through_memory(held, held_vals, String::from("o.0"), none).len() == 0 { return 26; }
+    names.push(String::from("q.addr"));
+    vals.push(String::from("-1"));
+    if replay_through_memory(names, vals, String::from("o.0"), String::from("p.")).len() == 0 { return 27; }
+    names.push(String::from("q.len"));
+    vals.push(String::from("1"));
+    if replay_through_memory(names, vals, String::from("o.0"), String::from("p.")).len() != 0 { return 28; }
     0
 }
 

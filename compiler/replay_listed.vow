@@ -30,8 +30,37 @@ fn replay_listed_value(names: Vec<String>, vals: Vec<String>, key: String) -> St
 fn replay_listed_is_row(name: String, key: String) -> bool {
     let k: u64 = key.len();
     if name.len() < k + 2u64 || name.byte_at(k) != 46 || name.substring(0u64, k) != key { return false; }
-    let b: i64 = name.byte_at(k + 1u64);
-    b >= 48 && b <= 57
+    let mut i: u64 = k + 1u64;
+    while i < name.len() && name.byte_at(i) >= 48 && name.byte_at(i) <= 57 {
+        i = i + 1u64;
+    }
+    i > k + 1u64 && (i == name.len() || name.byte_at(i) == 58)
+}
+
+// True when the entry `<owner>.addr` is the address of a struct parameter: a `Vec` or `String`
+// parameter lists its length too, and its address is no struct's.
+fn replay_listed_struct_addr(names: Vec<String>, vals: Vec<String>, bits: u64) -> bool {
+    let mut i: u64 = 0u64;
+    while i < names.len() && i < vals.len() {
+        let n: u64 = names[i].len();
+        if n > 5u64 && names[i].substring(n - 5u64, n) == String::from(".addr") {
+            let owner: String = names[i].substring(0u64, n - 5u64);
+            if replay_listed_value(names, vals, str3l(owner, String::from(".len"))).len() == 0 {
+                match replay_addr_bits(vals[i]) {
+                    Option::Some(x) => { if x == bits { return true; } },
+                    Option::None => {},
+                }
+            }
+        }
+        i = i + 1u64;
+    }
+    false
+}
+
+fn str3l(a: String, b: String) -> String {
+    let out: String = String::from(a);
+    out.push_str(b);
+    out
 }
 
 // The position of the `.` that starts the last `.<digits>` of `name`, ignoring a `:<label>` suffix
@@ -82,6 +111,12 @@ fn replay_through_memory(names: Vec<String>, vals: Vec<String>, key: String, sha
     if !replay_listed_has_rows(names, key) { return String::from("` is read through memory; its fields are not listed"); }
     let mut i: u64 = 0u64;
     let mine: Option<u64> = replay_addr_bits(raw);
+    match mine {
+        Option::Some(x) => {
+            if replay_listed_struct_addr(names, vals, x) { return String::from("` is an object read through memory at the address of a struct parameter, whose own state the model reads there"); }
+        },
+        Option::None => {},
+    }
     i = 0u64;
     while i < names.len() {
         let dot: i64 = replay_listed_row_dot(names[i]);

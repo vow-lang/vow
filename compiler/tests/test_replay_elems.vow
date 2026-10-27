@@ -119,6 +119,10 @@ fn check_element_listed() -> i32 [io] {
     if apart.lit != String::from("{ let __replay_v: Vec<Person> = Vec::new(); let __replay_o0: Person = Person { age: 4 }; __replay_v.push(__replay_o0); let __replay_o1: Person = Person { age: -5 }; __replay_v.push(__replay_o1); __replay_v }") { return 46; }
     let partial: ReplayArg = value(String::from("fone"), 1, String::from("p.addr=-1,people.len=2,people[0]=0,people[1]=1,people[0].0=4"));
     if partial.reason.len() == 0 { return 47; }
+    let other: ReplayArg = value(String::from("fother"), 1, String::from("o.addr=5,people.len=1,people[0]=5,people[0].0=4"));
+    if other.reason.len() == 0 { return 49; }
+    let vec_addr: ReplayArg = value(String::from("fone"), 1, String::from("p.addr=-1,people.addr=0,people.len=1,people[0]=0,people[0].0=4"));
+    if vec_addr.reason.len() != 0 { return 50; }
     let named: ReplayArg = value(String::from("fone"), 1, String::from("p.addr=0,people.len=1,people[0]=0,people[0].0=4"));
     if named.reason.len() != 0 || named.deps != String::from("__replay_a0 ") { return 48; }
     0
