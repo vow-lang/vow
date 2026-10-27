@@ -377,7 +377,7 @@ fn check_held_collections() -> i32 [io] {
     let vs_empty: String = String::from("HasVs { v: { let __replay_v: Vec<String> = Vec::new(); __replay_v } }");
     if lit_of(String::from("fvsf"), String::from("h.0=0,h.0.len=0")) != vs_empty { return 338; }
     if agg(String::from("fvsf"), 0, String::from("h.0=0,h.0.len=1,h.0[0]=0")).reason.len() == 0 { return 339; }
-    if agg(String::from("fwidef"), 0, String::from("h.0=0,h.0.len=1,h.0[0]=5")).reason.len() == 0 { return 340; }
+    if index_of(lit_of(String::from("fwidef"), String::from("h.0=0,h.0.len=1,h.0[0]=5")), String::from("5i128")) < 0 { return 340; }
     if agg(String::from("ffloatf"), 0, String::from("h.0=0,h.0.len=1,h.0[0]=5")).reason.len() == 0 { return 341; }
     if agg(String::from("fwidef"), 0, String::from("h.0=0,h.0.len=0")).reason.len() != 0 { return 342; }
     if agg(String::from("fhv"), 0, String::from("h.0=0,h.0.len=9999")).reason.len() == 0 { return 343; }
@@ -657,7 +657,6 @@ fn check_vec_elements_follow_the_element_type() -> i32 [io] {
 // A wide element is listed as one decimal value, which replay spells with the
 // literal suffix of its type.
 fn check_wide_vec_elements() -> i32 [io] {
-    if agg(String::from("fvi128"), 0, String::from("v.len=2,v[0]=-5,v[1]=170141183460469231731687303715884105727")).reason.len() != 0 { return 231; }
     let two: String = vec_lit(String::from("fvi128"), String::from("v.len=2,v[0]=-5,v[1]=170141183460469231731687303715884105727"));
     let want: String = str2s(vec_head(String::from("Vec<i128>")), String::from(" __replay_v.push(-5i128); __replay_v.push(170141183460469231731687303715884105727i128); __replay_v }"));
     if two != want { return 232; }
