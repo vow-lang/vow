@@ -70,9 +70,11 @@ was pushed, so a handle read from it names exactly one overlay entry.
    A pointer read out of given memory is typed `i64` and is admitted as a value: it is a 64-bit word
    in the model and at run time, stored as one and read back as the same word (`pass/..._foreign_handle_value`,
    `fail/..._foreign_handle_value_wrong`). A pointer-typed object value is not (`pointer_value`).
-   The counterexample of a function with such a write is not replayed (a `Vec` of structs is not
-   rebuilt, #1890); each `fail/vec_pointer_elem_field_foreign_*` was checked by running its `main`
-   in debug mode, which aborts on the violation the model names.
+   The counterexample of a function with such a write is replayed when every element of the `Vec`
+   is a struct parameter (`..._param_wrong`, `..._callee_wrong`, `..._two_params_wrong`); an element
+   that names no parameter has no listed fields and is not rebuilt (#1890). Each other
+   `fail/vec_pointer_elem_field_foreign_*` was checked by running its `main` in debug mode, which
+   aborts on the violation the model names.
 
    Adversarial cases pinned by fixtures: two elements one object (`..._two_elements_wrong`), a
    parameter that is the element (`..._param_wrong`, `..._two_params_wrong`), an object reached

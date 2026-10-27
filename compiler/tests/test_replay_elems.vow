@@ -1,0 +1,124 @@
+module TestReplayElems
+
+use lexer
+use ast
+use diag
+use parser
+use replay_main
+use replay_elems
+
+fn parse_src(source: String) -> Module [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    parse_module_into(lex(source), arena, dctx, String::from("entry.vow"))
+}
+
+fn elems_src() -> String {
+    let s: String = String::from("");
+    s.push_str(String::from("module T\n"));
+    s.push_str(String::from("type Who = Person;\n"));
+    s.push_str(String::from("struct Person { age: i64 }\n"));
+    s.push_str(String::from("struct Other { age: i64 }\n"));
+    s.push_str(String::from("linear struct Tok { n: i64 }\n"));
+    s.push_str(String::from("fn fone(p: Person, people: Vec<Person>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn ftwo(p: Person, q: Person, people: Vec<Person>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fother(o: Other, people: Vec<Person>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn falias(p: Who, people: Vec<Who>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fgrid(p: Person, grid: Vec<Vec<i64>>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn ftok(people: Vec<Tok>) -> i64 { 0 }\n"));
+    s
+}
+
+fn value(fname: String, pi: i64, kv: String) -> ReplayArg [io] {
+    let m: Module = parse_src(elems_src());
+    let names: Vec<String> = Vec::new();
+    let vals: Vec<String> = Vec::new();
+    let mut start: u64 = 0u64;
+    let mut i: u64 = 0u64;
+    while i <= kv.len() {
+        if i == kv.len() || kv.byte_at(i) == 44 {
+            if i > start {
+                let pair: String = kv.substring(start, i);
+                let mut at: u64 = 0u64;
+                while pair.byte_at(at) != 61 { at = at + 1u64; }
+                names.push(pair.substring(0u64, at));
+                vals.push(pair.substring(at + 1u64, pair.len()));
+            }
+            start = i + 1u64;
+        }
+        i = i + 1u64;
+    }
+    let objs: ReplayObjs = replay_param_objects(m, fname, names, vals);
+    let avoid: Vec<i64> = Vec::new();
+    replay_param_value(m, fname, pi, names, vals, avoid, objs)
+}
+
+fn check_addresses() -> i32 {
+    match replay_addr_bits(String::from("-1")) {
+        Option::Some(b) => { if b != 18446744073709551615u64 { return 1; } },
+        Option::None => { return 2; },
+    }
+    match replay_addr_bits(String::from("18446744073709551614")) {
+        Option::Some(b) => { if b != 18446744073709551614u64 { return 3; } },
+        Option::None => { return 4; },
+    }
+    match replay_addr_bits(String::from("x")) {
+        Option::Some(b) => { return 5; },
+        Option::None => {},
+    }
+    0
+}
+
+// An element is the object of the parameter whose `.addr` is its address, compared as bits: the
+// element prints unsigned and the address signed.
+fn check_element_is_parameter() -> i32 [io] {
+    let kv: String = String::from("p.addr=-1,p.0=4,people.addr=-2,people.len=2,people[0]=18446744073709551615,people[1]=18446744073709551615");
+    let r: ReplayArg = value(String::from("fone"), 1, kv);
+    if r.reason.len() != 0 { return 11; }
+    if r.ty_text != String::from("Vec<Person>") { return 12; }
+    if r.lit != String::from("{ let __replay_v: Vec<Person> = Vec::new(); __replay_v.push(__replay_a0); __replay_v.push(__replay_a0); __replay_v }") { return 13; }
+    if r.deps != String::from("__replay_a0 __replay_a0 ") { return 14; }
+    let two: String = String::from("p.addr=-1,q.addr=-2,p.alias=1,q.alias=2,people.len=1,people[0]=18446744073709551614");
+    let t: ReplayArg = value(String::from("ftwo"), 2, two);
+    if t.reason.len() != 0 || t.deps != String::from("__replay_a1 ") { return 15; }
+    let resolved: ReplayArg = value(String::from("falias"), 1, String::from("p.addr=7,people.len=1,people[0]=7"));
+    if resolved.reason.len() != 0 || resolved.ty_text != String::from("Vec<Person>") || resolved.deps != String::from("__replay_a0 ") { return 16; }
+    0
+}
+
+// An element that names no parameter of its type is an object whose fields the counterexample does not
+// list, so there is nothing to rebuild; the Vec itself and a parameter of another type are no such object.
+fn check_element_is_unknown() -> i32 [io] {
+    let own: ReplayArg = value(String::from("fone"), 1, String::from("p.addr=-1,people.addr=0,people.len=1,people[0]=0"));
+    if own.reason.len() == 0 { return 21; }
+    let other: ReplayArg = value(String::from("fother"), 1, String::from("o.addr=5,people.len=1,people[0]=5"));
+    if other.reason.len() == 0 { return 22; }
+    let unlisted: ReplayArg = value(String::from("fone"), 1, String::from("p.addr=-1,people.len=2,people[0]=18446744073709551615"));
+    if unlisted.reason.len() == 0 { return 23; }
+    let mixed: ReplayArg = value(String::from("fone"), 1, String::from("p.addr=-1,people.len=2,people[0]=18446744073709551615,people[1]=4"));
+    if mixed.reason.len() == 0 { return 26; }
+    let shared: ReplayArg = value(String::from("ftwo"), 2, String::from("p.addr=3,q.addr=3,p.alias=1,q.alias=2,people.len=1,people[0]=3"));
+    if shared.reason.len() == 0 { return 24; }
+    let lin: ReplayArg = value(String::from("ftok"), 0, String::from("people.len=1,people[0]=0"));
+    if lin.reason.len() == 0 { return 25; }
+    0
+}
+
+// A Vec the model never read, an empty Vec and a Vec of collections keep their existing handling.
+fn check_other_vectors() -> i32 [io] {
+    let empty: ReplayArg = value(String::from("fone"), 1, String::from("people.len=0"));
+    if empty.reason.len() != 0 || empty.deps.len() != 0 { return 31; }
+    let grid: ReplayArg = value(String::from("fgrid"), 1, String::from("grid.len=1,grid[0]=5"));
+    if grid.reason.len() == 0 { return 32; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let r1: i32 = check_addresses();
+    if r1 != 0 { return r1; }
+    let r2: i32 = check_element_is_parameter();
+    if r2 != 0 { return r2; }
+    let r3: i32 = check_element_is_unknown();
+    if r3 != 0 { return r3; }
+    check_other_vectors()
+}
