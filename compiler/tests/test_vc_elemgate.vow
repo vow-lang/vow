@@ -244,15 +244,15 @@ fn check_nested() -> i64 {
     let built: IrFunction = nested(vec_new, true);
     if vc_skip_reason(built) != String::from("") { return 1; }
     let tys: Vec<i64> = vc_ty_table(built);
-    let d: Vec<i64> = vc_elem_derived(built, vc_ptr_store_held(built, tys), tys);
+    let d: Vec<i64> = vc_elem_derived(built, vc_ptr_store_held(built, tys), tys, false);
     if d[24] != 1 || d[23] != 1 { return 2; }
     let given: IrFunction = nested(vec_new, false);
     let gtys: Vec<i64> = vc_ty_table(given);
-    let gd: Vec<i64> = vc_elem_derived(given, vc_ptr_store_held(given, gtys), gtys);
+    let gd: Vec<i64> = vc_elem_derived(given, vc_ptr_store_held(given, gtys), gtys, false);
     if gd[24] != 0 || vc_skip_reason(given) == String::from("") { return 3; }
     let split: IrFunction = nested(mk_inst_call_extern(2, ITY_PTR(), two(0, 1), String::from("__vow_string_split")), true);
     let stys: Vec<i64> = vc_ty_table(split);
-    let sd: Vec<i64> = vc_elem_derived(split, vc_ptr_store_held(split, stys), stys);
+    let sd: Vec<i64> = vc_elem_derived(split, vc_ptr_store_held(split, stys), stys, false);
     if sd[24] != 0 || vc_skip_reason(split) == String::from("") { return 4; }
     0
 }
@@ -300,27 +300,34 @@ fn nested_phi(param_edge: bool) -> IrFunction {
 fn check_phi() -> i64 {
     let ok: IrFunction = nested_phi(false);
     let tys: Vec<i64> = vc_ty_table(ok);
-    let d: Vec<i64> = vc_elem_derived(ok, vc_ptr_store_held(ok, tys), tys);
+    let d: Vec<i64> = vc_elem_derived(ok, vc_ptr_store_held(ok, tys), tys, false);
     if d[40] != 1 || d[41] != 1 { return 1; }
     let bad: IrFunction = nested_phi(true);
     let btys: Vec<i64> = vc_ty_table(bad);
-    let bd: Vec<i64> = vc_elem_derived(bad, vc_ptr_store_held(bad, btys), btys);
+    let bd: Vec<i64> = vc_elem_derived(bad, vc_ptr_store_held(bad, btys), btys, false);
     if bd[40] != 0 || bd[41] != 0 { return 2; }
     0
 }
 
 // A handle (the `get` of a `Vec` parameter, id 31) pushed into the `Vec` that holds the allocation 3
-// (`vc_ptr_store_handles`): the function is admitted, `exact` and the derived set are off, and a
-// field written through an element of that `Vec` is refused. `store` pushes an integer instead
-// (id 32), `field` adds the write through `get` 8.
-fn handle_stored(store: bool, field: bool) -> IrFunction {
+// (`vc_ptr_handle_status`): the function is admitted and the parameter is tagged, and a field
+// written through an element of that `Vec` is refused. `store` is the instruction that stores a
+// handle (a push of id 31 into the `Vec` 2 when 0, of the held `get` 8 when 1, of 31 into the `Vec`
+// 40 that holds no object when 2, nothing when 3); `field` adds the write through `get` 8.
+fn handle_stored(store: i64, field: bool) -> IrFunction {
     let params: Vec<i64> = Vec::new();
     params.push(ITY_PTR());
     let i: Vec<IrInst> = prefix(3);
     i.push(mk_inst_arg(30, ITY_PTR(), 0));
     i.push(mk_inst_const_i64(22, 0));
     i.push(mk_inst_call_extern(31, ITY_I64(), two(30, 22), String::from("__vow_vec_get_val")));
-    if store { i.push(mk_inst_call_extern(32, ITY_UNIT(), two(2, 31), String::from("__vow_vec_push_val"))); }
+    i.push(mk_inst_call_extern(40, ITY_PTR(), two(0, 1), String::from("__vow_vec_new")));
+    if store == 0 { i.push(mk_inst_call_extern(32, ITY_UNIT(), two(2, 31), String::from("__vow_vec_push_val"))); }
+    if store == 1 { i.push(mk_inst_call_extern(32, ITY_UNIT(), two(2, 8), String::from("__vow_vec_push_val"))); }
+    if store == 2 {
+        i.push(mk_inst_call_extern(32, ITY_UNIT(), two(2, 31), String::from("__vow_vec_push_val")));
+        i.push(mk_inst_call_extern(33, ITY_UNIT(), two(40, 31), String::from("__vow_vec_push_val")));
+    }
     if field { i.push(mk_inst_field_set(10, 8, 0, 9)); }
     i.push(mk_inst(11, IOP_RETURN(), ITY_UNIT(), Vec::new()));
     let f: IrFunction = one_block(params, i);
@@ -328,19 +335,30 @@ fn handle_stored(store: bool, field: bool) -> IrFunction {
     f
 }
 
-fn check_handles() -> i64 {
-    let f: IrFunction = handle_stored(true, false);
+fn status_of(f: IrFunction) -> i64 {
     let tys: Vec<i64> = vc_ty_table(f);
-    let held: Vec<i64> = vc_ptr_store_held(f, tys);
-    if !vc_ptr_store_handles(f, held, tys) { return 1; }
-    if vc_skip_reason(f) != String::from("") { return 2; }
-    let n: IrFunction = handle_stored(false, false);
-    let ntys: Vec<i64> = vc_ty_table(n);
-    if vc_ptr_store_handles(n, vc_ptr_store_held(n, ntys), ntys) { return 3; }
-    let w: IrFunction = handle_stored(true, true);
-    if vc_skip_reason(w) != String::from("unsupported-opcode: a field is written through an element of a Vec that holds a handle") { return 4; }
-    let ok: IrFunction = handle_stored(false, true);
-    if vc_skip_reason(ok) != String::from("") { return 5; }
+    vc_ptr_handle_status(f, vc_ptr_store_held(f, tys), tys)
+}
+
+fn check_handles() -> i64 {
+    let f: IrFunction = handle_stored(0, false);
+    if status_of(f) != VC_PH_GIVEN() || vc_skip_reason(f) != String::from("") { return 1; }
+    let tys: Vec<i64> = vc_ty_table(f);
+    let tags: Vec<i64> = vc_ptr_handle_tags(f, vc_ptr_store_held(f, tys), tys);
+    if tags.len() != tys.len() || tags[30] != 1 || tags[2] != 0 { return 2; }
+    if status_of(handle_stored(3, false)) != VC_PH_NONE() { return 3; }
+    let held_get: IrFunction = handle_stored(1, false);
+    if status_of(held_get) != VC_PH_OTHER() || vc_skip_reason(held_get) == String::from("") { return 4; }
+    let copied: IrFunction = handle_stored(2, false);
+    if status_of(copied) != VC_PH_OTHER() || vc_skip_reason(copied) == String::from("") { return 5; }
+    let w: IrFunction = handle_stored(0, true);
+    if vc_skip_reason(w) != String::from("unsupported-opcode: a field is written through an element of a Vec that holds a handle") { return 6; }
+    let ok: IrFunction = handle_stored(3, true);
+    if vc_skip_reason(ok) != String::from("") { return 7; }
+    let loose: IrFunction = handle_stored(0, false);
+    loose.param_keys.clear();
+    loose.param_keys.push(String::from(""));
+    if status_of(loose) != VC_PH_OTHER() { return 8; }
     0
 }
 

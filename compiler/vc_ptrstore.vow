@@ -42,7 +42,8 @@ use vc_ptrhandle
 // reads it exactly (`vc_walk_slot_word` then stores addresses).
 fn vc_ptr_store_detail(f: IrFunction, tys: Vec<i64>, calls: bool) -> String {
     let held: Vec<i64> = vc_ptr_store_held(f, tys);
-    let elem_write: String = vc_elem_write_detail(f, tys, held, vc_heap_count_marked(held) > 0 || vc_overlay_stores_pointer(f, tys));
+    let handles: bool = vc_ptr_handle_status(f, held, tys) != VC_PH_NONE();
+    let elem_write: String = vc_elem_write_detail(f, tys, held, vc_heap_count_marked(held) > 0 || vc_overlay_stores_pointer(f, tys), handles);
     if elem_write.len() > 0 { return elem_write; }
     if vc_heap_count_marked(held) == 0 { return String::from(""); }
     let mut reads: bool = false;
@@ -179,7 +180,8 @@ fn vc_ptr_store_known(f: IrFunction, tys: Vec<i64>, calls: bool) -> Vec<i64> {
 //   - each pointer stored is a known object with a class (`vc_ptr_store_known`; a `Vec` or `String`
 //     parameter is none of them, since two such parameters may be one value, #1823; an object used as
 //     no `Vec`, `String` or struct, and not built as one, has no state to read back) and nothing
-//     but a pointer or a `get` result is stored (any other handle read out of memory is no address the tags know; a `get` result keeps the chain open, `vc_ptrhandle`);
+//     but a pointer is stored (a handle read out of memory is no address the tags know), except the
+//     `get` of a `Vec` parameter, which `vc_ptr_handle_status` admits and which keeps the chain open;
 //   - an element read of any other `Vec` is not used as an object, since it may equal the address
 //     of an object the function stored.
 // `held[v]` marks the receivers of the stores, closed over Phis.
@@ -188,8 +190,10 @@ fn vc_ptr_store_resolvable(f: IrFunction, held: Vec<i64>, tys: Vec<i64>, calls: 
     let known: Vec<i64> = vc_ptr_store_known(f, tys, calls);
     let objects: VcObjects = vc_objects_analyze(f, tys);
     let foreign: Vec<i64> = dom_fill(n_ids, 0);
-    let derived: Vec<i64> = vc_elem_derived(f, held, tys);
-    let gets: Vec<i64> = vc_ptr_handle_gets(f, n_ids);
+    let status: i64 = vc_ptr_handle_status(f, held, tys);
+    if status == VC_PH_OTHER() { return false; }
+    let derived: Vec<i64> = vc_elem_derived(f, held, tys, status != VC_PH_NONE());
+    let gets: Vec<i64> = vc_elem_get_recv(f, n_ids);
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
         let blk: IrBlock = f.blocks[bi];
@@ -204,7 +208,7 @@ fn vc_ptr_store_resolvable(f: IrFunction, held: Vec<i64>, tys: Vec<i64>, calls: 
             let stored: i64 = vc_inst_stored_operand(inst);
             if stored >= 0 && (stored as u64) < n_ids && vc_objects_is_collection_param(objects, stored) { return false; }
             if inst.op == IOP_CALL() && inst.args.len() > 0 && vc_ptr_store_is_held(held, inst.args[0]) && stored >= 0
-                && !vc_ptr_handle_is_get(gets, stored) {
+                && !(status == VC_PH_GIVEN() && (stored as u64) < n_ids && gets[stored as u64] >= 0) {
                 if vc_heap_ty(tys, stored) != ITY_PTR() || known[stored as u64] == 0 { return false; }
                 if known[stored as u64] == 1 && vc_objects_stored_class(objects, stored) == 0 { return false; }
             }

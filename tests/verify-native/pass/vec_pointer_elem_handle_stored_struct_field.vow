@@ -1,0 +1,23 @@
+// A struct the function built and a struct the caller gave in one `Vec`: the field of the built one
+// is read back through its slot.
+module VecPointerElemHandleStoredStructField
+
+struct Person { age: i64 }
+
+fn own_age(src: Vec<Person>) -> i64 vow {
+  requires: src.len() > 0
+  ensures: result == 5
+} {
+  let dst: Vec<Person> = Vec::new();
+  let mine: Person = Person { age: 5 };
+  dst.push(mine);
+  dst.push(src[0]);
+  dst[0].age
+}
+
+fn main() -> i32 [io] {
+  let src: Vec<Person> = Vec::new();
+  src.push(Person { age: 1 });
+  print_i64(own_age(src));
+  0
+}

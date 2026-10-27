@@ -51,11 +51,9 @@ use vc_held
 // address a parameter entry has. A pointer Phi has the address of whichever object it
 // merges. A term read out of the memory the function was given (a parameter's field, a
 // field or an element read through a handle) is assumed different from the address of every
-// object the function allocates, whichever came first: an allocation is no object that existed
-// before it, so a handle the function loaded is never one it built, and only an address the
-// function stored can be the handle a read then names.
-// The object's state is its model at the current point of the walk, so a `push` after the
-// store is what a later read sees.
+// object the function allocates: an allocation is no object that existed before it, so only
+// an address the function stored can be the handle a read then names. The object's state is
+// its model at the current point of the walk, so a `push` after the store is seen.
 
 // An entry is a parameter (`param >= 0`, `obj == -1`) or a built object whose address
 // was stored (`param == -1`, `obj` its id). `names` and `hdr` locate the parameter address
@@ -64,8 +62,9 @@ use vc_held
 // terms read from given memory; `scanned` counts aggregate parameter symbols visited.
 // `tags` is the address tag array, -1 until an entry is allocated. `elems` selects stored
 // addresses instead of fresh constants for pointer elements. `exact` additionally says
-// every element is such an address: no loop cut havocs the Vec. `held` marks pointer-store
-// receivers; `elem_h`, ascending, lists the results of a `get` of one of them.
+// every element is such an address: no loop cut havocs the Vec, `tagged` is empty. `held`
+// marks pointer-store receivers; `elem_h`, ascending, lists the results of a `get` of one of
+// them. `tagged` marks the `Vec` parameters whose `get` results are given memory.
 struct VcOverlay {
     param: Vec<i64>,
     obj: Vec<i64>,
@@ -82,6 +81,7 @@ struct VcOverlay {
     tags: i64,
     elems: bool,
     exact: bool,
+    tagged: Vec<i64>,
 }
 
 fn vc_overlay_new() -> VcOverlay {
@@ -101,6 +101,7 @@ fn vc_overlay_new() -> VcOverlay {
         tags: -1,
         elems: false,
         exact: false,
+        tagged: Vec::new(),
     }
 }
 
@@ -141,8 +142,11 @@ fn vc_overlay_vec_havoc(f: IrFunction, held: Vec<i64>) -> bool {
 fn vc_handle_memory_new(f: IrFunction, tys: Vec<i64>, ag: VcAgg, vv: VcVec, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, elems: bool) -> VcHandleMemory {
     let ov: VcOverlay = vc_overlay_new();
     ov.elems = elems;
-    if elems { ov.held = vc_ptr_store_held(f, tys); }
-    ov.exact = elems && !vc_overlay_vec_havoc(f, ov.held) && !vc_ptr_store_handles(f, ov.held, tys);
+    if elems {
+        ov.held = vc_ptr_store_held(f, tys);
+        ov.tagged = vc_ptr_handle_tags(f, ov.held, tys);
+    }
+    ov.exact = elems && !vc_overlay_vec_havoc(f, ov.held) && ov.tagged.len() == 0;
     let stores: bool = elems || vc_overlay_stores_pointer(f, tys);
     let overlay: bool = vc_heap_overlay_needed(f, tys);
     if stores || overlay {
