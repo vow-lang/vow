@@ -1,0 +1,29 @@
+// TEST: replay-skipped a Vec<Vec<i64>> parameter is not rebuilt by replay, so each counterexample was checked by running main in debug mode (#1890)
+// TEST: counterexample-fn "mixed"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// The pushed `Vec` has three elements; the claim of two is false.
+module VecPointerElemHandleStoredMixedWrong
+
+fn mixed(src: Vec<Vec<i64>>) -> u64 vow {
+  requires: src.len() > 0
+  ensures: result == 2
+} {
+  let dst: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  dst.push(w);
+  dst.push(src[0]);
+  w.push(1);
+  w.push(2);
+  w.push(3);
+  let e: Vec<i64> = dst[0];
+  e.len()
+}
+
+fn main() -> i32 [io] {
+  let src: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  src.push(w);
+  print_u64(mixed(src));
+  0
+}

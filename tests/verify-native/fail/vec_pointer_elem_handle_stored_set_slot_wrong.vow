@@ -1,0 +1,28 @@
+// TEST: replay-skipped a Vec<Vec<i64>> parameter is not rebuilt by replay, so each counterexample was checked by running main in debug mode (#1890)
+// TEST: counterexample-fn "swap_in"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// The object in the first slot was replaced by a handle, so the first slot no longer has the one
+// element that was pushed to it: its length is whatever the given `Vec` has.
+module VecPointerElemHandleStoredSetSlotWrong
+
+fn swap_in(src: Vec<Vec<i64>>) -> u64 vow {
+  requires: src.len() > 0
+  ensures: result == 1
+} {
+  let dst: Vec<Vec<i64>> = Vec::new();
+  let a: Vec<i64> = Vec::new();
+  a.push(7);
+  dst.push(a);
+  dst[0] = src[0];
+  let e: Vec<i64> = dst[0];
+  e.len()
+}
+
+fn main() -> i32 [io] {
+  let src: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  src.push(w);
+  print_u64(swap_in(src));
+  0
+}

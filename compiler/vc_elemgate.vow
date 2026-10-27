@@ -8,6 +8,7 @@ use vc_int
 use vc_loops
 use vc_heap
 use vc_objects
+use vc_ptrhandle
 
 // Gate for a field written through an element (`people[i].age = v`, #1663). The IR types the
 // element `i64` (a handle), so the write is a `FieldSet` whose receiver is the result of a `Vec`
@@ -60,7 +61,7 @@ fn vc_elem_get_recv(f: IrFunction, n_ids: u64) -> Vec<i64> {
 fn vc_elem_derived(f: IrFunction, held: Vec<i64>, tys: Vec<i64>) -> Vec<i64> {
     let n_ids: u64 = tys.len();
     let d: Vec<i64> = dom_fill(n_ids, 0);
-    if vc_heap_count_marked(held) == 0 || vc_elem_stores_split(f, n_ids) { return d; }
+    if vc_heap_count_marked(held) == 0 || vc_elem_stores_split(f, n_ids) || vc_ptr_store_handles(f, held, tys) { return d; }
     let edges: Vec<i64> = dom_fill(n_ids, 0);
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
@@ -241,6 +242,9 @@ fn vc_elem_write_detail(f: IrFunction, tys: Vec<i64>, held: Vec<i64>, stores: bo
                 }
                 if inst.args[1] < 0 || (inst.args[1] as u64) >= n_ids || !vc_elem_write_ok(inst, ITY_I64(), tys[inst.args[1] as u64]) {
                     return String::from("a field of this type is written through a pointer element");
+                }
+                if held[r as u64] == 1 && vc_ptr_store_handles(f, held, tys) {
+                    return String::from("a field is written through an element of a Vec that holds a handle");
                 }
                 if held[r as u64] != 1 && derived[r as u64] != 1 {
                     let why: String = vc_elem_foreign_ok(f, { if (inst.args[0] as u64) < from.len() { from[inst.args[0] as u64] } else { -1 } }, tys[inst.args[1] as u64], stores, vc_chain_len(li, bi) > 0);
