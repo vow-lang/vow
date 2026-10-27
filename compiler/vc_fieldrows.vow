@@ -45,8 +45,7 @@ fn vc_append_field_rows(cs: VcClaims, rows: Vec<i64>, bound: i64, s: SmtScript, 
     while q < rows.len() {
         let r: u64 = rows[q] as u64;
         let arr: i64 = vc_tm_var(ar, ls.earr[r]);
-        let heap_name: String = String::from("hf");
-        heap_name.push_str(i64_to_string(ls.eslot[r]));
+        let heap_name: String = vc_heap_slot_name(ls.eslot[r]);
         let sort: i64 = vc_ty_sort(ls.ety[r]);
         let mut i: i64 = 0;
         while i < bound {

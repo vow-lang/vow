@@ -75,9 +75,7 @@ fn vc_held_listed_row(hp: VcHeap, ar: VcArena, h0: i64) -> i64 {
     if ls.bad { return -1; }
     let mut i: u64 = 0;
     while i < ls.handle.len() {
-        let want: String = String::from("hf");
-        want.push_str(i64_to_string(ls.slot[i]));
-        if ls.handle[i] == at_name && want == arr_name && ls.ty[i] == ITY_I64() { return i as i64; }
+        if ls.handle[i] == at_name && vc_heap_slot_name(ls.slot[i]) == arr_name && ls.ty[i] == ITY_I64() { return i as i64; }
         i = i + 1;
     }
     -1

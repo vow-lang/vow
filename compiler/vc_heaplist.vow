@@ -19,9 +19,10 @@ use vc_held
 // model row `<handle>.<slot>` of the type the slot is read as, for each field symbol the handle
 // may be (a merge of two fields reads either).
 //
-// The listing is complete only when every read has a handle made of field symbols: a handle that is
-// the value of another read, an element of a `Vec` or a scalar names no row, and the function
-// then lists nothing (`VcHeapListed.bad`). Replay reads an object whose address is listed and has
+// The element of a `Vec` parameter is a handle too (rows `<param>[<i>].<slot>`, `vc_fieldrows`). The
+// listing is complete only when every read has a handle made of field symbols and such elements: a
+// handle that is the value of another read or a scalar names no row, and the function then lists
+// nothing (`VcHeapListed.bad`). Replay reads an object whose address is listed and has
 // rows as fully described, so a row missing for a slot the function read would rebuild it wrongly.
 
 // The parts the handle `h` is made of: the positions in the aggregate model of its field symbols
@@ -95,8 +96,7 @@ fn vc_heaplist_note(hp: VcHeap, ag: VcAgg, vv: VcVec, ar: VcArena, hdr: SmtScrip
         return;
     }
     let sort: i64 = vc_ty_sort(ty);
-    let arr_name: String = String::from("hf");
-    arr_name.push_str(i64_to_string(slot));
+    let arr_name: String = vc_heap_slot_name(slot);
     let mut i: u64 = 0;
     while i < leaves.len() {
         let ps: u64 = leaves[i] as u64;

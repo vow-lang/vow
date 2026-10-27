@@ -168,6 +168,13 @@ fn vc_heap_used(hp: VcHeap) -> bool {
     hp.len_arr >= 0 || hp.elem_arr >= 0 || hp.byte_arr >= 0 || hp.fields.len() > 0
 }
 
+// The name of the array of slot `slot`.
+fn vc_heap_slot_name(slot: i64) -> String {
+    let name: String = String::from("hf");
+    name.push_str(i64_to_string(slot));
+    name
+}
+
 // The position of the array of slot `slot` in `hp.fields`, declared on first use.
 fn vc_heap_slot_index(hp: VcHeap, ar: VcArena, hdr: SmtScript, slot: i64) -> u64 {
     let mut i: u64 = 0;
@@ -175,10 +182,8 @@ fn vc_heap_slot_index(hp: VcHeap, ar: VcArena, hdr: SmtScript, slot: i64) -> u64
         if hp.slots[i] == slot { return i; }
         i = i + 1;
     }
-    let name: String = String::from("hf");
-    name.push_str(i64_to_string(slot));
     hp.slots.push(slot);
-    hp.fields.push(vc_agg_declare(ar, hdr, name, VC_SORT_ARRAY64()));
+    hp.fields.push(vc_agg_declare(ar, hdr, vc_heap_slot_name(slot), VC_SORT_ARRAY64()));
     hp.fields.len() - 1
 }
 
