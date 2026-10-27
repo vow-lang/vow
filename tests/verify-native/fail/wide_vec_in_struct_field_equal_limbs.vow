@@ -1,4 +1,3 @@
-// TEST: replay-skipped a Vec<u128> held in a struct field lists its elements, but replay does not rebuild a held 128-bit element (#1890)
 // TEST: counterexample-fn "limbs_agree"
 // TEST: counterexample-vow-id 1
 // TEST: counterexample-blame Callee
