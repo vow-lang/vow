@@ -1,0 +1,19 @@
+// The field is stored by the struct literal and again in one arm of a branch. The push after the
+// join is on a Phi of the two stored Vecs, and the length read back is the pushed Vec's.
+module PtrFieldBranchArmStore
+
+struct Block { id: i64, insts: Vec<i64> }
+
+fn fill(c: bool) -> u64 vow {
+  ensures: result == 1
+} {
+  let b: Block = Block { id: 7, insts: Vec::new() };
+  if c { b.insts = Vec::new(); }
+  b.insts.push(1);
+  b.insts.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill(true));
+  0
+}

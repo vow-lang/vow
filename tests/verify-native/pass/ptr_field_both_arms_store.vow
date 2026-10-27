@@ -1,0 +1,26 @@
+// Each arm stores its own Vec into the field. The push after the join is on the Vec of the arm
+// taken, whose length differs.
+module PtrFieldBothArmsStore
+
+struct Block { id: i64, insts: Vec<i64> }
+
+fn arm_len(c: bool) -> u64 vow {
+  ensures: (c && result == 3) || (!c && result == 1)
+} {
+  let b: Block = Block { id: 7, insts: Vec::new() };
+  if c {
+    let v: Vec<i64> = Vec::new();
+    v.push(1);
+    v.push(2);
+    b.insts = v;
+  } else {
+    b.insts = Vec::new();
+  }
+  b.insts.push(9);
+  b.insts.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(arm_len(true));
+  0
+}

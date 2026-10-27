@@ -1,0 +1,20 @@
+// The field holds the literal's Vec, or the Vec an arm stored. The push after the join lands on
+// whichever the path took, so the length is 2 without the arm and 1 with it.
+module PtrFieldBranchArmStoreBothPaths
+
+struct Block { id: i64, insts: Vec<i64> }
+
+fn arm_len(c: bool) -> u64 vow {
+  ensures: (c && result == 1) || (!c && result == 2)
+} {
+  let b: Block = Block { id: 7, insts: Vec::new() };
+  b.insts.push(10);
+  if c { b.insts = Vec::new(); }
+  b.insts.push(20);
+  b.insts.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(arm_len(true));
+  0
+}
