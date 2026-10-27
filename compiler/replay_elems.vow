@@ -4,12 +4,9 @@ use ast
 use replay_main
 use replay_alias
 
-// A `Vec<S>` parameter, `S` a struct, holds the addresses of its objects. The counterexample lists
-// `<param>[<i>]` for each, and lists no field of the object an element names (the function read it
-// through memory). An element whose address is the `<param>.addr` of a parameter of type `S` is that
-// parameter's object, whose fields the counterexample does list, so the harness pushes that
-// parameter's binding. An element that names no such parameter is an object whose fields are
-// unknown, and replay declines it rather than guess them.
+// The counterexample lists the address of each element of a `Vec<S>` parameter (`S` a struct) and no
+// field of the object it names. An element that is the `.addr` of a parameter of type `S` is that
+// parameter's object; any other element has unknown fields, which replay declines to guess.
 
 // The 64-bit pattern of an address as the counterexample prints it: an element in unsigned decimal,
 // a slot or `.addr` in signed decimal.
@@ -52,8 +49,8 @@ fn replay_elem_owner(slot: u64, shown: String, pi: i64, objs: ReplayObjs) -> i64
     first
 }
 
-// The element type of parameter `pi` when it is `Vec<S>` for a struct `S` the harness can name in
-// two places (not a `linear struct`), as AST type id; -1 for any other parameter.
+// The element type id of the alias-resolved type `tid` when it is `Vec<S>` for a struct `S` that is
+// not a `linear struct`; -1 for any other type.
 fn replay_object_elem_type(m: Module, tid: i64) -> i64 {
     let a: AstArena = m.arena;
     if type_tag(a, tid) != TY_GENERIC() || arena_str(a, type_a(a, tid)) != String::from("Vec") { return -1; }
@@ -65,8 +62,8 @@ fn replay_object_elem_type(m: Module, tid: i64) -> i64 {
     elem
 }
 
-// The value of parameter `pi` of `fn_name`: the harness literal `replay_agg_arg` builds, except for a
-// non-empty `Vec<S>` of structs, whose elements are the objects of the parameters they name.
+// `replay_agg_arg`, except that a non-empty `Vec<S>` of structs holds the objects of the parameters
+// its elements name.
 fn replay_param_value(m: Module, fn_name: String, pi: i64, names: Vec<String>, vals: Vec<String>, avoid: Vec<i64>, objs: ReplayObjs) -> ReplayArg {
     let a: AstArena = m.arena;
     let fid: i64 = replay_find_fn_item(m, fn_name);
@@ -87,19 +84,23 @@ fn replay_param_value(m: Module, fn_name: String, pi: i64, names: Vec<String>, v
     let deps: String = String::from("");
     let mut i: i64 = 0;
     while i < len {
+        let mut owner: i64 = -1;
         let key: String = str3r(pname, String::from("["), str3r(i64_to_string(i), String::from("]"), String::from("")));
-        let owner: i64 = match replay_addr_bits(replay_cex_value(names, vals, key)) {
-            Option::Some(bits) => { replay_elem_owner(bits, eshown, pi, objs) },
-            Option::None => { -3 },
-        };
-        if owner == -3 {
-            return replay_arg_skip(str3r(String::from("the counterexample does not give element "), i64_to_string(i), str3r(String::from(" of `"), pname, String::from("` (length too large to list)"))));
+        let slot: Option<u64> = replay_addr_bits(replay_cex_value(names, vals, key));
+        let whose: String = str3r(String::from(" of `"), pname, String::from("`"));
+        match slot {
+            Option::None => {
+                return replay_arg_skip(str3r(String::from("the counterexample does not give element "), i64_to_string(i), str3r(whose, String::from(" (no address listed)"), String::from(""))));
+            },
+            Option::Some(bits) => {
+                owner = replay_elem_owner(bits, eshown, pi, objs);
+            },
         }
         if owner == -2 {
-            return replay_arg_skip(str3r(String::from("element "), i64_to_string(i), str3r(String::from(" of `"), pname, String::from("` holds an address that several parameters share without being one object"))));
+            return replay_arg_skip(str3r(String::from("element "), i64_to_string(i), str3r(whose, String::from(" holds an address that several parameters share without being one object"), String::from(""))));
         }
         if owner < 0 {
-            return replay_arg_skip(str3r(String::from("element "), i64_to_string(i), str3r(String::from(" of `"), pname, str3r(String::from("` is a `"), eshown, String::from("` read through memory; its fields are not listed")))));
+            return replay_arg_skip(str3r(String::from("element "), i64_to_string(i), str3r(whose, String::from(" is a `"), str3r(eshown, String::from("` read through memory; its fields are not listed"), String::from("")))));
         }
         let bind: String = replay_obj_bind(objs, owner);
         lit.push_str(String::from(" __replay_v.push("));

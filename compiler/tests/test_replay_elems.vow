@@ -95,6 +95,8 @@ fn check_element_is_unknown() -> i32 [io] {
     if other.reason.len() == 0 { return 22; }
     let unlisted: ReplayArg = value(String::from("fone"), 1, String::from("p.addr=-1,people.len=2,people[0]=18446744073709551615"));
     if unlisted.reason.len() == 0 { return 23; }
+    let mixed: ReplayArg = value(String::from("fone"), 1, String::from("p.addr=-1,people.len=2,people[0]=18446744073709551615,people[1]=4"));
+    if mixed.reason.len() == 0 { return 26; }
     let shared: ReplayArg = value(String::from("ftwo"), 2, String::from("p.addr=3,q.addr=3,p.alias=1,q.alias=2,people.len=1,people[0]=3"));
     if shared.reason.len() == 0 { return 24; }
     let lin: ReplayArg = value(String::from("ftok"), 0, String::from("people.len=1,people[0]=0"));
