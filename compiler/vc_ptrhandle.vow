@@ -49,8 +49,8 @@ fn vc_ptr_handle_tagged(f: IrFunction, tys: Vec<i64>) -> Vec<i64> {
     tagged
 }
 
-// 1 for an `i64` that may be the address of an object: a `get` or a field read, and every Phi that
-// merges one.
+// 1 for an `i64` that may be the address of an object: a call result (a `get`) or a field read, and
+// every Phi that merges one.
 fn vc_ptr_handle_maybe_address(f: IrFunction, tys: Vec<i64>) -> Vec<i64> {
     let may: Vec<i64> = dom_fill(tys.len(), 0);
     let mut bi: u64 = 0;
@@ -107,6 +107,6 @@ fn vc_ptr_handle_status(f: IrFunction, held: Vec<i64>, tys: Vec<i64>) -> i64 {
 // The `Vec` parameters whose `get` results are noted as given memory (`vc_ptr_handle_tagged`) when a
 // handle is stored into a held `Vec` and the model tells it from an address; else empty.
 fn vc_ptr_handle_tags(f: IrFunction, held: Vec<i64>, tys: Vec<i64>) -> Vec<i64> {
-    if vc_ptr_handle_status(f, held, tys) == VC_PH_GIVEN() { return vc_ptr_handle_tagged(f, tys); }
-    Vec::new()
+    if vc_ptr_handle_status(f, held, tys) != VC_PH_GIVEN() { return Vec::new(); }
+    vc_ptr_handle_tagged(f, tys)
 }

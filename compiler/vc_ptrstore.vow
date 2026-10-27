@@ -42,7 +42,8 @@ use vc_ptrhandle
 // reads it exactly (`vc_walk_slot_word` then stores addresses).
 fn vc_ptr_store_detail(f: IrFunction, tys: Vec<i64>, calls: bool) -> String {
     let held: Vec<i64> = vc_ptr_store_held(f, tys);
-    let handles: bool = vc_ptr_handle_status(f, held, tys) != VC_PH_NONE();
+    let status: i64 = vc_ptr_handle_status(f, held, tys);
+    let handles: bool = status != VC_PH_NONE();
     let elem_write: String = vc_elem_write_detail(f, tys, held, vc_heap_count_marked(held) > 0 || vc_overlay_stores_pointer(f, tys), handles);
     if elem_write.len() > 0 { return elem_write; }
     if vc_heap_count_marked(held) == 0 { return String::from(""); }
@@ -72,7 +73,7 @@ fn vc_ptr_store_detail(f: IrFunction, tys: Vec<i64>, calls: bool) -> String {
         }
         return String::from("");
     }
-    if vc_ptr_store_resolvable(f, held, tys, calls) { return String::from(""); }
+    if vc_ptr_store_resolvable(f, held, tys, calls, status) { return String::from(""); }
     String::from("a pointer element is read back")
 }
 
@@ -184,13 +185,12 @@ fn vc_ptr_store_known(f: IrFunction, tys: Vec<i64>, calls: bool) -> Vec<i64> {
 //     `get` of a `Vec` parameter, which `vc_ptr_handle_status` admits and which keeps the chain open;
 //   - an element read of any other `Vec` is not used as an object, since it may equal the address
 //     of an object the function stored.
-// `held[v]` marks the receivers of the stores, closed over Phis.
-fn vc_ptr_store_resolvable(f: IrFunction, held: Vec<i64>, tys: Vec<i64>, calls: bool) -> bool {
+// `held[v]` marks the receivers of the stores, closed over Phis; `status` is `vc_ptr_handle_status`.
+fn vc_ptr_store_resolvable(f: IrFunction, held: Vec<i64>, tys: Vec<i64>, calls: bool, status: i64) -> bool {
     let n_ids: u64 = tys.len();
     let known: Vec<i64> = vc_ptr_store_known(f, tys, calls);
     let objects: VcObjects = vc_objects_analyze(f, tys);
     let foreign: Vec<i64> = dom_fill(n_ids, 0);
-    let status: i64 = vc_ptr_handle_status(f, held, tys);
     if status == VC_PH_OTHER() { return false; }
     let derived: Vec<i64> = vc_elem_derived(f, held, tys, status != VC_PH_NONE());
     let gets: Vec<i64> = vc_elem_get_recv(f, n_ids);
