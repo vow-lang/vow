@@ -1,0 +1,116 @@
+module TestReplayListed
+
+use lexer
+use ast
+use diag
+use parser
+use replay_main
+use replay_listed
+
+fn parse_src(source: String) -> Module [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    parse_module_into(lex(source), arena, dctx, String::from("entry.vow"))
+}
+
+fn two_src() -> String {
+    let s: String = String::from("");
+    s.push_str(String::from("module T\n"));
+    s.push_str(String::from("struct HasVec { v: Vec<i64> }\n"));
+    s.push_str(String::from("struct Two { a: HasVec, b: HasVec }\n"));
+    s.push_str(String::from("fn ftwo(t: Two) -> i64 { 0 }\n"));
+    s
+}
+
+// `Two` holds two `HasVec` objects: each is rebuilt from its rows, and two with one address are not.
+fn two_reason(kv: String) -> String [io] {
+    let m: Module = parse_src(two_src());
+    let names: Vec<String> = Vec::new();
+    let vals: Vec<String> = Vec::new();
+    let mut start: u64 = 0u64;
+    let mut i: u64 = 0u64;
+    while i <= kv.len() {
+        if i == kv.len() || kv.byte_at(i) == 44 {
+            let pair: String = kv.substring(start, i);
+            let mut at: u64 = 0u64;
+            while pair.byte_at(at) != 61 { at = at + 1u64; }
+            names.push(pair.substring(0u64, at));
+            vals.push(pair.substring(at + 1u64, pair.len()));
+            start = i + 1u64;
+        }
+        i = i + 1u64;
+    }
+    let avoid: Vec<i64> = Vec::new();
+    let objs: ReplayObjs = replay_param_objects(m, String::from("ftwo"), names, vals);
+    let r: ReplayArg = replay_agg_arg(m, String::from("ftwo"), 0, names, vals, avoid, objs);
+    if r.reason.len() > 0 { return r.reason; }
+    r.lit
+}
+
+fn check_objects() -> i32 [io] {
+    let one: String = String::from("t.0=0,t.0.0=1,t.0.0.len=1,t.0.0[0]=7,t.1=1,t.1.0=2,t.1.0.len=0");
+    let want: String = String::from("Two { a: HasVec { v: { let __replay_v: Vec<i64> = Vec::new(); __replay_v.push(7); __replay_v } }, b: HasVec { v: { let __replay_v: Vec<i64> = Vec::new(); __replay_v } } }");
+    if two_reason(one) != want { return 41; }
+    let clash: String = String::from("t.0=0,t.0.0=1,t.0.0.len=0,t.1=0,t.1.0=2,t.1.0.len=0");
+    if two_reason(clash).len() == 0 || two_reason(clash).contains(String::from("Two {")) { return 42; }
+    let bare: String = String::from("t.0=0,t.1=1,t.1.0=2,t.1.0.len=0");
+    if two_reason(bare).contains(String::from("Two {")) { return 43; }
+    0
+}
+
+
+fn check_rows() -> i32 {
+    if !replay_listed_is_row(String::from("o.0.1"), String::from("o.0")) { return 1; }
+    if !replay_listed_is_row(String::from("o.0.1:64"), String::from("o.0")) { return 2; }
+    if replay_listed_is_row(String::from("o.0"), String::from("o.0")) { return 3; }
+    if replay_listed_is_row(String::from("o.0.len"), String::from("o.0")) { return 4; }
+    if replay_listed_is_row(String::from("o.01.1"), String::from("o.0")) { return 5; }
+    if replay_listed_row_dot(String::from("o.0.1")) != 3 { return 6; }
+    if replay_listed_row_dot(String::from("o.0.1:bool")) != 3 { return 7; }
+    if replay_listed_row_dot(String::from("people[1].0")) != 9 { return 8; }
+    if replay_listed_row_dot(String::from("o.0.len")) != -1 { return 9; }
+    if replay_listed_row_dot(String::from("o")) != -1 { return 10; }
+    0
+}
+
+fn check_through_memory() -> i32 {
+    let names: Vec<String> = Vec::new();
+    let vals: Vec<String> = Vec::new();
+    let none: String = String::from("");
+    if replay_through_memory(names, vals, String::from("o.0"), none).len() != 0 { return 21; }
+    names.push(String::from("o.0"));
+    vals.push(String::from("-1"));
+    if replay_through_memory(names, vals, String::from("o.0"), none).len() == 0 { return 22; }
+    names.push(String::from("o.0.0"));
+    vals.push(String::from("5"));
+    if replay_through_memory(names, vals, String::from("o.0"), none).len() != 0 { return 23; }
+    names.push(String::from("p.1"));
+    vals.push(String::from("18446744073709551615"));
+    names.push(String::from("p.1.0"));
+    vals.push(String::from("6"));
+    if replay_through_memory(names, vals, String::from("o.0"), none).len() == 0 { return 24; }
+    if replay_through_memory(names, vals, String::from("o.0"), String::from("p.")).len() != 0 { return 25; }
+    0
+}
+
+fn check_addresses() -> i32 {
+    match replay_addr_bits(String::from("-1")) {
+        Option::Some(b) => { if b != 18446744073709551615u64 { return 31; } },
+        Option::None => { return 32; },
+    }
+    match replay_addr_bits(String::from("x")) {
+        Option::Some(b) => { return 33; },
+        Option::None => {},
+    }
+    0
+}
+
+fn main() -> i32 [io] {
+    let r1: i32 = check_rows();
+    if r1 != 0 { return r1; }
+    let r2: i32 = check_through_memory();
+    if r2 != 0 { return r2; }
+    let r3: i32 = check_addresses();
+    if r3 != 0 { return r3; }
+    check_objects()
+}

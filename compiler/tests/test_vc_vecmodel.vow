@@ -7,6 +7,7 @@ use vc_exec
 use vc_smt
 use vc_term
 use vc_vecmodel
+use vc_heap
 
 // Two `Vec`/`String` parameters: `p0`'s length constant is declared at header
 // position 2 and `p3`'s at 20, and claim 0's query holds the first 10 commands,
@@ -48,6 +49,7 @@ fn two_vec_claims() -> VcClaims {
         vec_handle: Vec::new(),
         map_len: Vec::new(),
         map_len_hdr: Vec::new(),
+        listed: vc_heap_listed_new(),
     };
     cs.header_lens.push(10);
     cs.model_names.push(String::from("p0_vlen"));

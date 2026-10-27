@@ -9,6 +9,7 @@ use vc_vec
 use vc_map
 use vc_overlay
 use vc_held
+use vc_heap
 
 // Parameter-model publication for native counterexamples. Scalar declarations register here
 // before the walk; finish publishes lazily declared memory entries once the walk is complete.
@@ -53,13 +54,17 @@ fn vc_model_finish(cs: VcClaims, memory: VcHandleMemory, mp: VcMap) {
     let vv: VcVec = memory.vv;
     let ov: VcOverlay = memory.overlay;
     let held: VcHeld = memory.held;
+    let ls: VcHeapListed = memory.heap.listed;
+    cs.listed = ls;
+    let rows: u64 = { if ls.bad { 0 } else { ls.names.len() } };
     let none: i64 = 9223372036854775807;
+    let mut r: u64 = 0;
     let mut i: u64 = 0;
     let mut v: u64 = 0;
     let mut a: u64 = 0;
     let mut d: u64 = 0;
     let mut e: u64 = 0;
-    while i < ag.ps_param.len() || v < vv.pv_param.len() || vc_overlay_next_listed(ov, a) < ov.param.len() || vc_held_next_listed(held, d) < held.hdr.len() || e < mp.ent_hdr.len() {
+    while i < ag.ps_param.len() || v < vv.pv_param.len() || vc_overlay_next_listed(ov, a) < ov.param.len() || vc_held_next_listed(held, d) < held.hdr.len() || e < mp.ent_hdr.len() || r < rows {
         a = vc_overlay_next_listed(ov, a);
         d = vc_held_next_listed(held, d);
         let hi: i64 = { if i < ag.ps_param.len() { ag.ps_hdr[i] } else { none } };
@@ -67,7 +72,11 @@ fn vc_model_finish(cs: VcClaims, memory: VcHandleMemory, mp: VcMap) {
         let ha: i64 = { if a < ov.param.len() { ov.hdr[a] } else { none } };
         let hh: i64 = { if d < held.hdr.len() { held.hdr[d] } else { none } };
         let he: i64 = { if e < mp.ent_hdr.len() { mp.ent_hdr[e] } else { none } };
-        if he < hi && he < hv && he < ha && he < hh {
+        let hr: i64 = { if r < rows { ls.hdr[r] } else { none } };
+        if hr < hi && hr < hv && hr < ha && hr < hh && hr < he {
+            vc_model_append(cs, ls.names[r], ls.param[r], ls.path[r], ls.ty[r], vc_ty_sort(ls.ty[r]), ls.slot[r], hr);
+            r = r + 1;
+        } else if he < hi && he < hv && he < ha && he < hh {
             vc_model_append(cs, mp.ent_name[e], mp.ent_param[e], String::from(""), ITY_U64(), 64, mp.ent_slot[e], he);
             if mp.ent_slot[e] == VC_SLOT_VEC_LEN() {
                 cs.map_len.push(mp.ent_name[e]);

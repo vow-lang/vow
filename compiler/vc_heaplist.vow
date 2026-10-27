@@ -1,0 +1,124 @@
+module VcHeapList
+
+use vc_ops
+use vc_term
+use vc_smt
+use vc_int
+use vc_agg
+use vc_vec
+use vc_heap
+use vc_held
+
+// Fields a function reads through a handle, listed in a counterexample. The heap is an array per
+// slot that nothing but a field written through an element stores to (`vc_heap`), so the object a
+// parameter's field names has, in a model, the value `hf<k>[h]` for each slot `k` the function reads.
+// The model gives the address `h` (the field's own symbol, `o.0`) and not these values, so a
+// counterexample that reads `o.inner.id` through it lists only `o.0` and replay cannot rebuild
+// `Inner`. Each such read adds a `define-fun` of `hf<k>[h]`, taken at the array the function was
+// given (a field written through an element changes the array the walk reads, never this one), and a
+// model row `<handle>.<slot>` of the type the slot is read as, for each field symbol the handle
+// may be (a merge of two fields reads either).
+//
+// The listing is complete only when every read has a handle made of field symbols: a handle that is
+// the value of another read, an element of a `Vec` or a scalar names no row, and the function
+// then lists nothing (`VcHeapListed.bad`). Replay reads an object whose address is listed and has
+// rows as fully described, so a row missing for a slot the function read would rebuild it wrongly.
+
+// The parts the handle `h` is made of: the positions in the aggregate model of its field symbols
+// (`fields`) and the names of the arrays of the `Vec` parameters it is an element of (`elems`). False
+// when some part is anything else (`depth` bounds a chain of merges).
+fn vc_heaplist_leaves(ar: VcArena, ag: VcAgg, vv: VcVec, h: i64, depth: i64, fields: Vec<i64>, elems: Vec<String>) -> bool {
+    if depth <= 0 || h < 0 || (h as u64) >= ar.kinds.len() { return false; }
+    let kind: i64 = ar.kinds[h as u64];
+    if kind == VC_T_VAR() {
+        let named: i64 = ar.named[h as u64];
+        if named >= 0 && named != h { return vc_heaplist_leaves(ar, ag, vv, named, depth - 1, fields, elems); }
+        let ps: i64 = vc_held_field_symbol(ag, vc_term_text(ar, h));
+        if ps < 0 { return false; }
+        fields.push(ps);
+        return true;
+    }
+    if kind == VC_T_APP() && ar.aux[h as u64] == VC_OP_ITE() {
+        return vc_heaplist_leaves(ar, ag, vv, ar.b[h as u64], depth - 1, fields, elems) && vc_heaplist_leaves(ar, ag, vv, ar.c[h as u64], depth - 1, fields, elems);
+    }
+    if kind == VC_T_APP() && ar.aux[h as u64] == VC_OP_SELECT() {
+        let arr: i64 = ar.a[h as u64];
+        if ar.kinds[arr as u64] != VC_T_VAR() { return false; }
+        let name: String = vc_term_text(ar, arr);
+        let mut i: u64 = 0;
+        while i < vv.pv_arr.len() {
+            if vv.pv_arr[i] == name && vv.pv_wide[i] < 0 {
+                elems.push(name);
+                return true;
+            }
+            i = i + 1;
+        }
+    }
+    false
+}
+
+fn vc_heaplist_has(ls: VcHeapListed, handle: String, slot: i64, sort: i64) -> bool {
+    let mut i: u64 = 0;
+    while i < ls.handle.len() {
+        if ls.handle[i] == handle && ls.slot[i] == slot && vc_ty_sort(ls.ty[i]) == sort { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+fn vc_heaplist_has_elem(ls: VcHeapListed, arr: String, slot: i64, sort: i64) -> bool {
+    let mut i: u64 = 0;
+    while i < ls.earr.len() {
+        if ls.earr[i] == arr && ls.eslot[i] == slot && vc_ty_sort(ls.ety[i]) == sort { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// Notes the read of slot `slot` at type `ty` of the object at the handle `h`, whose array
+// `vc_heap_field` has just declared: a row per field symbol `h` is made of.
+fn vc_heaplist_note(hp: VcHeap, ag: VcAgg, vv: VcVec, ar: VcArena, hdr: SmtScript, h: i64, slot: i64, ty: i64) {
+    let ls: VcHeapListed = hp.listed;
+    if ls.bad { return; }
+    let leaves: Vec<i64> = Vec::new();
+    let elems: Vec<String> = Vec::new();
+    if !vc_heaplist_leaves(ar, ag, vv, h, 8, leaves, elems) {
+        ls.bad = true;
+        return;
+    }
+    let sort: i64 = vc_ty_sort(ty);
+    let arr_name: String = String::from("hf");
+    arr_name.push_str(i64_to_string(slot));
+    let mut i: u64 = 0;
+    while i < leaves.len() {
+        let ps: u64 = leaves[i] as u64;
+        let handle: String = ag.ps_name[ps];
+        if !vc_heaplist_has(ls, handle, slot, sort) {
+            let name: String = String::from("hread");
+            name.push_str(i64_to_string(ls.names.len() as i64));
+            let raw: i64 = vc_tm_app2(ar, VC_OP_SELECT(), vc_tm_var(ar, arr_name), vc_tm_var(ar, handle));
+            let path: String = String::from(ag.ps_path[ps]);
+            path.push_str(String::from("."));
+            path.push_str(i64_to_string(ag.ps_slot[ps]));
+            ls.names.push(name);
+            ls.param.push(ag.ps_param[ps]);
+            ls.path.push(path);
+            ls.slot.push(slot);
+            ls.ty.push(ty);
+            ls.hdr.push(hdr.kinds.len() as i64);
+            ls.handle.push(handle);
+            vc_script_define_fun(hdr, name, sort, vc_heap_slot_as(ar, raw, ty));
+        }
+        i = i + 1;
+    }
+    let mut e: u64 = 0;
+    while e < elems.len() {
+        if !vc_heaplist_has_elem(ls, elems[e], slot, sort) {
+            ls.earr.push(elems[e]);
+            ls.eslot.push(slot);
+            ls.ety.push(ty);
+            ls.ehdr.push(hdr.kinds.len() as i64);
+        }
+        e = e + 1;
+    }
+}

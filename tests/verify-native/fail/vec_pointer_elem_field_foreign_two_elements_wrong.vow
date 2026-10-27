@@ -1,7 +1,8 @@
-// TEST: replay-skipped an element of a `Vec<Person>` parameter that names no parameter is an object read through memory, and its fields are not listed (#1890)
 // TEST: counterexample-fn "bump"
 // TEST: counterexample-vow-id 1
 // TEST: counterexample-blame Callee
+// TEST: counterexample-value people[0].0 4
+// TEST: counterexample-value people[1].0 4
 // Two elements of the `Vec` the caller gave may be one object: the write through the first shows in
 // the second, so it is not still what it was.
 module VecPointerElemFieldForeignTwoElementsWrong

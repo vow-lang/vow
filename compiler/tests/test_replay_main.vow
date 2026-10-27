@@ -389,9 +389,9 @@ fn check_held_collections() -> i32 [io] {
     let no_addr: ReplayArg = agg(String::from("fhv"), 0, String::from("h.0.len=1,h.0[0]=1"));
     if index_of(no_addr.reason, String::from("lists its length but not its address")) < 0 { return 349; }
     let both: String = String::from("b.0=1,b.0.0=1,b.0.1.0=2,b.0.1.1=3,b.1.0=1,b.1.1=6,b.1.2=7");
-    if index_of(agg(String::from("fboth"), 0, both).reason, String::from("is read through memory")) < 0 { return 350; }
+    if agg(String::from("fboth"), 0, both).reason.len() != 0 { return 350; }
     let two: String = String::from("t.0=0,t.0.0=0,t.0.0.len=1,t.0.0[0]=7");
-    if index_of(agg(String::from("ftwo"), 0, two).reason, String::from("is read through memory")) < 0 { return 348; }
+    if agg(String::from("ftwo"), 0, two).reason.len() != 0 { return 348; }
     0
 }
 

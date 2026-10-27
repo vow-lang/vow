@@ -7,6 +7,7 @@ use vc_smt
 use vc_agg
 use vc_vec
 use vc_heap
+use vc_heaplist
 use vc_wide
 use vc_held
 use vc_overlay
@@ -86,6 +87,7 @@ fn vc_overlay_arm(ov: VcOverlay, ar: VcArena, acc: i64, i: u64, h: i64, val: i64
 
 fn vc_handle_field(m: VcHandleMemory, h: i64, slot: i64, ty: i64) -> i64 {
     let base: i64 = vc_heap_field(m.heap, m.ar, m.header, h, slot, ty);
+    vc_heaplist_note(m.heap, m.ag, m.vv, m.ar, m.header, h, slot, ty);
     let t: i64 = vc_overlay_field(m.overlay, m.ag, m.ar, m.header, m.assumed, h, slot, ty, base, m.heap.ranked);
     vc_handle_note_loaded(m, base, ty);
     t

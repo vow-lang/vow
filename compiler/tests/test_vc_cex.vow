@@ -8,6 +8,7 @@ use vc_smt
 use vc_term
 use vc_cex
 use vc_vecmodel
+use vc_heap
 use tests.builders
 
 fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
@@ -47,6 +48,7 @@ fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
         vec_handle: Vec::new(),
         map_len: Vec::new(),
         map_len_hdr: Vec::new(),
+        listed: vc_heap_listed_new(),
     };
     cs.kinds.push(kind);
     cs.frames.push(-1);
@@ -193,9 +195,8 @@ fn check_shift_and_arith_labels() -> i64 {
     0
 }
 
-// A claim of an inlined callee reports the callee's own vow id and names the
-// callee's function; neither carries an assertion label (the callee clause
-// text is resolved from the function's vows).
+// A claim of an inlined callee reports the callee's own vow id and function;
+// neither has an assertion label (clause text comes from its vows).
 fn check_callee_clauses() -> i64 {
     let f: IrFunction = fn_xy();
     let pre: VcClaims = claims_with(VC_CLAIM_CALLER_PRE(), 4, String::from(""));

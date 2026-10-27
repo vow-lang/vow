@@ -9,6 +9,7 @@ use vc_query
 use vc_exec
 use vc_wide
 use vc_fmt
+use vc_fieldrows
 
 // Contents of `Vec` and `String` parameters in a counterexample. The model of
 // such a parameter is an SMT array plus a 64-bit length (`vc_vec`); the array is
@@ -185,6 +186,7 @@ fn vc_ask_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, vecs: Vec
     let names: Vec<String> = vc_claim_model_names(cs, k);
     let widths: Vec<i64> = vc_claim_model_widths(cs, k);
     vc_append_vec_projection(cs, vecs, bound, s, names, widths);
+    vc_append_field_rows(cs, vc_field_rows(cs, k), bound, s, names, widths);
     vc_script_check_sat(s);
     vc_script_get_value(s, names);
     vc_solver_check_cached(cache, bin, vc_smt_render(ar, s), names, widths, budget_ms, scratch)
@@ -264,8 +266,9 @@ fn vc_enrich_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: V
 // behind them (`vc_enrich_vec_model`).
 fn vc_answer_regular_count(cs: VcClaims, k: u64, ans: VcSolverAnswer) -> u64 {
     let vecs: u64 = vc_cex_vecs(cs, k).len();
+    let units: u64 = vecs + vc_field_rows(cs, k).len();
     let n: u64 = vc_claim_model_count(cs, k);
-    if vecs > 0 && ans.values.len() > n && (ans.values.len() - n) % vecs == 0 { return n; }
+    if vecs > 0 && ans.values.len() > n && (ans.values.len() - n) % units == 0 { return n; }
     ans.values.len()
 }
 
@@ -274,7 +277,7 @@ fn vc_answer_elems_per_vec(cs: VcClaims, k: u64, ans: VcSolverAnswer) -> u64 {
     let n: u64 = vc_answer_regular_count(cs, k, ans);
     let vecs: u64 = vc_cex_vecs(cs, k).len();
     if vecs == 0 { return 0; }
-    (ans.values.len() - n) / vecs
+    (ans.values.len() - n) / (vecs + vc_field_rows(cs, k).len())
 }
 
 fn vc_source_param_name(f: IrFunction, k: i64) -> String {

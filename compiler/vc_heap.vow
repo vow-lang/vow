@@ -35,7 +35,34 @@ use vc_agg
 // An element is read as the 8-byte slot the runtime keeps, and a field is read at
 // its own type from the low bits of its slot, like a `Vec` element.
 
+// The fields the function read through a handle that the counterexample lists (`vc_heaplist`):
+// per row the symbol of the field's `define-fun`, the parameter and path of the handle it was read
+// at, the slot and type read, the header position of the definition and the handle's symbol. `bad`
+// is set when some read had a handle that no row can name: the listing would not be complete.
+struct VcHeapListed {
+    names: Vec<String>,
+    param: Vec<i64>,
+    path: Vec<String>,
+    slot: Vec<i64>,
+    ty: Vec<i64>,
+    hdr: Vec<i64>,
+    handle: Vec<String>,
+    earr: Vec<String>,
+    eslot: Vec<i64>,
+    ety: Vec<i64>,
+    ehdr: Vec<i64>,
+    bad: bool,
+}
+
+// Listed fields of a `Vec` parameter's elements read as handles are rows too: per row the array of
+// the `Vec`, the slot and type read, and the header position after which the claims list them
+// (`<param>[<i>].<slot>`, behind the elements in the enrichment of `vc_vecmodel`).
+fn vc_heap_listed_new() -> VcHeapListed {
+    VcHeapListed { names: Vec::new(), param: Vec::new(), path: Vec::new(), slot: Vec::new(), ty: Vec::new(), hdr: Vec::new(), handle: Vec::new(), earr: Vec::new(), eslot: Vec::new(), ety: Vec::new(), ehdr: Vec::new(), bad: false }
+}
+
 struct VcHeap {
+    listed: VcHeapListed,
     slots: Vec<i64>,
     fields: Vec<i64>,
     len_arr: i64,
@@ -48,6 +75,7 @@ struct VcHeap {
 
 fn vc_heap_new() -> VcHeap {
     VcHeap {
+        listed: vc_heap_listed_new(),
         slots: Vec::new(),
         fields: Vec::new(),
         len_arr: -1,
@@ -172,7 +200,11 @@ fn vc_heap_store(hp: VcHeap, ar: VcArena, hdr: SmtScript, h: i64, slot: i64, ter
 
 // A 64-bit slot read as a field of type `ty` (Bool or an integer of up to 64 bits).
 fn vc_heap_field(hp: VcHeap, ar: VcArena, hdr: SmtScript, h: i64, slot: i64, ty: i64) -> i64 {
-    let raw: i64 = vc_heap_slot(hp, ar, hdr, h, slot);
+    vc_heap_slot_as(ar, vc_heap_slot(hp, ar, hdr, h, slot), ty)
+}
+
+// A 64-bit slot value `raw` read as a field of type `ty`.
+fn vc_heap_slot_as(ar: VcArena, raw: i64, ty: i64) -> i64 {
     if ty == ITY_BOOL() {
         return vc_tm_app2(ar, VC_OP_DISTINCT(), raw, vc_tm_bv(ar, 64, 0, 0));
     }
