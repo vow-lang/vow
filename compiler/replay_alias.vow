@@ -1,0 +1,56 @@
+module ReplayAlias
+
+use ast
+
+// Type aliases for the replay harness. The model and the lowering see through `type Id = i64`, so
+// the counterexample may give one object to `a: Vec<Id>` and `b: Vec<i64>`, and the harness has to
+// compare and build parameter types with the aliases resolved. The harness source keeps the alias
+// declarations, so a resolved type text is valid wherever the alias is.
+
+fn REPLAY_ALIAS_DEPTH() -> i64 { 16 }
+
+// The target type of the alias named `name`, or -1 when no alias has that name. Calls no contracted
+// function, so the verifiers have no obligation in this loop.
+fn replay_alias_target(m: Module, name: String) -> i64 {
+    let a: AstArena = m.arena;
+    let items: Vec<i64> = m.items;
+    let mut i: u64 = 0u64;
+    while i < items.len() {
+        let it: i64 = items[i];
+        if it >= 0 && item_kind(it) == ITEM_TYPE_ALIAS() {
+            let aid: i64 = item_id(it);
+            if arena_str(a, alias_name_sid(a, aid)) == name { return alias_type_tid(a, aid); }
+        }
+        i = i + 1u64;
+    }
+    -1
+}
+
+// The type `tid` with every alias in it replaced by its target, or `tid` itself when it holds none
+// (a type node is added to the arena only when an argument changed). A chain deeper than
+// REPLAY_ALIAS_DEPTH, and a type form other than a name or a generic, stays as written, which
+// replay then declines as a type it does not rebuild.
+fn replay_resolve_type(m: Module, tid: i64, depth: i64) -> i64 {
+    let a: AstArena = m.arena;
+    if depth >= REPLAY_ALIAS_DEPTH() { return tid; }
+    let tag: i64 = type_tag(a, tid);
+    if tag == TY_NAMED() {
+        let target: i64 = replay_alias_target(m, arena_str(a, type_a(a, tid)));
+        if target < 0 { return tid; }
+        return replay_resolve_type(m, target, depth + 1);
+    }
+    if tag != TY_GENERIC() { return tid; }
+    let lid: i64 = type_b(a, tid);
+    let args: Vec<i64> = Vec::new();
+    let mut changed: bool = false;
+    let mut i: i64 = 0;
+    while i < list_len(a, lid) {
+        let arg: i64 = list_get(a, lid, i);
+        let r: i64 = replay_resolve_type(m, arg, depth + 1);
+        if r != arg { changed = true; }
+        args.push(r);
+        i = i + 1;
+    }
+    if !changed { return tid; }
+    arena_add_type(a, TY_GENERIC(), type_a(a, tid), arena_add_list(a, args), type_span(a, tid))
+}

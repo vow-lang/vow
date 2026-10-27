@@ -301,7 +301,7 @@ fn check_unsupported_args_are_skipped_with_a_reason() -> i32 [io] {
     if agg(String::from("fvs"), 0, String::from("v.len=1")).reason.len() == 0 { return 134; }
     if agg(String::from("fvf"), 0, String::from("v.len=1,v[0]=0")).reason.len() == 0 { return 148; }
     if agg(String::from("fref"), 0, String::from("")).reason.len() == 0 { return 135; }
-    if agg(String::from("fa"), 0, String::from("")).reason.len() == 0 { return 136; }
+    if agg(String::from("fa"), 0, String::from("")).reason.len() != 0 { return 136; }
     if agg(String::from("fu"), 0, String::from("")).reason.len() == 0 { return 137; }
     if agg(String::from("missing"), 0, String::from("")).reason.len() == 0 { return 138; }
     if agg(String::from("fp"), 5, String::from("")).reason.len() == 0 { return 139; }
