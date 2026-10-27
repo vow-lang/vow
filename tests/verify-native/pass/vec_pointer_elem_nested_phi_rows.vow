@@ -1,0 +1,27 @@
+// Two rows merged by an `if`: the write through the merged row reaches the object of the row that is
+// picked, and only that one.
+module VecPointerElemNestedPhiRows
+
+struct Person { age: i64 }
+
+fn pick(c: bool) -> i64 vow {
+  ensures: c && result == 700 + 4 || !c && result == 407
+} {
+  let grid: Vec<Vec<Person>> = Vec::new();
+  let r0: Vec<Person> = Vec::new();
+  let r1: Vec<Person> = Vec::new();
+  let a: Person = Person { age: 4 };
+  let b: Person = Person { age: 4 };
+  r0.push(a);
+  r1.push(b);
+  grid.push(r0);
+  grid.push(r1);
+  let row: Vec<Person> = if c { grid[0] } else { grid[1] };
+  row[0].age = 7;
+  a.age * 100 + b.age
+}
+
+fn main() -> i32 [io] {
+  print_i64(pick(true));
+  0
+}

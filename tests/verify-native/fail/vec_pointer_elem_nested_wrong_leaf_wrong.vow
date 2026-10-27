@@ -1,0 +1,26 @@
+// TEST: counterexample-fn "pick"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// Element 1 of the row is the second leaf, of length 1, not the first, of length 2.
+module VecPointerElemNestedWrongLeafWrong
+
+fn pick() -> u64 vow {
+  ensures: result == 2
+} {
+  let r0: Vec<Vec<i64>> = Vec::new();
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  a.push(1);
+  a.push(2);
+  b.push(9);
+  r0.push(a);
+  r0.push(b);
+  let top: Vec<Vec<Vec<i64>>> = Vec::new();
+  top.push(r0);
+  top[0][1].len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(pick());
+  0
+}

@@ -3,6 +3,7 @@ module VcElemGate
 use ir
 use ir_dominance
 use vc_ops
+use vc_strops
 use vc_int
 use vc_loops
 use vc_heap
@@ -46,6 +47,112 @@ fn vc_elem_get_recv(f: IrFunction, n_ids: u64) -> Vec<i64> {
         bi = bi + 1;
     }
     recv
+}
+
+// 1 for every `get` result whose receiver is an object the function built or reached from one (an
+// element of an element, `grid[i][j]`, #1663), and every Phi all of whose edges are: `held` marks the
+// receivers of a pointer store, which are `Vec`s the function created, so the elements of such a
+// receiver are exactly the words the function stored, and each stored object is itself one of those
+// (`vc_ptr_store_resolvable` checks every store). The elements of a result are then stored words too,
+// whatever the depth. A Phi with an edge that is none of these (an element of a `Vec` given to the
+// function, a pointer loaded from memory) is not derived. All zero when a `split` result is stored: its
+// pieces are free addresses, not words the function stored.
+fn vc_elem_derived(f: IrFunction, held: Vec<i64>, tys: Vec<i64>) -> Vec<i64> {
+    let n_ids: u64 = tys.len();
+    let d: Vec<i64> = dom_fill(n_ids, 0);
+    if vc_heap_count_marked(held) == 0 || vc_elem_stores_split(f, n_ids) { return d; }
+    let edges: Vec<i64> = dom_fill(n_ids, 0);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_UPSILON() && inst.args.len() == 1 && inst.dv >= 0 && (inst.dv as u64) < n_ids {
+                edges[inst.dv as u64] = edges[inst.dv as u64] + 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    let mut changed: bool = true;
+    while changed {
+        changed = vc_elem_derive_round(f, held, d, edges);
+    }
+    d
+}
+
+// One round of `vc_elem_derived`: marks the `get`s whose receiver is held or derived, then the Phis
+// all of whose `edges` are held or derived. True when something was marked.
+fn vc_elem_derive_round(f: IrFunction, held: Vec<i64>, d: Vec<i64>, edges: Vec<i64>) -> bool {
+    let n_ids: u64 = d.len();
+    let good: Vec<i64> = dom_fill(n_ids, 0);
+    let mut changed: bool = false;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_UPSILON() && inst.args.len() == 1 && inst.dv >= 0 && (inst.dv as u64) < n_ids
+                && vc_elem_valid(held, d, inst.args[0]) {
+                good[inst.dv as u64] = good[inst.dv as u64] + 1;
+            }
+            if inst.op == IOP_CALL() && inst.id >= 0 && (inst.id as u64) < n_ids && inst.args.len() == 2
+                && inst.ty == ITY_I64() && vc_inst_vec_kind(inst) == VC_VEC_GET()
+                && d[inst.id as u64] == 0 && vc_elem_valid(held, d, inst.args[0]) {
+                d[inst.id as u64] = 1;
+                changed = true;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    let mut v: u64 = 0;
+    while v < n_ids {
+        if d[v] == 0 && edges[v] > 0 && good[v] == edges[v] {
+            d[v] = 1;
+            changed = true;
+        }
+        v = v + 1;
+    }
+    changed
+}
+
+// True when a `push` or `set` stores a `split` result (or a Phi that merges one).
+fn vc_elem_stores_split(f: IrFunction, n_ids: u64) -> bool {
+    let split: Vec<i64> = dom_fill(n_ids, 0);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_CALL() && inst.id >= 0 && (inst.id as u64) < n_ids && vc_inst_vec_kind(inst) == VC_STR_SPLIT() {
+                split[inst.id as u64] = 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    vc_heap_close_over_phis(f, split);
+    bi = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let stored: i64 = vc_inst_stored_operand(blk.insts[ii]);
+            if stored >= 0 && (stored as u64) < n_ids && split[stored as u64] == 1 { return true; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    false
+}
+
+// True when `id` is a receiver of a pointer store or derived from one (`vc_elem_derived`).
+fn vc_elem_valid(held: Vec<i64>, d: Vec<i64>, id: i64) -> bool {
+    id >= 0 && (id as u64) < d.len() && (held[id as u64] == 1 || d[id as u64] == 1)
 }
 
 // True when a pointer read out of a field (`FieldGet[ptr]`, the payload of an enum, `Option` or
@@ -117,6 +224,7 @@ fn vc_elem_write_detail(f: IrFunction, tys: Vec<i64>, held: Vec<i64>, stores: bo
     let n_ids: u64 = tys.len();
     let recv: Vec<i64> = vc_elem_get_recv(f, n_ids);
     let from: Vec<i64> = vc_heap_get_params(f);
+    let derived: Vec<i64> = vc_elem_derived(f, held, tys);
     let succ: Vec<i64> = dom_successors(f, dom_block_id_table(f));
     let li: VcLoopInfo = vc_loop_analysis(f.blocks.len(), succ, dom_rpo_numbers(f.blocks.len(), succ));
     let mut bi: u64 = 0;
@@ -134,7 +242,7 @@ fn vc_elem_write_detail(f: IrFunction, tys: Vec<i64>, held: Vec<i64>, stores: bo
                 if inst.args[1] < 0 || (inst.args[1] as u64) >= n_ids || !vc_elem_write_ok(inst, ITY_I64(), tys[inst.args[1] as u64]) {
                     return String::from("a field of this type is written through a pointer element");
                 }
-                if held[r as u64] != 1 {
+                if held[r as u64] != 1 && derived[r as u64] != 1 {
                     let why: String = vc_elem_foreign_ok(f, { if (inst.args[0] as u64) < from.len() { from[inst.args[0] as u64] } else { -1 } }, tys[inst.args[1] as u64], stores, vc_chain_len(li, bi) > 0);
                     if why.len() > 0 { return why; }
                 }
