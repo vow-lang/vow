@@ -204,7 +204,8 @@ fn check_mixed_vecs() -> i64 {
 
 // A write through an element of an element: ids 2: the inner `Vec`, which holds the allocation 3;
 // 20: the outer `Vec`, which holds the inner one; 23: `outer[0]`, 24: `outer[0][0]`, written. `inner`
-// is the instruction that builds the inner `Vec`; `via` is the receiver of the second `get`.
+// is the instruction that builds the inner `Vec`; `outer_get` picks the receiver of the first `get`:
+// the outer `Vec` (20), or the `Vec` parameter (30).
 fn nested(inner: IrInst, outer_get: bool) -> IrFunction {
     let params: Vec<i64> = Vec::new();
     params.push(ITY_PTR());
@@ -255,6 +256,58 @@ fn check_nested() -> i64 {
     0
 }
 
+// A Phi merging two elements: ids 23 and 25 are `get`s of the outer `Vec` (20), 26 of the `Vec`
+// parameter (30) when `param_edge`; 40 is the Phi, 41 its `get`, written through. Block 0 branches to
+// 1 and 2, which feed the Phi in block 3.
+fn nested_phi(param_edge: bool) -> IrFunction {
+    let f: IrFunction = nested(mk_inst_call_extern(2, ITY_PTR(), two(0, 1), String::from("__vow_vec_new")), true);
+    let head: IrBlock = f.blocks[0];
+    let insts: Vec<IrInst> = head.insts;
+    insts.pop();
+    insts.pop();
+    insts.pop();
+    insts.push(mk_inst_const_bool(50, 1));
+    insts.push(mk_inst_branch(51, 50, 1, 2));
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_upsilon(52, 23, 40));
+    a.push(mk_inst_jump(53, 3));
+    let b: Vec<IrInst> = Vec::new();
+    if param_edge {
+        b.push(mk_inst_call_extern(26, ITY_I64(), two(30, 22), String::from("__vow_vec_get_val")));
+        b.push(mk_inst_upsilon(54, 26, 40));
+    } else {
+        b.push(mk_inst_call_extern(25, ITY_I64(), two(20, 22), String::from("__vow_vec_get_val")));
+        b.push(mk_inst_upsilon(54, 25, 40));
+    }
+    b.push(mk_inst_jump(55, 3));
+    let c: Vec<IrInst> = Vec::new();
+    c.push(mk_inst_phi(40, ITY_I64()));
+    c.push(mk_inst_call_extern(41, ITY_I64(), two(40, 22), String::from("__vow_vec_get_val")));
+    c.push(mk_inst_const_i64(9, 5));
+    c.push(mk_inst_field_set(10, 41, 0, 9));
+    c.push(mk_inst(11, IOP_RETURN(), ITY_UNIT(), Vec::new()));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    blocks.push(mk_block(1, a));
+    blocks.push(mk_block(2, b));
+    blocks.push(mk_block(3, c));
+    let g: IrFunction = mk_function(1, String::from("f"), f.params, ITY_UNIT(), blocks);
+    g.param_keys.push(String::from("Vec<Vec<Person>>"));
+    g
+}
+
+fn check_phi() -> i64 {
+    let ok: IrFunction = nested_phi(false);
+    let tys: Vec<i64> = vc_ty_table(ok);
+    let d: Vec<i64> = vc_elem_derived(ok, vc_ptr_store_held(ok, tys), tys);
+    if d[40] != 1 || d[41] != 1 { return 1; }
+    let bad: IrFunction = nested_phi(true);
+    let btys: Vec<i64> = vc_ty_table(bad);
+    let bd: Vec<i64> = vc_elem_derived(bad, vc_ptr_store_held(bad, btys), btys);
+    if bd[40] != 0 || bd[41] != 0 { return 2; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_admitted();
     if r == 0 { r = check_refused() + 10; if r == 10 { r = 0; } }
@@ -263,5 +316,6 @@ fn main() -> i32 {
     if r == 0 { r = check_foreign_refused() + 40; if r == 40 { r = 0; } }
     if r == 0 { r = check_mixed_vecs() + 50; if r == 50 { r = 0; } }
     if r == 0 { r = check_nested() + 60; if r == 60 { r = 0; } }
+    if r == 0 { r = check_phi() + 70; if r == 70 { r = 0; } }
     i64_to_i32_wrap(r)
 }

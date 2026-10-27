@@ -1,4 +1,4 @@
-// A field written through an element of an element: `grid[1][0].age = 7` writes the object that was
+// A field written through an element of an element (`row = grid[1]`, then `row[1].age = 7`) writes the object that was
 // pushed, so the variable that was pushed, another slot holding it and a read through the nested
 // elements see it, and an untouched sibling does not.
 module VecPointerElemNestedFieldWrite

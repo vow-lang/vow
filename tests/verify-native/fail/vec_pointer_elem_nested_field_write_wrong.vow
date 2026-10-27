@@ -1,7 +1,7 @@
 // TEST: counterexample-fn "birthday"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
-// The write through `grid[1][1]` reaches the object the variable `a` holds, so `a.age` is 7, not 4.
+// The write through `row[0]`, with `row = grid[0]`, reaches the object the variable `a` holds, so `a.age` is 7, not 4.
 module VecPointerElemNestedFieldWriteWrong
 
 struct Person { age: i64 }
