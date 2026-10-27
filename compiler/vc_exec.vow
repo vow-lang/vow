@@ -46,9 +46,9 @@ use ir_dominance
 // that follow it. A claim is only asked on the paths that reach it: its query
 // asserts the block's path condition next to the negated goal, and an
 // assumption made in a block is the implication `path condition => assumption`.
-// SMT division and shifts are total, so the aborts the language specifies are
-// separate claims, and a later claim always assumes the guards of earlier ones
-// on its path: an aborting run never reaches it. Two kinds of abort:
+// SMT division and shifts are total, so the language's aborts are separate
+// claims, and a later claim assumes the guards of earlier ones on its path: an
+// aborting run never reaches it. Two kinds of abort:
 //
 //   hard  wrapping `/`, `%` (zero divisor, signed MIN / -1) and a shift count
 //         outside `0 <= count < width`: a counterexample fails the function.
@@ -64,7 +64,8 @@ use ir_dominance
 // A loop reaches the executor already unrolled (`vc_unroll`): a back edge past
 // the bound ends in a sink block, and a path that reaches it is the unwinding
 // claim "no run needs more iterations than the bound". It is a claim only and
-// assumes nothing afterwards: a counterexample means the bound was too small. A loop `invariant` is checked like an
+// assumes nothing afterwards: a counterexample means the bound was too small,
+// not a bug. A loop `invariant` is checked like an
 // `ensures` at every iteration copy of its header, and assumed nowhere in an
 // unrolled function. In the inductive attempt (`vc_induct`) the loop is cut
 // instead: a header Phi is a havoc marker, a fresh unconstrained constant, and

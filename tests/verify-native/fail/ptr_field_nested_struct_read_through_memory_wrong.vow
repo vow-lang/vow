@@ -3,7 +3,7 @@
 // TEST: counterexample-blame Callee
 // `o.inner.id` is read through the address `o.0`: the counterexample lists the address and the slot
 // the function read (`o.0.0`), and replay rebuilds `Inner` from it.
-module PtrFieldNestedStructReadThroughMemorySkipped
+module PtrFieldNestedStructReadThroughMemoryWrong
 
 struct Inner { id: i64, tag: i64 }
 struct Outer { inner: Inner, n: i64 }

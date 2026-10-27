@@ -57,19 +57,27 @@ fn vc_heaplist_leaves(ar: VcArena, ag: VcAgg, vv: VcVec, h: i64, depth: i64, fie
     false
 }
 
-fn vc_heaplist_has(ls: VcHeapListed, handle: String, slot: i64, sort: i64) -> bool {
+// True when the row of `handle` and `slot` at `ty`'s sort exists. The same sort at another type is
+// a slot read as two types of one width, which one name cannot show: the listing is then abandoned.
+fn vc_heaplist_has(ls: VcHeapListed, handle: String, slot: i64, ty: i64) -> bool {
     let mut i: u64 = 0;
     while i < ls.handle.len() {
-        if ls.handle[i] == handle && ls.slot[i] == slot && vc_ty_sort(ls.ty[i]) == sort { return true; }
+        if ls.handle[i] == handle && ls.slot[i] == slot && vc_ty_sort(ls.ty[i]) == vc_ty_sort(ty) {
+            if ls.ty[i] != ty { ls.bad = true; }
+            return true;
+        }
         i = i + 1;
     }
     false
 }
 
-fn vc_heaplist_has_elem(ls: VcHeapListed, arr: String, slot: i64, sort: i64) -> bool {
+fn vc_heaplist_has_elem(ls: VcHeapListed, arr: String, slot: i64, ty: i64) -> bool {
     let mut i: u64 = 0;
     while i < ls.earr.len() {
-        if ls.earr[i] == arr && ls.eslot[i] == slot && vc_ty_sort(ls.ety[i]) == sort { return true; }
+        if ls.earr[i] == arr && ls.eslot[i] == slot && vc_ty_sort(ls.ety[i]) == vc_ty_sort(ty) {
+            if ls.ety[i] != ty { ls.bad = true; }
+            return true;
+        }
         i = i + 1;
     }
     false
@@ -93,7 +101,7 @@ fn vc_heaplist_note(hp: VcHeap, ag: VcAgg, vv: VcVec, ar: VcArena, hdr: SmtScrip
     while i < leaves.len() {
         let ps: u64 = leaves[i] as u64;
         let handle: String = ag.ps_name[ps];
-        if !vc_heaplist_has(ls, handle, slot, sort) {
+        if !vc_heaplist_has(ls, handle, slot, ty) {
             let name: String = String::from("hread");
             name.push_str(i64_to_string(ls.names.len() as i64));
             let raw: i64 = vc_tm_app2(ar, VC_OP_SELECT(), vc_tm_var(ar, arr_name), vc_tm_var(ar, handle));
@@ -113,7 +121,7 @@ fn vc_heaplist_note(hp: VcHeap, ag: VcAgg, vv: VcVec, ar: VcArena, hdr: SmtScrip
     }
     let mut e: u64 = 0;
     while e < elems.len() {
-        if !vc_heaplist_has_elem(ls, elems[e], slot, sort) {
+        if !vc_heaplist_has_elem(ls, elems[e], slot, ty) {
             ls.earr.push(elems[e]);
             ls.eslot.push(slot);
             ls.ety.push(ty);

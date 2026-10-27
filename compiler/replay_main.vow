@@ -115,12 +115,7 @@ fn replay_is_int_literal(s: String) -> bool {
 }
 
 fn replay_cex_value(names: Vec<String>, vals: Vec<String>, key: String) -> String {
-    let mut i: u64 = 0u64;
-    while i < names.len() && i < vals.len() {
-        if names[i] == key { return vals[i]; }
-        i = i + 1u64;
-    }
-    String::from("")
+    replay_listed_value(names, vals, key)
 }
 
 // Id of item `it` when it is of `kind`, -1 otherwise (an id is never negative).

@@ -72,6 +72,7 @@ fn vc_held_listed_row(hp: VcHeap, ar: VcArena, h0: i64) -> i64 {
     let arr_name: String = vc_term_text(ar, arr);
     let at_name: String = vc_term_text(ar, at);
     let ls: VcHeapListed = hp.listed;
+    if ls.bad { return -1; }
     let mut i: u64 = 0;
     while i < ls.handle.len() {
         let want: String = String::from("hf");
@@ -126,6 +127,21 @@ fn vc_held_mark_wide(hd: VcHeld, ar: VcArena, h: i64, ty: i64) {
     let mut i: u64 = 0;
     while i < hd.handle.len() {
         if hd.handle[i] == name { hd.wide[i] = ty; }
+        i = i + 1;
+    }
+}
+
+// A collection noted under a listed row (`hread<N>`) is not listed when the listing is abandoned:
+// its parent object would not be.
+fn vc_held_drop_rows(hd: VcHeld, ls: VcHeapListed) {
+    if !ls.bad { return; }
+    let mut i: u64 = 0;
+    while i < hd.handle.len() {
+        let mut r: u64 = 0;
+        while r < ls.names.len() {
+            if ls.names[r] == hd.handle[i] { hd.cls[i] = VC_HELD_BOTH(); }
+            r = r + 1;
+        }
         i = i + 1;
     }
 }
