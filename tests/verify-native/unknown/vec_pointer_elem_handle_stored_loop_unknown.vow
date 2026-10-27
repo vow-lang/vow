@@ -1,0 +1,23 @@
+// A symbolic loop that stores the handles of a given `Vec`: the claim holds, but only the bounded
+// rounds decide it, so the verdict is `unknown`, never a proof.
+module VecPointerElemHandleStoredLoopUnknown
+
+fn loop_push(src: Vec<Vec<i64>>) -> u64 vow {
+  ensures: result == 0
+} {
+  let dst: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  dst.push(w);
+  let mut i: u64 = 0;
+  while i < src.len() {
+    dst.push(src[i]);
+    i = i + 1;
+  }
+  dst[0].len()
+}
+
+fn main() -> i32 [io] {
+  let src: Vec<Vec<i64>> = Vec::new();
+  print_u64(loop_push(src));
+  0
+}

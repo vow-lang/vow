@@ -18,7 +18,8 @@ use vc_objects
 // A handle that is the result of a `get` of a `Vec` a pointer is stored into (`held`), in a function
 // that reads an element back (`VcOverlay.exact`, `vc_ptr_store_resolvable`), is one of the addresses
 // the function stored: such a `Vec` is one it built and holds nothing else, and an element read of
-// any other `Vec` is never used as an object. An index out of bounds is a claim and assumed not to
+// any other `Vec` is never used as an object. (Not when a `get` of a `Vec` parameter is stored too,
+// `vc_ptrhandle`: `exact` is off.) An index out of bounds is a claim and assumed not to
 // happen afterwards, so a read after it is of a stored slot. The `ite` chain of such a handle ends in
 // its first entry instead of `array[h]`: the solver is not asked to rule out an address that is
 // no entry's, which costs a case split per stored object and per read, cubic in the object count.
@@ -39,7 +40,12 @@ use vc_objects
 // Records `t`, the term of the `get` of the receiver `recv`, as an element of a `Vec` the function stored
 // pointers into. Terms are numbered as they are made, so a new one is above every one recorded and the
 // list stays sorted; an older term is not recorded, and a chain over it keeps the array.
-fn vc_overlay_note_elem(ov: VcOverlay, t: i64, recv: i64) {
+fn vc_overlay_note_elem(m: VcHandleMemory, t: i64, recv: i64) {
+    let ov: VcOverlay = m.overlay;
+    if recv >= 0 && (recv as u64) < ov.tagged.len() && ov.tagged[recv as u64] == 1 {
+        vc_overlay_note_loaded(ov, m.ar, m.assumed, t);
+        return;
+    }
     if !ov.exact || !vc_ptr_store_is_held(ov.held, recv) { return; }
     let n: u64 = ov.elem_h.len();
     if n == 0 || ov.elem_h[n - 1] < t { ov.elem_h.push(t); }

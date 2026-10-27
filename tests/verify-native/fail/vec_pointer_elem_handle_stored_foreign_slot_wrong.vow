@@ -1,0 +1,29 @@
+// TEST: replay-skipped a Vec<Vec<i64>> parameter is not rebuilt by replay, so each counterexample was checked by running main in debug mode (#1890)
+// TEST: counterexample-fn "mixed"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// The second slot holds a handle the caller gave, not the empty `Vec` that was pushed first: the
+// claim that it is empty is false whenever the given `Vec` has an element. A chain that assumed
+// every slot holds the address of a stored object would prove it.
+module VecPointerElemHandleStoredForeignSlotWrong
+
+fn mixed(src: Vec<Vec<i64>>) -> u64 vow {
+  requires: src.len() > 0
+  ensures: result == 0
+} {
+  let dst: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  dst.push(w);
+  dst.push(src[0]);
+  let e: Vec<i64> = dst[1];
+  e.len()
+}
+
+fn main() -> i32 [io] {
+  let src: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  w.push(1);
+  src.push(w);
+  print_u64(mixed(src));
+  0
+}

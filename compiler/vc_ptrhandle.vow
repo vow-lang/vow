@@ -1,0 +1,112 @@
+module VcPtrHandle
+
+use ir
+use ir_dominance
+use vc_ops
+use vc_heap
+use vc_objects
+use vc_elemgate
+
+// A handle stored into a `Vec` that also holds objects (`mixed.push(src[0])`, #1663). The IR types a
+// pointer an element read returned `i64`, so storing it is no pointer store (`vc_ptr_store_value`): a
+// `Vec` that receives only handles is read like any `Vec` of words. A `Vec` that also receives an
+// object (`held`) then holds two kinds of word, the address of an object the function stored and a
+// word of the memory it was given. The word is stored as it is (`vc_walk_slot_word`), a read of the
+// slot returns the same term, and a read through it is the `ite` chain over the entries ending in
+// the heap array, exact for both kinds.
+//
+// It is admitted only when the model can tell the kinds apart (`vc_ptr_handle_status`): every handle
+// stored is the `get` of a `Vec` parameter (`vc_ptr_handle_tagged`), whose elements are the memory
+// the function was given, so each such `get` is noted as read from it and assumed different from the
+// address of every object the function built (`vc_overlay_note_loaded`); and no value that may be
+// an address (a `get` or a field read, closed over Phis) is stored into a `Vec` that is not held, so
+// no parameter's elements can be one. Without that a counterexample could pick a handle equal to the
+// address of a built object, which no run has. What follows from a `Vec` that holds a handle: its
+// chain keeps the array arm (`VcOverlay.exact` off), no element of its elements is a stored word
+// (`vc_elem_derived`) and a field written through its elements stays refused.
+
+fn VC_PH_NONE() -> i64 { 0 }
+fn VC_PH_GIVEN() -> i64 { 1 }
+fn VC_PH_OTHER() -> i64 { 2 }
+
+// 1 for the result of `GetArg` of a `Vec` parameter.
+fn vc_ptr_handle_tagged(f: IrFunction, tys: Vec<i64>) -> Vec<i64> {
+    let tagged: Vec<i64> = dom_fill(tys.len(), 0);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_GET_ARG() && inst.ty == ITY_PTR() && inst.id >= 0 && (inst.id as u64) < tagged.len()
+                && vc_overlay_param_class(f, inst.dv) == VC_OV_VEC() {
+                tagged[inst.id as u64] = 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    tagged
+}
+
+// 1 for an `i64` that may be the address of an object: a call result (a `get`) or a field read, and
+// every Phi that merges one.
+fn vc_ptr_handle_maybe_address(f: IrFunction, tys: Vec<i64>) -> Vec<i64> {
+    let may: Vec<i64> = dom_fill(tys.len(), 0);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if (inst.op == IOP_CALL() || inst.op == IOP_FIELD_GET()) && inst.ty == ITY_I64() && inst.id >= 0 && (inst.id as u64) < may.len() {
+                may[inst.id as u64] = 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    vc_heap_close_over_phis(f, may);
+    may
+}
+
+// `VC_PH_NONE` when no `get` result is stored into a receiver of a pointer store (`held`);
+// `VC_PH_GIVEN` when some is and the model tells it from an address (see above); else `VC_PH_OTHER`,
+// which `vc_ptr_store_resolvable` refuses.
+fn vc_ptr_handle_status(f: IrFunction, held: Vec<i64>, tys: Vec<i64>) -> i64 {
+    let n_ids: u64 = tys.len();
+    let recv: Vec<i64> = vc_elem_get_recv(f, n_ids);
+    let tagged: Vec<i64> = vc_ptr_handle_tagged(f, tys);
+    let may: Vec<i64> = vc_ptr_handle_maybe_address(f, tys);
+    let mut stored_handle: bool = false;
+    let mut other: bool = false;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            let s: i64 = vc_inst_stored_operand(inst);
+            let into_held: bool = inst.op == IOP_CALL() && inst.args.len() > 0 && inst.args[0] >= 0 && (inst.args[0] as u64) < held.len()
+                && held[inst.args[0] as u64] == 1;
+            if into_held && s >= 0 && (s as u64) < n_ids && recv[s as u64] >= 0 {
+                stored_handle = true;
+                if (recv[s as u64] as u64) >= n_ids || tagged[recv[s as u64] as u64] != 1 { other = true; }
+            } else if !into_held && inst.op == IOP_CALL() && s >= 0 && (s as u64) < n_ids && may[s as u64] == 1 {
+                other = true;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    if !stored_handle { return VC_PH_NONE(); }
+    if other { return VC_PH_OTHER(); }
+    VC_PH_GIVEN()
+}
+
+// The `Vec` parameters whose `get` results are noted as given memory (`vc_ptr_handle_tagged`) when a
+// handle is stored into a held `Vec` and the model tells it from an address; else empty.
+fn vc_ptr_handle_tags(f: IrFunction, held: Vec<i64>, tys: Vec<i64>) -> Vec<i64> {
+    if vc_ptr_handle_status(f, held, tys) != VC_PH_GIVEN() { return Vec::new(); }
+    vc_ptr_handle_tagged(f, tys)
+}

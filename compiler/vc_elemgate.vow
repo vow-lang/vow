@@ -55,12 +55,13 @@ fn vc_elem_get_recv(f: IrFunction, n_ids: u64) -> Vec<i64> {
 // receiver are exactly the words the function stored, and each stored object is itself one of those
 // (`vc_ptr_store_resolvable` checks every store). The elements of a result are then stored words too,
 // whatever the depth. A Phi with an edge that is none of these (an element of a `Vec` given to the
-// function, a pointer loaded from memory) is not derived. All zero when a `split` result is stored: its
-// pieces are free addresses, not words the function stored.
-fn vc_elem_derived(f: IrFunction, held: Vec<i64>, tys: Vec<i64>) -> Vec<i64> {
+// function, a pointer loaded from memory) is not derived. All zero when a `split` result is stored (its
+// pieces are free addresses, not words the function stored) and when a handle is stored into a held
+// `Vec` (`handles`, `vc_ptrhandle`): its slots then hold words of the given memory too.
+fn vc_elem_derived(f: IrFunction, held: Vec<i64>, tys: Vec<i64>, handles: bool) -> Vec<i64> {
     let n_ids: u64 = tys.len();
     let d: Vec<i64> = dom_fill(n_ids, 0);
-    if vc_heap_count_marked(held) == 0 || vc_elem_stores_split(f, n_ids) { return d; }
+    if vc_heap_count_marked(held) == 0 || handles || vc_elem_stores_split(f, n_ids) { return d; }
     let edges: Vec<i64> = dom_fill(n_ids, 0);
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
@@ -220,11 +221,11 @@ fn vc_elem_foreign_ok(f: IrFunction, k: i64, t1: i64, stores: bool, in_loop: boo
 // reaches both because the alias analysis and the heap overlay count a write through an element as
 // a write of a parameter (`vc_agg_alias_marked`, `vc_heap_overlay_needed`). The caller checks that
 // the address model reads the function exactly.
-fn vc_elem_write_detail(f: IrFunction, tys: Vec<i64>, held: Vec<i64>, stores: bool) -> String {
+fn vc_elem_write_detail(f: IrFunction, tys: Vec<i64>, held: Vec<i64>, stores: bool, handles: bool) -> String {
     let n_ids: u64 = tys.len();
     let recv: Vec<i64> = vc_elem_get_recv(f, n_ids);
     let from: Vec<i64> = vc_heap_get_params(f);
-    let derived: Vec<i64> = vc_elem_derived(f, held, tys);
+    let derived: Vec<i64> = vc_elem_derived(f, held, tys, handles);
     let succ: Vec<i64> = dom_successors(f, dom_block_id_table(f));
     let li: VcLoopInfo = vc_loop_analysis(f.blocks.len(), succ, dom_rpo_numbers(f.blocks.len(), succ));
     let mut bi: u64 = 0;
@@ -241,6 +242,9 @@ fn vc_elem_write_detail(f: IrFunction, tys: Vec<i64>, held: Vec<i64>, stores: bo
                 }
                 if inst.args[1] < 0 || (inst.args[1] as u64) >= n_ids || !vc_elem_write_ok(inst, ITY_I64(), tys[inst.args[1] as u64]) {
                     return String::from("a field of this type is written through a pointer element");
+                }
+                if held[r as u64] == 1 && handles {
+                    return String::from("a field is written through an element of a Vec that holds a handle");
                 }
                 if held[r as u64] != 1 && derived[r as u64] != 1 {
                     let why: String = vc_elem_foreign_ok(f, { if (inst.args[0] as u64) < from.len() { from[inst.args[0] as u64] } else { -1 } }, tys[inst.args[1] as u64], stores, vc_chain_len(li, bi) > 0);

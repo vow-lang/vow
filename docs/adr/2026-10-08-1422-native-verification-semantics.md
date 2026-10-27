@@ -1303,8 +1303,7 @@ object, the mechanism of #1756, for the functions that do read an element back.
   parameters that are one value: ADR-2026-10-19-1700.
 - **What stays `Skipped`** (`a pointer element is read back`, as before): the elements of a `Vec` parameter
   that also receives a pointer, an element of an element of a `Vec` the function did not build used as an object
-  (`outer[i][j].len()` of built `Vec`s is modelled, ADR-2026-10-27-0300), a `Vec` or `String` parameter stored (#1823), a handle stored in a
-  `Vec` of pointers, a pointer stored that is none of the kinds above, and a stored object with no class.
+  (`outer[i][j].len()` of built `Vec`s is modelled, ADR-2026-10-27-0300), a `Vec` or `String` parameter stored (#1823), a pointer stored that is none of the kinds above, and a stored object with no class.
   Copies (`vec_sort`, `pin_to_root`) of a `Vec` that holds a pointer stay `Skipped` (`a Vec of pointer
   elements is copied`).
 - **Alternatives rejected.** Noting the result of `get` as a loaded term (tag 0) is unsound once a handle

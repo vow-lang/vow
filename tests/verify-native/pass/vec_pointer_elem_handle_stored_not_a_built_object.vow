@@ -1,0 +1,26 @@
+// A handle the caller gave is never the address of an object the function built, so growing the
+// built object leaves the length read through the stored handle as it was.
+module VecPointerElemHandleStoredNotABuiltObject
+
+fn stable(src: Vec<Vec<i64>>) -> u64 vow {
+  requires: src.len() > 0
+  ensures: result == 0
+} {
+  let dst: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  dst.push(w);
+  dst.push(src[0]);
+  let a: Vec<i64> = dst[1];
+  let before: u64 = a.len();
+  w.push(1);
+  let after: u64 = a.len();
+  after - before
+}
+
+fn main() -> i32 [io] {
+  let src: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  src.push(w);
+  print_u64(stable(src));
+  0
+}

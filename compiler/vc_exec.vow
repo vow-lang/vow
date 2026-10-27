@@ -654,7 +654,7 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
         if kind == VC_VEC_GET() {
             let t: i64 = vc_tm_app2(ar, VC_OP_SELECT(), vc_vec_cur_arr(vv, s, b), idx);
             vc_define(w, inst, t);
-            vc_overlay_note_elem(w.memory.overlay, t, inst.args[0]);
+            vc_overlay_note_elem(w.memory, t, inst.args[0]);
             w.elem_obj[inst.id as u64] = w.obj_of[inst.args[0] as u64];
         } else {
             vc_mark_stored_float(w, w.obj_of[inst.args[0] as u64], inst.args[2]);

@@ -1,0 +1,23 @@
+// TEST: skip-reason unsupported-opcode
+// A field written through an element of a `Vec` that holds a handle: the slot may name memory the
+// caller gave, which the write to the stored objects would not reach, so the function stays `Skipped`.
+module VecPointerElemHandleStoredFieldWriteSkipped
+
+struct Person { age: i64 }
+
+fn birthday(src: Vec<Person>, mine: Person) -> i64 vow {
+  requires: src.len() > 0
+} {
+  let dst: Vec<Person> = Vec::new();
+  dst.push(mine);
+  dst.push(src[0]);
+  dst[0].age = 5;
+  mine.age
+}
+
+fn main() -> i32 [io] {
+  let src: Vec<Person> = Vec::new();
+  src.push(Person { age: 1 });
+  print_i64(birthday(src, Person { age: 2 }));
+  0
+}

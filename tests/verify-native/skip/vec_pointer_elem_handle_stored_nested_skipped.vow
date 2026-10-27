@@ -1,0 +1,29 @@
+// TEST: skip-reason unsupported-opcode
+// An element of the slot that holds a handle is a word of the memory the caller gave, not one the
+// function stored, so it is no stored object (ADR-2026-10-27-0300 needs a `Vec` of addresses only):
+// used as an object it keeps the function `Skipped`.
+module VecPointerElemHandleStoredNestedSkipped
+
+fn leaf(src: Vec<Vec<Vec<i64>>>) -> u64 vow {
+  requires: src.len() > 0
+} {
+  let dst: Vec<Vec<Vec<i64>>> = Vec::new();
+  let row: Vec<Vec<i64>> = Vec::new();
+  let a: Vec<i64> = Vec::new();
+  row.push(a);
+  dst.push(row);
+  dst.push(src[0]);
+  let r: Vec<Vec<i64>> = dst[1];
+  let l: Vec<i64> = r[0];
+  l.len()
+}
+
+fn main() -> i32 [io] {
+  let src: Vec<Vec<Vec<i64>>> = Vec::new();
+  let row: Vec<Vec<i64>> = Vec::new();
+  let a: Vec<i64> = Vec::new();
+  row.push(a);
+  src.push(row);
+  print_u64(leaf(src));
+  0
+}

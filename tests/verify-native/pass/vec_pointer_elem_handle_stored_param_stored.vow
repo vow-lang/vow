@@ -1,0 +1,24 @@
+// A struct parameter stored next to a handle: a write through the parameter is what the slot that
+// holds it reads back.
+module VecPointerElemHandleStoredParamStored
+
+struct Person { age: i64 }
+
+fn rename(src: Vec<Person>, me: Person) -> i64 vow {
+  requires: src.len() > 0
+  ensures: result == 7
+} {
+  let dst: Vec<Person> = Vec::new();
+  dst.push(me);
+  dst.push(src[0]);
+  me.age = 7;
+  let e: Person = dst[0];
+  e.age
+}
+
+fn main() -> i32 [io] {
+  let src: Vec<Person> = Vec::new();
+  src.push(Person { age: 1 });
+  print_i64(rename(src, Person { age: 2 }));
+  0
+}

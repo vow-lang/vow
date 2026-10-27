@@ -1,0 +1,26 @@
+// TEST: skip-reason unsupported-opcode
+// A handle copied into a second `Vec` (`out.push(src[0])`) that holds no object may put a word the
+// function wrote into the memory it was given, so the stored handle is not known to be given memory:
+// the function stays `Skipped`.
+module VecPointerElemHandleStoredCopiedSkipped
+
+fn copy(src: Vec<Vec<i64>>) -> u64 vow {
+  requires: src.len() > 0
+} {
+  let dst: Vec<Vec<i64>> = Vec::new();
+  let out: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  dst.push(w);
+  dst.push(src[0]);
+  out.push(src[0]);
+  let e: Vec<i64> = dst[1];
+  e.len()
+}
+
+fn main() -> i32 [io] {
+  let src: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  src.push(w);
+  print_u64(copy(src));
+  0
+}

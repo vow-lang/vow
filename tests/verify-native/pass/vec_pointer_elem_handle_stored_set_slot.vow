@@ -1,0 +1,28 @@
+// A handle stored with `set` over an object: the first slot is the handle now, the second still
+// the object, and the object's length is the pushes made to it.
+module VecPointerElemHandleStoredSetSlot
+
+fn swap_in(src: Vec<Vec<i64>>) -> u64 vow {
+  requires: src.len() > 0
+  ensures: result == 2
+} {
+  let dst: Vec<Vec<i64>> = Vec::new();
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  a.push(7);
+  b.push(8);
+  b.push(9);
+  dst.push(a);
+  dst.push(b);
+  dst[0] = src[0];
+  let e: Vec<i64> = dst[1];
+  e.len()
+}
+
+fn main() -> i32 [io] {
+  let src: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  src.push(w);
+  print_u64(swap_in(src));
+  0
+}

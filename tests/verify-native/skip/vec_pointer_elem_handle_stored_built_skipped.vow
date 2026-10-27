@@ -1,0 +1,23 @@
+// TEST: skip-reason unsupported-opcode
+// A handle read out of a `Vec` the function built is the address of an object it stored, not a word
+// of the memory it was given: storing it into another `Vec` that holds objects stays `Skipped`.
+module VecPointerElemHandleStoredBuiltSkipped
+
+fn relay() -> u64 vow {
+  ensures: result == 0
+} {
+  let a: Vec<Vec<i64>> = Vec::new();
+  let b: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  let x: Vec<i64> = Vec::new();
+  a.push(w);
+  b.push(x);
+  b.push(a[0]);
+  let e: Vec<i64> = b[1];
+  e.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(relay());
+  0
+}

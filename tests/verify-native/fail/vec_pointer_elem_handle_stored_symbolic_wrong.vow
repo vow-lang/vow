@@ -1,0 +1,31 @@
+// TEST: replay-skipped a Vec<Vec<i64>> parameter is not rebuilt by replay, so each counterexample was checked by running main in debug mode (#1890)
+// TEST: counterexample-fn "pick"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// The index reaches the third slot, which holds a handle: its length is not one of the objects'.
+module VecPointerElemHandleStoredSymbolicWrong
+
+fn pick(src: Vec<Vec<i64>>, i: u64) -> u64 vow {
+  requires: src.len() > 0 && i < 3
+  ensures: result == 1 || result == 2
+} {
+  let dst: Vec<Vec<i64>> = Vec::new();
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  a.push(1);
+  b.push(1);
+  b.push(2);
+  dst.push(a);
+  dst.push(b);
+  dst.push(src[0]);
+  let e: Vec<i64> = dst[i];
+  e.len()
+}
+
+fn main() -> i32 [io] {
+  let src: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  src.push(w);
+  print_u64(pick(src, 2));
+  0
+}

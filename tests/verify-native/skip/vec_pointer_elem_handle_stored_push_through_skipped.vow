@@ -1,0 +1,25 @@
+// TEST: skip-reason unsupported-opcode
+// A write through the slot that holds a handle (`dst[1].push(9)`) is a write to memory the caller
+// gave, which the model does not make: the function stays `Skipped`, so a later read never sees
+// a stale length.
+module VecPointerElemHandleStoredPushThroughSkipped
+
+fn grow(src: Vec<Vec<i64>>) -> u64 vow {
+  requires: src.len() > 0
+} {
+  let dst: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  dst.push(w);
+  dst.push(src[0]);
+  dst[1].push(9);
+  let e: Vec<i64> = dst[1];
+  e.len()
+}
+
+fn main() -> i32 [io] {
+  let src: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  src.push(w);
+  print_u64(grow(src));
+  0
+}
