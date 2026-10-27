@@ -94,7 +94,6 @@ fn vc_phi_rollback(plan: VcPhiPlan, phis: u64, upss: u64, next_id: i64) {
     plan.next_id = next_id;
 }
 
-// The value at the end of block `p`: its last store, else the value computed for its start.
 fn vc_phi_at_end(last: Vec<i64>, memo: Vec<i64>, p: i64) -> i64 {
     if last[p as u64] >= 0 { return last[p as u64]; }
     memo[p as u64]
@@ -185,7 +184,6 @@ fn vc_phi_reach(plan: VcPhiPlan, last: Vec<i64>, poff: Vec<i64>, plist: Vec<i64>
     memo[rb as u64]
 }
 
-// Appends the Phis placed at the head of block `b` to `out`.
 fn vc_phi_emit_heads(plan: VcPhiPlan, b: u64, out: IrBlock) {
     let mut k: i64 = plan.phi_head[b];
     while k >= 0 {
@@ -194,7 +192,15 @@ fn vc_phi_emit_heads(plan: VcPhiPlan, b: u64, out: IrBlock) {
     }
 }
 
-// Appends the Upsilons that feed Phis from block `b` to `out`; `term` is its terminator.
+// The index of the terminator of block `b`, before which its Upsilons go: -1 when it feeds no
+// Phi, -2 when it feeds one and has no terminator (the rewrite is then refused).
+fn vc_phi_term_index(plan: VcPhiPlan, b: u64, blk: IrBlock) -> i64 {
+    if plan.ups_head[b] < 0 { return -1; }
+    let t: i64 = vc_last_terminal(blk);
+    if t < 0 { return -2; }
+    t
+}
+
 fn vc_phi_emit_ups(plan: VcPhiPlan, b: u64, out: IrBlock, term: IrInst) {
     let mut k: i64 = plan.ups_head[b];
     while k >= 0 {

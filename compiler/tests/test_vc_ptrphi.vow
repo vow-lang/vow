@@ -268,6 +268,137 @@ fn check_loop_store_not_merged() -> i64 {
     0
 }
 
+// An inner join already has its Phi when the walk meets a path with no store: the failed walk
+// removes it, and the read stays. Another field of the object resolves, so the rewrite happens
+// and would carry a stale Phi.
+fn check_failed_walk_leaves_no_phi() -> i64 {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_alloc(1, 16));
+    e.push(vec_new(30));
+    e.push(mk_inst_field_set(31, 1, 1, 30));
+    e.push(mk_inst_const_bool(4, 1));
+    e.push(mk_inst_branch(5, 4, 1, 5));
+    let o: Vec<IrInst> = Vec::new();
+    o.push(mk_inst_branch(6, 4, 2, 3));
+    let a: Vec<IrInst> = Vec::new();
+    a.push(vec_new(8));
+    a.push(mk_inst_field_set(9, 1, 0, 8));
+    a.push(mk_inst_jump(10, 4));
+    let b: Vec<IrInst> = Vec::new();
+    b.push(vec_new(11));
+    b.push(mk_inst_field_set(12, 1, 0, 11));
+    b.push(mk_inst_jump(13, 4));
+    let inner: Vec<IrInst> = Vec::new();
+    inner.push(mk_inst_jump(14, 6));
+    let bare: Vec<IrInst> = Vec::new();
+    bare.push(mk_inst_jump(7, 6));
+    let j: Vec<IrInst> = read_and_push(20, Vec::new());
+    j.push(mk_inst_field_get(32, ITY_I64(), 1, 1));
+    j.push(push_call(33, 32, 20));
+    j.push(ret(25));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, o));
+    blocks.push(mk_block(2, a));
+    blocks.push(mk_block(3, b));
+    blocks.push(mk_block(4, inner));
+    blocks.push(mk_block(5, bare));
+    blocks.push(mk_block(6, j));
+    let g: IrFunction = vc_resolve_ptr_fields(func(blocks));
+    if count_op(g, IOP_FIELD_GET()) != 1 || find_id(g, 33).args[0] != 30 { return 1; }
+    if count_op(g, IOP_PHI()) != 0 || count_op(g, IOP_UPSILON()) != 0 { return 2; }
+    0
+}
+
+// Two reads of the field after one join each get a Phi with an id of its own.
+fn check_two_reads() -> i64 {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_alloc(1, 16));
+    e.push(mk_inst_const_bool(4, 1));
+    e.push(mk_inst_branch(5, 4, 1, 2));
+    let a: Vec<IrInst> = Vec::new();
+    a.push(vec_new(8));
+    a.push(mk_inst_field_set(9, 1, 0, 8));
+    a.push(mk_inst_jump(10, 3));
+    let b: Vec<IrInst> = Vec::new();
+    b.push(vec_new(11));
+    b.push(mk_inst_field_set(12, 1, 0, 11));
+    b.push(mk_inst_jump(13, 3));
+    let j: Vec<IrInst> = read_and_push(20, Vec::new());
+    let j2: Vec<IrInst> = read_and_push(30, j);
+    j2.push(ret(25));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, a));
+    blocks.push(mk_block(2, b));
+    blocks.push(mk_block(3, j2));
+    let g: IrFunction = vc_resolve_ptr_fields(func(blocks));
+    if count_op(g, IOP_FIELD_GET()) != 0 { return 1; }
+    if count_op(g, IOP_PHI()) != 2 || count_op(g, IOP_UPSILON()) != 4 { return 2; }
+    let first: i64 = find_id(g, 22).args[0];
+    let second: i64 = find_id(g, 32).args[0];
+    if first == second || find_id(g, first).op != IOP_PHI() || find_id(g, second).op != IOP_PHI() { return 3; }
+    0
+}
+
+// A branch whose two targets are the same join lists its block twice as a predecessor: one
+// Upsilon, not two.
+fn check_duplicate_predecessor() -> i64 {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_alloc(1, 16));
+    e.push(vec_new(2));
+    e.push(mk_inst_field_set(3, 1, 0, 2));
+    e.push(mk_inst_const_bool(4, 1));
+    e.push(mk_inst_branch(5, 4, 1, 2));
+    let a: Vec<IrInst> = Vec::new();
+    a.push(vec_new(8));
+    a.push(mk_inst_field_set(9, 1, 0, 8));
+    a.push(mk_inst_branch(10, 4, 2, 2));
+    let j: Vec<IrInst> = read_and_push(20, Vec::new());
+    j.push(ret(25));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, a));
+    blocks.push(mk_block(2, j));
+    let g: IrFunction = vc_resolve_ptr_fields(func(blocks));
+    if count_op(g, IOP_PHI()) != 1 || count_op(g, IOP_UPSILON()) != 2 { return 1; }
+    0
+}
+
+// A merged read whose only use is not an object operand gets no Phi.
+fn check_value_use_gets_no_phi() -> i64 {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_alloc(1, 16));
+    e.push(vec_new(30));
+    e.push(mk_inst_field_set(31, 1, 1, 30));
+    e.push(mk_inst_const_bool(4, 1));
+    e.push(mk_inst_branch(5, 4, 1, 2));
+    let a: Vec<IrInst> = Vec::new();
+    a.push(vec_new(8));
+    a.push(mk_inst_field_set(9, 1, 0, 8));
+    a.push(mk_inst_jump(10, 3));
+    let b: Vec<IrInst> = Vec::new();
+    b.push(vec_new(11));
+    b.push(mk_inst_field_set(12, 1, 0, 11));
+    b.push(mk_inst_jump(13, 3));
+    let j: Vec<IrInst> = Vec::new();
+    j.push(mk_inst_field_get(21, ITY_I64(), 1, 0));
+    j.push(mk_inst_const_i64(22, 9));
+    j.push(push_call(23, 22, 21));
+    j.push(mk_inst_field_get(32, ITY_I64(), 1, 1));
+    j.push(push_call(33, 32, 22));
+    j.push(ret(25));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, a));
+    blocks.push(mk_block(2, b));
+    blocks.push(mk_block(3, j));
+    let g: IrFunction = vc_resolve_ptr_fields(func(blocks));
+    if count_op(g, IOP_FIELD_GET()) != 1 || find_id(g, 33).args[0] != 30 { return 1; }
+    if count_op(g, IOP_PHI()) != 0 { return 2; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_both_arms_store();
     if r == 0 { r = check_store_in_one_arm() + 10; if r == 10 { r = 0; } }
@@ -275,5 +406,9 @@ fn main() -> i32 {
     if r == 0 { r = check_path_without_store() + 30; if r == 30 { r = 0; } }
     if r == 0 { r = check_nested_joins() + 40; if r == 40 { r = 0; } }
     if r == 0 { r = check_loop_store_not_merged() + 50; if r == 50 { r = 0; } }
+    if r == 0 { r = check_failed_walk_leaves_no_phi() + 60; if r == 60 { r = 0; } }
+    if r == 0 { r = check_two_reads() + 70; if r == 70 { r = 0; } }
+    if r == 0 { r = check_duplicate_predecessor() + 80; if r == 80 { r = 0; } }
+    if r == 0 { r = check_value_use_gets_no_phi() + 90; if r == 90 { r = 0; } }
     i64_to_i32_wrap(r)
 }
