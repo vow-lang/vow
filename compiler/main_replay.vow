@@ -184,7 +184,7 @@ fn replay_confirm() -> ReplayVerdict {
 // source declaration; anything else is an i64, u64 or bool taken by name.
 fn replay_param_arg(m: Module, ce: VerifyCE, aggregate: bool, native: bool, pi: i64, pname: String, ty: i64, avoid: Vec<i64>, objs: ReplayObjs) -> ReplayArg {
     if aggregate {
-        return replay_agg_arg(m, ce.function, pi, ce.var_names, ce.var_values, avoid, objs);
+        return replay_param_value(m, ce.function, pi, ce.var_names, ce.var_values, avoid, objs);
     }
     let raw: String = replay_cex_value(ce.var_names, ce.var_values, pname);
     if raw.len() == 0 { return replay_arg_skip(String::from("no counterexample value")); }

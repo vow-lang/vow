@@ -1,4 +1,4 @@
-// TEST: replay-skipped the elements of a `Vec<Pair>` parameter are not rebuilt by replay (#1890)
+// TEST: replay-skipped `q.p` holds the address of an element of `people`, an object read through memory whose fields are not listed (#1890)
 // TEST: counterexample-fn "f"
 // TEST: counterexample-vow-id 1
 // TEST: counterexample-blame Callee

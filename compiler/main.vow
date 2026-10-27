@@ -34,6 +34,7 @@ use complexity
 use complexity_main
 use cli_flags
 use replay_main
+use replay_elems
 use decl_main
 use main_args
 use main_callee
