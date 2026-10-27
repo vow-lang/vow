@@ -67,10 +67,10 @@ fn replay_object_elem_type(m: Module, tid: i64) -> i64 {
 fn replay_param_value(m: Module, fn_name: String, pi: i64, names: Vec<String>, vals: Vec<String>, avoid: Vec<i64>, objs: ReplayObjs) -> ReplayArg {
     let a: AstArena = m.arena;
     let fid: i64 = replay_find_fn_item(m, fn_name);
-    if fid < 0 || pi < 0 || pi >= list_len(a, fn_params_lid(a, fid)) / 4 {
+    let lid: i64 = { if fid < 0 { -1 } else { fn_params_lid(a, fid) } };
+    if lid < 0 || pi < 0 || pi >= list_len(a, lid) / 4 {
         return replay_agg_arg(m, fn_name, pi, names, vals, avoid, objs);
     }
-    let lid: i64 = fn_params_lid(a, fid);
     let pname: String = arena_str(a, list_get(a, lid, pi * 4));
     let tid: i64 = replay_resolve_type(m, list_get(a, lid, pi * 4 + 1), 0);
     let elem: i64 = replay_object_elem_type(m, tid);
