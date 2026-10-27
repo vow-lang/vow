@@ -1,9 +1,8 @@
-// TEST: replay-skipped a Vec<i128> held in a struct field lists its elements, but replay does not rebuild a held 128-bit element (#1890)
 // TEST: counterexample-fn "first"
 // TEST: counterexample-vow-id 1
 // TEST: counterexample-blame Callee
-// A held 128-bit element is the raw 64-bit slot in the counterexample, which a literal cannot rebuild.
-module HeapVecWideFieldElementSkipped
+// A held 128-bit element is listed as one decimal value, which replay rebuilds as a literal.
+module HeapVecWideFieldElementWrong
 
 struct Bag { items: Vec<i128>, tag: i64 }
 
