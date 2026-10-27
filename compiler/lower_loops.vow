@@ -4,8 +4,8 @@ use ast
 use ir
 use lower
 
-// Loop syntax constructs the edges and Phis. This module owns the body lifetime,
-// lexical lookup depth, transfers and expression result; callers never inspect active frames.
+// Complete loop lowering: syntax callers supply one expression. SSA construction,
+// metadata, body lifetime, lexical transfers and expression results stay here.
 struct LoopPhis {
     names: Vec<String>,
     ids: Vec<i64>,
@@ -31,6 +31,83 @@ struct LoopFrame {
     index_phi: i64,
     collects_values: bool,
     breaks: Vec<LoopBreak>,
+}
+
+// Private construction state. Pending inputs and header Phis have the same order;
+// the optional unsigned foreach index precedes every named mutation on both sides.
+struct LoopHeader {
+    pre_header: i64,
+    inputs: Vec<i64>,
+    phis: LoopPhis,
+    index_input: i64,
+    index_phi: i64,
+}
+
+fn lower_loop_start(ctx: LowerCtx, variables: ScopedVars, header: i64, index: i64, origin: i64) -> LoopHeader {
+    let pre_header: i64 = ctx.current_block;
+    let mut index_input: i64 = -1;
+    if index != -1 { index_input = lower_loop_pending_input(ctx, index, origin); }
+    let inputs: Vec<i64> = Vec::new();
+    let values: Vec<i64> = variables.vals;
+    let mut i: u64 = 0;
+    while i < values.len() {
+        inputs.push(lower_loop_pending_input(ctx, values[i], origin));
+        i = i + 1;
+    }
+    lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), Vec::new(), IDATA_JUMP_TARGET(), header, 0, String::from(""), origin);
+    lctx_switch_to_block(ctx, header);
+    let mut index_phi: i64 = -1;
+    if index != -1 {
+        index_phi = lctx_emit(ctx, IOP_PHI(), ITY_U64(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""), origin);
+    }
+    let phis: LoopPhis = lower_loop_make_phis(ctx, variables.names, values, true, origin);
+    LoopHeader { pre_header: pre_header, inputs: inputs, phis: phis, index_input: index_input, index_phi: index_phi }
+}
+
+fn lower_loop_pending_input(ctx: LowerCtx, value: i64, origin: i64) -> i64 {
+    let args: Vec<i64> = Vec::new();
+    args.push(value);
+    lctx_emit(ctx, IOP_UPSILON(), lctx_inst_ty(ctx, value), args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""), origin)
+}
+
+fn lower_loop_make_phis(ctx: LowerCtx, names: Vec<String>, values: Vec<i64>, rebind: bool, origin: i64) -> LoopPhis {
+    let ids: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < values.len() {
+        let phi: i64 = lctx_emit(ctx, IOP_PHI(), lctx_inst_ty(ctx, values[i]), Vec::new(), IDATA_NONE(), 0, 0, String::from(""), origin);
+        lctx_merge_one_aggregate_metadata(ctx, values[i], phi);
+        ids.push(phi);
+        if rebind { lctx_assign(ctx, names[i], phi); }
+        i = i + 1;
+    }
+    LoopPhis { names: names, ids: ids }
+}
+
+fn lower_loop_patch_header(ctx: LowerCtx, setup: LoopHeader) {
+    if setup.index_input != -1 { backpatch_upsilon(ctx, setup.pre_header, setup.index_input, setup.index_phi); }
+    let phis: LoopPhis = setup.phis;
+    let mut i: u64 = 0;
+    while i < setup.inputs.len() {
+        backpatch_upsilon(ctx, setup.pre_header, setup.inputs[i], phis.ids[i]);
+        i = i + 1;
+    }
+}
+
+fn lower_loop_exit_phis(ctx: LowerCtx, phis: LoopPhis, exit: i64, restore: i64, origin: i64) -> LoopPhis {
+    lctx_switch_to_block(ctx, exit);
+    let outgoing: LoopPhis = lower_loop_make_phis(ctx, phis.names, phis.ids, false, origin);
+    lctx_switch_to_block(ctx, restore);
+    outgoing
+}
+
+fn lower_loop_inputs(ctx: LowerCtx, values: Vec<i64>, targets: Vec<i64>, origin: i64) {
+    let mut i: u64 = 0;
+    while i < values.len() {
+        let args: Vec<i64> = Vec::new();
+        args.push(values[i]);
+        lctx_emit(ctx, IOP_UPSILON(), lctx_inst_ty(ctx, values[i]), args, IDATA_PHI_TARGET(), targets[i], 0, String::from(""), origin);
+        i = i + 1;
+    }
 }
 
 fn lower_while_body(ctx: LowerCtx, body: i64, edges: LoopEdges, origin: i64) -> i64 {
@@ -145,4 +222,157 @@ fn lower_loop_continue(ctx: LowerCtx, origin: i64) -> i64 {
     lower_loop_emit_phis(ctx, edges.carried, frame.scope_depth, false, origin);
     lower_loop_step_index(ctx, frame.index_phi, origin);
     lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), Vec::new(), IDATA_JUMP_TARGET(), edges.header, 0, String::from(""), origin)
+}
+
+fn lower_while_expr(ctx: LowerCtx, eid: i64, origin: i64) -> i64 {
+    let a: AstArena = ctx.arena;
+    let cond_eid: i64 = expr_a(a, eid);
+    let body_bid: i64 = expr_b(a, eid);
+    let vow_lid: i64 = expr_c(a, eid);
+
+    let carried: ScopedVars = lctx_in_scope_vars(ctx, collect_loop_assigned_vars(ctx, eid));
+
+    let header_block: i64 = lctx_new_block(ctx);
+    let body_block: i64 = lctx_new_block(ctx);
+    let exit_block: i64 = lctx_new_block(ctx);
+
+    let setup: LoopHeader = lower_loop_start(ctx, carried, header_block, -1, origin);
+    let phis: LoopPhis = setup.phis;
+
+    if vow_lid != -1 {
+        lower_invariant_clauses(ctx, vow_lid);
+    }
+
+    let cond_id: i64 = lower_expr(ctx, cond_eid);
+    let cond_block: i64 = ctx.current_block;
+
+    let outgoing: LoopPhis = lower_loop_exit_phis(ctx, phis, exit_block, cond_block, origin);
+
+    // The final condition evaluation may have changed a carried binding.
+    lower_loop_emit_phis(ctx, outgoing, ctx.scope_vars.len(), false, origin);
+
+    let br_args: Vec<i64> = Vec::new();
+    br_args.push(cond_id);
+    lctx_emit(ctx, IOP_BRANCH(), ITY_UNIT(), br_args, IDATA_BRANCH_TARGETS(), body_block, exit_block, String::from(""), origin);
+
+    lower_loop_patch_header(ctx, setup);
+
+    lctx_switch_to_block(ctx, body_block);
+    let edges: LoopEdges = LoopEdges {
+        header: header_block, exit: exit_block, carried: phis, outgoing: outgoing,
+    };
+    return lower_while_body(ctx, body_bid, edges, origin);
+}
+
+fn lower_loop_expr(ctx: LowerCtx, eid: i64, origin: i64) -> i64 {
+    let a: AstArena = ctx.arena;
+    let body_bid: i64 = expr_a(a, eid);
+    let vow_lid: i64 = expr_b(a, eid);
+
+    let carried: ScopedVars = lctx_in_scope_vars(ctx, collect_loop_assigned_vars(ctx, eid));
+
+    let header_block: i64 = lctx_new_block(ctx);
+    let exit_block: i64 = lctx_new_block(ctx);
+
+    let setup: LoopHeader = lower_loop_start(ctx, carried, header_block, -1, origin);
+    let phis: LoopPhis = setup.phis;
+
+    if vow_lid != -1 {
+        lower_invariant_clauses(ctx, vow_lid);
+    }
+
+    lower_loop_patch_header(ctx, setup);
+
+    let outgoing: LoopPhis = lower_loop_exit_phis(ctx, phis, exit_block, header_block, origin);
+
+    let edges: LoopEdges = LoopEdges {
+        header: header_block, exit: exit_block, carried: phis, outgoing: outgoing,
+    };
+    return lower_loop_body(ctx, body_bid, edges, origin);
+}
+
+fn lower_foreach_expr(ctx: LowerCtx, eid: i64, origin: i64) -> i64 {
+    let a: AstArena = ctx.arena;
+    let iterable_eid: i64 = expr_a(a, eid);
+    let body_bid: i64 = expr_b(a, eid);
+    let info_lid: i64 = expr_c(a, eid);
+    let name_sid: i64 = list_get(a, info_lid, 0);
+    let vow_lid: i64 = list_get(a, info_lid, 1);
+    let binding_name: String = arena_str(a, name_sid);
+
+    let iter_id: i64 = lower_expr(ctx, iterable_eid);
+
+    let len_args: Vec<i64> = Vec::new();
+    len_args.push(iter_id);
+    let len_id: i64 = lctx_emit(ctx, IOP_CALL(), ITY_U64(), len_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_len"), origin);
+
+    let idx_init_args: Vec<i64> = Vec::new();
+    let idx_init: i64 = lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), idx_init_args, IDATA_CONST_U64(), 0, 0, String::from(""), origin);
+
+    let carried: ScopedVars = lctx_in_scope_vars(ctx, collect_loop_assigned_vars(ctx, eid));
+
+    let header_block: i64 = lctx_new_block(ctx);
+    let body_block: i64 = lctx_new_block(ctx);
+    let exit_block: i64 = lctx_new_block(ctx);
+
+    let setup: LoopHeader = lower_loop_start(ctx, carried, header_block, idx_init, origin);
+    let phis: LoopPhis = setup.phis;
+    let idx_phi: i64 = setup.index_phi;
+
+    if vow_lid != -1 {
+        lower_invariant_clauses(ctx, vow_lid);
+    }
+
+    let cond_args: Vec<i64> = Vec::new();
+    cond_args.push(idx_phi);
+    cond_args.push(len_id);
+    let cond_id: i64 = lctx_emit(ctx, IOP_LT(), ITY_BOOL(), cond_args, IDATA_INTEGER(), ITY_U64(), 0, String::from(""), origin);
+
+    let outgoing: LoopPhis = lower_loop_exit_phis(ctx, phis, exit_block, header_block, origin);
+
+    // The natural foreach exit uses header values, before its binding scope.
+    lower_loop_inputs(ctx, phis.ids, outgoing.ids, origin);
+
+    let br_args: Vec<i64> = Vec::new();
+    br_args.push(cond_id);
+    lctx_emit(ctx, IOP_BRANCH(), ITY_UNIT(), br_args, IDATA_BRANCH_TARGETS(), body_block, exit_block, String::from(""), origin);
+
+    lower_loop_patch_header(ctx, setup);
+
+    lctx_switch_to_block(ctx, body_block);
+    let get_args: Vec<i64> = Vec::new();
+    get_args.push(iter_id);
+    get_args.push(idx_phi);
+    let foreach_wide_ty: i64 = lctx_checked_wide_vec_elem(ctx, eid);
+    let elem_id: i64 = if foreach_wide_ty != -1 {
+        lctx_emit_wide_vec_elem_get(ctx, iter_id, idx_phi, foreach_wide_ty, origin)
+    } else {
+        let raw_elem: i64 = lctx_emit(ctx, IOP_CALL(), ITY_I64(), get_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_get_val"), origin);
+        let foreach_float: i64 = lctx_checked_float_vec_elem(ctx, eid);
+        if foreach_float != -1 {
+            lctx_float_from_vec_slot(ctx, raw_elem, foreach_float, origin)
+        } else if foreach_elem_is_bool(ctx, iter_id) {
+            narrow_vec_bool_elem(ctx, raw_elem, origin)
+        } else {
+            raw_elem
+        }
+    };
+    lctx_project_vec_index_metadata(ctx, iter_id, elem_id);
+    let iter_elem_ast_tid: i64 = lctx_generic_ast_arg_tid(
+        ctx, lctx_get_declared_ast_tid(ctx, iter_id), String::from("Vec"), 0
+    );
+    // A collection element keeps its declared type, as an indexed element
+    // does, so the binding dispatches map methods and indexes into an inner
+    // `Vec<Map>`. Mirrors Rust `record_collection_foreach_element`.
+    if iter_elem_ast_tid != -1 {
+        if lctx_map_tag_of_ast_tid(ctx, iter_elem_ast_tid) != String::from("")
+            || lctx_generic_ast_arg_tid(ctx, iter_elem_ast_tid, String::from("Vec"), 0) != -1 {
+            lctx_tag_declared_ast_tid(ctx, elem_id, iter_elem_ast_tid);
+        }
+    }
+
+    let edges: LoopEdges = LoopEdges {
+        header: header_block, exit: exit_block, carried: phis, outgoing: outgoing,
+    };
+    return lower_foreach_body(ctx, body_bid, edges, binding_name, elem_id, idx_phi, origin);
 }

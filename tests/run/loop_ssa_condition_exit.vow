@@ -1,0 +1,29 @@
+// TEST: stdout "4\n6\nafter\n"
+module LoopSsaConditionExit
+
+fn main() -> i32 [io] {
+    let mut count: i64 = 0;
+    while true && { count = count + 1; count < 4 } {
+        continue;
+    }
+    print_i64(count);
+    print_str("\n");
+    let xs: Vec<u64> = Vec::new();
+    xs.push(1u64);
+    xs.push(2u64);
+    xs.push(3u64);
+    let mut total: u64 = 0u64;
+    let mut text: String = String::from("before");
+    let result: String = loop {
+        for item in xs {
+            total = total + item;
+            text = String::from("after");
+        }
+        break text;
+    };
+    print_u64(total);
+    print_str("\n");
+    print_str(result);
+    print_str("\n");
+    0
+}

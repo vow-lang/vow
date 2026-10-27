@@ -1,0 +1,170 @@
+module TestLowerLoopSyntax
+
+use ast
+use diag
+use lexer
+use parser
+use ir
+use lower
+use lower_loops
+
+fn expression(ctx: LowerCtx, text: String) -> Module {
+    let source: String = String::from("module Syntax\nfn f() { let result = ");
+    source.push_str(text);
+    source.push_str(String::from("; }"));
+    let parsed: Module = parse_module_into(lex(source), ctx.arena, diag_ctx_new(), String::from("syntax.vow"));
+    parsed
+}
+
+fn expression_id(parsed: Module) -> i64 {
+    let a: AstArena = parsed.arena;
+    let body: i64 = fn_body_bid(a, item_id(parsed.items[0]));
+    stmt_c(a, list_get(a, blk_stmts(a, body), 0))
+}
+
+fn define(ctx: LowerCtx, name: String, text: String) -> i64 {
+    let parsed: Module = expression(ctx, text);
+    let value: i64 = lower_expr(ctx, expression_id(parsed));
+    lctx_define(ctx, name, value);
+    value
+}
+
+fn lower_test_loop(ctx: LowerCtx, eid: i64) -> i64 {
+    let tag: i64 = expr_tag(ctx.arena, eid);
+    let origin: i64 = expr_span(ctx.arena, eid);
+    if tag == EXPR_WHILE() { return lower_while_expr(ctx, eid, origin); }
+    if tag == EXPR_FOR() { return lower_foreach_expr(ctx, eid, origin); }
+    lower_loop_expr(ctx, eid, origin)
+}
+
+fn all_patched(ctx: LowerCtx) -> bool {
+    let f: IrFunction = ctx.func;
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let block: IrBlock = f.blocks[b];
+        let mut i: u64 = 0;
+        while i < block.insts.len() {
+            let up: IrInst = block.insts[i];
+            if up.op == IOP_UPSILON() {
+                let mut found: bool = false;
+                let mut p: u64 = 0;
+                while p < f.blocks.len() {
+                    let dest: IrBlock = f.blocks[p];
+                    let mut j: u64 = 0;
+                    while j < dest.insts.len() {
+                        let phi: IrInst = dest.insts[j];
+                        if phi.id == up.dv && phi.op == IOP_PHI() { found = true; }
+                        j = j + 1;
+                    }
+                    p = p + 1;
+                }
+                if !found { return false; }
+            }
+            i = i + 1;
+        }
+        b = b + 1;
+    }
+    true
+}
+
+fn check_while_condition() -> i64 {
+    let ctx: LowerCtx = lctx_new(String::from("while"), ITY_UNIT(), 0, arena_new(), Vec::new());
+    define(ctx, String::from("x"), String::from("4"));
+    define(ctx, String::from("flag"), String::from("true"));
+    let parsed: Module = expression(ctx, String::from("while flag && { x = x + 1; x < 7 } { x = x + 2; }"));
+    let eid: i64 = expression_id(parsed);
+    lower_test_loop(ctx, eid);
+    let exit_phi: i64 = lctx_lookup(ctx, String::from("x"));
+    let f: IrFunction = ctx.func;
+    let header: IrBlock = f.blocks[1];
+    let header_phi: IrInst = header.insts[0];
+    let mut matched: bool = false;
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let block: IrBlock = f.blocks[b];
+        let mut i: u64 = 0;
+        while i < block.insts.len() {
+            let inst: IrInst = block.insts[i];
+            let args: Vec<i64> = inst.args;
+            if inst.op == IOP_UPSILON() && inst.dv == exit_phi && b != 2 {
+                if b == 1 || args[0] == header_phi.id { return 1; }
+                if inst.ostart != span_unpack_start(expr_span(ctx.arena, eid)) { return 2; }
+                matched = true;
+            }
+            i = i + 1;
+        }
+        b = b + 1;
+    }
+    if !matched || !all_patched(ctx) { return 3; }
+    0
+}
+
+fn check_foreach() -> i64 {
+    let ctx: LowerCtx = lctx_new(String::from("foreach"), ITY_UNIT(), 0, arena_new(), Vec::new());
+    let initial: i64 = define(ctx, String::from("x"), String::from("8u64"));
+    define(ctx, String::from("text"), String::from("\"before\""));
+    define(ctx, String::from("xs"), String::from("Vec::new()"));
+    let parsed: Module = expression(ctx, String::from("for item in xs { x = x + 1u64; text = \"after\"; }"));
+    let eid: i64 = expression_id(parsed);
+    lower_test_loop(ctx, eid);
+    let f: IrFunction = ctx.func;
+    let entry: IrBlock = f.blocks[0];
+    let header: IrBlock = f.blocks[1];
+    let ups: Vec<IrInst> = Vec::new();
+    let phis: Vec<IrInst> = Vec::new();
+    let mut i: u64 = 0;
+    while i < entry.insts.len() {
+        let inst: IrInst = entry.insts[i];
+        if inst.op == IOP_UPSILON() { ups.push(inst); }
+        i = i + 1;
+    }
+    i = 0;
+    while i < header.insts.len() {
+        let inst: IrInst = header.insts[i];
+        if inst.op == IOP_PHI() { phis.push(inst); }
+        i = i + 1;
+    }
+    if ups.len() != 3 || phis.len() != 3 { return 10; }
+    let index: IrInst = phis[0];
+    let scalar: IrInst = phis[1];
+    let text: IrInst = phis[2];
+    let scalar_up: IrInst = ups[1];
+    let scalar_args: Vec<i64> = scalar_up.args;
+    if index.ty != ITY_U64() || scalar.ty != ITY_U64() || text.ty != ITY_PTR() { return 11; }
+    if scalar_args[0] != initial { return 12; }
+    i = 0;
+    while i < 3 {
+        let up: IrInst = ups[i];
+        let phi: IrInst = phis[i];
+        if up.dv != phi.id || phi.ostart != span_unpack_start(expr_span(ctx.arena, eid)) { return 13; }
+        i = i + 1;
+    }
+    if lctx_get_tag(ctx, text.id) != String::from("String") { return 14; }
+    if lctx_get_tag(ctx, lctx_lookup(ctx, String::from("text"))) != String::from("String") { return 15; }
+    if lctx_lookup(ctx, String::from("item")) != -1 || !all_patched(ctx) { return 16; }
+    0
+}
+
+fn check_value_loop() -> i64 {
+    let ctx: LowerCtx = lctx_new(String::from("loop"), ITY_PTR(), 0, arena_new(), Vec::new());
+    define(ctx, String::from("text"), String::from("\"before\""));
+    let parsed: Module = expression(ctx, String::from("loop { text = \"after\"; break text; }"));
+    let result: i64 = lower_test_loop(ctx, expression_id(parsed));
+    let f: IrFunction = ctx.func;
+    if f.blocks.len() != 3 || !all_patched(ctx) { return 20; }
+    if lctx_get_tag(ctx, result) != String::from("String") { return 21; }
+    if lctx_get_tag(ctx, lctx_lookup(ctx, String::from("text"))) != String::from("String") { return 22; }
+    let empty: LowerCtx = lctx_new(String::from("empty"), ITY_UNIT(), 0, arena_new(), Vec::new());
+    let empty_parsed: Module = expression(empty, String::from("while false { break; }"));
+    lower_test_loop(empty, expression_id(empty_parsed));
+    if !all_patched(empty) { return 23; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let mut code: i64 = check_while_condition();
+    if code == 0 { code = check_foreach(); }
+    if code == 0 { code = check_value_loop(); }
+    if code != 0 { print_i64(code); return 1; }
+    0
+}
