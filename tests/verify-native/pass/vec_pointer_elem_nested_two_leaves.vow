@@ -1,0 +1,33 @@
+// Two leaves in two rows: each read through two indices names its own object, and a push made after
+// the store is seen.
+module VecPointerElemNestedTwoLeaves
+
+fn lens() -> u64 vow {
+  ensures: result == 314
+} {
+  let top: Vec<Vec<Vec<i64>>> = Vec::new();
+  let r0: Vec<Vec<i64>> = Vec::new();
+  let r1: Vec<Vec<i64>> = Vec::new();
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  let c: Vec<i64> = Vec::new();
+  a.push(1);
+  a.push(2);
+  b.push(7);
+  c.push(1);
+  r0.push(a);
+  r0.push(b);
+  r1.push(c);
+  top.push(r0);
+  top.push(r1);
+  a.push(3);
+  c.push(5);
+  c.push(6);
+  c.push(7);
+  top[0][0].len() * 100 + top[0][1].len() * 10 + top[1][0].len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(lens());
+  0
+}

@@ -1,0 +1,24 @@
+// TEST: counterexample-fn "lens"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The push to the leaf after it was stored shows through the nested read: the length is 3, not 2.
+module VecPointerElemNestedLaterPushWrong
+
+fn lens() -> u64 vow {
+  ensures: result == 2
+} {
+  let top: Vec<Vec<Vec<i64>>> = Vec::new();
+  let r0: Vec<Vec<i64>> = Vec::new();
+  let a: Vec<i64> = Vec::new();
+  a.push(1);
+  a.push(2);
+  r0.push(a);
+  top.push(r0);
+  a.push(3);
+  top[0][0].len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(lens());
+  0
+}

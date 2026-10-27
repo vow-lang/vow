@@ -1,0 +1,27 @@
+// TEST: counterexample-fn "second"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// The second leaf of a row has two elements, the first one: the claim that every leaf has one is false.
+module VecPointerElemNestedSymbolicWrong
+
+fn second(j: u64) -> u64 vow {
+  requires: j < 2
+  ensures: result == 1
+} {
+  let row: Vec<Vec<i64>> = Vec::new();
+  let a: Vec<i64> = Vec::new();
+  a.push(1);
+  let b: Vec<i64> = Vec::new();
+  b.push(2);
+  b.push(3);
+  row.push(a);
+  row.push(b);
+  let top: Vec<Vec<Vec<i64>>> = Vec::new();
+  top.push(row);
+  top[0][j].len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(second(1));
+  0
+}

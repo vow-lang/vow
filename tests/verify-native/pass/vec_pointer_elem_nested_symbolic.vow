@@ -1,0 +1,28 @@
+// A symbolic index into the outer and the inner `Vec`, both in range: every leaf has one element.
+module VecPointerElemNestedSymbolic
+
+fn one(i: u64, j: u64) -> u64 vow {
+  requires: i < 2
+  requires: j < 2
+  ensures: result == 1
+} {
+  let top: Vec<Vec<Vec<i64>>> = Vec::new();
+  let mut n: u64 = 0;
+  while n < 2 {
+    let row: Vec<Vec<i64>> = Vec::new();
+    let a: Vec<i64> = Vec::new();
+    a.push(1);
+    let b: Vec<i64> = Vec::new();
+    b.push(2);
+    row.push(a);
+    row.push(b);
+    top.push(row);
+    n = n + 1;
+  }
+  top[i][j].len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(one(1, 1));
+  0
+}

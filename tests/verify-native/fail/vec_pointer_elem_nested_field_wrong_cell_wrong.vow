@@ -1,0 +1,26 @@
+// TEST: counterexample-fn "birthday"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The write is to the cell [0][1], not [0][0]: the first cell keeps its age.
+module VecPointerElemNestedFieldWrongCellWrong
+
+struct Person { age: i64 }
+
+fn birthday() -> i64 vow {
+  ensures: result == 7
+} {
+  let grid: Vec<Vec<Person>> = Vec::new();
+  let r0: Vec<Person> = Vec::new();
+  r0.push(Person { age: 4 });
+  r0.push(Person { age: 5 });
+  grid.push(r0);
+  let row: Vec<Person> = grid[0];
+  row[1].age = 7;
+  let first: Person = row[0];
+  first.age
+}
+
+fn main() -> i32 [io] {
+  print_i64(birthday());
+  0
+}

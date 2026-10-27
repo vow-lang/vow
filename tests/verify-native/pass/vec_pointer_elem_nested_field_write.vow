@@ -1,0 +1,31 @@
+// A field written through an element of an element: `grid[1][0].age = 7` writes the object that was
+// pushed, so the variable that was pushed, another slot holding it and a read through the nested
+// elements see it, and an untouched sibling does not.
+module VecPointerElemNestedFieldWrite
+
+struct Person { age: i64, id: i64 }
+
+fn birthday() -> i64 vow {
+  ensures: result == 7 * 1000 + 7 * 100 + 4 * 10 + 1
+} {
+  let grid: Vec<Vec<Person>> = Vec::new();
+  let r0: Vec<Person> = Vec::new();
+  let r1: Vec<Person> = Vec::new();
+  let a: Person = Person { age: 4, id: 1 };
+  let b: Person = Person { age: 4, id: 2 };
+  r0.push(a);
+  r1.push(b);
+  r1.push(a);
+  grid.push(r0);
+  grid.push(r1);
+  let row: Vec<Person> = grid[1];
+  row[1].age = 7;
+  let after: Vec<Person> = grid[1];
+  let first: Vec<Person> = grid[0];
+  after[1].age * 1000 + a.age * 100 + after[0].age * 10 + first[0].id
+}
+
+fn main() -> i32 [io] {
+  print_i64(birthday());
+  0
+}

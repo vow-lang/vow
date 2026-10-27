@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "deep"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The leaf holds two elements, not three.
+module VecPointerElemNestedReadWrong
+
+fn deep() -> u64 vow {
+  ensures: result == 3
+} {
+  let top: Vec<Vec<Vec<i64>>> = Vec::new();
+  let mid: Vec<Vec<i64>> = Vec::new();
+  let leaf: Vec<i64> = Vec::new();
+  leaf.push(1);
+  leaf.push(2);
+  mid.push(leaf);
+  top.push(mid);
+  top[0][0].len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(deep());
+  0
+}
