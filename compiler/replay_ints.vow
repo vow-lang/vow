@@ -57,9 +57,12 @@ fn replay_int_literal(name: String, raw: String) -> String {
     raw
 }
 
-// True for the element types a held `Vec` rebuilds: `bool` and the integers, 128-bit ones included
-// (listed as the one decimal value the program reads, as for a `Vec` parameter). A held float
-// element is the raw 64-bit slot, which a float cannot rebuild.
+// True for the names of the scalar types a replay literal can denote.
+fn replay_is_scalar_name(name: String) -> bool {
+    name == String::from("bool") || name == String::from("f32") || name == String::from("f64") || name == String::from("i128") || name == String::from("u128") || replay_int_bits(name) > 0
+}
+
+// The scalars a held `Vec` rebuilds as elements: all but the floats, whose elements are raw slots.
 fn replay_held_elem_name(name: String) -> bool {
-    name == String::from("bool") || name == String::from("i128") || name == String::from("u128") || replay_int_bits(name) > 0
+    replay_is_scalar_name(name) && name != String::from("f32") && name != String::from("f64")
 }

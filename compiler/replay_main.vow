@@ -307,10 +307,6 @@ fn replay_slot_label(name: String) -> String {
     i64_to_string(replay_int_bits(name))
 }
 
-fn replay_is_scalar_name(name: String) -> bool {
-    name == String::from("bool") || name == String::from("f32") || name == String::from("f64") || name == String::from("i128") || name == String::from("u128") || replay_int_bits(name) > 0
-}
-
 fn replay_zero_text(name: String) -> String {
     if name == String::from("bool") { return String::from("false"); }
     String::from("0")
@@ -518,7 +514,7 @@ fn replay_field_skip(shown: String, tail: String) -> ReplayArg {
     replay_arg_skip(str3r(String::from("field of type `"), shown, tail))
 }
 
-// True for the element types a held `Vec` rebuilds (`replay_held_elem_name`).
+// True for the element types a held `Vec` rebuilds: `bool` and the integers (a float is a raw slot).
 fn replay_held_elem_scalar(a: AstArena, tid: i64) -> bool {
     type_tag(a, tid) == TY_NAMED() && replay_held_elem_name(arena_str(a, type_a(a, tid)))
 }
