@@ -1,0 +1,21 @@
+// TEST: counterexample-fn "get_id"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// `o.inner.id` is read through the address `o.0`: the counterexample lists the address and the slot
+// the function read (`o.0.0`), and replay rebuilds `Inner` from it.
+module PtrFieldNestedStructReadThroughMemoryWrong
+
+struct Inner { id: i64, tag: i64 }
+struct Outer { inner: Inner, n: i64 }
+
+fn get_id(o: Outer) -> i64 vow {
+  ensures: result == 0
+} {
+  o.inner.id
+}
+
+fn main() -> i32 [io] {
+  let o: Outer = Outer { inner: Inner { id: 0, tag: 1 }, n: 2 };
+  print_i64(get_id(o));
+  0
+}

@@ -46,9 +46,9 @@ use ir_dominance
 // that follow it. A claim is only asked on the paths that reach it: its query
 // asserts the block's path condition next to the negated goal, and an
 // assumption made in a block is the implication `path condition => assumption`.
-// SMT division and shifts are total, so the aborts the language specifies are
-// separate claims, and a later claim always assumes the guards of earlier ones
-// on its path: an aborting run never reaches it. Two kinds of abort:
+// SMT division and shifts are total, so the language's aborts are separate
+// claims, and a later claim assumes the guards of earlier ones on its path: an
+// aborting run never reaches it. Two kinds of abort:
 //
 //   hard  wrapping `/`, `%` (zero divisor, signed MIN / -1) and a shift count
 //         outside `0 <= count < width`: a counterexample fails the function.
@@ -65,7 +65,7 @@ use ir_dominance
 // the bound ends in a sink block, and a path that reaches it is the unwinding
 // claim "no run needs more iterations than the bound". It is a claim only and
 // assumes nothing afterwards: a counterexample means the bound was too small,
-// not that the function is wrong. A loop `invariant` is checked like an
+// not a bug. A loop `invariant` is checked like an
 // `ensures` at every iteration copy of its header, and assumed nowhere in an
 // unrolled function. In the inductive attempt (`vc_induct`) the loop is cut
 // instead: a header Phi is a havoc marker, a fresh unconstrained constant, and
@@ -77,7 +77,7 @@ use ir_dominance
 // `invariant`), and the invariant of the block that is not a hypothesis is
 // assumed once asked, so the exit continues under it.
 //
-// A call has been spliced into its caller before this point (`vc_inline`), and
+// A call is spliced into its caller before this point (`vc_inline`), and
 // the clauses of the copy carry the frame they came from (`vc_frame_of`). In a
 // frame a `requires` is a claim blamed on the caller and an `ensures` or loop
 // `invariant` one blamed on the callee, and both are assumed afterwards: the
@@ -894,6 +894,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         vec_handle: Vec::new(),
         map_len: Vec::new(),
         map_len_hdr: Vec::new(),
+        listed: vc_heap_listed_new(),
     };
     vc_script_set_logic(hdr, String::from("QF_BV"));
     vc_script_set_option(hdr, String::from(":produce-models"), String::from("true"));

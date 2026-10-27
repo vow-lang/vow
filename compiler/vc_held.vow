@@ -1,5 +1,7 @@
 module VcHeld
 
+use ir
+use vc_ops
 use vc_term
 use vc_smt
 use vc_agg
@@ -58,11 +60,34 @@ fn vc_held_field_symbol(ag: VcAgg, name: String) -> i64 {
     -1
 }
 
+// Position in `hp.listed` of the row that defines the handle `h` when it is exactly the value a read
+// of one field symbol listed (`select hf<k> <field symbol>`, `vc_heaplist`), or -1: a collection a
+// struct that is itself a field holds is at an address the listing names.
+fn vc_held_listed_row(hp: VcHeap, ar: VcArena, h0: i64) -> i64 {
+    let h: i64 = { if ar.kinds[h0 as u64] == VC_T_VAR() && ar.named[h0 as u64] >= 0 { ar.named[h0 as u64] } else { h0 } };
+    if ar.kinds[h as u64] != VC_T_APP() || ar.aux[h as u64] != VC_OP_SELECT() { return -1; }
+    let arr: i64 = ar.a[h as u64];
+    let at: i64 = ar.b[h as u64];
+    if ar.kinds[arr as u64] != VC_T_VAR() || ar.kinds[at as u64] != VC_T_VAR() || ar.named[at as u64] >= 0 { return -1; }
+    let arr_name: String = vc_term_text(ar, arr);
+    let at_name: String = vc_term_text(ar, at);
+    let ls: VcHeapListed = hp.listed;
+    if ls.bad { return -1; }
+    let mut i: u64 = 0;
+    while i < ls.handle.len() {
+        if ls.handle[i] == at_name && vc_heap_slot_name(ls.slot[i]) == arr_name && ls.ty[i] == ITY_I64() { return i as i64; }
+        i = i + 1;
+    }
+    -1
+}
+
 // Notes the handle `h` whose length was just read, as a `String` when `string`. `hp.len_arr`
 // is declared by that read.
 fn vc_held_note(hd: VcHeld, ag: VcAgg, hp: VcHeap, ar: VcArena, hdr: SmtScript, h: i64, string: bool) {
-    if ar.kinds[h as u64] != VC_T_VAR() || ar.named[h as u64] >= 0 { return; }
-    let name: String = vc_term_text(ar, h);
+    let row: i64 = vc_held_listed_row(hp, ar, h);
+    if row < 0 && (ar.kinds[h as u64] != VC_T_VAR() || ar.named[h as u64] >= 0) { return; }
+    let ls: VcHeapListed = hp.listed;
+    let name: String = { if row >= 0 { String::from(ls.names[row as u64]) } else { vc_term_text(ar, h) } };
     let cls: i64 = { if string { VC_HELD_STRING() } else { VC_HELD_VEC() } };
     let mut i: u64 = 0;
     while i < hd.handle.len() {
@@ -72,17 +97,17 @@ fn vc_held_note(hd: VcHeld, ag: VcAgg, hp: VcHeap, ar: VcArena, hdr: SmtScript, 
         }
         i = i + 1;
     }
-    let ps: i64 = vc_held_field_symbol(ag, name);
+    let ps: i64 = { if row >= 0 { 0 } else { vc_held_field_symbol(ag, name) } };
     if ps < 0 { return; }
     let len_name: String = String::from(name);
     len_name.push_str(String::from("_hl"));
     let arr: i64 = { if string { vc_heap_byte_array(hp, ar, hdr) } else { vc_heap_elem_array(hp, ar, hdr) } };
     hd.handle.push(name);
-    let path: String = String::from(ag.ps_path[ps as u64]);
+    let path: String = { if row >= 0 { String::from(ls.path[row as u64]) } else { String::from(ag.ps_path[ps as u64]) } };
     path.push_str(String::from("."));
-    path.push_str(i64_to_string(ag.ps_slot[ps as u64]));
+    path.push_str(i64_to_string({ if row >= 0 { ls.slot[row as u64] } else { ag.ps_slot[ps as u64] } }));
     hd.path.push(path);
-    hd.param.push(ag.ps_param[ps as u64]);
+    hd.param.push({ if row >= 0 { ls.param[row as u64] } else { ag.ps_param[ps as u64] } });
     hd.cls.push(cls);
     hd.len_name.push(len_name);
     hd.arr.push(vc_term_text(ar, arr));
@@ -100,6 +125,21 @@ fn vc_held_mark_wide(hd: VcHeld, ar: VcArena, h: i64, ty: i64) {
     let mut i: u64 = 0;
     while i < hd.handle.len() {
         if hd.handle[i] == name { hd.wide[i] = ty; }
+        i = i + 1;
+    }
+}
+
+// A collection noted under a listed row (`hread<N>`) is not listed when the listing is abandoned:
+// its parent object would not be.
+fn vc_held_drop_rows(hd: VcHeld, ls: VcHeapListed) {
+    if !ls.bad { return; }
+    let mut i: u64 = 0;
+    while i < hd.handle.len() {
+        let mut r: u64 = 0;
+        while r < ls.names.len() {
+            if ls.names[r] == hd.handle[i] { hd.cls[i] = VC_HELD_BOTH(); }
+            r = r + 1;
+        }
         i = i + 1;
     }
 }

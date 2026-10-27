@@ -8,6 +8,7 @@ use contract_text
 use replay_mapkeys
 use replay_ints
 use replay_alias
+use replay_listed
 
 // Entry-`main` handling for `--replay-cex` (#1550). A replay harness is the
 // entry file's own text plus a synthesized `fn main`, so a file that already
@@ -114,12 +115,7 @@ fn replay_is_int_literal(s: String) -> bool {
 }
 
 fn replay_cex_value(names: Vec<String>, vals: Vec<String>, key: String) -> String {
-    let mut i: u64 = 0u64;
-    while i < names.len() && i < vals.len() {
-        if names[i] == key { return vals[i]; }
-        i = i + 1u64;
-    }
-    String::from("")
+    replay_listed_value(names, vals, key)
 }
 
 // Id of item `it` when it is of `kind`, -1 otherwise (an id is never negative).
@@ -559,10 +555,6 @@ fn replay_held_arg(a: AstArena, tid: i64, inner: String, names: Vec<String>, val
     replay_arg_ok(lit, shown)
 }
 
-fn replay_read_through_memory(shown: String) -> ReplayArg {
-    replay_field_skip(shown, String::from("` is read through memory; its fields are not listed"))
-}
-
 // The struct, enum, `Option` or `Result` a field of AST type `tid` holds at `slot`: a pointer
 // to an object whose slot `j` is the counterexample entry `<prefix>.<slot>.<j>` (the native
 // model names a held object by the path of slots that reach it), or the `Vec` or `String` it
@@ -591,17 +583,15 @@ fn replay_nested_arg(m: Module, tid: i64, pname: String, slot: i64, names: Vec<S
         let sid: i64 = replay_find_struct(m, name);
         let eid: i64 = replay_find_enum(m, name);
         if sid < 0 && eid < 0 { return not_scalar; }
-        if replay_cex_value(names, vals, inner).len() > 0 {
-            return replay_read_through_memory(shown);
-        }
+        let why: String = replay_through_memory(names, vals, inner, String::from(""));
+        if why.len() > 0 { return replay_field_skip(shown, why); }
         if sid >= 0 { return replay_struct_arg(m, sid, inner, names, vals, depth + 1, avoid, objs); }
         return replay_enum_arg(m, eid, inner, names, vals, depth + 1, avoid, objs);
     }
     if tag == TY_GENERIC() {
         if arena_str(a, type_a(a, tid)) == String::from("Vec") { return replay_held_arg(a, tid, inner, names, vals); }
-        if replay_cex_value(names, vals, inner).len() > 0 {
-            return replay_read_through_memory(shown);
-        }
+        let why: String = replay_through_memory(names, vals, inner, String::from(""));
+        if why.len() > 0 { return replay_field_skip(shown, why); }
         return replay_builtin_enum_arg(m, tid, inner, names, vals, depth + 1, avoid, objs);
     }
     not_scalar

@@ -9,6 +9,8 @@ use vc_agg
 use vc_int
 use vc_fmt
 use vc_vecmodel
+use vc_fieldrows
+use vc_heap
 
 // Maps a solver answer for one claim onto the `VerifyResult` the shared
 // counterexample reporting (`build_ce_from_result`) already consumes.
@@ -136,6 +138,60 @@ fn vc_proven_result() -> VerifyResult {
     vc_verify_result(VERIFY_PROVEN(), -1, Vec::new(), Vec::new(), String::from(""))
 }
 
+// True when another element row of the same array and slot reads it at another sort: the entry
+// names then carry the sort, as a field of a parameter read at two sorts does.
+fn vc_field_row_ambiguous(ls: VcHeapListed, r: i64) -> bool {
+    let mut o: u64 = 0;
+    while o < ls.earr.len() {
+        if o as i64 != r && ls.earr[o] == ls.earr[r as u64] && ls.eslot[o] == ls.eslot[r as u64] && vc_ty_sort(ls.ety[o]) != vc_ty_sort(ls.ety[r as u64]) { return true; }
+        o = o + 1;
+    }
+    false
+}
+
+// Appends `<param>[<i>].<slot>` for the fields of the elements below each `Vec` parameter's length
+// that the answer carries behind the elements (`vc_append_field_rows`: for each row of
+// `vc_field_rows`, the same number of values per parameter of `vc_cex_vecs`).
+fn vc_append_field_answer(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnswer, names: Vec<String>, values: Vec<String>) {
+    let n: u64 = vc_answer_regular_count(cs, k, ans);
+    let rows: Vec<i64> = vc_field_rows(cs, k);
+    if ans.values.len() <= n || rows.len() == 0 { return; }
+    let vecs: Vec<i64> = vc_cex_vecs(cs, k);
+    let per: u64 = vc_answer_elems_per_vec(cs, k, ans);
+    let ls: VcHeapListed = cs.listed;
+    let mut q: u64 = 0;
+    while q < rows.len() {
+        let r: u64 = rows[q] as u64;
+        let mut p: u64 = 0;
+        while p < vecs.len() {
+            if cs.vec_arr[vecs[p] as u64] == ls.earr[r] && vc_cex_vec_path(cs, vecs[p]).len() == 0 {
+                let len: i64 = vc_answer_vec_len(cs, ans, n, vecs[p]);
+                let base: String = vc_source_param_name(f, cs.vec_param[vecs[p] as u64]);
+                let mut i: i64 = 0;
+                while i < len && len as u64 <= per {
+                    let at: u64 = n + (vecs.len() + q) * per + i as u64;
+                    if at < ans.values.len() {
+                        let key: String = String::from(base);
+                        key.push_str(String::from("["));
+                        key.push_str(i64_to_string(i));
+                        key.push_str(String::from("]."));
+                        key.push_str(i64_to_string(ls.eslot[r]));
+                        if vc_field_row_ambiguous(ls, r as i64) {
+                            key.push_str(String::from(":"));
+                            key.push_str(vc_sort_suffix(vc_ty_sort(ls.ety[r])));
+                        }
+                        names.push(key);
+                        values.push(vc_format_value(ls.ety[r], ans.values[at], ans.highs[at]));
+                    }
+                    i = i + 1;
+                }
+            }
+            p = p + 1;
+        }
+        q = q + 1;
+    }
+}
+
 // Result for claim `k` of `cs` given the solver's answer for it. `sat` is a
 // counterexample; `unsat` is not handled here (the caller moves on).
 fn vc_claim_result(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnswer) -> VerifyResult {
@@ -155,6 +211,7 @@ fn vc_claim_result(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnswer) -> 
             j = j + 1;
         }
         vc_append_vec_answer_contents(f, cs, k, ans, names, values);
+        vc_append_field_answer(f, cs, k, ans, names, values);
         let kind: i64 = cs.kinds[k];
         let mut raw: String = String::from("");
         if kind != VC_CLAIM_ENSURES() && kind != VC_CLAIM_CALLER_PRE() && kind != VC_CLAIM_CALLEE_POST() {

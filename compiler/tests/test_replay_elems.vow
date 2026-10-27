@@ -6,6 +6,7 @@ use diag
 use parser
 use replay_main
 use replay_elems
+use replay_listed
 
 fn parse_src(source: String) -> Module [io] {
     let dctx: DiagCtx = diag_ctx_new();
@@ -104,6 +105,29 @@ fn check_element_is_unknown() -> i32 [io] {
     0
 }
 
+// An element whose fields the counterexample lists (`people[0].0`) is rebuilt from them; elements with
+// one address are one binding pushed twice, and elements with two addresses are two.
+fn check_element_listed() -> i32 [io] {
+    let one: ReplayArg = value(String::from("fone"), 1, String::from("p.addr=-1,people.addr=0,people.len=1,people[0]=0,people[0].0=4"));
+    if one.reason.len() != 0 { return 41; }
+    if one.lit != String::from("{ let __replay_v: Vec<Person> = Vec::new(); let __replay_o0: Person = Person { age: 4 }; __replay_v.push(__replay_o0); __replay_v }") { return 42; }
+    let same: ReplayArg = value(String::from("fone"), 1, String::from("p.addr=-1,people.len=2,people[0]=0,people[1]=0,people[0].0=4,people[1].0=4"));
+    if same.reason.len() != 0 { return 43; }
+    if same.lit != String::from("{ let __replay_v: Vec<Person> = Vec::new(); let __replay_o0: Person = Person { age: 4 }; __replay_v.push(__replay_o0); __replay_v.push(__replay_o0); __replay_v }") { return 44; }
+    let apart: ReplayArg = value(String::from("fone"), 1, String::from("p.addr=-1,people.len=2,people[0]=0,people[1]=1,people[0].0=4,people[1].0=-5"));
+    if apart.reason.len() != 0 { return 45; }
+    if apart.lit != String::from("{ let __replay_v: Vec<Person> = Vec::new(); let __replay_o0: Person = Person { age: 4 }; __replay_v.push(__replay_o0); let __replay_o1: Person = Person { age: -5 }; __replay_v.push(__replay_o1); __replay_v }") { return 46; }
+    let partial: ReplayArg = value(String::from("fone"), 1, String::from("p.addr=-1,people.len=2,people[0]=0,people[1]=1,people[0].0=4"));
+    if partial.reason.len() == 0 { return 47; }
+    let other: ReplayArg = value(String::from("fother"), 1, String::from("o.addr=5,people.len=1,people[0]=5,people[0].0=4"));
+    if other.reason.len() == 0 { return 49; }
+    let vec_addr: ReplayArg = value(String::from("fone"), 1, String::from("p.addr=-1,people.addr=0,people.len=1,people[0]=0,people[0].0=4"));
+    if vec_addr.reason.len() != 0 { return 50; }
+    let named: ReplayArg = value(String::from("fone"), 1, String::from("p.addr=0,people.len=1,people[0]=0,people[0].0=4"));
+    if named.reason.len() != 0 || named.deps != String::from("__replay_a0 ") { return 48; }
+    0
+}
+
 // A Vec the model never read, an empty Vec and a Vec of collections keep their existing handling.
 fn check_other_vectors() -> i32 [io] {
     let empty: ReplayArg = value(String::from("fone"), 1, String::from("people.len=0"));
@@ -120,5 +144,7 @@ fn main() -> i32 [io] {
     if r2 != 0 { return r2; }
     let r3: i32 = check_element_is_unknown();
     if r3 != 0 { return r3; }
+    let r4: i32 = check_element_listed();
+    if r4 != 0 { return r4; }
     check_other_vectors()
 }

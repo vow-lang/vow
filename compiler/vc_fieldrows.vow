@@ -1,0 +1,62 @@
+module VcFieldRows
+
+use vc_ops
+use vc_term
+use vc_smt
+use vc_int
+use vc_heap
+use vc_query
+
+// The fields of the elements of a `Vec` parameter that the function read through the element's
+// handle (`vc_heaplist`): an element is the address of an object, and `hf<k>[element]` is its slot
+// `k`. Like the elements themselves (`vc_vecmodel`) they are read back from a model whose lengths
+// are bounded, so a claim's enriched answer carries them behind the elements: for each row, the
+// first `bound` objects' slot, each defined as `<arr>_e<i>_f<row>`. A function with a read that no
+// row can name lists none (`VcHeapListed.bad`).
+
+// Positions in `cs.listed` of the element rows the query of claim `k` declares.
+fn vc_field_rows(cs: VcClaims, k: u64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let ls: VcHeapListed = cs.listed;
+    if ls.bad { return out; }
+    let mut r: u64 = 0;
+    while r < ls.earr.len() {
+        if ls.ehdr[r] < cs.header_lens[k] { out.push(r as i64); }
+        r = r + 1;
+    }
+    out
+}
+
+fn vc_field_row_name(cs: VcClaims, r: i64, i: i64) -> String {
+    let out: String = String::from(cs.listed.earr[r as u64]);
+    out.push_str(String::from("_e"));
+    out.push_str(i64_to_string(i));
+    out.push_str(String::from("_f"));
+    out.push_str(i64_to_string(r));
+    out
+}
+
+// Appends, for each row of `rows`, the slot of the first `bound` elements to one model projection:
+// each definition, with its name and sort, in row-major order.
+fn vc_append_field_rows(cs: VcClaims, rows: Vec<i64>, bound: i64, s: SmtScript, names: Vec<String>, widths: Vec<i64>) {
+    let ar: VcArena = cs.arena;
+    let ls: VcHeapListed = cs.listed;
+    let mut q: u64 = 0;
+    while q < rows.len() {
+        let r: u64 = rows[q] as u64;
+        let arr: i64 = vc_tm_var(ar, ls.earr[r]);
+        let heap_name: String = vc_heap_slot_name(ls.eslot[r]);
+        let sort: i64 = vc_ty_sort(ls.ety[r]);
+        let mut i: i64 = 0;
+        while i < bound {
+            let element: i64 = vc_tm_app2(ar, VC_OP_SELECT(), arr, vc_tm_bv(ar, 64, i, 0));
+            let raw: i64 = vc_tm_app2(ar, VC_OP_SELECT(), vc_tm_var(ar, heap_name), element);
+            let name: String = vc_field_row_name(cs, rows[q], i);
+            vc_script_define_fun(s, name, sort, vc_heap_slot_as(ar, raw, ls.ety[r]));
+            names.push(name);
+            widths.push(sort);
+            i = i + 1;
+        }
+        q = q + 1;
+    }
+}

@@ -1,0 +1,139 @@
+module ReplayListed
+
+// An object a function read through memory: the counterexample lists the address the field holds
+// (`o.0`) and, for each slot the function read at that address, `o.0.<slot>` (`vc_heaplist`). The
+// rows exist for every object of a function whose reads are all listed, and for none otherwise, so
+// an address with rows is described completely and an address without them is not described at all.
+
+// The 64-bit pattern of an address as the counterexample prints it: an element in unsigned decimal,
+// a slot or `.addr` in signed decimal.
+fn replay_addr_bits(raw: String) -> Option<u64> {
+    if raw.len() > 1 && raw.byte_at(0) == 45 {
+        match parse_i64(raw) {
+            Option::Some(v) => { return Option::Some(v as u64); },
+            Option::None => { return Option::None; },
+        }
+    }
+    raw.parse_u64()
+}
+
+fn replay_listed_value(names: Vec<String>, vals: Vec<String>, key: String) -> String {
+    let mut i: u64 = 0u64;
+    while i < names.len() && i < vals.len() {
+        if names[i] == key { return vals[i]; }
+        i = i + 1u64;
+    }
+    String::from("")
+}
+
+// True when `name` is `<key>.<digits>`, optionally followed by `:<label>`: a slot row of `key`.
+fn replay_listed_is_row(name: String, key: String) -> bool {
+    let k: u64 = key.len();
+    if name.len() < k + 2u64 || name.byte_at(k) != 46 || name.substring(0u64, k) != key { return false; }
+    let mut i: u64 = k + 1u64;
+    while i < name.len() && name.byte_at(i) >= 48 && name.byte_at(i) <= 57 {
+        i = i + 1u64;
+    }
+    i > k + 1u64 && (i == name.len() || name.byte_at(i) == 58)
+}
+
+// True when the entry `<owner>.addr` is the address of a struct parameter: a `Vec` or `String`
+// parameter lists its length too, and its address is no struct's.
+fn replay_listed_len_key(owner: String) -> String {
+    let out: String = String::from(owner);
+    out.push_str(String::from(".len"));
+    out
+}
+
+fn replay_listed_struct_addr(names: Vec<String>, vals: Vec<String>, bits: u64) -> bool {
+    let mut i: u64 = 0u64;
+    while i < names.len() && i < vals.len() {
+        let n: u64 = names[i].len();
+        if n > 5u64 && names[i].substring(n - 5u64, n) == String::from(".addr") {
+            let owner: String = names[i].substring(0u64, n - 5u64);
+            if replay_listed_value(names, vals, replay_listed_len_key(owner)).len() == 0 {
+                match replay_addr_bits(vals[i]) {
+                    Option::Some(x) => { if x == bits { return true; } },
+                    Option::None => {},
+                }
+            }
+        }
+        i = i + 1u64;
+    }
+    false
+}
+
+// The position of the `.` that starts the last `.<digits>` of `name`, ignoring a `:<label>` suffix
+// (a slot row), or -1.
+fn replay_listed_row_dot(name: String) -> i64 {
+    let mut end: u64 = name.len();
+    let mut i: u64 = 0u64;
+    while i < name.len() {
+        if name.byte_at(i) == 58 { end = i; }
+        i = i + 1u64;
+    }
+    i = end;
+    while i > 0u64 {
+        i = i - 1u64;
+        let b: i64 = name.byte_at(i);
+        if b == 46 {
+            if i + 1u64 < end { return i as i64; }
+            return -1;
+        }
+        if b < 48 || b > 57 { return -1; }
+    }
+    -1
+}
+
+// True when the object named `key` has a row.
+fn replay_listed_has_rows(names: Vec<String>, key: String) -> bool {
+    let mut i: u64 = 0u64;
+    while i < names.len() {
+        if replay_listed_is_row(names[i], key) { return true; }
+        i = i + 1u64;
+    }
+    false
+}
+
+// True when `name` starts with the non-empty `prefix`.
+fn replay_listed_under(name: String, prefix: String) -> bool {
+    prefix.len() > 0u64 && name.len() >= prefix.len() && name.substring(0u64, prefix.len()) == prefix
+}
+
+// Why the object whose address is the entry `key` cannot be rebuilt from the counterexample, as the
+// tail of "field of type `<T>"; "" when the entry is absent (the field was never read) or the
+// object is described. Two objects with one address are one object, which the harness could build
+// only by sharing a binding, so it declines, except for those named under `shared` (the elements
+// of one `Vec`, which it shares).
+fn replay_through_memory(names: Vec<String>, vals: Vec<String>, key: String, shared: String) -> String {
+    let raw: String = replay_listed_value(names, vals, key);
+    if raw.len() == 0 { return String::from(""); }
+    if !replay_listed_has_rows(names, key) { return String::from("` is read through memory; its fields are not listed"); }
+    let mine: Option<u64> = replay_addr_bits(raw);
+    match mine {
+        Option::Some(x) => {
+            if replay_listed_struct_addr(names, vals, x) { return String::from("` is an object read through memory at the address of a struct parameter, whose own state the model reads there"); }
+        },
+        Option::None => {},
+    }
+    let mut i: u64 = 0u64;
+    while i < names.len() {
+        let dot: i64 = replay_listed_row_dot(names[i]);
+        if dot > 0 {
+            let owner: String = names[i].substring(0u64, dot as u64);
+            if owner != key && !replay_listed_under(owner, shared) {
+                match mine {
+                    Option::Some(x) => {
+                        match replay_addr_bits(replay_listed_value(names, vals, owner)) {
+                            Option::Some(y) => { if x == y { return String::from("` is an object read through memory at an address another such object has"); } },
+                            Option::None => {},
+                        }
+                    },
+                    Option::None => {},
+                }
+            }
+        }
+        i = i + 1u64;
+    }
+    String::from("")
+}

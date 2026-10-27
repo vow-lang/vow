@@ -2,6 +2,7 @@ module VcQuery
 
 use vc_ops
 use vc_term
+use vc_heap
 use vc_smt
 
 // Claim query construction. The executor records append-only prefixes; full,
@@ -57,6 +58,8 @@ struct VcClaims {
     // those of a `Vec`: the symbol and the header position of its declaration.
     map_len: Vec<String>,
     map_len_hdr: Vec<i64>,
+    // The fields the function read through a handle that the counterexample lists (`vc_heaplist`).
+    listed: VcHeapListed,
 }
 
 // `model_slots` of the length of a `Vec` or `String` parameter; a scalar
