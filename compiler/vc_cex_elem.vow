@@ -1,6 +1,7 @@
 module VcCexElem
 
 use ast
+use replay_ints
 use replay_main
 
 // Typed display of the elements of `Vec` and `String` parameters in a native

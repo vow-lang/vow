@@ -1,0 +1,58 @@
+module ReplayInts
+
+// Scalar integer type names as the replay harness spells and range-checks them.
+
+// Bit width of a scalar integer type name; 0 for any other name.
+fn replay_int_bits(name: String) -> i64 {
+    if name == String::from("i8") || name == String::from("u8") { return 8; }
+    if name == String::from("i16") || name == String::from("u16") { return 16; }
+    if name == String::from("i32") || name == String::from("u32") { return 32; }
+    if name == String::from("i64") || name == String::from("u64") { return 64; }
+    0
+}
+
+fn replay_int_signed(name: String) -> bool {
+    name.byte_at(0) == 105
+}
+
+// True if the integer text `raw` is a value of the integer type `name`.
+fn replay_int_fits(name: String, raw: String) -> bool {
+    let bits: i64 = replay_int_bits(name);
+    if replay_int_signed(name) {
+        if bits == 64 && raw == String::from("-9223372036854775808") { return true; }
+        match parse_i64(raw) {
+            Option::Some(v) => {
+                if bits == 64 { return true; }
+                let lim: i64 = 1 << (bits - 1);
+                v >= 0 - lim && v < lim
+            },
+            Option::None => { false },
+        }
+    } else {
+        if raw.byte_at(0) == 45 { return false; }
+        match raw.parse_u64() {
+            Option::Some(v) => {
+                if bits == 64 { return true; }
+                v < (1u64 << (bits as u64))
+            },
+            Option::None => { false },
+        }
+    }
+}
+
+// Source text of an integer value of type `name`. The most negative value has
+// no literal of its own (its magnitude is out of range), so it is spelled as
+// one more than the minimum, less one; a `u64` carries its suffix because its
+// magnitude may exceed `i64`.
+fn replay_int_literal(name: String, raw: String) -> String {
+    if raw == String::from("-128") { return String::from("(-127 - 1)"); }
+    if raw == String::from("-32768") { return String::from("(-32767 - 1)"); }
+    if raw == String::from("-2147483648") { return String::from("(-2147483647 - 1)"); }
+    if raw == String::from("-9223372036854775808") { return String::from("(-9223372036854775807 - 1)"); }
+    if name == String::from("u64") {
+        let out: String = String::from(raw);
+        out.push_str(String::from("u64"));
+        return out;
+    }
+    raw
+}

@@ -1,4 +1,3 @@
-// TEST: replay-skipped replay does not resolve `type Id = i64`, so it cannot tell that `a: Vec<Id>` and `b: Vec<i64>` are one type (#1890)
 // TEST: counterexample-fn "t"
 // TEST: counterexample-vow-id 2
 // TEST: counterexample-blame Callee
