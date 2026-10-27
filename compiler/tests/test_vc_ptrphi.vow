@@ -1,0 +1,414 @@
+module TestVcPtrPhi
+
+use ir
+use ir_dominance
+use vc_ops
+use vc_ptrfield
+use tests.builders
+
+fn two(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v.push(b);
+    v
+}
+
+fn vec_new(id: i64) -> IrInst {
+    mk_inst_call_extern(id, ITY_PTR(), Vec::new(), String::from("__vow_vec_new"))
+}
+
+fn push_call(id: i64, recv: i64, val: i64) -> IrInst {
+    mk_inst_call_extern(id, ITY_UNIT(), two(recv, val), String::from("__vow_vec_push_val"))
+}
+
+fn ret(id: i64) -> IrInst {
+    mk_inst(id, IOP_RETURN(), ITY_UNIT(), Vec::new())
+}
+
+fn func(blocks: Vec<IrBlock>) -> IrFunction {
+    mk_function(1, String::from("f"), Vec::new(), ITY_UNIT(), blocks)
+}
+
+fn count_op(f: IrFunction, op: i64) -> i64 {
+    let mut n: i64 = 0;
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let blk: IrBlock = f.blocks[b];
+        let mut i: u64 = 0;
+        while i < blk.insts.len() {
+            if blk.insts[i].op == op { n = n + 1; }
+            i = i + 1;
+        }
+        b = b + 1;
+    }
+    n
+}
+
+fn find_id(f: IrFunction, id: i64) -> IrInst {
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let blk: IrBlock = f.blocks[b];
+        let mut i: u64 = 0;
+        while i < blk.insts.len() {
+            if blk.insts[i].id == id { return blk.insts[i]; }
+            i = i + 1;
+        }
+        b = b + 1;
+    }
+    mk_inst_const_i64(0 - 1, 0)
+}
+
+fn find_op(f: IrFunction, op: i64) -> IrInst {
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let blk: IrBlock = f.blocks[b];
+        let mut i: u64 = 0;
+        while i < blk.insts.len() {
+            if blk.insts[i].op == op { return blk.insts[i]; }
+            i = i + 1;
+        }
+        b = b + 1;
+    }
+    mk_inst_const_i64(0 - 1, 0)
+}
+
+// The value the Upsilon in block `bi` feeds, -1 when it has none.
+fn ups_value(f: IrFunction, bi: u64) -> i64 {
+    let blk: IrBlock = f.blocks[bi];
+    let mut i: u64 = 0;
+    while i < blk.insts.len() {
+        if blk.insts[i].op == IOP_UPSILON() { return blk.insts[i].args[0]; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn read_and_push(first_id: i64, join: Vec<IrInst>) -> Vec<IrInst> {
+    join.push(mk_inst_const_i64(first_id, 9));
+    join.push(mk_inst_field_get(first_id + 1, ITY_I64(), 1, 0));
+    join.push(push_call(first_id + 2, first_id + 1, first_id));
+    join
+}
+
+// Both arms of a branch store the field and none dominates the read; a store after the read
+// in the join is no value of it. The push is on a Phi of the two stored Vecs, fed from each arm.
+fn check_both_arms_store() -> i64 {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_alloc(1, 16));
+    e.push(mk_inst_const_bool(4, 1));
+    e.push(mk_inst_branch(5, 4, 1, 2));
+    let a: Vec<IrInst> = Vec::new();
+    a.push(vec_new(8));
+    a.push(mk_inst_field_set(9, 1, 0, 8));
+    a.push(mk_inst_jump(10, 3));
+    let b: Vec<IrInst> = Vec::new();
+    b.push(vec_new(11));
+    b.push(mk_inst_field_set(12, 1, 0, 11));
+    b.push(mk_inst_jump(13, 3));
+    let j: Vec<IrInst> = read_and_push(20, Vec::new());
+    j.push(vec_new(23));
+    j.push(mk_inst_field_set(24, 1, 0, 23));
+    j.push(ret(25));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, a));
+    blocks.push(mk_block(2, b));
+    blocks.push(mk_block(3, j));
+    let g: IrFunction = vc_resolve_ptr_fields(func(blocks));
+    if count_op(g, IOP_FIELD_GET()) != 0 { return 1; }
+    if count_op(g, IOP_PHI()) != 1 || count_op(g, IOP_UPSILON()) != 2 { return 2; }
+    let phi: IrInst = find_op(g, IOP_PHI());
+    if phi.ty != ITY_PTR() || find_id(g, 22).args[0] != phi.id { return 3; }
+    if ups_value(g, 1) != 8 || ups_value(g, 2) != 11 { return 4; }
+    if find_op(g, IOP_UPSILON()).dv != phi.id { return 5; }
+    0
+}
+
+// A store in one arm and an earlier one before the branch: the Phi merges the arm's store with
+// the earlier one, fed from the entry block on the path that skips the arm.
+fn check_store_in_one_arm() -> i64 {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_alloc(1, 16));
+    e.push(vec_new(2));
+    e.push(mk_inst_field_set(3, 1, 0, 2));
+    e.push(mk_inst_const_bool(4, 1));
+    e.push(mk_inst_branch(5, 4, 1, 2));
+    let a: Vec<IrInst> = Vec::new();
+    a.push(vec_new(8));
+    a.push(mk_inst_field_set(9, 1, 0, 8));
+    a.push(mk_inst_jump(10, 2));
+    let j: Vec<IrInst> = read_and_push(20, Vec::new());
+    j.push(ret(25));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, a));
+    blocks.push(mk_block(2, j));
+    let g: IrFunction = vc_resolve_ptr_fields(func(blocks));
+    if count_op(g, IOP_FIELD_GET()) != 0 || count_op(g, IOP_PHI()) != 1 { return 1; }
+    if find_id(g, 22).args[0] != find_op(g, IOP_PHI()).id { return 2; }
+    if ups_value(g, 0) != 2 || ups_value(g, 1) != 8 { return 3; }
+    0
+}
+
+// Both arms store the one value stored before the branch: every path agrees, so the read is
+// that value and no Phi is built.
+fn check_paths_agree() -> i64 {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_alloc(1, 16));
+    e.push(vec_new(2));
+    e.push(mk_inst_field_set(3, 1, 0, 2));
+    e.push(mk_inst_const_bool(4, 1));
+    e.push(mk_inst_branch(5, 4, 1, 2));
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_field_set(9, 1, 0, 2));
+    a.push(mk_inst_jump(10, 3));
+    let b: Vec<IrInst> = Vec::new();
+    b.push(mk_inst_field_set(12, 1, 0, 2));
+    b.push(mk_inst_jump(13, 3));
+    let j: Vec<IrInst> = read_and_push(20, Vec::new());
+    j.push(ret(25));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, a));
+    blocks.push(mk_block(2, b));
+    blocks.push(mk_block(3, j));
+    let g: IrFunction = vc_resolve_ptr_fields(func(blocks));
+    if count_op(g, IOP_FIELD_GET()) != 0 || count_op(g, IOP_PHI()) != 0 { return 1; }
+    if find_id(g, 22).args[0] != 2 { return 2; }
+    0
+}
+
+// One path reaches the read with no store at all: the field has no value there, the read is left
+// alone and the failed walk leaves no Phi behind.
+fn check_path_without_store() -> i64 {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_alloc(1, 16));
+    e.push(mk_inst_const_bool(4, 1));
+    e.push(mk_inst_branch(5, 4, 1, 2));
+    let a: Vec<IrInst> = Vec::new();
+    a.push(vec_new(8));
+    a.push(mk_inst_field_set(9, 1, 0, 8));
+    a.push(mk_inst_jump(10, 2));
+    let j: Vec<IrInst> = read_and_push(20, Vec::new());
+    j.push(ret(25));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, a));
+    blocks.push(mk_block(2, j));
+    let g: IrFunction = vc_resolve_ptr_fields(func(blocks));
+    if count_op(g, IOP_FIELD_GET()) != 1 { return 1; }
+    if count_op(g, IOP_PHI()) != 0 || count_op(g, IOP_UPSILON()) != 0 { return 2; }
+    if find_id(g, 22).args[0] != 21 { return 3; }
+    0
+}
+
+// A join whose predecessor is itself a join: the inner Phi feeds the outer one.
+fn check_nested_joins() -> i64 {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_alloc(1, 16));
+    e.push(vec_new(2));
+    e.push(mk_inst_field_set(3, 1, 0, 2));
+    e.push(mk_inst_const_bool(4, 1));
+    e.push(mk_inst_branch(5, 4, 1, 2));
+    let o: Vec<IrInst> = Vec::new();
+    o.push(mk_inst_branch(6, 4, 3, 4));
+    let skip: Vec<IrInst> = Vec::new();
+    skip.push(mk_inst_jump(7, 6));
+    let s: Vec<IrInst> = Vec::new();
+    s.push(vec_new(8));
+    s.push(mk_inst_field_set(9, 1, 0, 8));
+    s.push(mk_inst_jump(10, 5));
+    let n: Vec<IrInst> = Vec::new();
+    n.push(mk_inst_jump(11, 5));
+    let inner: Vec<IrInst> = Vec::new();
+    inner.push(mk_inst_jump(12, 6));
+    let j: Vec<IrInst> = read_and_push(20, Vec::new());
+    j.push(ret(25));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, o));
+    blocks.push(mk_block(2, skip));
+    blocks.push(mk_block(3, s));
+    blocks.push(mk_block(4, n));
+    blocks.push(mk_block(5, inner));
+    blocks.push(mk_block(6, j));
+    let g: IrFunction = vc_resolve_ptr_fields(func(blocks));
+    if count_op(g, IOP_FIELD_GET()) != 0 { return 1; }
+    if count_op(g, IOP_PHI()) != 2 || count_op(g, IOP_UPSILON()) != 4 { return 2; }
+    if ups_value(g, 2) != 2 || ups_value(g, 3) != 8 || ups_value(g, 4) != 2 { return 3; }
+    let outer: IrInst = find_id(g, 22);
+    let inner_phi: IrInst = find_id(g, ups_value(g, 5));
+    if find_id(g, outer.args[0]).op != IOP_PHI() || inner_phi.op != IOP_PHI() || inner_phi.id == outer.args[0] { return 4; }
+    0
+}
+
+// A store in a loop that reaches the read after it would need a loop-carried Phi: left alone.
+fn check_loop_store_not_merged() -> i64 {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_alloc(1, 16));
+    e.push(vec_new(2));
+    e.push(mk_inst_field_set(3, 1, 0, 2));
+    e.push(mk_inst_const_bool(4, 1));
+    e.push(mk_inst_jump(5, 1));
+    let h: Vec<IrInst> = Vec::new();
+    h.push(mk_inst_branch(6, 4, 2, 3));
+    let l: Vec<IrInst> = Vec::new();
+    l.push(vec_new(8));
+    l.push(mk_inst_field_set(9, 1, 0, 8));
+    l.push(mk_inst_jump(10, 1));
+    let x: Vec<IrInst> = read_and_push(20, Vec::new());
+    x.push(ret(25));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, h));
+    blocks.push(mk_block(2, l));
+    blocks.push(mk_block(3, x));
+    let g: IrFunction = vc_resolve_ptr_fields(func(blocks));
+    if count_op(g, IOP_FIELD_GET()) != 1 || count_op(g, IOP_PHI()) != 0 { return 1; }
+    0
+}
+
+// An inner join already has its Phi when the walk meets a path with no store: the failed walk
+// removes it, and the read stays. Another field of the object resolves, so the rewrite happens
+// and would carry a stale Phi.
+fn check_failed_walk_leaves_no_phi() -> i64 {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_alloc(1, 16));
+    e.push(vec_new(30));
+    e.push(mk_inst_field_set(31, 1, 1, 30));
+    e.push(mk_inst_const_bool(4, 1));
+    e.push(mk_inst_branch(5, 4, 1, 5));
+    let o: Vec<IrInst> = Vec::new();
+    o.push(mk_inst_branch(6, 4, 2, 3));
+    let a: Vec<IrInst> = Vec::new();
+    a.push(vec_new(8));
+    a.push(mk_inst_field_set(9, 1, 0, 8));
+    a.push(mk_inst_jump(10, 4));
+    let b: Vec<IrInst> = Vec::new();
+    b.push(vec_new(11));
+    b.push(mk_inst_field_set(12, 1, 0, 11));
+    b.push(mk_inst_jump(13, 4));
+    let inner: Vec<IrInst> = Vec::new();
+    inner.push(mk_inst_jump(14, 6));
+    let bare: Vec<IrInst> = Vec::new();
+    bare.push(mk_inst_jump(7, 6));
+    let j: Vec<IrInst> = read_and_push(20, Vec::new());
+    j.push(mk_inst_field_get(32, ITY_I64(), 1, 1));
+    j.push(push_call(33, 32, 20));
+    j.push(ret(25));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, o));
+    blocks.push(mk_block(2, a));
+    blocks.push(mk_block(3, b));
+    blocks.push(mk_block(4, inner));
+    blocks.push(mk_block(5, bare));
+    blocks.push(mk_block(6, j));
+    let g: IrFunction = vc_resolve_ptr_fields(func(blocks));
+    if count_op(g, IOP_FIELD_GET()) != 1 || find_id(g, 33).args[0] != 30 { return 1; }
+    if count_op(g, IOP_PHI()) != 0 || count_op(g, IOP_UPSILON()) != 0 { return 2; }
+    0
+}
+
+// Two reads of the field after one join each get a Phi with an id of its own.
+fn check_two_reads() -> i64 {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_alloc(1, 16));
+    e.push(mk_inst_const_bool(4, 1));
+    e.push(mk_inst_branch(5, 4, 1, 2));
+    let a: Vec<IrInst> = Vec::new();
+    a.push(vec_new(8));
+    a.push(mk_inst_field_set(9, 1, 0, 8));
+    a.push(mk_inst_jump(10, 3));
+    let b: Vec<IrInst> = Vec::new();
+    b.push(vec_new(11));
+    b.push(mk_inst_field_set(12, 1, 0, 11));
+    b.push(mk_inst_jump(13, 3));
+    let j: Vec<IrInst> = read_and_push(20, Vec::new());
+    let j2: Vec<IrInst> = read_and_push(30, j);
+    j2.push(ret(25));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, a));
+    blocks.push(mk_block(2, b));
+    blocks.push(mk_block(3, j2));
+    let g: IrFunction = vc_resolve_ptr_fields(func(blocks));
+    if count_op(g, IOP_FIELD_GET()) != 0 { return 1; }
+    if count_op(g, IOP_PHI()) != 2 || count_op(g, IOP_UPSILON()) != 4 { return 2; }
+    let first: i64 = find_id(g, 22).args[0];
+    let second: i64 = find_id(g, 32).args[0];
+    if first == second || find_id(g, first).op != IOP_PHI() || find_id(g, second).op != IOP_PHI() { return 3; }
+    0
+}
+
+// A branch whose two targets are the same join lists its block twice as a predecessor: one
+// Upsilon, not two.
+fn check_duplicate_predecessor() -> i64 {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_alloc(1, 16));
+    e.push(vec_new(2));
+    e.push(mk_inst_field_set(3, 1, 0, 2));
+    e.push(mk_inst_const_bool(4, 1));
+    e.push(mk_inst_branch(5, 4, 1, 2));
+    let a: Vec<IrInst> = Vec::new();
+    a.push(vec_new(8));
+    a.push(mk_inst_field_set(9, 1, 0, 8));
+    a.push(mk_inst_branch(10, 4, 2, 2));
+    let j: Vec<IrInst> = read_and_push(20, Vec::new());
+    j.push(ret(25));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, a));
+    blocks.push(mk_block(2, j));
+    let g: IrFunction = vc_resolve_ptr_fields(func(blocks));
+    if count_op(g, IOP_PHI()) != 1 || count_op(g, IOP_UPSILON()) != 2 { return 1; }
+    0
+}
+
+// A merged read whose only use is not an object operand gets no Phi.
+fn check_value_use_gets_no_phi() -> i64 {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_alloc(1, 16));
+    e.push(vec_new(30));
+    e.push(mk_inst_field_set(31, 1, 1, 30));
+    e.push(mk_inst_const_bool(4, 1));
+    e.push(mk_inst_branch(5, 4, 1, 2));
+    let a: Vec<IrInst> = Vec::new();
+    a.push(vec_new(8));
+    a.push(mk_inst_field_set(9, 1, 0, 8));
+    a.push(mk_inst_jump(10, 3));
+    let b: Vec<IrInst> = Vec::new();
+    b.push(vec_new(11));
+    b.push(mk_inst_field_set(12, 1, 0, 11));
+    b.push(mk_inst_jump(13, 3));
+    let j: Vec<IrInst> = Vec::new();
+    j.push(mk_inst_field_get(21, ITY_I64(), 1, 0));
+    j.push(mk_inst_const_i64(22, 9));
+    j.push(push_call(23, 22, 21));
+    j.push(mk_inst_field_get(32, ITY_I64(), 1, 1));
+    j.push(push_call(33, 32, 22));
+    j.push(ret(25));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, a));
+    blocks.push(mk_block(2, b));
+    blocks.push(mk_block(3, j));
+    let g: IrFunction = vc_resolve_ptr_fields(func(blocks));
+    if count_op(g, IOP_FIELD_GET()) != 1 || find_id(g, 33).args[0] != 30 { return 1; }
+    if count_op(g, IOP_PHI()) != 0 { return 2; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_both_arms_store();
+    if r == 0 { r = check_store_in_one_arm() + 10; if r == 10 { r = 0; } }
+    if r == 0 { r = check_paths_agree() + 20; if r == 20 { r = 0; } }
+    if r == 0 { r = check_path_without_store() + 30; if r == 30 { r = 0; } }
+    if r == 0 { r = check_nested_joins() + 40; if r == 40 { r = 0; } }
+    if r == 0 { r = check_loop_store_not_merged() + 50; if r == 50 { r = 0; } }
+    if r == 0 { r = check_failed_walk_leaves_no_phi() + 60; if r == 60 { r = 0; } }
+    if r == 0 { r = check_two_reads() + 70; if r == 70 { r = 0; } }
+    if r == 0 { r = check_duplicate_predecessor() + 80; if r == 80 { r = 0; } }
+    if r == 0 { r = check_value_use_gets_no_phi() + 90; if r == 90 { r = 0; } }
+    i64_to_i32_wrap(r)
+}

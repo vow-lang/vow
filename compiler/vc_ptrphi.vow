@@ -1,0 +1,216 @@
+module VcPtrPhi
+
+use ir
+use ir_dominance
+use vc_loops
+
+// The Phis a field read needs when the object it names depends on the path taken: a field
+// stored in each arm of a branch, or in one arm with an earlier store on the other path. The
+// read is the value of the field at its position, found as the reaching definition (SSA
+// construction over one field of one allocation): the last store in the read's block before
+// it, else the value at the start of the block, which is the value at the end of its only
+// predecessor, or, for a join, a new Phi of the values at the end of every predecessor (an
+// Upsilon before each predecessor's terminator feeds it). A join whose predecessors all agree
+// needs no Phi.
+//
+// The walk is fail-closed: it returns -1 and leaves the plan as it found it when
+//   - a block is reached again before its value is known, or a join is a loop header (one of
+//     its predecessors is dominated by it): the Phi would be loop-carried, which this walk does
+//     not build, so a loop around the read or around a store that reaches it leaves it alone;
+//   - the entry block is reached with no store on the path: the field has no value there.
+// `vc_pf_merge_store` (vc_ptrfield) decides which stores count; this module only places Phis.
+//
+// A plan holds the Phis and Upsilons of every successful walk of a function, linked per block
+// (`phi_head[b]` and `ups_head[b]` are the newest entry, `*_next` the one before it). New
+// values take ids from `next_id`, which starts above every id of the function.
+struct VcPhiPlan {
+    next_id: i64,
+    phi_id: Vec<i64>,
+    phi_blk: Vec<i64>,
+    phi_next: Vec<i64>,
+    ups_val: Vec<i64>,
+    ups_phi: Vec<i64>,
+    ups_id: Vec<i64>,
+    ups_blk: Vec<i64>,
+    ups_next: Vec<i64>,
+    phi_head: Vec<i64>,
+    ups_head: Vec<i64>,
+}
+
+fn vc_phi_plan_new(first_id: i64, nb: u64) -> VcPhiPlan {
+    VcPhiPlan {
+        next_id: first_id,
+        phi_id: Vec::new(),
+        phi_blk: Vec::new(),
+        phi_next: Vec::new(),
+        ups_val: Vec::new(),
+        ups_phi: Vec::new(),
+        ups_id: Vec::new(),
+        ups_blk: Vec::new(),
+        ups_next: Vec::new(),
+        phi_head: dom_fill(nb, -1),
+        ups_head: dom_fill(nb, -1),
+    }
+}
+
+fn vc_phi_add_phi(plan: VcPhiPlan, blk: i64) -> i64 {
+    let id: i64 = plan.next_id;
+    plan.next_id = id + 1;
+    plan.phi_id.push(id);
+    plan.phi_blk.push(blk);
+    plan.phi_next.push(plan.phi_head[blk as u64]);
+    plan.phi_head[blk as u64] = plan.phi_id.len() as i64 - 1;
+    id
+}
+
+fn vc_phi_add_ups(plan: VcPhiPlan, blk: i64, val: i64, phi: i64) {
+    plan.ups_val.push(val);
+    plan.ups_phi.push(phi);
+    plan.ups_id.push(plan.next_id);
+    plan.next_id = plan.next_id + 1;
+    plan.ups_blk.push(blk);
+    plan.ups_next.push(plan.ups_head[blk as u64]);
+    plan.ups_head[blk as u64] = plan.ups_val.len() as i64 - 1;
+}
+
+// Drops every entry added since the plan had `phis` Phis, `upss` Upsilons and `next_id`.
+fn vc_phi_rollback(plan: VcPhiPlan, phis: u64, upss: u64, next_id: i64) {
+    while plan.ups_val.len() > upss {
+        let k: u64 = plan.ups_val.len() - 1;
+        plan.ups_head[plan.ups_blk[k] as u64] = plan.ups_next[k];
+        plan.ups_val.pop();
+        plan.ups_phi.pop();
+        plan.ups_id.pop();
+        plan.ups_blk.pop();
+        plan.ups_next.pop();
+    }
+    while plan.phi_id.len() > phis {
+        let k: u64 = plan.phi_id.len() - 1;
+        plan.phi_head[plan.phi_blk[k] as u64] = plan.phi_next[k];
+        plan.phi_id.pop();
+        plan.phi_blk.pop();
+        plan.phi_next.pop();
+    }
+    plan.next_id = next_id;
+}
+
+fn vc_phi_at_end(last: Vec<i64>, memo: Vec<i64>, p: i64) -> i64 {
+    if last[p as u64] >= 0 { return last[p as u64]; }
+    memo[p as u64]
+}
+
+// The value at the start of block `b`, whose predecessors' values are those at their ends (the
+// last store of the block when it has one, else the value computed for it). Adds the Phi and its
+// Upsilons when the predecessors disagree; -1 when `b` has no predecessor or is a loop header.
+fn vc_phi_join(plan: VcPhiPlan, b: i64, last: Vec<i64>, memo: Vec<i64>, poff: Vec<i64>, plist: Vec<i64>, nums: Vec<i64>) -> i64 {
+    let lo: i64 = poff[b as u64];
+    let hi: i64 = poff[(b + 1) as u64];
+    if lo == hi { return -1; }
+    let first: i64 = plist[lo as u64];
+    let v0: i64 = vc_phi_at_end(last, memo, first);
+    let mut same: bool = true;
+    let mut k: i64 = lo;
+    while k < hi {
+        let p: u64 = plist[k as u64] as u64;
+        let v: i64 = vc_phi_at_end(last, memo, p as i64);
+        if v < 0 || dom_dominates(nums, last.len(), b, p as i64) { return -1; }
+        if v != v0 { same = false; }
+        k = k + 1;
+    }
+    if same { return v0; }
+    let phi: i64 = vc_phi_add_phi(plan, b);
+    let seen: Vec<i64> = Vec::new();
+    k = lo;
+    while k < hi {
+        let p: i64 = plist[k as u64];
+        let mut dup: bool = false;
+        let mut s: u64 = 0;
+        while s < seen.len() {
+            if seen[s] == p { dup = true; }
+            s = s + 1;
+        }
+        if !dup {
+            seen.push(p);
+            vc_phi_add_ups(plan, p, vc_phi_at_end(last, memo, p), phi);
+        }
+        k = k + 1;
+    }
+    phi
+}
+
+// The value of the field at the start of block `rb`, where `last[b]` is the value of the last
+// store in block `b` (-1: none; for `rb`, the last store before the read). `poff`/`plist` are
+// the predecessor lists (CSR) and `nums` the dominator numbering. -1 when the walk fails; the
+// plan is then as it was.
+fn vc_phi_reach(plan: VcPhiPlan, last: Vec<i64>, poff: Vec<i64>, plist: Vec<i64>, nums: Vec<i64>, rb: i64) -> i64 {
+    if last[rb as u64] >= 0 { return last[rb as u64]; }
+    let nb: u64 = last.len();
+    let phis: u64 = plan.phi_id.len();
+    let upss: u64 = plan.ups_val.len();
+    let first_id: i64 = plan.next_id;
+    let state: Vec<i64> = dom_fill(nb, 0);
+    let memo: Vec<i64> = dom_fill(nb, -1);
+    let cur: Vec<i64> = dom_fill(nb, 0);
+    let stack: Vec<i64> = Vec::new();
+    state[rb as u64] = 1;
+    cur[rb as u64] = poff[rb as u64];
+    stack.push(rb);
+    while stack.len() > 0 {
+        let b: i64 = stack[stack.len() - 1];
+        if cur[b as u64] < poff[(b + 1) as u64] {
+            let p: i64 = plist[cur[b as u64] as u64];
+            cur[b as u64] = cur[b as u64] + 1;
+            if last[p as u64] < 0 {
+                if state[p as u64] == 1 {
+                    vc_phi_rollback(plan, phis, upss, first_id);
+                    return -1;
+                }
+                if state[p as u64] == 0 {
+                    state[p as u64] = 1;
+                    cur[p as u64] = poff[p as u64];
+                    stack.push(p);
+                }
+            }
+        } else {
+            let v: i64 = vc_phi_join(plan, b, last, memo, poff, plist, nums);
+            if v < 0 {
+                vc_phi_rollback(plan, phis, upss, first_id);
+                return -1;
+            }
+            memo[b as u64] = v;
+            state[b as u64] = 2;
+            stack.pop();
+        }
+    }
+    memo[rb as u64]
+}
+
+fn vc_phi_emit_heads(plan: VcPhiPlan, b: u64, out: IrBlock) {
+    let mut k: i64 = plan.phi_head[b];
+    while k >= 0 {
+        out.insts.push(ir_inst_new(plan.phi_id[k as u64], IOP_PHI(), ITY_PTR(), Vec::new(), IDATA_NONE(), 0, 0, String::from("")));
+        k = plan.phi_next[k as u64];
+    }
+}
+
+// The index of the terminator of block `b`, before which its Upsilons go: -1 when it feeds no
+// Phi, -2 when it feeds one and has no terminator (the rewrite is then refused).
+fn vc_phi_term_index(plan: VcPhiPlan, b: u64, blk: IrBlock) -> i64 {
+    if plan.ups_head[b] < 0 { return -1; }
+    let t: i64 = vc_last_terminal(blk);
+    if t < 0 { return -2; }
+    t
+}
+
+fn vc_phi_emit_ups(plan: VcPhiPlan, b: u64, out: IrBlock, term: IrInst) {
+    let mut k: i64 = plan.ups_head[b];
+    while k >= 0 {
+        let feed: Vec<i64> = Vec::new();
+        feed.push(plan.ups_val[k as u64]);
+        let ups: IrInst = ir_inst_new(plan.ups_id[k as u64], IOP_UPSILON(), ITY_UNIT(), feed, IDATA_PHI_TARGET(), plan.ups_phi[k as u64], 0, String::from(""));
+        ups.ostart = term.ostart;
+        ups.olen = term.olen;
+        out.insts.push(ups);
+        k = plan.ups_next[k as u64];
+    }
+}

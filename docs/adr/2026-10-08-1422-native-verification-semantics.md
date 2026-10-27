@@ -1221,21 +1221,23 @@ Three small rules, each sound for proofs and none a cap or a havoc.
   every later read. When the struct is an allocation (reached through the Phi a call result is
   after inlining), `vc_resolve_ptr_fields` makes the object operand of the `Vec` or `String`
   operation the value of the last `FieldSet` of the slot dominating the read (an earlier position
-  in its block, or a dominating block), so a field stored twice is resolved per read: the push
-  after `b.insts = Vec::new()` is on the new `Vec`, the read between the two stores is the first.
-  The stores that may name the allocation are wider than the truth: a store through it or a Phi that merges it, through a
-  receiver the rule cannot place, and, once it has escaped (stored into a field, pushed into a
-  collection or passed as a value, so a loaded pointer may be it), through any pointer that is not
-  a parameter or an allocation. Each must name the allocation alone (a store
-  through a Phi that merges it with another object may leave the slot as it was), and each that
-  does not dominate the read must be unable to reach it (`vc_pf_entering`), so a store in one arm
-  of a branch that merges before the read, or in a loop around it, leaves the read a handle, and
-  the write through it `Skipped` (the merge of two stored objects would need a Phi built here: see #1888). So
-  does a pointer value of another type and a parameter's field (another parameter may be the same
-  object). The pre-inline gate of one function of a call tree (`calls`) accepts a write through a
-  handle for the same reason, since the struct is built by a callee. Pinned by
-  `pass/ptr_field_vec_push_via_field.vow`, `pass/ptr_field_reassigned_*.vow`, the `_wrong` twins
-  (a wrong-store read is refuted) and `compiler/tests/test_vc_ptrfield.vow`.
+  in its block, or a dominating block), so the push after `b.insts = Vec::new()` is on the new
+  `Vec`, a read between the two stores on the first.
+  The stores that may name the allocation are wider than the truth: a store through it or a Phi
+  that merges it, through a receiver the rule cannot place, and, once it has escaped (stored into
+  a field, pushed into a collection or passed as a value, so a loaded pointer may be it), through
+  any pointer that is not a parameter or an allocation. Each must name the allocation alone (a
+  store through a Phi that merges it with another object may leave the slot as it was), and each that
+  does not dominate the read must be unable to reach it (`vc_pf_entering`). A read a store
+  reaches without dominating it, past a merge of branches, is its reaching definition
+  (`vc_phi_reach`, #1888): the last store in its block, else the value at the end of its only
+  predecessor, else a Phi of those at the end of every predecessor. A loop header or a path with
+  no store leaves the read a handle and the write `Skipped`, as does a pointer value of another type
+  or a parameter's field (it may be another parameter). The pre-inline gate (`calls`) accepts such a write:
+  a callee builds the struct. Pinned by
+  `pass/ptr_field_vec_push_via_field.vow`, `pass/ptr_field_reassigned_*.vow`,
+  `pass/ptr_field_*arm*.vow`, the `_wrong` twins and
+  `compiler/tests/test_vc_ptr{field,phi}.vow`.
 - **A loop with no `invariant` is also cut, with the clause `true`.** After the bounded rounds end
   open at the largest bound, when the inductive attempt did not prove and some loop has no clause,
   the cut is made again with `ConstBool true; VowInvariant` after each such header's Phis

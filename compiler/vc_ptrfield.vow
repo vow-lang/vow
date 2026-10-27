@@ -8,6 +8,7 @@ use vc_gate
 use vc_loops
 use vc_agg_shape
 use vc_sources
+use vc_ptrphi
 
 // A collection held in a field of a struct the function allocated, and used where an
 // object is declared. The IR types such a field `i64` (a handle, see `vc_heap`), so
@@ -31,9 +32,9 @@ use vc_sources
 //     read's own block, or a dominating block). Each store must name `A`
 //     alone: a store through a Phi that merges `A` with another object may leave the slot as
 //     it was. Every store that does not dominate the read must be unable to reach it, in a
-//     block from which the read's block cannot be entered, so a store in one arm of a branch
-//     that merges before the read, or in a loop around it, leaves the read alone (the merge
-//     of two stored objects would need a Phi built here: see #1888);
+//     block from which the read's block cannot be entered. A read that fails this because a
+//     store in one arm of a branch merges before it is the Phi of the stored objects
+//     (`vc_phi_reach`, vc_ptrphi); a loop around the read or a store leaves it alone;
 //   - the stored value is a pointer, and it is defined where the read is.
 //
 // Only the object operands of a `Vec` or `String` operation are replaced. A read with
@@ -192,21 +193,27 @@ fn vc_pf_before(c: VcPfCtx, x: i64, yb: i64, yi: i64) -> bool {
     vc_pf_dominates(c, c.s_blk[x as u64], yb)
 }
 
-// The value stored into slot `slot` of allocation `a` by the last store that dominates the
-// read at (`rb`, `ri`), when no other store can reach the read; -1 otherwise.
-fn vc_pf_last_store(c: VcPfCtx, a: i64, slot: i64, rb: i64, ri: i64) -> i64 {
+// True when no store of `slot` whose receiver the rule cannot place may name `a`.
+fn vc_pf_slot_clean(c: VcPfCtx, a: i64, slot: i64) -> bool {
     let mut n: u64 = 0;
     while n < c.loose_any.len() {
-        if c.s_slot[c.loose_any[n] as u64] == slot { return -1; }
+        if c.s_slot[c.loose_any[n] as u64] == slot { return false; }
         n = n + 1;
     }
     if c.escaped[a as u64] == 1 {
         n = 0;
         while n < c.loose_loaded.len() {
-            if c.s_slot[c.loose_loaded[n] as u64] == slot { return -1; }
+            if c.s_slot[c.loose_loaded[n] as u64] == slot { return false; }
             n = n + 1;
         }
     }
+    true
+}
+
+// The value stored into slot `slot` of allocation `a` by the last store that dominates the
+// read at (`rb`, `ri`), when no other store can reach the read; -1 otherwise.
+fn vc_pf_last_store(c: VcPfCtx, a: i64, slot: i64, rb: i64, ri: i64) -> i64 {
+    if !vc_pf_slot_clean(c, a, slot) { return -1; }
     let mut last: i64 = -1;
     let mut e: i64 = c.a_head[a as u64];
     while e >= 0 {
@@ -227,6 +234,31 @@ fn vc_pf_last_store(c: VcPfCtx, a: i64, slot: i64, rb: i64, ri: i64) -> i64 {
     let v: i64 = c.s_val[last as u64];
     if v < 0 || (v as u64) >= c.tys.len() || c.tys[v as u64] != ITY_PTR() { return -1; }
     v
+}
+
+// The value of slot `slot` of `a` at the read (`rb`, `ri`) when it depends on the path taken:
+// a Phi (or the one value every path agrees on) of the stores that reach the read. Every store
+// of the slot must name `a` alone and store a pointer; -1 when the walk fails.
+fn vc_pf_merge_store(c: VcPfCtx, plan: VcPhiPlan, a: i64, slot: i64, rb: i64, ri: i64) -> i64 {
+    if !vc_pf_slot_clean(c, a, slot) { return -1; }
+    vc_pf_cfg(c);
+    let last: Vec<i64> = dom_fill(c.f.blocks.len(), -1);
+    let at: Vec<i64> = dom_fill(c.f.blocks.len(), -1);
+    let mut e: i64 = c.a_head[a as u64];
+    while e >= 0 {
+        let s: u64 = c.a_store[e as u64] as u64;
+        if c.s_slot[s] == slot {
+            let v: i64 = c.s_val[s];
+            if c.s_only[s] != a || v < 0 || (v as u64) >= c.tys.len() || c.tys[v as u64] != ITY_PTR() { return -1; }
+            let blk: u64 = c.s_blk[s] as u64;
+            if (blk as i64 != rb || c.s_pos[s] < ri) && c.s_pos[s] > at[blk] {
+                at[blk] = c.s_pos[s];
+                last[blk] = v;
+            }
+        }
+        e = c.a_next[e as u64];
+    }
+    vc_phi_reach(plan, last, c.poff, c.plist, c.nums, rb)
 }
 
 // Every store of the slot names `a` alone (a store through a Phi that merges `a` with another
@@ -307,8 +339,9 @@ fn vc_pf_cfg(c: VcPfCtx) {
     }
 }
 
-// `repl[id]` is the pointer value the field read `id` resolves to, -1 for a read left alone.
-fn vc_pf_resolve(c: VcPfCtx, rpo: Vec<i64>, n_ids: u64) -> Vec<i64> {
+// `repl[id]` is the pointer value the field read `id` resolves to, -1 for a read left alone;
+// `nobj[id]` is its number of uses as an object operand (only such a read gets a Phi).
+fn vc_pf_resolve(c: VcPfCtx, plan: VcPhiPlan, nobj: Vec<i64>, rpo: Vec<i64>, n_ids: u64) -> Vec<i64> {
     let f: IrFunction = c.f;
     let repl: Vec<i64> = dom_fill(n_ids, -1);
     let src: VcSources = c.src;
@@ -323,7 +356,9 @@ fn vc_pf_resolve(c: VcPfCtx, rpo: Vec<i64>, n_ids: u64) -> Vec<i64> {
                     && inst.args.len() == 1 && inst.args[0] >= 0 && (inst.args[0] as u64) < n_ids && c.tys[inst.args[0] as u64] == ITY_PTR() {
                     let leaves: Vec<i64> = vc_sources_leaves(src, inst.args[0]);
                     if leaves.len() == 1 && leaves[0] >= 0 && (leaves[0] as u64) < n_ids && src.op[leaves[0] as u64] == IOP_REGION_ALLOC() {
-                        repl[inst.id as u64] = vc_pf_last_store(c, leaves[0], inst.dv, b as i64, i as i64);
+                        let mut v: i64 = vc_pf_last_store(c, leaves[0], inst.dv, b as i64, i as i64);
+                        if v < 0 && nobj[inst.id as u64] > 0 { v = vc_pf_merge_store(c, plan, leaves[0], inst.dv, b as i64, i as i64); }
+                        repl[inst.id as u64] = v;
                     }
                 }
                 i = i + 1;
@@ -393,10 +428,8 @@ fn vc_resolve_ptr_fields(f: IrFunction) -> IrFunction {
     if tys.len() < n_ids { return f; }
     let c: VcPfCtx = vc_pf_context(f, tys, rpo, n_ids);
     if !c.ok { return f; }
-    let repl: Vec<i64> = vc_pf_resolve(c, rpo, n_ids);
     let uses: Vec<i64> = dom_fill(n_ids, 0);
-    let done: Vec<i64> = dom_fill(n_ids, 0);
-    let mut any: bool = false;
+    let nobj: Vec<i64> = dom_fill(n_ids, 0);
     let mut b: u64 = 0;
     while b < nb {
         let blk: IrBlock = f.blocks[b];
@@ -409,10 +442,7 @@ fn vc_resolve_ptr_fields(f: IrFunction) -> IrFunction {
                 let a: i64 = inst.args[p];
                 if a >= 0 && (a as u64) < n_ids {
                     uses[a as u64] = uses[a as u64] + 1;
-                    if p < objs && repl[a as u64] >= 0 {
-                        done[a as u64] = done[a as u64] + 1;
-                        any = true;
-                    }
+                    if p < objs { nobj[a as u64] = nobj[a as u64] + 1; }
                 }
                 p = p + 1;
             }
@@ -420,16 +450,28 @@ fn vc_resolve_ptr_fields(f: IrFunction) -> IrFunction {
         }
         b = b + 1;
     }
+    let plan: VcPhiPlan = vc_phi_plan_new(n_ids as i64, nb);
+    let repl: Vec<i64> = vc_pf_resolve(c, plan, nobj, rpo, n_ids);
+    let mut any: bool = false;
+    let mut a: u64 = 0;
+    while a < n_ids {
+        if repl[a] >= 0 && nobj[a] > 0 { any = true; }
+        a = a + 1;
+    }
     if !any { return f; }
     let g: IrFunction = vc_function_shell(f);
     b = 0;
     while b < nb {
         let blk: IrBlock = f.blocks[b];
         let out: IrBlock = ir_block_new(blk.id);
+        vc_phi_emit_heads(plan, b, out);
+        let term: i64 = vc_phi_term_index(plan, b, blk);
+        if term == -2 { return f; }
         let mut i: u64 = 0;
         while i < blk.insts.len() {
             let inst: IrInst = blk.insts[i];
-            let dead: bool = inst.id >= 0 && (inst.id as u64) < n_ids && done[inst.id as u64] > 0 && done[inst.id as u64] == uses[inst.id as u64];
+            if i as i64 == term { vc_phi_emit_ups(plan, b, out, inst); }
+            let dead: bool = inst.id >= 0 && (inst.id as u64) < n_ids && repl[inst.id as u64] >= 0 && nobj[inst.id as u64] > 0 && nobj[inst.id as u64] == uses[inst.id as u64];
             if !dead {
                 out.insts.push(vc_pf_rewrite(inst, repl));
             }
