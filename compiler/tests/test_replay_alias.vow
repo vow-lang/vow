@@ -27,8 +27,22 @@ fn alias_src() -> String {
     s.push_str(String::from("fn floop(x: Loop) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fpair(p: Pair) -> i64 { 0 }\n"));
     s.push_str(String::from("type PairAlias = Pair;\n"));
+    s.push_str(String::from("type Small = i8;\n"));
+    s.push_str(String::from("struct HasId { x: Id }\n"));
+    s.push_str(String::from("fn fsmall(v: Vec<Small>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fhasid(h: HasId) -> i64 { 0 }\n"));
     s.push_str(String::from("fn falias(p: PairAlias) -> i64 { 0 }\n"));
     s
+}
+
+fn index_of_push(text: String) -> i64 {
+    let needle: String = String::from("push(-1)");
+    let mut i: u64 = 0u64;
+    while i + needle.len() <= text.len() {
+        if text.substring(i, i + needle.len()) == needle { return i as i64; }
+        i = i + 1u64;
+    }
+    -1
 }
 
 fn param_type(m: Module, fname: String, pi: i64) -> i64 {
@@ -94,6 +108,9 @@ fn check_alias_parameters() -> i32 [io] {
     if reg.reason.len() != 0 || reg.ty_text != String::from("HashMap<i64, i64>") { return 14; }
     let pair: ReplayArg = agg(String::from("falias"), 0, String::from("p.0=1,p.1=2"));
     if pair.lit != String::from("Pair { lo: 1, hi: 2 }") { return 17; }
+    let small: ReplayArg = agg(String::from("fsmall"), 0, String::from("v.len=1,v[0]=18446744073709551615"));
+    if small.reason.len() != 0 || small.ty_text != String::from("Vec<i8>") || index_of_push(small.lit) < 0 { return 18; }
+    if agg(String::from("fhasid"), 0, String::from("h.0=1")).reason.len() == 0 { return 19; }
     let looped: ReplayArg = agg(String::from("floop"), 0, String::from(""));
     if looped.reason.len() == 0 { return 15; }
     let objs: ReplayObjs = replay_param_objects(parse_src(alias_src()), String::from("fvec"), Vec::new(), Vec::new());
