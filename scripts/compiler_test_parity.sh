@@ -9,6 +9,9 @@ cd "$(dirname "$0")/.." || exit 1
 
 out=$(mktemp -d) || exit 1
 trap 'rm -rf "$out"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 target/release/vow test compiler/ > "$out/rust_test.json"
 rust_exit=$?
