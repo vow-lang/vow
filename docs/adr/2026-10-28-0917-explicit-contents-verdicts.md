@@ -1,6 +1,6 @@
 # ADR-2026-10-28-0917: a listed address says whether its contents matter
 
-Status: accepted (issue #1890, epic #1398; user ruling of 2026-10-28 recorded on #1398)
+Status: proposed (issue #1890, epic #1398); the direction is the user ruling of 2026-10-28 (list container contents, say so when they do not matter), the format and scope await maintainer acceptance
 
 Addendum to [ADR-2026-10-27-0617](2026-10-27-0617-fields-read-through-a-handle.md) (objects the function
 reads through memory are listed as addresses with their fields) and
