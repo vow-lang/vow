@@ -1,8 +1,7 @@
-// TEST: replay-skipped the elements of a `Vec<Person>` parameter are objects read through memory and their fields are not listed (`src[0].contents` is `unlisted`), so replay cannot rebuild them (#1890)
 // TEST: counterexample-fn "rename"
 // TEST: counterexample-vow-id 1
 // TEST: counterexample-blame Callee
-// TEST: counterexample-value src[0].contents unlisted
+// TEST: counterexample-value src[0].0 -1
 // The handle in the second slot is another `Person` than the parameter unless the caller passes the
 // same one twice: the write through the parameter is not what that slot reads.
 module VecPointerElemHandleStoredParamOtherWrong

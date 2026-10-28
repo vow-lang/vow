@@ -1,0 +1,32 @@
+// TEST: counterexample-fn "cell"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value grid[1].len 1
+// TEST: counterexample-value grid[1][0].len 3
+// TEST: counterexample-value grid[1][0][2] 5
+// TEST: counterexample-value grid[0].contents unconstrained
+// TEST: replay-skipped the elements of a Vec<Vec<Vec<i64>>> parameter list contents behind their addresses, and replay does not rebuild a Vec of collections yet (#1890)
+// The cell the function reads is two collections deep: each level lists its length, and the cell is 5.
+module VecPointerElemNestedParamCellSkipped
+
+fn cell(grid: Vec<Vec<Vec<i64>>>) -> i64 vow {
+  requires: grid.len() == 2 && grid[1].len() == 1 && grid[1][0].len() == 3
+  ensures: result != 5
+} {
+  grid[1][0][2]
+}
+
+fn main() -> i32 [io] {
+  let grid: Vec<Vec<Vec<i64>>> = Vec::new();
+  let a: Vec<Vec<i64>> = Vec::new();
+  let b: Vec<Vec<i64>> = Vec::new();
+  let leaf: Vec<i64> = Vec::new();
+  leaf.push(1);
+  leaf.push(2);
+  leaf.push(3);
+  b.push(leaf);
+  grid.push(a);
+  grid.push(b);
+  print_i64(cell(grid));
+  0
+}
