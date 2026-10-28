@@ -1,0 +1,53 @@
+module ReplayFree
+
+use ast
+use contract_text
+use replay_listed
+
+// Objects the counterexample leaves free. A position that holds the address of a `Vec`, a
+// `String` or a struct carries `<position>.contents` = `unconstrained` when the function never
+// read through the address (`vc_cex_verdict`): any contents reproduce the failure, so the harness
+// builds the simplest value. Any other token, or none, leaves the object unbuilt.
+
+// The simplest value of the element type `tid` of a `Vec`, as a block: an empty `String` or an
+// empty `Vec`; "" for any other type, which replay does not build empty.
+fn replay_free_elem(a: AstArena, tid: i64) -> String {
+    if type_tag(a, tid) == TY_NAMED() && arena_str(a, type_a(a, tid)) == String::from("String") {
+        return String::from("String::from(\"\")");
+    }
+    if type_tag(a, tid) == TY_GENERIC() && arena_str(a, type_a(a, tid)) == String::from("Vec") {
+        let shown: String = print_type_text(a, tid);
+        let out: String = String::from("{ let __replay_e: ");
+        out.push_str(shown);
+        out.push_str(String::from(" = Vec::new(); __replay_e }"));
+        return out;
+    }
+    String::from("")
+}
+
+// A `Vec` of type `tid` with `len` elements, each the simplest value, for the position `key`
+// whose elements the counterexample lists only as marked free addresses; "" when an element is
+// not marked or the element type is not one replay builds empty.
+fn replay_free_vec(a: AstArena, tid: i64, key: String, len: i64, names: Vec<String>, vals: Vec<String>) -> String {
+    let args: i64 = type_b(a, tid);
+    if len <= 0 || list_len(a, args) != 1 { return String::from(""); }
+    let elem: String = replay_free_elem(a, list_get(a, args, 0));
+    if elem.len() == 0 { return String::from(""); }
+    let out: String = String::from("{ let __replay_v: ");
+    out.push_str(print_type_text(a, tid));
+    out.push_str(String::from(" = Vec::new();"));
+    let mut i: i64 = 0;
+    while i < len {
+        let at: String = String::from(key);
+        at.push_str(String::from("["));
+        at.push_str(i64_to_string(i));
+        at.push_str(String::from("]"));
+        if !replay_listed_unread(names, vals, at) { return String::from(""); }
+        out.push_str(String::from(" __replay_v.push("));
+        out.push_str(elem);
+        out.push_str(String::from(");"));
+        i = i + 1;
+    }
+    out.push_str(String::from(" __replay_v }"));
+    out
+}

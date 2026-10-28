@@ -1,0 +1,280 @@
+module TestVcReadRows
+
+use ir
+use verifier
+use vc_solver
+use vc_exec
+use vc_smt
+use vc_term
+use vc_vecmodel
+use vc_heap
+use vc_reads
+use vc_readrows
+use vc_cex
+use vc_ops
+
+// Claim 0's query holds the first 10 header commands: `p0`'s length is declared at position 2.
+fn read_claims() -> VcClaims {
+    let cs: VcClaims = VcClaims {
+        arena: vc_arena_new(),
+        header: vc_script_new(),
+        assumed: Vec::new(),
+        kinds: Vec::new(),
+        frames: Vec::new(),
+        fr: vc_frames_new(),
+        pre_only: false,
+        step: false,
+        hyp_now: false,
+        vow_ids: Vec::new(),
+        labels: Vec::new(),
+        ostarts: Vec::new(),
+        olens: Vec::new(),
+        negated_goals: Vec::new(),
+        header_lens: Vec::new(),
+        assumed_lens: Vec::new(),
+        model_names: Vec::new(),
+        model_params: Vec::new(),
+        model_paths: Vec::new(),
+        model_tys: Vec::new(),
+        model_widths: Vec::new(),
+        model_slots: Vec::new(),
+        model_hdr: Vec::new(),
+        model_ambig: Vec::new(),
+        hook_vars: Vec::new(),
+        map_vars: Vec::new(),
+        vec_param: Vec::new(),
+        vec_arr: Vec::new(),
+        vec_len: Vec::new(),
+        vec_hdr: Vec::new(),
+        vec_wide: Vec::new(),
+        vec_path: Vec::new(),
+        vec_handle: Vec::new(),
+        map_len: Vec::new(),
+        map_len_hdr: Vec::new(),
+        listed: vc_heap_listed_new(),
+    };
+    cs.header_lens.push(10);
+    cs.model_names.push(String::from("p0_vlen"));
+    cs.model_params.push(0);
+    cs.model_paths.push(String::from(""));
+    cs.model_tys.push(ITY_U64());
+    cs.model_widths.push(64);
+    cs.model_slots.push(VC_SLOT_VEC_LEN());
+    cs.model_hdr.push(2);
+    cs.model_names.push(String::from("p3_vlen"));
+    cs.model_params.push(3);
+    cs.model_paths.push(String::from(""));
+    cs.model_tys.push(ITY_U64());
+    cs.model_widths.push(64);
+    cs.model_slots.push(VC_SLOT_VEC_LEN());
+    cs.model_hdr.push(20);
+    cs.vec_param.push(0);
+    cs.vec_arr.push(String::from("p0_varr"));
+    cs.vec_len.push(String::from("p0_vlen"));
+    cs.vec_hdr.push(2);
+    cs.vec_wide.push(-1);
+    cs.vec_param.push(3);
+    cs.vec_arr.push(String::from("p3_varr"));
+    cs.vec_len.push(String::from("p3_vlen"));
+    cs.vec_hdr.push(20);
+    cs.vec_wide.push(-1);
+    cs
+}
+
+fn answer_with(count: u64) -> VcSolverAnswer {
+    let values: Vec<i64> = Vec::new();
+    let highs: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < count {
+        values.push(0);
+        highs.push(0);
+        i = i + 1;
+    }
+    VcSolverAnswer { verdict: VC_ANS_SAT(), values: values, highs: highs, raw: String::from("") }
+}
+
+// The registry holds each handle once per class, a variable by its name, a composite term by its id.
+fn check_registry_dedupes() -> i64 {
+    let cs: VcClaims = read_claims();
+    let ar: VcArena = cs.arena;
+    let ls: VcHeapListed = cs.listed;
+    let hdr: SmtScript = cs.header;
+    let x: i64 = vc_tm_var(ar, String::from("x"));
+    let x2: i64 = vc_tm_var(ar, String::from("x"));
+    let y: i64 = vc_tm_var(ar, String::from("y"));
+    vc_reads_note(ls, ar, hdr, VC_READ_VEC(), x);
+    vc_reads_note(ls, ar, hdr, VC_READ_VEC(), x2);
+    if ls.rd_cls.len() != 1 { return 1; }
+    vc_reads_note(ls, ar, hdr, VC_READ_STR(), x);
+    vc_reads_note(ls, ar, hdr, VC_READ_VEC(), y);
+    if ls.rd_cls.len() != 3 { return 2; }
+    let sum: i64 = vc_tm_app2(ar, VC_OP_BVADD(), x, vc_tm_bv(ar, 64, 8, 0));
+    vc_reads_note(ls, ar, hdr, VC_READ_OBJ(), sum);
+    vc_reads_note(ls, ar, hdr, VC_READ_OBJ(), sum);
+    if ls.rd_cls.len() != 4 || ls.rd_cls[3] != VC_READ_OBJ() || ls.rd_term[3] != sum { return 3; }
+    if hdr.kinds.len() != 0 { return 4; }
+    0
+}
+
+// The registry makes no term and writes nothing to the header: a query is the same with it.
+fn check_registry_leaves_the_query_alone() -> i64 {
+    let cs: VcClaims = read_claims();
+    let ar: VcArena = cs.arena;
+    let x: i64 = vc_tm_var(ar, String::from("x"));
+    let terms: u64 = ar.kinds.len();
+    let cmds: u64 = cs.header.kinds.len();
+    vc_reads_note(cs.listed, ar, cs.header, VC_READ_VEC(), x);
+    vc_reads_note(cs.listed, ar, cs.header, VC_READ_STR(), x);
+    if ar.kinds.len() != terms || cs.header.kinds.len() != cmds { return 5; }
+    0
+}
+
+fn check_registry_overflows() -> i64 {
+    let cs: VcClaims = read_claims();
+    let ar: VcArena = cs.arena;
+    let ls: VcHeapListed = cs.listed;
+    let mut i: i64 = 0;
+    while i < VC_READ_CAP() {
+        vc_reads_note(ls, ar, cs.header, VC_READ_VEC(), vc_tm_var(ar, i64_to_string(i)));
+        i = i + 1;
+    }
+    if ls.rd_over || ls.rd_cls.len() as i64 != VC_READ_CAP() { return 10; }
+    vc_reads_note(ls, ar, cs.header, VC_READ_VEC(), vc_tm_var(ar, String::from("one more")));
+    if !ls.rd_over || ls.rd_cls.len() as i64 != VC_READ_CAP() { return 11; }
+    ls.rd_ok = true;
+    if vc_read_rows(cs, 0).len() != 0 { return 12; }
+    0
+}
+
+// A read is part of a claim's query once the header it was made at is declared there.
+fn check_rows_follow_the_header() -> i64 {
+    let cs: VcClaims = read_claims();
+    let ar: VcArena = cs.arena;
+    let ls: VcHeapListed = cs.listed;
+    ls.rd_cls.push(VC_READ_VEC());
+    ls.rd_term.push(vc_tm_var(ar, String::from("a")));
+    ls.rd_hdr.push(4);
+    ls.rd_cls.push(VC_READ_STR());
+    ls.rd_term.push(vc_tm_var(ar, String::from("b")));
+    ls.rd_hdr.push(10);
+    ls.rd_cls.push(VC_READ_OBJ());
+    ls.rd_term.push(vc_tm_var(ar, String::from("c")));
+    ls.rd_hdr.push(11);
+    if vc_read_rows(cs, 0).len() != 0 { return 20; }
+    ls.rd_ok = true;
+    let rows: Vec<i64> = vc_read_rows(cs, 0);
+    if rows.len() != 2 || rows[0] != 0 || rows[1] != 1 { return 21; }
+    cs.header_lens[0] = 11;
+    if vc_read_rows(cs, 0).len() != 3 { return 22; }
+    0
+}
+
+fn check_rows_are_defined_after_everything() -> i64 {
+    let cs: VcClaims = read_claims();
+    let ar: VcArena = cs.arena;
+    let ls: VcHeapListed = cs.listed;
+    ls.rd_ok = true;
+    ls.rd_cls.push(VC_READ_VEC());
+    ls.rd_term.push(vc_tm_var(ar, String::from("hv")));
+    ls.rd_hdr.push(3);
+    let s: SmtScript = vc_script_new();
+    let names: Vec<String> = Vec::new();
+    let widths: Vec<i64> = Vec::new();
+    vc_append_read_rows(cs, vc_read_rows(cs, 0), s, names, widths);
+    if names.len() != 1 || names[0] != String::from("hrd0") || widths[0] != 64 { return 30; }
+    if vc_command_text(ar, s, 0) != String::from("(define-fun hrd0 () (_ BitVec 64) hv)") { return 31; }
+    0
+}
+
+// The reads close the answer: a plain answer has none, an enriched one carries them behind the
+// elements of the `Vec` parameters.
+fn check_answer_layout_with_reads() -> i64 {
+    let cs: VcClaims = read_claims();
+    let ls: VcHeapListed = cs.listed;
+    ls.rd_ok = true;
+    ls.rd_cls.push(VC_READ_VEC());
+    ls.rd_term.push(vc_tm_var(cs.arena, String::from("a")));
+    ls.rd_hdr.push(3);
+    ls.rd_cls.push(VC_READ_STR());
+    ls.rd_term.push(vc_tm_var(cs.arena, String::from("b")));
+    ls.rd_hdr.push(4);
+    let n: u64 = vc_claim_model_count(cs, 0);
+    if vc_answer_body(cs, 0, answer_with(n)) != n { return 40; }
+    if vc_answer_regular_count(cs, 0, answer_with(n)) != n { return 41; }
+    if vc_answer_body(cs, 0, answer_with(n + 8 + 2)) != n + 8 { return 42; }
+    if vc_answer_regular_count(cs, 0, answer_with(n + 8 + 2)) != n { return 43; }
+    if vc_answer_elems_per_vec(cs, 0, answer_with(n + 8 + 2)) != 8 { return 44; }
+    if vc_answer_regular_count(cs, 0, answer_with(n + 2)) != n { return 45; }
+    if vc_answer_elems_per_vec(cs, 0, answer_with(n + 2)) != 0 { return 46; }
+    0
+}
+
+// Elements of `Vec` parameters, fields of their elements and reads together.
+fn check_answer_layout_with_vecs_rows_and_reads() -> i64 {
+    let cs: VcClaims = read_claims();
+    let ls: VcHeapListed = cs.listed;
+    ls.rd_ok = true;
+    ls.rd_cls.push(VC_READ_OBJ());
+    ls.rd_term.push(vc_tm_var(cs.arena, String::from("a")));
+    ls.rd_hdr.push(3);
+    ls.earr.push(String::from("p0_varr"));
+    ls.eslot.push(0);
+    ls.ety.push(ITY_I64());
+    ls.ehdr.push(5);
+    let n: u64 = vc_claim_model_count(cs, 0);
+    if vc_field_rows(cs, 0).len() != 1 { return 50; }
+    if vc_answer_regular_count(cs, 0, answer_with(n + 2 * 4 + 1)) != n { return 51; }
+    if vc_answer_elems_per_vec(cs, 0, answer_with(n + 2 * 4 + 1)) != 4 { return 52; }
+    if vc_answer_body(cs, 0, answer_with(n + 2 * 4 + 1)) != n + 8 { return 53; }
+    0
+}
+
+fn check_read_entries() -> i64 {
+    let cs: VcClaims = read_claims();
+    let ls: VcHeapListed = cs.listed;
+    let names: Vec<String> = Vec::new();
+    let values: Vec<String> = Vec::new();
+    let n: u64 = vc_claim_model_count(cs, 0);
+    vc_append_read_answer(cs, 0, answer_with(n), names, values);
+    if names.len() != 0 { return 60; }
+    ls.rd_ok = true;
+    vc_append_read_answer(cs, 0, answer_with(n), names, values);
+    if names.len() != 1 || names[0] != String::from("$read.n") || values[0] != String::from("0") { return 61; }
+    ls.rd_cls.push(VC_READ_STR());
+    ls.rd_term.push(vc_tm_var(cs.arena, String::from("a")));
+    ls.rd_hdr.push(3);
+    ls.rd_cls.push(VC_READ_OBJ());
+    ls.rd_term.push(vc_tm_var(cs.arena, String::from("b")));
+    ls.rd_hdr.push(4);
+    let missing: Vec<String> = Vec::new();
+    let missing_values: Vec<String> = Vec::new();
+    vc_append_read_answer(cs, 0, answer_with(n), missing, missing_values);
+    if missing.len() != 0 { return 62; }
+    let ans: VcSolverAnswer = answer_with(n + 8 + 2);
+    ans.values[n + 8] = -2;
+    ans.values[n + 9] = 7;
+    let got: Vec<String> = Vec::new();
+    let got_values: Vec<String> = Vec::new();
+    vc_append_read_answer(cs, 0, ans, got, got_values);
+    if got.len() != 3 || got[0] != String::from("$read.n") || got_values[0] != String::from("2") { return 63; }
+    if got[1] != String::from("$read.0") || got_values[1] != String::from("str:-2") { return 64; }
+    if got[2] != String::from("$read.1") || got_values[2] != String::from("obj:7") { return 65; }
+    ls.rd_over = true;
+    let dropped: Vec<String> = Vec::new();
+    let dropped_values: Vec<String> = Vec::new();
+    vc_append_read_answer(cs, 0, ans, dropped, dropped_values);
+    if dropped.len() != 0 { return 66; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_registry_dedupes();
+    if r == 0 { r = check_registry_leaves_the_query_alone(); }
+    if r == 0 { r = check_registry_overflows(); }
+    if r == 0 { r = check_rows_follow_the_header(); }
+    if r == 0 { r = check_rows_are_defined_after_everything(); }
+    if r == 0 { r = check_answer_layout_with_reads(); }
+    if r == 0 { r = check_answer_layout_with_vecs_rows_and_reads(); }
+    if r == 0 { r = check_read_entries(); }
+    i64_to_i32_wrap(r)
+}

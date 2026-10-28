@@ -12,6 +12,7 @@ use vc_wide
 use vc_held
 use vc_overlay
 use vc_objects
+use vc_reads
 
 // Reads through a handle (`VcHandleMemory`, `vc_overlay`): the never-written heap overlaid with the
 // parameter and object entries, one `ite` arm per entry of the class the read asks for.
@@ -87,6 +88,7 @@ fn vc_overlay_arm(ov: VcOverlay, ar: VcArena, acc: i64, i: u64, h: i64, val: i64
 
 fn vc_handle_field(m: VcHandleMemory, h: i64, slot: i64, ty: i64) -> i64 {
     let base: i64 = vc_heap_field(m.heap, m.ar, m.header, h, slot, ty);
+    vc_reads_note(m.heap.listed, m.ar, m.header, VC_READ_OBJ(), h);
     vc_heaplist_note(m.heap, m.ag, m.vv, m.ar, m.header, h, slot, ty);
     let t: i64 = vc_overlay_field(m.overlay, m.ag, m.ar, m.header, m.assumed, h, slot, ty, base, m.heap.ranked);
     vc_handle_note_loaded(m, base, ty);
@@ -97,13 +99,16 @@ fn vc_handle_field(m: VcHandleMemory, h: i64, slot: i64, ty: i64) -> i64 {
 // element afterwards must not declare its heap array in that earlier prefix, so a
 // collection held in a field (`vc_held`) declares its element array with the length.
 fn vc_handle_len(m: VcHandleMemory, b: i64, h: i64, inst: IrInst, kind: i64) -> i64 {
+    let rcls: i64 = vc_overlay_op_class(inst, kind);
     let base: i64 = vc_heap_len(m.heap, m.ar, m.header, m.assumed, h);
-    vc_held_note(m.held, m.ag, m.heap, m.ar, m.header, h, vc_overlay_op_class(inst, kind) == VC_OV_STRING());
-    vc_overlay_len(m.overlay, m.ag, m.vv, m.ar, m.header, m.assumed, b, h, vc_overlay_op_class(inst, kind), base)
+    vc_reads_note(m.heap.listed, m.ar, m.header, { if rcls == VC_OV_STRING() { VC_READ_STR() } else { VC_READ_VEC() } }, h);
+    vc_held_note(m.held, m.ag, m.heap, m.ar, m.header, h, rcls == VC_OV_STRING());
+    vc_overlay_len(m.overlay, m.ag, m.vv, m.ar, m.header, m.assumed, b, h, rcls, base)
 }
 
 fn vc_handle_elem(m: VcHandleMemory, b: i64, h: i64, idx: i64) -> i64 {
     let base: i64 = vc_heap_elem(m.heap, m.ar, m.header, h, idx);
+    vc_reads_note(m.heap.listed, m.ar, m.header, VC_READ_VEC(), h);
     let t: i64 = vc_overlay_elem(m.overlay, m.ag, m.vv, m.ar, m.header, m.assumed, b, h, idx, VC_OV_VEC(), false, base);
     vc_handle_note_loaded(m, base, ITY_I64());
     t
@@ -119,6 +124,7 @@ fn vc_handle_wide(m: VcHandleMemory, b: i64, h: i64, idx: i64) -> i64 {
 
 fn vc_handle_byte(m: VcHandleMemory, b: i64, h: i64, idx: i64) -> i64 {
     let base: i64 = vc_heap_byte(m.heap, m.ar, m.header, h, idx);
+    vc_reads_note(m.heap.listed, m.ar, m.header, VC_READ_STR(), h);
     vc_overlay_elem(m.overlay, m.ag, m.vv, m.ar, m.header, m.assumed, b, h, idx, VC_OV_STRING(), true, base)
 }
 

@@ -3121,7 +3121,7 @@ const SKILL_DOC_SCHEMAS_COUNTEREXAMPLE_SCHEMA_JSON: &str = r#"{
     "values": {
       "type": "object",
       "additionalProperties": { "type": "string" },
-      "description": "Map of source names (or, under the ESBMC backend, $esbmc$-prefixed internal variable names) to counterexample values. Under the native backend a field of a struct, enum, Option or Result parameter is named <param>.<slot> (an enum's discriminant is slot 0), with a :bool, :f32, :f64 or :<bits> suffix when the function reads that slot at two sorts; bool values are true or false"
+      "description": "Map of source names (or, under the ESBMC backend, $esbmc$-prefixed internal variable names) to counterexample values. Under the native backend a field of a struct, enum, Option or Result parameter is named <param>.<slot> (an enum's discriminant is slot 0), with a :bool, :f32, :f64 or :<bits> suffix when the function reads that slot at two sorts; bool values are true or false. Under the native backend an object a counterexample lists only as an address (a Vec, String or struct held in a field, or an element of a Vec of them) has an entry <position>.contents whose value is unconstrained (the failing claim never reads through the address, so any contents reproduce the failure) or unlisted (it does, or the verifier cannot tell, and the contents are not listed)"
     },
     "violation": {
       "type": "string",

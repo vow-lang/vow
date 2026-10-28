@@ -56,6 +56,7 @@ fn vc_model_finish(cs: VcClaims, memory: VcHandleMemory, mp: VcMap) {
     let held: VcHeld = memory.held;
     let ls: VcHeapListed = memory.heap.listed;
     cs.listed = ls;
+    ls.rd_ok = true;
     vc_held_drop_rows(held, ls);
     let rows: u64 = { if ls.bad { 0 } else { ls.names.len() } };
     let none: i64 = 9223372036854775807;

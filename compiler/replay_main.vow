@@ -9,64 +9,7 @@ use replay_mapkeys
 use replay_ints
 use replay_alias
 use replay_listed
-
-// Entry-`main` handling for `--replay-cex` (#1550). A replay harness is the
-// entry file's own text plus a synthesized `fn main`, so a file that already
-// defines `main` must have that definition renamed out of the way first. The
-// definition is located in the merged AST, never by text search, so `fn main(`
-// inside a comment or string literal is not mistaken for it. Only the span
-// start is used: packed spans clamp their length to 65535 bytes, so removing
-// the definition by span would truncate a long `main`.
-
-// Byte offset of the `fn` keyword of the `main` defined in `path` itself, or
-// -1 when the entry file defines none. A `main` from a `use`d dependency is not
-// the entry file's `main`, so only items whose originating file is `path` count.
-fn replay_entry_main_start(m: Module, item_files: Vec<String>, path: String) -> i64 {
-    let a: AstArena = m.arena;
-    let n: u64 = m.items.len();
-    let mut i: u64 = 0u64;
-    while i < n {
-        let it: i64 = m.items[i];
-        if i < item_files.len() && item_files[i] == path && it >= 0 && item_kind(it) == ITEM_FN() {
-            let fid: i64 = item_id(it);
-            if !fn_is_declaration(a, fid) && arena_str(a, fn_name_sid(a, fid)) == String::from("main") {
-                return span_unpack_start(fn_span(a, fid));
-            }
-        }
-        i = i + 1u64;
-    }
-    -1
-}
-
-fn replay_is_space(b: i64) -> bool {
-    b == 32 || b == 9 || b == 10 || b == 13
-}
-
-// `src` with the `main` whose `fn` keyword sits at byte `start` renamed to
-// `__replay_orig_main`. Returns "" when `src` does not hold `fn`, whitespace and
-// exactly the identifier `main` at that offset, so a stale offset can never
-// corrupt a harness silently.
-fn replay_rename_main(src: String, start: i64) -> String {
-    let n: i64 = src.len() as i64;
-    if start < 0 || start + 2 > n { return String::from(""); }
-    if src.byte_at(start as u64) != 102 || src.byte_at((start + 1) as u64) != 110 {
-        return String::from("");
-    }
-    let mut p: i64 = start + 2;
-    while p < n && replay_is_space(src.byte_at(p as u64)) {
-        p = p + 1;
-    }
-    let name: String = String::from("main");
-    let nl: i64 = name.len() as i64;
-    if p + nl > n { return String::from(""); }
-    if src.substring(p as u64, (p + nl) as u64) != name { return String::from(""); }
-    let end: i64 = p + nl;
-    if end < n {
-        let after: i64 = src.byte_at(end as u64);
-        if after >= 0 && after <= 255 && is_ident_cont(after) { return String::from(""); }
-    }
-    splice(src, p as u64, nl as u64, String::from("__replay_orig_main"))
-}
+use replay_free
 
 // Aggregate arguments for the native backend's `--replay-cex`. The native
 // counterexample lists an aggregate parameter's scalar slots as `<param>.<slot>`
@@ -95,23 +38,6 @@ fn replay_arg_ok(lit: String, ty_text: String) -> ReplayArg {
 // literal names (see `ReplayObjs`), so they are declared before it.
 fn replay_arg_ok_deps(lit: String, ty_text: String, deps: String) -> ReplayArg {
     ReplayArg { lit: lit, ty_text: ty_text, reason: String::from(""), deps: deps }
-}
-
-// True if `s` is a plain decimal integer literal (optional leading `-`).
-fn replay_is_int_literal(s: String) -> bool {
-    let n: u64 = s.len();
-    if n == 0 { return false; }
-    let mut i: u64 = 0;
-    if s.byte_at(0) == 45 {
-        if n == 1 { return false; }
-        i = 1;
-    }
-    while i < n {
-        let b: i64 = s.byte_at(i);
-        if b < 48 || b > 57 { return false; }
-        i = i + 1;
-    }
-    true
 }
 
 fn replay_cex_value(names: Vec<String>, vals: Vec<String>, key: String) -> String {
@@ -531,7 +457,7 @@ fn replay_held_arg(a: AstArena, tid: i64, inner: String, names: Vec<String>, val
     if entry.len() == 0 && len != -1 {
         return replay_field_skip(shown, String::from("`: the counterexample lists its length but not its address"));
     }
-    if entry.len() > 0 && len == -1 {
+    if entry.len() > 0 && len == -1 && !replay_listed_unread(names, vals, inner) {
         return replay_field_skip(shown, String::from("`: the counterexample does not list its length"));
     }
     if !is_vec {
@@ -540,6 +466,8 @@ fn replay_held_arg(a: AstArena, tid: i64, inner: String, names: Vec<String>, val
     let elem: i64 = list_get(a, type_b(a, tid), 0);
     if replay_held_elem_scalar(a, elem) { return replay_vec_arg(a, tid, inner, names, vals); }
     if len > 0 || len == -2 {
+        let free: String = replay_free_vec(a, tid, inner, len, names, vals);
+        if free.len() > 0 { return replay_arg_ok(free, shown); }
         return replay_field_skip(shown, String::from("` holds elements replay cannot rebuild"));
     }
     let lit: String = String::from("{ let __replay_v: ");
@@ -903,11 +831,13 @@ fn replay_slot_element(name: String, slot: u64) -> ReplayArg {
 fn replay_vec_arg(a: AstArena, tid: i64, pname: String, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
     let shown: String = print_type_text(a, tid);
     let args_lid: i64 = type_b(a, tid);
+    let len: i64 = replay_vec_len(pname, names, vals);
+    let free: String = replay_free_vec(a, tid, pname, len, names, vals);
+    if free.len() > 0 { return replay_arg_ok(free, shown); }
     if list_len(a, args_lid) != 1 || type_tag(a, list_get(a, args_lid, 0)) != TY_NAMED() {
         return replay_arg_skip(str3r(String::from("parameter type `"), shown, String::from("` is not rebuilt by replay")));
     }
     let ename: String = arena_str(a, type_a(a, list_get(a, args_lid, 0)));
-    let len: i64 = replay_vec_len(pname, names, vals);
     if len == -2 {
         return replay_arg_skip(str3r(String::from("length of `"), pname, String::from("` is not a length replay can build")));
     }

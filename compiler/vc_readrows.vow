@@ -1,0 +1,46 @@
+module VcReadRows
+
+use vc_term
+use vc_smt
+use vc_heap
+use vc_query
+use vc_reads
+
+// The handles a claim's query can read through (`vc_reads`), projected in the model of a failed
+// claim. Like the elements of a `Vec` parameter (`vc_vecmodel`) they are read back from the
+// enrichment's model, behind everything else it carries, so the handles belong to the same
+// counterexample as the addresses it lists. A read made at a header position the claim's query
+// does not declare yet is not part of it.
+
+// Positions in the registry of the reads the query of claim `k` can make; none when the registry
+// was dropped or never completed.
+fn vc_read_rows(cs: VcClaims, k: u64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let ls: VcHeapListed = cs.listed;
+    if ls.rd_over || !ls.rd_ok { return out; }
+    let mut i: u64 = 0;
+    while i < ls.rd_hdr.len() {
+        if ls.rd_hdr[i] <= cs.header_lens[k] { out.push(i as i64); }
+        i = i + 1;
+    }
+    out
+}
+
+fn vc_read_row_name(i: i64) -> String {
+    let out: String = String::from("hrd");
+    out.push_str(i64_to_string(i));
+    out
+}
+
+// Appends the handle of each row of `rows` to one model projection, with its name and 64-bit sort.
+fn vc_append_read_rows(cs: VcClaims, rows: Vec<i64>, s: SmtScript, names: Vec<String>, widths: Vec<i64>) {
+    let ls: VcHeapListed = cs.listed;
+    let mut q: u64 = 0;
+    while q < rows.len() {
+        let name: String = vc_read_row_name(rows[q]);
+        vc_script_define_fun(s, name, 64, ls.rd_term[rows[q] as u64]);
+        names.push(name);
+        widths.push(64);
+        q = q + 1;
+    }
+}

@@ -162,6 +162,7 @@ fn native_report_result(f: IrFunction, ir_mod: IrModule, m: Module, path: String
     if st == VERIFY_FAILED() {
         diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": FAILED")));
         vc_cex_retype_elements(m, f.name, vr.var_names, vr.var_values);
+        vc_cex_apply_verdicts(m, f.name, vr.var_names, vr.var_values);
         emit_ce_vars(vr);
         if ces.len() == 0 {
             ces.push(native_with_call_chain(build_ce_from_result(f, ir_mod, vr, path), ir_mod, oc, path));

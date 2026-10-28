@@ -1,0 +1,65 @@
+module VcReads
+
+use vc_term
+use vc_smt
+use vc_heap
+
+// The registry of the handles a function reads memory through. A handle is the address of a
+// `Vec`, a `String` or a struct the function loaded; the counterexample lists the address of such
+// an object, and what the function read at it only when a listing covers it (`vc_heaplist`,
+// `vc_held`). The registry is what tells an object whose contents the claim never looked at (any
+// contents reproduce the failure) from one whose contents were read but not listed: the driver
+// compares the addresses a counterexample lists with the addresses read here (`vc_cex_verdict`).
+//
+// Each read is the class of the operation (`VC_READ_*`), the handle's term and the header position
+// of the walk when it was made. The registry makes no term and writes nothing to the header, so
+// a query is the same with and without it; the terms are defined only in the model projection
+// that follows a failed claim (`vc_readrows`). The registry may hold reads the claim did not make
+// (a read on another path, or after the claim), which only turns an unread object into a read one.
+
+fn VC_READ_VEC() -> i64 { 1 }
+
+fn VC_READ_STR() -> i64 { 2 }
+
+fn VC_READ_OBJ() -> i64 { 3 }
+
+// More distinct handles than this and the registry is dropped: the driver then lists nothing as
+// unread.
+fn VC_READ_CAP() -> i64 { 128 }
+
+fn vc_reads_class_name(cls: i64) -> String {
+    if cls == VC_READ_STR() { return String::from("str"); }
+    if cls == VC_READ_OBJ() { return String::from("obj"); }
+    String::from("vec")
+}
+
+// The term a handle is known by: a variable standing for a composite term is that term.
+fn vc_reads_key(ar: VcArena, h: i64) -> i64 {
+    if ar.kinds[h as u64] == VC_T_VAR() && ar.named[h as u64] >= 0 { return ar.named[h as u64]; }
+    h
+}
+
+// True when handles `a` and `b` are the same term. A variable is never interned, so two of one
+// name are two terms.
+fn vc_reads_same(ar: VcArena, a: i64, b: i64) -> bool {
+    if a == b { return true; }
+    ar.kinds[a as u64] == VC_T_VAR() && ar.kinds[b as u64] == VC_T_VAR() && ar.strs[ar.aux[a as u64] as u64] == ar.strs[ar.aux[b as u64] as u64]
+}
+
+// Records that the handle `h` was read as `cls` at the current header position.
+fn vc_reads_note(ls: VcHeapListed, ar: VcArena, hdr: SmtScript, cls: i64, h: i64) {
+    if ls.rd_over || h < 0 || (h as u64) >= ar.kinds.len() { return; }
+    let key: i64 = vc_reads_key(ar, h);
+    let mut i: u64 = 0;
+    while i < ls.rd_cls.len() {
+        if ls.rd_cls[i] == cls && vc_reads_same(ar, ls.rd_term[i], key) { return; }
+        i = i + 1;
+    }
+    if ls.rd_cls.len() as i64 >= VC_READ_CAP() {
+        ls.rd_over = true;
+        return;
+    }
+    ls.rd_cls.push(cls);
+    ls.rd_term.push(key);
+    ls.rd_hdr.push(hdr.kinds.len() as i64);
+}

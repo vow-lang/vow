@@ -1,0 +1,147 @@
+module TestReplayFree
+
+use lexer
+use token
+use ast
+use diag
+use parser
+use replay_main
+use replay_listed
+use replay_free
+
+fn parse_src(source: String) -> Module [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    parse_module_into(lex(source), arena, dctx, String::from("entry.vow"))
+}
+
+fn index_of(hay: String, needle: String) -> i64 {
+    let n: i64 = hay.len() as i64;
+    let k: i64 = needle.len() as i64;
+    let mut i: i64 = 0;
+    while i + k <= n {
+        if hay.substring(i as u64, (i + k) as u64) == needle { return i; }
+        i = i + 1;
+    }
+    -1
+}
+
+fn kv_part(kv: String, values: bool) -> Vec<String> {
+    let out: Vec<String> = Vec::new();
+    let mut start: u64 = 0u64;
+    let mut i: u64 = 0u64;
+    while i <= kv.len() {
+        if i == kv.len() || kv.byte_at(i) == 44 {
+            if i > start {
+                let pair: String = kv.substring(start, i);
+                let at: u64 = index_of(pair, String::from("=")) as u64;
+                if values { out.push(pair.substring(at + 1u64, pair.len())); } else { out.push(pair.substring(0u64, at)); }
+            }
+            start = i + 1u64;
+        }
+        i = i + 1u64;
+    }
+    out
+}
+
+fn src() -> String {
+    let s: String = String::from("module T\n");
+    s.push_str(String::from("struct Names { items: Vec<String>, tag: i64 }\n"));
+    s.push_str(String::from("struct Bag { items: Vec<i64>, tag: i64 }\n"));
+    s.push_str(String::from("struct Grid { rows: Vec<Vec<i64>>, tag: i64 }\n"));
+    s.push_str(String::from("struct Pair { lo: i64, hi: i64 }\n"));
+    s.push_str(String::from("struct Holder { p: Pair, tag: i64 }\n"));
+    s.push_str(String::from("struct Strs { name: String, tag: i64 }\n"));
+    s.push_str(String::from("fn fnames(n: Names) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fbag(b: Bag) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fgrid(g: Grid) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn frows(src: Vec<Vec<i64>>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fstrs(src: Vec<String>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fints(src: Vec<i64>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fhold(h: Holder) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fpairs(people: Vec<Pair>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fstr(s: Strs) -> i64 { 0 }\n"));
+    s
+}
+
+fn agg(fname: String, kv: String) -> ReplayArg [io] {
+    let m: Module = parse_src(src());
+    let names: Vec<String> = kv_part(kv, false);
+    let vals: Vec<String> = kv_part(kv, true);
+    let objs: ReplayObjs = replay_param_objects(m, fname, names, vals);
+    let all: Vec<i64> = Vec::new();
+    all.push(0);
+    replay_agg_arg(m, fname, 0, names, vals, all, objs)
+}
+
+fn lit_of(fname: String, kv: String) -> String [io] {
+    let r: ReplayArg = agg(fname, kv);
+    if r.reason.len() > 0 { return String::from("<skip>"); }
+    r.lit
+}
+
+fn reason_of(fname: String, kv: String) -> String [io] {
+    agg(fname, kv).reason
+}
+
+fn check_marker_reading() -> i64 {
+    let names: Vec<String> = kv_part(String::from("a.0=1,a.0.contents=unconstrained,b.0=1,b.0.contents=unlisted,c.0=1"), false);
+    let vals: Vec<String> = kv_part(String::from("a.0=1,a.0.contents=unconstrained,b.0=1,b.0.contents=unlisted,c.0=1"), true);
+    if !replay_listed_unread(names, vals, String::from("a.0")) { return 1; }
+    if replay_listed_unread(names, vals, String::from("b.0")) { return 2; }
+    if replay_listed_unread(names, vals, String::from("c.0")) { return 3; }
+    if replay_listed_unread(names, vals, String::from("d.0")) { return 4; }
+    0
+}
+
+// A held `Vec` the counterexample lists only as an address, marked free, is built empty.
+fn check_held_collection_without_a_length() -> i64 [io] {
+    if lit_of(String::from("fbag"), String::from("b.0=-1,b.1=7,b.0.contents=unconstrained")) != String::from("Bag { items: { let __replay_v: Vec<i64> = Vec::new(); __replay_v }, tag: 7 }") { return 10; }
+    if index_of(reason_of(String::from("fbag"), String::from("b.0=-1,b.1=7")), String::from("does not list its length")) < 0 { return 11; }
+    if index_of(reason_of(String::from("fbag"), String::from("b.0=-1,b.1=7,b.0.contents=unlisted")), String::from("does not list its length")) < 0 { return 12; }
+    if lit_of(String::from("fstr"), String::from("s.0=3,s.1=7,s.0.contents=unconstrained")) != String::from("Strs { name: { let __replay_s: String = String::from(\"\"); __replay_s }, tag: 7 }") { return 13; }
+    0
+}
+
+// A held `Vec` of strings or of `Vec`s whose elements are all marked free is built from empty ones.
+fn check_held_vec_of_collections() -> i64 [io] {
+    let one: String = lit_of(String::from("fnames"), String::from("n.0=0,n.0.len=1,n.0[0]=0,n.0[0].contents=unconstrained,n.1=7"));
+    let want: String = String::from("Names { items: { let __replay_v: Vec<String> = Vec::new(); __replay_v.push(String::from(\"\")); __replay_v }, tag: 7 }");
+    if one != want { return 20; }
+    let two: String = lit_of(String::from("fgrid"), String::from("g.0=0,g.0.len=2,g.0[0]=1,g.0[1]=2,g.0[0].contents=unconstrained,g.0[1].contents=unconstrained"));
+    if index_of(two, String::from("__replay_v.push({ let __replay_e: Vec<i64> = Vec::new(); __replay_e }); __replay_v.push({ let __replay_e: Vec<i64> = Vec::new(); __replay_e });")) < 0 { return 21; }
+    if lit_of(String::from("fnames"), String::from("n.0=0,n.0.len=1,n.0[0]=0,n.1=7")) != String::from("<skip>") { return 22; }
+    if lit_of(String::from("fnames"), String::from("n.0=0,n.0.len=1,n.0[0]=0,n.0[0].contents=unlisted")) != String::from("<skip>") { return 23; }
+    if lit_of(String::from("fgrid"), String::from("g.0=0,g.0.len=2,g.0[0]=1,g.0[1]=2,g.0[0].contents=unconstrained")) != String::from("<skip>") { return 24; }
+    0
+}
+
+// A parameter that is a `Vec` of collections.
+fn check_vec_parameters_of_collections() -> i64 [io] {
+    let rows: String = lit_of(String::from("frows"), String::from("src.len=2,src[0]=-1,src[1]=-2,src[0].contents=unconstrained,src[1].contents=unconstrained"));
+    if rows != String::from("{ let __replay_v: Vec<Vec<i64>> = Vec::new(); __replay_v.push({ let __replay_e: Vec<i64> = Vec::new(); __replay_e }); __replay_v.push({ let __replay_e: Vec<i64> = Vec::new(); __replay_e }); __replay_v }") { return 30; }
+    let strs: String = lit_of(String::from("fstrs"), String::from("src.len=1,src[0]=5,src[0].contents=unconstrained"));
+    if strs != String::from("{ let __replay_v: Vec<String> = Vec::new(); __replay_v.push(String::from(\"\")); __replay_v }") { return 31; }
+    if lit_of(String::from("frows"), String::from("src.len=1,src[0]=-1,src[0].contents=unlisted")) != String::from("<skip>") { return 32; }
+    if lit_of(String::from("frows"), String::from("src.len=1,src[0]=-1")) != String::from("<skip>") { return 33; }
+    if lit_of(String::from("fints"), String::from("src.len=2,src[0]=1,src[1]=2")) != String::from("{ let __replay_v: Vec<i64> = Vec::new(); __replay_v.push(1); __replay_v.push(2); __replay_v }") { return 34; }
+    0
+}
+
+// An object marked free is built like one the function never read: every slot takes zero.
+fn check_free_objects() -> i64 [io] {
+    if lit_of(String::from("fhold"), String::from("h.0=-3,h.1=4,h.0.contents=unconstrained")) != String::from("Holder { p: Pair { lo: 0, hi: 0 }, tag: 4 }") { return 40; }
+    if index_of(reason_of(String::from("fhold"), String::from("h.0=-3,h.1=4")), String::from("is read through memory")) < 0 { return 41; }
+    if index_of(reason_of(String::from("fhold"), String::from("h.0=-3,h.1=4,h.0.contents=unlisted")), String::from("is read through memory")) < 0 { return 42; }
+    if lit_of(String::from("fhold"), String::from("h.0=-3,h.0.0=5,h.1=4")) == String::from("<skip>") { return 43; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let mut r: i64 = check_marker_reading();
+    if r == 0 { r = check_held_collection_without_a_length(); }
+    if r == 0 { r = check_held_vec_of_collections(); }
+    if r == 0 { r = check_vec_parameters_of_collections(); }
+    if r == 0 { r = check_free_objects(); }
+    i64_to_i32_wrap(r)
+}

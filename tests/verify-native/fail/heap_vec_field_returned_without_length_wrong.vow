@@ -1,9 +1,9 @@
-// TEST: replay-skipped a Vec field read only as an address has no listed length, so there is nothing to rebuild (by design)
 // TEST: counterexample-fn "pass"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
-// The Vec in `b.items` is returned, never measured: the counterexample lists its address and no length.
-module HeapVecFieldReturnedWithoutLengthSkipped
+// TEST: counterexample-value b.0.contents unconstrained
+// The Vec in `b.items` is returned, never measured: the counterexample lists its address and says any contents will do.
+module HeapVecFieldReturnedWithoutLengthWrong
 
 struct Bag { items: Vec<i64>, tag: i64 }
 

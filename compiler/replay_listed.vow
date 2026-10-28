@@ -100,6 +100,13 @@ fn replay_listed_under(name: String, prefix: String) -> bool {
     prefix.len() > 0u64 && name.len() >= prefix.len() && name.substring(0u64, prefix.len()) == prefix
 }
 
+// True when the position `key` is marked free.
+fn replay_listed_unread(names: Vec<String>, vals: Vec<String>, key: String) -> bool {
+    let at: String = String::from(key);
+    at.push_str(String::from(".contents"));
+    replay_listed_value(names, vals, at) == String::from("unconstrained")
+}
+
 // Why the object whose address is the entry `key` cannot be rebuilt from the counterexample, as the
 // tail of "field of type `<T>"; "" when the entry is absent (the field was never read) or the
 // object is described. Two objects with one address are one object, which the harness could build
@@ -108,7 +115,7 @@ fn replay_listed_under(name: String, prefix: String) -> bool {
 fn replay_through_memory(names: Vec<String>, vals: Vec<String>, key: String, shared: String) -> String {
     let raw: String = replay_listed_value(names, vals, key);
     if raw.len() == 0 { return String::from(""); }
-    if !replay_listed_has_rows(names, key) { return String::from("` is read through memory; its fields are not listed"); }
+    if !replay_listed_has_rows(names, key) && !replay_listed_unread(names, vals, key) { return String::from("` is read through memory; its fields are not listed"); }
     let mine: Option<u64> = replay_addr_bits(raw);
     match mine {
         Option::Some(x) => {
