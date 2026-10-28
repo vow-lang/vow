@@ -27,7 +27,7 @@ permissions:
 jobs:
   equivalence:
     name: shard ${{ matrix.shard }}/4
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     strategy:
       # One shard's divergence must not cancel the others: partial results

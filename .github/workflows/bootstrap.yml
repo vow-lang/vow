@@ -39,7 +39,7 @@ jobs:
   # condition of its own.
   changes:
     name: Classify changed paths
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       code: ${{ steps.classify.outputs.code }}
@@ -64,7 +64,7 @@ jobs:
     # self-hosted `verify` pass runs on the fixed-point binary, so ESBMC
     # never overlaps a self-hosted codegen. Verification does not affect
     # codegen, so the fixed-point check remains meaningful.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -132,9 +132,9 @@ jobs:
     # separate self-hosted verify pass use the arm64 Linux ESBMC artifact, while Stages 2-3 skip
     # ESBMC. Verification does not affect codegen, so the SHA-256 fixed-point check remains
     # meaningful.
-    # Runner label matches release.yml's linux/aarch64 leg (ubuntu-24.04-arm) so both jobs depend
+    # Runner label matches release.yml's linux/aarch64 leg (ubuntu-26.04-arm) so both jobs depend
     # on the same GitHub-hosted ARM64 image resolving the install-esbmc pin identically.
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -81,7 +81,7 @@ permissions:
 jobs:
   changes:
     name: Classify changed paths
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       code: ${{ steps.classify.outputs.code }}
@@ -100,7 +100,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     name: Oracles (shard ${{ matrix.shard }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     strategy:
       fail-fast: false

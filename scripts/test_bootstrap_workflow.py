@@ -106,9 +106,9 @@ class BootstrapWorkflowTest(unittest.TestCase):
         self.jobs = job_blocks(self.text)
 
     def test_covers_both_platforms(self) -> None:
-        self.assertIn("runs-on: ubuntu-latest", self.jobs["bootstrap"])
+        self.assertIn("runs-on: ubuntu-26.04", self.jobs["bootstrap"])
         self.assertIn("runs-on: macos-15", self.jobs["bootstrap-macos"])
-        self.assertIn("runs-on: ubuntu-24.04-arm", self.jobs["bootstrap-linux-arm64"])
+        self.assertIn("runs-on: ubuntu-26.04-arm", self.jobs["bootstrap-linux-arm64"])
 
     def test_runs_the_bootstrap_script_on_both_platforms(self) -> None:
         for name in ("bootstrap", "bootstrap-macos", "bootstrap-linux-arm64"):
