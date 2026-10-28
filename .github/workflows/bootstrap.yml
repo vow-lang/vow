@@ -39,7 +39,7 @@ jobs:
   # condition of its own.
   changes:
     name: Classify changed paths
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       code: ${{ steps.classify.outputs.code }}
@@ -64,7 +64,7 @@ jobs:
     # self-hosted `verify` pass runs on the fixed-point binary, so ESBMC
     # never overlaps a self-hosted codegen. Verification does not affect
     # codegen, so the fixed-point check remains meaningful.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
