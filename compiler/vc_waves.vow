@@ -22,8 +22,22 @@ use vc_pool
 // skip it has without summaries. The parent plans from the proven ids and hands the same ids to
 // every worker (`--worker-summaries`), so planner and worker agree on every summary.
 
+// The ids of the summaries that stand for callees of a root when every callee is trusted, for the
+// roots the planner already asked (`native_summary_roots` builds the module of that question to
+// know whether a summary could rescue the root): `fns[r]` is the module index of a root,
+// `ids[r]` those ids. `vc_waves_needs` takes them instead of building the same module again.
+struct VcRootSums {
+    fns: Vec<i64>,
+    ids: Vec<Vec<i64>>,
+}
+
+fn vc_root_sums_none() -> VcRootSums {
+    VcRootSums { fns: Vec::new(), ids: Vec::new() }
+}
+
 // What `vc_waves_prove` needs to know about a module, and what it has worked out so far: the
-// callees each function waits for (`needs`, valid where `known` is 1).
+// callees each function waits for (`needs`, valid where `known` is 1), and the summary ids of the
+// roots already asked (`sum_ids`, valid where `sum_known` is 1).
 struct VcWaveCtx {
     fns: Vec<IrFunction>,
     idx_of: Vec<i64>,
@@ -33,17 +47,37 @@ struct VcWaveCtx {
     sizes: Vec<i64>,
     needs: Vec<Vec<i64>>,
     known: Vec<i64>,
+    sum_ids: Vec<Vec<i64>>,
+    sum_known: Vec<i64>,
 }
 
 fn vc_wave_ctx(vm: IrModule, budget: i64) -> VcWaveCtx [read] {
     let fns: Vec<IrFunction> = vm.functions;
     let needs: Vec<Vec<i64>> = Vec::new();
+    let sum_ids: Vec<Vec<i64>> = Vec::new();
     let mut i: u64 = 0;
     while i < fns.len() {
         needs.push(Vec::new());
+        sum_ids.push(Vec::new());
         i = i + 1;
     }
-    VcWaveCtx { fns: fns, idx_of: vc_fn_index_table(fns), vm: vm, budget: budget, root_min: vc_trust_root_min(), sizes: dom_fill(fns.len(), -1), needs: needs, known: dom_fill(fns.len(), 0) }
+    VcWaveCtx { fns: fns, idx_of: vc_fn_index_table(fns), vm: vm, budget: budget, root_min: vc_trust_root_min(), sizes: dom_fill(fns.len(), -1), needs: needs, known: dom_fill(fns.len(), 0), sum_ids: sum_ids, sum_known: dom_fill(fns.len(), 0) }
+}
+
+// Tells `c` the summary ids of the roots of `sums`.
+fn vc_wave_seed(c: VcWaveCtx, sums: VcRootSums) {
+    let mut r: u64 = 0;
+    while r < sums.fns.len() {
+        let fi: u64 = sums.fns[r] as u64;
+        let ids: Vec<i64> = sums.ids[r];
+        let mut k: u64 = 0;
+        while k < ids.len() {
+            c.sum_ids[fi].push(ids[k] + 0);
+            k = k + 1;
+        }
+        c.sum_known[fi] = 1;
+        r = r + 1;
+    }
 }
 
 // The callees of the function at index `fi`, callees first, when its call tree is above `root_min`
@@ -131,18 +165,27 @@ fn vc_trust_repeated(c: VcWaveCtx, fi: u64, order: Vec<i64>) -> Vec<i64> {
 // function above `root_min`, the callees its call tree repeats (`vc_trust_repeated`).
 fn vc_waves_needs(c: VcWaveCtx, fi: u64) -> Vec<i64> {
     if c.known[fi] == 0 {
-        let sm: VcSummarised = vc_summary_module(c.fns[fi], c.vm, vc_trust_all(), c.budget);
-        let used: Vec<i64> = sm.used_ids;
         let mut ids: Vec<i64> = Vec::new();
-        let mut k: u64 = 0;
-        while k < used.len() {
-            // The summarised module is scratch, freed on return: only the ids are kept, in the
-            // arena of `c`. Region inference cannot tell a loaded id from a loaded pointer, and
-            // `+ 0` makes a new value of it; stored as loaded, the id would tie the module it
-            // was read from to `c`. The answer is read back from `c` and not returned as built,
-            // which would give it a second destination and put it in the root region.
-            ids.push(used[k] + 0);
-            k = k + 1;
+        if c.sum_known[fi] == 1 {
+            let seeded: Vec<i64> = c.sum_ids[fi];
+            let mut k: u64 = 0;
+            while k < seeded.len() {
+                ids.push(seeded[k] + 0);
+                k = k + 1;
+            }
+        } else {
+            let sm: VcSummarised = vc_summary_module(c.fns[fi], c.vm, vc_trust_all(), c.budget);
+            let used: Vec<i64> = sm.used_ids;
+            let mut k: u64 = 0;
+            while k < used.len() {
+                // The summarised module is scratch, freed on return: only the ids are kept, in the
+                // arena of `c`. Region inference cannot tell a loaded id from a loaded pointer, and
+                // `+ 0` makes a new value of it; stored as loaded, the id would tie the module it
+                // was read from to `c`. The answer is read back from `c` and not returned as built,
+                // which would give it a second destination and put it in the root region.
+                ids.push(used[k] + 0);
+                k = k + 1;
+            }
         }
         let order: Vec<i64> = vc_trust_reach(c, fi);
         if ids.len() == 0 { ids = vc_trust_needs(c, order); }
@@ -257,8 +300,9 @@ fn vc_waves_say_ready(pool: VcPool, names: Vec<String>, said: Vec<i64>) [io] {
 
 // The functions proven by waves started from `roots` (indices of the functions whose decision
 // needs summaries). Empty when no root asks for a summary or nothing is proven.
-fn vc_waves_prove(exe: String, path: String, vm: IrModule, roots: Vec<i64>, jobs: i64, timeout_ms: i64, budget: i64, cache: VcCache) -> VcWaveProofs [io, read, write] {
+fn vc_waves_prove(exe: String, path: String, vm: IrModule, roots: Vec<i64>, sums: VcRootSums, jobs: i64, timeout_ms: i64, budget: i64, cache: VcCache) -> VcWaveProofs [io, read, write] {
     let c: VcWaveCtx = vc_wave_ctx(vm, budget);
+    vc_wave_seed(c, sums);
     let fns: Vec<IrFunction> = c.fns;
     let out: VcWaveProofs = vc_waves_none();
     let proven: Vec<i64> = out.ids;
