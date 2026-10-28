@@ -167,7 +167,7 @@ pub fn is_max_heap(h: MaxHeap) -> bool vow {
     let mut i: u64 = 1;
     while i < n vow {
         invariant: i >= 1,
-        invariant: i <= n
+        invariant: n == 0 || i <= n
     } {
         let p: u64 = max_parent_idx(i);
         if d[p] < d[i] {

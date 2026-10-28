@@ -45,6 +45,19 @@ if ! check_empty_output "test/subcommand" "$rust_test_json" "$self_test_json" "$
         fail "test/single-file-module-root" "rust=$rust_single_status self=$self_single_status"
     fi
 
+    # `vow test` runs in debug mode, so the loop invariants of is_min_heap /
+    # is_max_heap are checked at runtime on an empty heap (a false-at-entry
+    # invariant aborts the run), in both compilers.
+    rust_heap=$($RUST test tests/multi/heap/main.vow 2>/dev/null) || true
+    self_heap=$(run_self test tests/multi/heap/main.vow 2>/dev/null) || true
+    rust_heap_status=$(echo "$rust_heap" | uv run python -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null) || rust_heap_status=""
+    self_heap_status=$(echo "$self_heap" | uv run python -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null) || self_heap_status=""
+    if [ "$rust_heap_status" = "TestsPassed" ] && [ "$self_heap_status" = "TestsPassed" ]; then
+        pass "test/heap-empty-order-invariant"
+    else
+        fail "test/heap-empty-order-invariant" "rust=$rust_heap_status self=$self_heap_status"
+    fi
+
     # A nonexistent path and a hung test must both fail closed in both
     # compilers: TestsFailed, exit 1, exactly one failed/timeout entry (#415).
     hang_dir="$TMPDIR/test_hang"
