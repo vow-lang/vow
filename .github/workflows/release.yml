@@ -24,7 +24,7 @@ permissions:
 jobs:
   plan:
     name: Decide release version
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
     outputs:
@@ -62,11 +62,11 @@ jobs:
           # parses these blocks and permits comments between entries.
           - os: linux
             arch: x86_64
-            runner: ubuntu-24.04
+            runner: ubuntu-26.04
             verify: true
           - os: linux
             arch: aarch64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
             verify: true
           - os: macos
             arch: aarch64
@@ -161,7 +161,7 @@ jobs:
     name: Publish release
     needs: [plan, build-package]
     if: needs.plan.outputs.published == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
       issues: write
