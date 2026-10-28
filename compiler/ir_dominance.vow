@@ -275,6 +275,69 @@ fn dom_dominates(nums: Vec<i64>, nb: u64, a: i64, b: i64) -> bool {
     nums[a as u64] <= nums[b as u64] && nums[nb + b as u64] <= nums[nb + a as u64]
 }
 
+// The strongly connected components of the blocks reachable from block 0 (Tarjan, iterative):
+// out[b] is 2 * component + cyclic for a reachable block, -1 otherwise. `cyclic` is 1 when the
+// component has more than one block or its one block jumps to itself, so a block of it can
+// enter itself. A component is numbered when Tarjan completes it, so a block that can enter a
+// block of another component has the larger number: a smaller number cannot reach it.
+fn dom_scc(nb: u64, succ: Vec<i64>) -> Vec<i64> {
+    let out: Vec<i64> = dom_fill(nb, -1);
+    if nb == 0 { return out; }
+    let idx: Vec<i64> = dom_fill(nb, -1);
+    let low: Vec<i64> = dom_fill(nb, 0);
+    let on_stack: Vec<i64> = dom_fill(nb, 0);
+    let cursor: Vec<i64> = dom_fill(nb, 0);
+    let path: Vec<i64> = Vec::new();
+    let open: Vec<i64> = Vec::new();
+    let mut clock: i64 = 1;
+    let mut comps: i64 = 0;
+    idx[0] = 0;
+    on_stack[0] = 1;
+    path.push(0);
+    open.push(0);
+    while path.len() > 0 {
+        let b: i64 = path[path.len() - 1];
+        let k: i64 = cursor[b as u64];
+        if k < 2 {
+            cursor[b as u64] = k + 1;
+            let s: i64 = succ[(b * 2 + k) as u64];
+            if s >= 0 {
+                if idx[s as u64] < 0 {
+                    idx[s as u64] = clock;
+                    low[s as u64] = clock;
+                    clock = clock + 1;
+                    on_stack[s as u64] = 1;
+                    path.push(s);
+                    open.push(s);
+                } else if on_stack[s as u64] == 1 && idx[s as u64] < low[b as u64] {
+                    low[b as u64] = idx[s as u64];
+                }
+            }
+        } else {
+            path.pop();
+            if low[b as u64] == idx[b as u64] {
+                let mut from: u64 = open.len();
+                while open[from - 1] != b { from = from - 1; }
+                from = from - 1;
+                let mut cyclic: i64 = 0;
+                if open.len() - from > 1 || succ[(b * 2) as u64] == b || succ[(b * 2 + 1) as u64] == b { cyclic = 1; }
+                while open.len() > from {
+                    let w: i64 = open[open.len() - 1];
+                    open.pop();
+                    on_stack[w as u64] = 0;
+                    out[w as u64] = comps * 2 + cyclic;
+                }
+                comps = comps + 1;
+            }
+            if path.len() > 0 {
+                let p: i64 = path[path.len() - 1];
+                if low[b as u64] < low[p as u64] { low[p as u64] = low[b as u64]; }
+            }
+        }
+    }
+    out
+}
+
 fn dom_max_inst_id(f: IrFunction) -> i64 {
     let mut max_id: i64 = 0;
     let mut bi: u64 = 0;

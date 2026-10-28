@@ -263,15 +263,19 @@ fn native_plan(fns: Vec<IrFunction>, ir_mod: IrModule, vm: IrModule, const_fn_in
 // True when proven callees could change the skip of `f`, a root skipped as too large to inline: a
 // summary stands for some callee of it once every callee is trusted. Where none does, none will
 // under a smaller set of proven callees, so no proof could change the skip. A function of its own so
-// the scratch module of the question is freed on return, one root at a time.
-fn native_skip_rescuable(f: IrFunction, vm: IrModule, budget: i64) -> bool {
-    vc_summary_module(f, vm, vc_trust_all(), budget).used
+// the scratch module of the question is freed on return, one root at a time. The ids of the
+// summaries that stand for a callee of `f` are pushed on `ids`, for the waves (`VcRootSums`).
+fn native_skip_rescuable(f: IrFunction, vm: IrModule, budget: i64, ids: Vec<i64>) -> bool {
+    let sm: VcSummarised = vc_summary_module(f, vm, vc_trust_all(), budget);
+    vc_ids_append(ids, sm.used_ids);
+    sm.used
 }
 
 // Indices of the functions whose decision waits for proofs of other functions (`vc_waves`): the
 // too-large skips a summary could rescue, which need summaries, and the ones that will run
 // with a call tree above `vc_trust_root_min`, which skip the claims of the callees proven first.
-fn native_summary_roots(entries: Vec<NativeEntry>, vm: IrModule, budget: i64) -> Vec<i64> [read] {
+// `sums` gets the summary ids of each root of the first kind, which it had to work out to tell.
+fn native_summary_roots(entries: Vec<NativeEntry>, vm: IrModule, budget: i64, sums: VcRootSums) -> Vec<i64> [read] {
     let roots: Vec<i64> = Vec::new();
     let vfns: Vec<IrFunction> = vm.functions;
     let idx_of: Vec<i64> = vc_fn_index_table(vfns);
@@ -281,7 +285,12 @@ fn native_summary_roots(entries: Vec<NativeEntry>, vm: IrModule, budget: i64) ->
     while e < entries.len() {
         let en: NativeEntry = entries[e];
         if en.task < 0 && en.pre < 0 && vc_reason_code(en.reason) == VC_SKIP_INLINING_TOO_LARGE() {
-            if native_skip_rescuable(vfns[en.fn_index as u64], vm, budget) { roots.push(en.fn_index); }
+            let ids: Vec<i64> = Vec::new();
+            if native_skip_rescuable(vfns[en.fn_index as u64], vm, budget, ids) {
+                roots.push(en.fn_index);
+                sums.fns.push(en.fn_index);
+                sums.ids.push(ids);
+            }
         } else if en.task >= 0 && vc_tree_size(vfns, idx_of, sizes, en.fn_index, VC_INLINE_SKIP_INSTS()) > root_min { roots.push(en.fn_index); }
         e = e + 1;
     }

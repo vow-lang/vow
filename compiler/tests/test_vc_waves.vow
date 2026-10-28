@@ -202,6 +202,33 @@ fn check_wave_lines() -> i64 {
     0
 }
 
+fn seeded(m: IrModule, fi: i64, ids: Vec<i64>) -> VcWaveCtx [read] {
+    let sums: VcRootSums = vc_root_sums_none();
+    sums.fns.push(fi);
+    sums.ids.push(ids);
+    let c: VcWaveCtx = vc_wave_ctx(m, 16384);
+    vc_wave_seed(c, sums);
+    c
+}
+
+// The summary ids a root was asked for are the ones its needs start from: none asked for gives
+// what the module itself answers (no summary stands for a callee within the budget), and ids
+// given are taken as the answer to the question, not asked again.
+fn check_seeded_summary_ids() -> i64 [read] {
+    let plain: VcWaveCtx = vc_wave_ctx(repeats(), 16384);
+    if plain.sum_known[5] != 0 { return 1; }
+    let none: Vec<i64> = Vec::new();
+    let empty: VcWaveCtx = seeded(repeats(), 5, none);
+    if empty.sum_known[5] != 1 || empty.sum_known[4] != 0 { return 2; }
+    if ids_text(vc_waves_needs(empty, 5)) != ids_text(vc_waves_needs(plain, 5)) { return 3; }
+    let given: Vec<i64> = Vec::new();
+    given.push(99);
+    let c: VcWaveCtx = seeded(repeats(), 5, given);
+    if !vc_id_in(vc_waves_needs(c, 5), 99) { return 4; }
+    if vc_id_in(vc_waves_needs(vc_wave_ctx(repeats(), 16384), 5), 99) { return 5; }
+    0
+}
+
 fn main() -> i32 [read] {
     let mut r: i64 = check_trust_needs();
     if r == 0 { let d: i64 = check_waves_needs_within_budget(); if d != 0 { r = 100 + d; } }
@@ -209,5 +236,6 @@ fn main() -> i32 [read] {
     if r == 0 { let k: i64 = check_call_copies(); if k != 0 { r = 400 + k; } }
     if r == 0 { let w: i64 = check_waves_needs_repeated(); if w != 0 { r = 500 + w; } }
     if r == 0 { let l: i64 = check_wave_lines(); if l != 0 { r = 200 + l; } }
+    if r == 0 { let q: i64 = check_seeded_summary_ids(); if q != 0 { r = 600 + q; } }
     i64_to_i32_wrap(r)
 }
