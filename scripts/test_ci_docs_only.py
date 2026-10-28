@@ -316,6 +316,11 @@ class IsCompilerInputTest(unittest.TestCase):
             "compiler/replay_main.vow",
             "compiler/vc_cache.vow",
             "compiler/help_gen.vow",
+            "examples/divide.vow",
+            "tests/fixtures/vec_bool_layout.vow",
+            "tests/verify-native/summary/ensures_shadowed_param.vow",
+            "docs/spec/schemas/test-result.schema.json",
+            "tests/run/map_narrow_values.vow",
         ):
             with self.subTest(path=path):
                 self.assertTrue(ci_docs_only.is_compiler_input(path))
@@ -338,6 +343,7 @@ class IsCompilerInputTest(unittest.TestCase):
             "vow-runtime/src/lib.rs",
             "README.md",
             ".github/workflows/ci.yml",
+            "tests/run/unrelated_fixture.vow",
             "scripts/compiler_test_parity.sh.bak",
             "compiler-extra/lexer.vow",
         ):

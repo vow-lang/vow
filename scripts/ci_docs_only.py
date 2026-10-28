@@ -65,10 +65,11 @@ proved, how it is proved, or the headroom it is proved within:
 
 The two-compiler `test compiler/` comparison costs a bootstrap build plus both
 test runs, so it runs on a pull request only when the changeset can move its
-outcome: the self-hosted sources and their tests under `compiler/`, the scripts
-that build and compare the two compilers, and this gate and that workflow.
-Rust-crate changes are not inputs here; `cargo test`, the promoted fixtures and
-the post-merge bootstrap cover them.
+outcome: the self-hosted sources and their tests under `compiler/`, the fixtures
+and schemas those tests read from outside it, the scripts that build and compare
+the two compilers, and this gate and that workflow. Rust-crate and runtime
+changes are not inputs: they would send most pull requests through this job, so
+the post-merge bootstrap remains their only check (a maintainer decision).
 
 An unresolvable commit range reports `arena=true` and `compiler=true`, which is
 also what a `schedule` or `workflow_dispatch` event produces: neither carries a
@@ -107,13 +108,25 @@ ARENA_INPUT_FILES = (
 
 # Paths that can change the compiler test suite's outcome (see the module
 # docstring). Directories match by prefix, files exactly, as for the arena.
-COMPILER_INPUT_DIRS = ("compiler/",)
+COMPILER_INPUT_DIRS = (
+    "compiler/",
+    # Fixtures and schemas the suite reads from outside `compiler/`.
+    "examples/",
+    "tests/fixtures/",
+    "tests/verify-native/",
+    "docs/spec/schemas/",
+)
 
 COMPILER_INPUT_FILES = (
     "scripts/compiler_test_parity.sh",
     "scripts/concat_vow.sh",
     "scripts/parity.py",
     "scripts/test_parity.py",
+    "scripts/schema_check.py",
+    "tests/run/map_narrow_values.vow",
+    "tests/run/map_receiver_shapes.vow",
+    "tests/run/match_merge_with_mutation.vow",
+    "tests/run/short_circuit_assign.vow",
     "scripts/bootstrap.sh",
     "scripts/ci_docs_only.py",
     "scripts/test_ci_docs_only.py",

@@ -128,10 +128,7 @@ class BootstrapWorkflowTest(unittest.TestCase):
                 self.assertIn("install-esbmc", job)
 
     def compiler_test_step(self) -> str:
-        """The tier-1 comparison step and the script it runs.
-
-        Job-wide assertions stay green even if the step is deleted outright.
-        """
+        """The tier-1 comparison step, scoped so deleting it fails the test."""
         linux = self.jobs["bootstrap"]
         start = linux.index("equivalence tier 1")
         step = linux[start : linux.index("- name:", start)]
@@ -147,7 +144,10 @@ class BootstrapWorkflowTest(unittest.TestCase):
         for command in (rust_test, self_test, comparator):
             with self.subTest(command=command):
                 self.assertIn(command, step)
-        self.assertLess(linux.index("scripts/bootstrap.sh"), linux.index("tier 1"))
+        self.assertLess(
+            linux.index("scripts/bootstrap.sh"),
+            linux.index("run: scripts/compiler_test"),
+        )
 
     def test_the_compiler_test_step_sets_no_memory_cap(self) -> None:
         # A cap on one side only would turn a memory limit into a spurious

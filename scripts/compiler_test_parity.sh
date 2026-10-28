@@ -7,11 +7,13 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 1
 
-out="${TMPDIR:-/tmp}"
+out=$(mktemp -d) || exit 1
+trap 'rm -rf "$out"' EXIT
+
 target/release/vow test compiler/ > "$out/rust_test.json"
 rust_exit=$?
 build/vowc test compiler/ > "$out/self_test.json"
 self_exit=$?
 
-exec python3 scripts/parity.py test "$out/rust_test.json" "$out/self_test.json" \
+python3 scripts/parity.py test "$out/rust_test.json" "$out/self_test.json" \
   "$rust_exit" "$self_exit"
