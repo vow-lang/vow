@@ -37,7 +37,7 @@ with `o.1` equal to `h.addr` before this change); the payload was typed `ptr` on
    is one the aggregate model understands (`vc_agg_ptr_reads_used_ok`). A payload that is a `Vec`,
    a `String` or a value, a write through a payload and a payload read from memory read through a
    handle stay `Skipped`. Shape 4 of the issue (`Option<Vec<_>>`, `option_vec_payload`) is one of
-   them: the collection is kept per parameter, not per object, which #1663 decides.
+   them: the collection is kept per parameter, not per object, which #1906 decides.
 3. **No field-address ranking in such a function.** The cycle exclusion of #1779 ranks the value a
    by-value struct-typed field holds below the object holding it, because no program can build a
    value of a self-containing struct. A payload can hold the object that holds it
@@ -50,6 +50,6 @@ with `o.1` equal to `h.addr` before this change); the payload was typed `ptr` on
 ## Consequences
 
 `tests/verify-native/skip/option_payload_{built_in_function,of_merged_param,param_write}.vow` move
-to `pass/`; `option_vec_payload.vow` stays `Skipped` and names #1663. The guards fail on a model
+to `pass/`; `option_vec_payload.vow` stays `Skipped` and names #1906. The guards fail on a model
 that reads the value at the store, takes one arm of a merge, swaps the edges or keeps the payload
 apart from the parameters (`fail/option_payload_*_wrong.vow`).

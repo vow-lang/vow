@@ -112,7 +112,7 @@ function that stores a pointer, reads a payload object or loops; a pointer, floa
 narrower integer written through the element of a `Vec` parameter; an element of an element of a `Vec`
 the function did not build (a built one is ADR-2026-10-27-0300); a
 write through a Phi of handles; a pointer written through any element
-(`skip/..._pointer_value_skipped`, tracked in #1663: the C emitter cannot store a `Vec` in a field
+(`skip/..._pointer_value_skipped`, tracked in #1908: the C emitter cannot store a `Vec` in a field
 either, ESBMC rejects the emitted C with a parse error, as it does for
 `skip/..._collection_param_in_field_skipped`).
 
