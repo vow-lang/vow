@@ -69,18 +69,6 @@ fn vc_cex_type_class(m: Module, tid: i64) -> i64 {
     0
 }
 
-// Kind of the object the position `name` of `fn_name` holds the address of, or 0 when `name` is
-// not a path of slots and indices to a `Vec`, a `String` or a struct. A parameter itself is no
-// position.
-fn vc_cex_position_class(m: Module, fn_name: String, name: String) -> i64 {
-    let mut i: u64 = 0;
-    while i < name.len() && name.byte_at(i) != 46 && name.byte_at(i) != 91 {
-        i = i + 1;
-    }
-    if i == name.len() { return 0; }
-    vc_cex_type_class(m, vc_cex_position_type(m, fn_name, name))
-}
-
 // Spelling of the resolved type `tid`, equal for two positions exactly when their objects have one
 // declared type.
 fn vc_cex_type_key(m: Module, tid: i64) -> String {

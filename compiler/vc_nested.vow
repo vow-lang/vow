@@ -335,7 +335,7 @@ fn vc_enrich_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: V
     let first: VcSolverAnswer = vc_enrich_vec_first(cache, bin, cs, k, ans, pin, budget_ms, scratch);
     if !vc_nest_enabled(cs, k) || first.values.len() <= vc_claim_model_count(cs, k) { return first; }
     let plan: VcNestPlan = vc_nest_plan(cs, k, first, vc_answer_body(cs, k, first));
-    if plan.cls.len() == 0 { return first; }
+    if plan.cls.len() == 0 || (vc_nest_collections(plan) == 0 && plan.s_grp.len() == 0) { return first; }
     vc_nest_attach(first, vc_nest_run(cache, bin, cs, k, first, plan, started, budget_ms, scratch))
 }
 

@@ -23,9 +23,10 @@ fn src() -> String {
     s.push_str(String::from("struct Holder { p: Pair, v: Vec<i64>, n: i64, r: Row }\n"));
     s.push_str(String::from("linear struct Token { id: i64 }\n"));
     s.push_str(String::from("struct Wrap { t: Token, k: i64 }\n"));
+    s.push_str(String::from("struct Tree { kids: Vec<Tree> }\n"));
     s.push_str(String::from("struct Other { a: i64 }\n"));
     s.push_str(String::from("struct Box1 { o: Other }\n"));
-    s.push_str(String::from("fn f(n: Names, grid: Vec<Vec<i64>>, h: Holder, people: Vec<Pair>, x: i64, w: Wrap, names: Vec<String>, g3: Vec<Vec<Vec<i64>>>, wide: Vec<Vec<i128>>, fl: Vec<Vec<f64>>, b1: Box1, v: Vec<i64>, hs: Vec<Holder>) -> i64 { x }\n"));
+    s.push_str(String::from("fn f(n: Names, grid: Vec<Vec<i64>>, h: Holder, people: Vec<Pair>, x: i64, w: Wrap, names: Vec<String>, g3: Vec<Vec<Vec<i64>>>, wide: Vec<Vec<i128>>, fl: Vec<Vec<f64>>, b1: Box1, v: Vec<i64>, hs: Vec<Holder>, t: Tree) -> i64 { x }\n"));
     s.push_str(String::from("fn main() -> i32 [io] { 0 }\n"));
     s
 }
@@ -212,6 +213,16 @@ fn check_contents_are_stripped_with_the_handoff() -> i64 [io] {
     0
 }
 
+// A model whose objects hold their own address nests the same contents one step deeper each round: the
+// copies stop at a depth, and the positions past it are marked.
+fn check_a_cyclic_model_stops() -> i64 [io] {
+    let got: String = run(String::from("f"), String::from("t.0=5,t.0.len=1,t.0[0]=9,$read.n=2,$read.0=vec:5,$read.1=obj:9,$read.1.0=5"));
+    if index_of(got, String::from("t.0[0].0.len=1")) < 0 { return 140; }
+    if index_of(got, String::from(".contents=unlisted")) < 0 { return 141; }
+    if got.len() > 200000 { return 142; }
+    0
+}
+
 fn main() -> i32 [io] {
     let mut r: i64 = check_unread_element_is_free();
     if r == 0 { r = check_read_element_is_unlisted(); }
@@ -227,5 +238,6 @@ fn main() -> i32 [io] {
     if r == 0 { r = check_one_address_is_one_object(); }
     if r == 0 { r = check_contents_that_cannot_be_shown_stay_unlisted(); }
     if r == 0 { r = check_contents_are_stripped_with_the_handoff(); }
+    if r == 0 { r = check_a_cyclic_model_stops(); }
     i64_to_i32_wrap(r)
 }

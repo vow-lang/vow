@@ -24,6 +24,10 @@ use vc_cex_reads
 
 fn VC_JOIN_CAP() -> i64 { 4096 }
 
+// Longest position the copies go into: a model whose objects hold their own address would nest the
+// same contents under one more step each round.
+fn VC_JOIN_DEPTH() -> u64 { 256 }
+
 // The positions of a counterexample: per position the entry that holds it, its name, kind, resolved
 // type and the spelling of the type, address and whether it is a parameter itself (`<p>.addr`),
 // which has no verdict of its own. `added` is the number of entries the copies added.
@@ -55,7 +59,7 @@ fn vc_cex_pos_scan(m: Module, fn_name: String, ps: VcCexPos, names: Vec<String>,
         let owner: String = { if param { names[j].substring(0, names[j].len() - 5) } else { String::from(names[j]) } };
         let tid: i64 = vc_cex_position_type(m, fn_name, owner);
         let cls: i64 = vc_cex_type_class(m, tid);
-        if cls != 0 && (param || owner.len() > 0) {
+        if cls != 0 && (param || vc_cex_has_step(owner)) {
             match replay_addr_bits(vals[j]) {
                 Option::Some(b) => {
                     ps.at.push(j);
@@ -71,6 +75,16 @@ fn vc_cex_pos_scan(m: Module, fn_name: String, ps: VcCexPos, names: Vec<String>,
         }
         j = j + 1;
     }
+}
+
+// True when `name` goes through a slot or an index: a parameter itself is no position.
+fn vc_cex_has_step(name: String) -> bool {
+    let mut i: u64 = 0;
+    while i < name.len() {
+        if name.byte_at(i) == 46 || name.byte_at(i) == 91 { return true; }
+        i = i + 1;
+    }
+    false
 }
 
 fn vc_cex_pos_of(ps: VcCexPos, at: u64) -> i64 {
@@ -292,7 +306,7 @@ fn vc_cex_address_shared(ps: VcCexPos, pi: u64) -> bool {
 // Lists the contents of the position `pi` that the function read through, from an object it is the
 // alias of or from the verifier's listing; false when it cannot.
 fn vc_cex_fill(m: Module, ps: VcCexPos, pi: u64, rs: VcCexReads, names: Vec<String>, vals: Vec<String>) -> bool {
-    if ps.added >= VC_JOIN_CAP() { return false; }
+    if ps.added >= VC_JOIN_CAP() || ps.name[pi].len() > VC_JOIN_DEPTH() { return false; }
     let src: i64 = vc_cex_alias_source(ps, pi, names, vals);
     if src >= 0 {
         vc_cex_copy_alias(ps, src as u64, ps.name[pi], names, vals);
