@@ -5,6 +5,21 @@
 
 section_begin "Section 10b: Test Subcommand"
 
+# `vow test` builds in debug mode, so the loop invariants of the shipped
+# stdlib/heap is_min_heap / is_max_heap are checked at runtime (empty heap
+# included) in both compilers.
+heap_order_test="tests/stdlib/heap_order_predicates.vow"
+heap_rust=$($RUST test --module-root stdlib/heap "$heap_order_test" 2>/dev/null) || true
+heap_self=$(run_self test --module-root stdlib/heap "$heap_order_test" 2>/dev/null) || true
+heap_status() { printf '%s' "$1" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || true; }
+heap_rust_status=$(heap_status "$heap_rust")
+heap_self_status=$(heap_status "$heap_self")
+if [ "$heap_rust_status" = "TestsPassed" ] && [ "$heap_self_status" = "TestsPassed" ]; then
+    pass "test/heap-order-predicates"
+else
+    fail "test/heap-order-predicates" "rust=$heap_rust_status self=$heap_self_status"
+fi
+
 # Run vowc test with both compilers on compiler/ directory.
 rust_test_exit=0 self_test_exit=0
 rust_test_json=$($RUST test compiler/ 2>/dev/null) || rust_test_exit=$?
