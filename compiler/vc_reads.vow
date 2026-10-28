@@ -43,7 +43,7 @@ fn vc_reads_key(ar: VcArena, h: i64) -> i64 {
 // name are two terms.
 fn vc_reads_same(ar: VcArena, a: i64, b: i64) -> bool {
     if a == b { return true; }
-    ar.kinds[a as u64] == VC_T_VAR() && ar.kinds[b as u64] == VC_T_VAR() && vc_term_text(ar, a) == vc_term_text(ar, b)
+    ar.kinds[a as u64] == VC_T_VAR() && ar.kinds[b as u64] == VC_T_VAR() && ar.strs[ar.aux[a as u64] as u64] == ar.strs[ar.aux[b as u64] as u64]
 }
 
 // Records that the handle `h` was read as `cls` at the current header position.
