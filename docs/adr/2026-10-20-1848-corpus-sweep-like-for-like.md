@@ -1,6 +1,6 @@
 # ADR-2026-10-20-1848: the corpus sweep compares only fixtures both backends decide
 
-Status: proposed, needs maintainer decision (issue #1848, epic #1398)
+Status: accepted (issue #1848, epic #1398; maintainer ruling 2026-10-28)
 
 Native verifier only (no Rust twin,
 [ADR-2026-10-08-1421](2026-10-08-1421-verifier-lives-only-in-compiler.md)). Touches the harness
@@ -20,7 +20,7 @@ kind: ESBMC declines in 3 to 7 ms; native pays process start (driver, worker re-
 process per query, 9 to 15 ms on the tiny ones) before it can say the same. `verify_compiler.py`
 has a measurement floor for this; the corpus sweep has none.
 
-## Decision (proposed)
+## Decision
 
 1. A sweep row is **like-for-like** only when both backends reach a deciding verdict (`proven` or
    `refuted`) on the same functions (class `match`, same skipped set, as before). Only those rows
@@ -40,6 +40,9 @@ has a measurement floor for this; the corpus sweep has none.
 
 ## Consequences
 
+- Maintainer ruling 2026-10-28: accepted as written. The `more_precise` rows (ESBMC skips or is
+  inconclusive, native decides; 146 of them over 1.25x in the `125d09d5` sweep) are tracked, not
+  gated: they stay in `rows[]` with their class and exclusion reason and carry no cost bound.
 - The seven tiny `skip`/`unknown` offenders leave the gate and appear in `undecided[]`. The
   worst-case bound is then decided by rows where a verdict was actually computed.
 - The exemption is not bounded by cost: a native regression from 1 s to 25 s on a fixture where
