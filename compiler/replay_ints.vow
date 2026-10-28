@@ -66,3 +66,20 @@ fn replay_is_scalar_name(name: String) -> bool {
 fn replay_held_elem_name(name: String) -> bool {
     replay_is_scalar_name(name) && name != String::from("f32") && name != String::from("f64")
 }
+
+// True if `s` is a plain decimal integer literal (optional leading `-`).
+fn replay_is_int_literal(s: String) -> bool {
+    let n: u64 = s.len();
+    if n == 0 { return false; }
+    let mut i: u64 = 0;
+    if s.byte_at(0) == 45 {
+        if n == 1 { return false; }
+        i = 1;
+    }
+    while i < n {
+        let b: i64 = s.byte_at(i);
+        if b < 48 || b > 57 { return false; }
+        i = i + 1;
+    }
+    true
+}

@@ -1,0 +1,186 @@
+module VcCexVerdict
+
+use ast
+use replay_alias
+use replay_listed
+use replay_main
+use verifier
+use vc_reads
+use vc_cex_elem
+
+// What a native counterexample says about the objects whose address it lists. An object the
+// function reached through memory (a `Vec`, a `String` or a struct held in a field, or an element
+// of a `Vec` of them) appears as its address, and its contents only where a listing covers them
+// (`vc_held`, `vc_heaplist`, `vc_fieldrows`). An address alone describes nothing, so every such
+// position with no contents gets `<position>.contents`:
+//
+//   unconstrained  the function never read through that address, so any contents reproduce the
+//                  failure
+//   unlisted       the function read through the address, or the verifier could not tell, and the
+//                  contents are not listed
+//
+// The verifier hands over the handles the function read through as `$read.n` and `$read.<i>`
+// (`vc_append_read_answer`), `<class>:<address>`; the driver strips them. Without `$read.n` the
+// reads are unknown and nothing is called unconstrained. A read of one class at an address does
+// not touch an object of another class there: the model shares its arrays between types, which
+// real objects, being distinct, do not.
+
+// Class (`VC_READ_*`) of the object the position `name` of the function `fn_name` holds, or 0
+// when `name` is not a path of slots and indices to a `Vec`, a `String` or a struct.
+fn vc_cex_position_class(m: Module, fn_name: String, name: String) -> i64 {
+    let a: AstArena = m.arena;
+    let mut at: u64 = 0;
+    while at < name.len() && name.byte_at(at) != 46 && name.byte_at(at) != 91 {
+        at = at + 1;
+    }
+    if at == name.len() { return 0; }
+    let tid: i64 = vc_cex_param_type(m, fn_name, name.substring(0, at));
+    if tid < 0 { return 0; }
+    let mut cur: i64 = replay_resolve_type(m, tid, 0);
+    while at < name.len() && cur >= 0 {
+        let open: i64 = name.byte_at(at);
+        let mut end: u64 = at + 1;
+        while end < name.len() && name.byte_at(end) >= 48 && name.byte_at(end) <= 57 {
+            end = end + 1;
+        }
+        if end == at + 1 { return 0; }
+        let mut digits: i64 = 0;
+        let mut d: u64 = at + 1;
+        while d < end && digits < 100000000 {
+            digits = digits * 10 + (name.byte_at(d) - 48);
+            d = d + 1;
+        }
+        if open == 46 {
+            if end < name.len() && name.byte_at(end) != 46 && name.byte_at(end) != 91 { return 0; }
+            let f: i64 = vc_cex_field_type_at(m, cur, digits);
+            if f < 0 { return 0; }
+            cur = replay_resolve_type(m, f, 0);
+            at = end;
+        } else {
+            if end >= name.len() || name.byte_at(end) != 93 { return 0; }
+            if type_tag(a, cur) != TY_GENERIC() || arena_str(a, type_a(a, cur)) != String::from("Vec") { return 0; }
+            let args: i64 = type_b(a, cur);
+            if list_len(a, args) != 1 { return 0; }
+            cur = replay_resolve_type(m, list_get(a, args, 0), 0);
+            at = end + 1;
+        }
+    }
+    if cur < 0 { return 0; }
+    if type_tag(a, cur) == TY_GENERIC() && arena_str(a, type_a(a, cur)) == String::from("Vec") { return VC_READ_VEC(); }
+    if type_tag(a, cur) != TY_NAMED() { return 0; }
+    let tname: String = arena_str(a, type_a(a, cur));
+    if tname == String::from("String") { return VC_READ_STR(); }
+    let sid: i64 = replay_find_struct(m, tname);
+    if sid >= 0 && sdef_is_linear(a, sid) == 0 { return VC_READ_OBJ(); }
+    0
+}
+
+// The reads of a counterexample: the class and address of each, and whether they are known.
+struct VcCexReads {
+    known: bool,
+    cls: Vec<i64>,
+    bits: Vec<u64>,
+}
+
+fn vc_cex_class_of_name(name: String) -> i64 {
+    if name == vc_reads_class_name(VC_READ_STR()) { return VC_READ_STR(); }
+    if name == vc_reads_class_name(VC_READ_OBJ()) { return VC_READ_OBJ(); }
+    if name == vc_reads_class_name(VC_READ_VEC()) { return VC_READ_VEC(); }
+    0
+}
+
+// Reads the `$read.*` entries from position `from` on. A malformed entry makes the reads unknown.
+fn vc_cex_read_entries(names: Vec<String>, vals: Vec<String>, from: u64) -> VcCexReads {
+    let out: VcCexReads = VcCexReads { known: false, cls: Vec::new(), bits: Vec::new() };
+    if from >= names.len() || names[from] != String::from("$read.n") { return out; }
+    let mut count: i64 = -1;
+    match parse_i64(vals[from]) {
+        Option::Some(v) => { count = v; },
+        Option::None => { return out; },
+    }
+    if count < 0 || from + 1 + (count as u64) != names.len() { return out; }
+    let mut i: u64 = from + 1;
+    while i < names.len() {
+        let colon: i64 = str_find_str(vals[i], String::from(":"));
+        if colon < 1 { return out; }
+        let cls: i64 = vc_cex_class_of_name(vals[i].substring(0, colon as u64));
+        if cls == 0 { return out; }
+        match replay_addr_bits(vals[i].substring((colon + 1) as u64, vals[i].len())) {
+            Option::Some(b) => {
+                out.cls.push(cls);
+                out.bits.push(b);
+            },
+            Option::None => { return out; },
+        }
+        i = i + 1;
+    }
+    out.known = true;
+    out
+}
+
+fn vc_cex_was_read(rs: VcCexReads, cls: i64, bits: u64) -> bool {
+    let mut i: u64 = 0;
+    while i < rs.cls.len() {
+        if rs.cls[i] == cls && rs.bits[i] == bits { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// The verdict for the position at entry `j` of class `cls`: "" when its contents are listed, else
+// the token `.contents` takes. An object at the address of a parameter is judged like any other:
+// a read through that address is a read of the object, and replay binds the parameter itself
+// before it consults the verdict.
+fn vc_cex_position_verdict(names: Vec<String>, vals: Vec<String>, j: u64, cls: i64, rs: VcCexReads) -> String {
+    let name: String = names[j];
+    if cls == VC_READ_OBJ() {
+        if replay_listed_has_rows(names, name) { return String::from(""); }
+    } else {
+        let raw: String = replay_listed_value(names, vals, replay_listed_len_key(name));
+        if raw.len() > 0 {
+            match raw.parse_u64() {
+                Option::Some(l) => {
+                    let first: String = String::from(name);
+                    first.push_str(String::from("[0]"));
+                    if l > 0 && replay_listed_value(names, vals, first).len() == 0 { return String::from("unlisted"); }
+                },
+                Option::None => { return String::from("unlisted"); },
+            }
+            return String::from("");
+        }
+    }
+    match replay_addr_bits(vals[j]) {
+        Option::Some(bits) => {
+            if !rs.known || vc_cex_was_read(rs, cls, bits) { return String::from("unlisted"); }
+            String::from("unconstrained")
+        },
+        Option::None => String::from(""),
+    }
+}
+
+// Strips the handoff entries of a native counterexample and adds `<position>.contents` to every
+// position of the function `fn_name` that holds the address of an object and lists no contents
+// for it. `names` and `vals` are the parallel entries of one counterexample, the handoff last.
+fn vc_cex_apply_verdicts(m: Module, fn_name: String, names: Vec<String>, vals: Vec<String>) {
+    let mut cut: u64 = 0;
+    while cut < names.len() && string_starts_with(names[cut], String::from("$read.")) == 0 {
+        cut = cut + 1;
+    }
+    let rs: VcCexReads = vc_cex_read_entries(names, vals, cut);
+    names.truncate(cut);
+    vals.truncate(cut);
+    let mut j: u64 = 0;
+    while j < cut {
+        let cls: i64 = vc_cex_position_class(m, fn_name, names[j]);
+        if cls != 0 {
+            let verdict: String = vc_cex_position_verdict(names, vals, j, cls, rs);
+            if verdict.len() > 0 {
+                let key: String = String::from(names[j]);
+                key.push_str(String::from(".contents"));
+                names.push(key);
+                vals.push(verdict);
+            }
+        }
+        j = j + 1;
+    }
+}

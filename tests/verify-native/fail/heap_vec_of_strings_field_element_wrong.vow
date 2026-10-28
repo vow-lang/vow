@@ -1,9 +1,9 @@
-// TEST: replay-skipped a Vec<String> held in a struct field is listed with an element that is an address, which replay cannot rebuild (#1890)
 // TEST: counterexample-fn "firstlen"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
-// The counterexample needs one element, and an element that is a String is only an address.
-module HeapVecOfStringsFieldElementSkipped
+// TEST: counterexample-value n.0[0].contents unconstrained
+// The counterexample needs one element, a String the function never reads: it lists its address and says any String will do.
+module HeapVecOfStringsFieldElementWrong
 
 struct Names { items: Vec<String>, tag: i64 }
 

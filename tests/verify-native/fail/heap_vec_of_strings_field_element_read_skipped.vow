@@ -1,0 +1,21 @@
+// TEST: replay-skipped the String in a Vec<String> held in a field is read, and its contents are not listed (#1890)
+// TEST: counterexample-fn "firstlen"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value n.0[0].contents unlisted
+// The counterexample needs one element and the function reads its length, so the element is an address with no contents: the listing says so.
+module HeapVecOfStringsFieldElementReadSkipped
+
+struct Names { items: Vec<String>, tag: i64 }
+
+fn firstlen(n: Names) -> u64 vow {
+  ensures: result == 7
+} {
+  if n.items.len() > 0u64 { n.items[0].len() } else { 7u64 }
+}
+
+fn main() -> i32 [io] {
+  let n: Names = Names { items: Vec::new(), tag: 0 };
+  print_u64(firstlen(n));
+  0
+}

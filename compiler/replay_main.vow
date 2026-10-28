@@ -9,6 +9,7 @@ use replay_mapkeys
 use replay_ints
 use replay_alias
 use replay_listed
+use replay_free
 
 // Aggregate arguments for the native backend's `--replay-cex`. The native
 // counterexample lists an aggregate parameter's scalar slots as `<param>.<slot>`
@@ -37,23 +38,6 @@ fn replay_arg_ok(lit: String, ty_text: String) -> ReplayArg {
 // literal names (see `ReplayObjs`), so they are declared before it.
 fn replay_arg_ok_deps(lit: String, ty_text: String, deps: String) -> ReplayArg {
     ReplayArg { lit: lit, ty_text: ty_text, reason: String::from(""), deps: deps }
-}
-
-// True if `s` is a plain decimal integer literal (optional leading `-`).
-fn replay_is_int_literal(s: String) -> bool {
-    let n: u64 = s.len();
-    if n == 0 { return false; }
-    let mut i: u64 = 0;
-    if s.byte_at(0) == 45 {
-        if n == 1 { return false; }
-        i = 1;
-    }
-    while i < n {
-        let b: i64 = s.byte_at(i);
-        if b < 48 || b > 57 { return false; }
-        i = i + 1;
-    }
-    true
 }
 
 fn replay_cex_value(names: Vec<String>, vals: Vec<String>, key: String) -> String {
@@ -473,7 +457,7 @@ fn replay_held_arg(a: AstArena, tid: i64, inner: String, names: Vec<String>, val
     if entry.len() == 0 && len != -1 {
         return replay_field_skip(shown, String::from("`: the counterexample lists its length but not its address"));
     }
-    if entry.len() > 0 && len == -1 {
+    if entry.len() > 0 && len == -1 && !replay_listed_unread(names, vals, inner) {
         return replay_field_skip(shown, String::from("`: the counterexample does not list its length"));
     }
     if !is_vec {
@@ -482,6 +466,8 @@ fn replay_held_arg(a: AstArena, tid: i64, inner: String, names: Vec<String>, val
     let elem: i64 = list_get(a, type_b(a, tid), 0);
     if replay_held_elem_scalar(a, elem) { return replay_vec_arg(a, tid, inner, names, vals); }
     if len > 0 || len == -2 {
+        let free: String = replay_free_vec(a, tid, inner, len, names, vals);
+        if free.len() > 0 { return replay_arg_ok(free, shown); }
         return replay_field_skip(shown, String::from("` holds elements replay cannot rebuild"));
     }
     let lit: String = String::from("{ let __replay_v: ");
@@ -845,11 +831,13 @@ fn replay_slot_element(name: String, slot: u64) -> ReplayArg {
 fn replay_vec_arg(a: AstArena, tid: i64, pname: String, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
     let shown: String = print_type_text(a, tid);
     let args_lid: i64 = type_b(a, tid);
+    let len: i64 = replay_vec_len(pname, names, vals);
+    let free: String = replay_free_vec(a, tid, pname, len, names, vals);
+    if free.len() > 0 { return replay_arg_ok(free, shown); }
     if list_len(a, args_lid) != 1 || type_tag(a, list_get(a, args_lid, 0)) != TY_NAMED() {
         return replay_arg_skip(str3r(String::from("parameter type `"), shown, String::from("` is not rebuilt by replay")));
     }
     let ename: String = arena_str(a, type_a(a, list_get(a, args_lid, 0)));
-    let len: i64 = replay_vec_len(pname, names, vals);
     if len == -2 {
         return replay_arg_skip(str3r(String::from("length of `"), pname, String::from("` is not a length replay can build")));
     }

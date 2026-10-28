@@ -13,6 +13,7 @@ use vc_inline
 use vc_native
 use vc_cex
 use vc_cex_elem
+use vc_cex_verdict
 use vc_worker
 use vc_queue
 use vc_irwire
@@ -34,6 +35,7 @@ use complexity
 use complexity_main
 use cli_flags
 use replay_entry
+use replay_free
 use replay_main
 use replay_elems
 use decl_main

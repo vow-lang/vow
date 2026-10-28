@@ -1,0 +1,158 @@
+module TestVcCexVerdict
+
+use lexer
+use ast
+use diag
+use parser
+use replay_main
+use replay_listed
+use vc_reads
+use vc_cex_verdict
+
+fn parse_src(source: String) -> Module [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    parse_module_into(lex(source), arena, dctx, String::from("entry.vow"))
+}
+
+fn src() -> String {
+    let s: String = String::from("module T\n");
+    s.push_str(String::from("struct Names { items: Vec<String>, tag: i64 }\n"));
+    s.push_str(String::from("struct Pair { lo: i64, hi: i64 }\n"));
+    s.push_str(String::from("type Row = Vec<i64>;\n"));
+    s.push_str(String::from("struct Holder { p: Pair, v: Vec<i64>, n: i64, r: Row }\n"));
+    s.push_str(String::from("linear struct Token { id: i64 }\n"));
+    s.push_str(String::from("struct Wrap { t: Token, k: i64 }\n"));
+    s.push_str(String::from("fn f(n: Names, grid: Vec<Vec<i64>>, h: Holder, people: Vec<Pair>, x: i64, w: Wrap, names: Vec<String>) -> i64 { x }\n"));
+    s.push_str(String::from("fn main() -> i32 [io] { 0 }\n"));
+    s
+}
+
+fn index_of(hay: String, needle: String) -> i64 {
+    let n: i64 = hay.len() as i64;
+    let k: i64 = needle.len() as i64;
+    let mut i: i64 = 0;
+    while i + k <= n {
+        if hay.substring(i as u64, (i + k) as u64) == needle { return i; }
+        i = i + 1;
+    }
+    -1
+}
+
+fn kv_part(kv: String, values: bool) -> Vec<String> {
+    let out: Vec<String> = Vec::new();
+    let mut start: u64 = 0u64;
+    let mut i: u64 = 0u64;
+    while i <= kv.len() {
+        if i == kv.len() || kv.byte_at(i) == 44 {
+            if i > start {
+                let pair: String = kv.substring(start, i);
+                let at: u64 = index_of(pair, String::from("=")) as u64;
+                if values { out.push(pair.substring(at + 1u64, pair.len())); } else { out.push(pair.substring(0u64, at)); }
+            }
+            start = i + 1u64;
+        }
+        i = i + 1u64;
+    }
+    out
+}
+
+// Applies the verdicts to the entries `kv` of a counterexample of `f` and returns them as `k=v,...`.
+fn run(fname: String, kv: String) -> String [io] {
+    let m: Module = parse_src(src());
+    let names: Vec<String> = kv_part(kv, false);
+    let vals: Vec<String> = kv_part(kv, true);
+    vc_cex_apply_verdicts(m, fname, names, vals);
+    let out: String = String::from("");
+    let mut i: u64 = 0;
+    while i < names.len() {
+        if i > 0 { out.push_str(String::from(",")); }
+        out.push_str(names[i]);
+        out.push_str(String::from("="));
+        out.push_str(vals[i]);
+        i = i + 1;
+    }
+    out
+}
+
+fn check_unread_element_is_free() -> i64 [io] {
+    let got: String = run(String::from("f"), String::from("n.0=0,n.0.len=1,n.0[0]=0,$read.n=1,$read.0=vec:0"));
+    if got != String::from("n.0=0,n.0.len=1,n.0[0]=0,n.0[0].contents=unconstrained") { return 1; }
+    0
+}
+
+fn check_read_element_is_unlisted() -> i64 [io] {
+    let got: String = run(String::from("f"), String::from("n.0=-2,n.0.len=1,n.0[0]=18446744073709551615,$read.n=2,$read.0=vec:-2,$read.1=str:-1"));
+    if got != String::from("n.0=-2,n.0.len=1,n.0[0]=18446744073709551615,n.0[0].contents=unlisted") { return 10; }
+    0
+}
+
+fn check_unknown_reads_are_unlisted() -> i64 [io] {
+    let got: String = run(String::from("f"), String::from("n.0=0,n.0.len=1,n.0[0]=0"));
+    if got != String::from("n.0=0,n.0.len=1,n.0[0]=0,n.0[0].contents=unlisted") { return 20; }
+    let torn: String = run(String::from("f"), String::from("n.0=0,n.0.len=1,n.0[0]=0,$read.n=2,$read.0=str:5"));
+    if torn != String::from("n.0=0,n.0.len=1,n.0[0]=0,n.0[0].contents=unlisted") { return 21; }
+    let odd: String = run(String::from("f"), String::from("n.0=0,n.0.len=1,n.0[0]=0,$read.n=1,$read.0=map:5"));
+    if odd != String::from("n.0=0,n.0.len=1,n.0[0]=0,n.0[0].contents=unlisted") { return 22; }
+    0
+}
+
+fn check_a_read_of_another_class_is_not_a_read() -> i64 [io] {
+    let got: String = run(String::from("f"), String::from("grid.len=1,grid[0]=7,$read.n=2,$read.0=str:7,$read.1=obj:7"));
+    if got != String::from("grid.len=1,grid[0]=7,grid[0].contents=unconstrained") { return 30; }
+    let hit: String = run(String::from("f"), String::from("grid.len=1,grid[0]=18446744073709551609,$read.n=1,$read.0=vec:-7"));
+    if hit != String::from("grid.len=1,grid[0]=18446744073709551609,grid[0].contents=unlisted") { return 31; }
+    0
+}
+
+fn check_a_length_without_elements_is_unlisted() -> i64 [io] {
+    let got: String = run(String::from("f"), String::from("n.0=0,n.0.len=600,$read.n=0"));
+    if got != String::from("n.0=0,n.0.len=600,n.0.contents=unlisted") { return 40; }
+    let empty: String = run(String::from("f"), String::from("n.0=0,n.0.len=0,$read.n=0"));
+    if empty != String::from("n.0=0,n.0.len=0") { return 41; }
+    let listed: String = run(String::from("f"), String::from("h.1=0,h.1.len=1,h.1[0]=65,$read.n=0"));
+    if listed != String::from("h.1=0,h.1.len=1,h.1[0]=65") { return 42; }
+    0
+}
+
+fn check_structs_and_aliases() -> i64 [io] {
+    let free: String = run(String::from("f"), String::from("h.0=-3,h.1=-5,h.3=-9,$read.n=0"));
+    if free != String::from("h.0=-3,h.1=-5,h.3=-9,h.0.contents=unconstrained,h.1.contents=unconstrained,h.3.contents=unconstrained") { return 50; }
+    let rows: String = run(String::from("f"), String::from("h.0=-3,h.0.0=1,$read.n=1,$read.0=obj:-3"));
+    if rows != String::from("h.0=-3,h.0.0=1") { return 51; }
+    let seen: String = run(String::from("f"), String::from("h.0=-3,h.1=-3,$read.n=1,$read.0=obj:-3"));
+    if seen != String::from("h.0=-3,h.1=-3,h.0.contents=unlisted,h.1.contents=unconstrained") { return 52; }
+    0
+}
+
+fn check_only_containers_are_positions() -> i64 [io] {
+    let got: String = run(String::from("f"), String::from("x=5,h.2=7,people.addr=-2,people.alias=255,people.len=1,people[0]=18446744073709551614,h.0:64=1,$read.n=0"));
+    if got != String::from("x=5,h.2=7,people.addr=-2,people.alias=255,people.len=1,people[0]=18446744073709551614,h.0:64=1,people[0].contents=unconstrained") { return 60; }
+    let lin: String = run(String::from("f"), String::from("w.0=-4,$read.n=0"));
+    if lin != String::from("w.0=-4") { return 61; }
+    let unknown: String = run(String::from("nope"), String::from("n.0=0,n.0.len=1,n.0[0]=0,$read.n=0"));
+    if unknown != String::from("n.0=0,n.0.len=1,n.0[0]=0") { return 62; }
+    let scalar_elems: String = run(String::from("f"), String::from("names.len=1,names[0]=3,$read.n=0"));
+    if scalar_elems != String::from("names.len=1,names[0]=3,names[0].contents=unconstrained") { return 63; }
+    0
+}
+
+fn check_handoff_is_stripped() -> i64 [io] {
+    let got: String = run(String::from("f"), String::from("x=5,$read.n=1,$read.0=vec:3"));
+    if got != String::from("x=5") { return 70; }
+    let none: String = run(String::from("f"), String::from("x=5"));
+    if none != String::from("x=5") { return 71; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let mut r: i64 = check_unread_element_is_free();
+    if r == 0 { r = check_read_element_is_unlisted(); }
+    if r == 0 { r = check_unknown_reads_are_unlisted(); }
+    if r == 0 { r = check_a_read_of_another_class_is_not_a_read(); }
+    if r == 0 { r = check_a_length_without_elements_is_unlisted(); }
+    if r == 0 { r = check_structs_and_aliases(); }
+    if r == 0 { r = check_only_containers_are_positions(); }
+    if r == 0 { r = check_handoff_is_stripped(); }
+    i64_to_i32_wrap(r)
+}

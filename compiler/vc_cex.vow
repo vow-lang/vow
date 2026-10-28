@@ -10,6 +10,8 @@ use vc_int
 use vc_fmt
 use vc_vecmodel
 use vc_fieldrows
+use vc_readrows
+use vc_reads
 use vc_heap
 
 // Maps a solver answer for one claim onto the `VerifyResult` the shared
@@ -155,7 +157,7 @@ fn vc_field_row_ambiguous(ls: VcHeapListed, r: i64) -> bool {
 fn vc_append_field_answer(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnswer, names: Vec<String>, values: Vec<String>) {
     let n: u64 = vc_answer_regular_count(cs, k, ans);
     let rows: Vec<i64> = vc_field_rows(cs, k);
-    if ans.values.len() <= n || rows.len() == 0 { return; }
+    if vc_answer_body(cs, k, ans) <= n || rows.len() == 0 { return; }
     let vecs: Vec<i64> = vc_cex_vecs(cs, k);
     let per: u64 = vc_answer_elems_per_vec(cs, k, ans);
     let ls: VcHeapListed = cs.listed;
@@ -192,6 +194,31 @@ fn vc_append_field_answer(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnsw
     }
 }
 
+// Appends the handle reads of the claim (`vc_reads`) as the entries the driver compares the listed
+// addresses with (`vc_cex_verdict`), which strips them: `$read.n` their number and `$read.<i>` the
+// class and address of each. No `$read.n` says the reads are unknown (the registry was dropped, or
+// the answer carries no projection of them).
+fn vc_append_read_answer(cs: VcClaims, k: u64, ans: VcSolverAnswer, names: Vec<String>, values: Vec<String>) {
+    let ls: VcHeapListed = cs.listed;
+    if ls.rd_over || !ls.rd_ok { return; }
+    let rows: Vec<i64> = vc_read_rows(cs, k);
+    let body: u64 = vc_answer_body(cs, k, ans);
+    if rows.len() > 0 && ans.values.len() < body + rows.len() { return; }
+    names.push(String::from("$read.n"));
+    values.push(i64_to_string(rows.len() as i64));
+    let mut q: u64 = 0;
+    while q < rows.len() {
+        let key: String = String::from("$read.");
+        key.push_str(i64_to_string(q as i64));
+        names.push(key);
+        let text: String = String::from(vc_reads_class_name(ls.rd_cls[rows[q] as u64]));
+        text.push_str(String::from(":"));
+        text.push_str(i64_to_string(ans.values[body + q]));
+        values.push(text);
+        q = q + 1;
+    }
+}
+
 // Result for claim `k` of `cs` given the solver's answer for it. `sat` is a
 // counterexample; `unsat` is not handled here (the caller moves on).
 fn vc_claim_result(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnswer) -> VerifyResult {
@@ -212,6 +239,7 @@ fn vc_claim_result(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnswer) -> 
         }
         vc_append_vec_answer_contents(f, cs, k, ans, names, values);
         vc_append_field_answer(f, cs, k, ans, names, values);
+        vc_append_read_answer(cs, k, ans, names, values);
         let kind: i64 = cs.kinds[k];
         let mut raw: String = String::from("");
         if kind != VC_CLAIM_ENSURES() && kind != VC_CLAIM_CALLER_PRE() && kind != VC_CLAIM_CALLEE_POST() {
