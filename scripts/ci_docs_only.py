@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Classify a commit range for the CI job gates.
 
-Emits two independent outputs, `code` and `arena`, each guarding a different
-set of expensive jobs. Both fail open: anything the classifier cannot
+Emits three independent outputs, `code`, `arena` and `compiler`, each guarding a
+different set of expensive jobs. All fail open: anything the classifier cannot
 positively rule out runs the jobs it guards.
 
 `code` -- documentation-only detection, for ci.yml's build/bootstrap gate.
@@ -61,9 +61,18 @@ proved, how it is proved, or the headroom it is proved within:
     hundreds of MiB under a 2 GB cap, so a version bump has to re-run the
     proof that guards the headroom (#546, #747).
 
-An unresolvable commit range reports `arena=true`, which is also what a
-`schedule` or `workflow_dispatch` event produces: neither carries a range, so
-the nightly run needs no separate condition to opt itself in.
+`compiler` -- compiler-test relevance, for compiler-tests.yml's gate.
+
+The two-compiler `test compiler/` comparison costs a bootstrap build plus both
+test runs, so it runs on a pull request only when the changeset can move its
+outcome: the self-hosted sources and their tests under `compiler/`, the scripts
+that build and compare the two compilers, and this gate and that workflow.
+Rust-crate changes are not inputs here; `cargo test`, the promoted fixtures and
+the post-merge bootstrap cover them.
+
+An unresolvable commit range reports `arena=true` and `compiler=true`, which is
+also what a `schedule` or `workflow_dispatch` event produces: neither carries a
+range, so the nightly run needs no separate condition to opt itself in.
 """
 
 import argparse
@@ -96,6 +105,21 @@ ARENA_INPUT_FILES = (
     ".github/workflows/arena-verify.yml",
 )
 
+# Paths that can change the compiler test suite's outcome (see the module
+# docstring). Directories match by prefix, files exactly, as for the arena.
+COMPILER_INPUT_DIRS = ("compiler/",)
+
+COMPILER_INPUT_FILES = (
+    "scripts/compiler_test_parity.sh",
+    "scripts/concat_vow.sh",
+    "scripts/parity.py",
+    "scripts/test_parity.py",
+    "scripts/bootstrap.sh",
+    "scripts/ci_docs_only.py",
+    "scripts/test_ci_docs_only.py",
+    ".github/workflows/compiler-tests.yml",
+)
+
 # git's "no such commit" sentinel. `github.event.before` is all zeroes on the
 # first push to a branch, which leaves no range to diff.
 NULL_SHA = "0" * 40
@@ -126,6 +150,32 @@ def is_arena_input(path):
             it needs.
     """
     return path.startswith(ARENA_INPUT_DIRS) or path in ARENA_INPUT_FILES
+
+
+def is_compiler_input(path):
+    """Whether one repository path can change the compiler test suite's outcome.
+
+    Args:
+        path: A repository-relative path, as `git diff --name-only` prints it.
+
+    Returns:
+        bool: True when the path is a compiler source or test, or part of the
+            harness that builds, runs or gates the two-compiler comparison.
+    """
+    return path.startswith(COMPILER_INPUT_DIRS) or path in COMPILER_INPUT_FILES
+
+
+def touches_compiler(paths):
+    """Whether a changeset reaches the compiler test suite.
+
+    Args:
+        paths: The repository-relative paths a commit range touched.
+
+    Returns:
+        bool: True when any path is a compiler input. An empty changeset
+            returns False.
+    """
+    return any(is_compiler_input(p) for p in paths if p)
 
 
 def touches_arena(paths):
@@ -195,8 +245,8 @@ def main(argv=None):
 
     Returns:
         int: Process exit status. Always 0 -- an unresolvable range is reported
-            as `code=true arena=true`, not as a failure, because refusing to
-            classify must not itself break the pipeline.
+            as `code=true arena=true compiler=true`, not as a failure, because
+            refusing to classify must not itself break the pipeline.
     """
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--base", default="", help="older end of the commit range")
@@ -207,17 +257,22 @@ def main(argv=None):
     if paths is None:
         docs_only = False
         arena = True
+        compiler = True
     else:
         docs_only = is_docs_only(paths)
         arena = touches_arena(paths)
+        compiler = touches_compiler(paths)
         for p in paths:
             labels = "prose" if is_prose(p) else "code "
             if is_arena_input(p):
                 labels += " arena"
+            if is_compiler_input(p):
+                labels += " compiler"
             print(f"{labels}  {p}", file=sys.stderr)
 
     print(f"code={'false' if docs_only else 'true'}")
     print(f"arena={'true' if arena else 'false'}")
+    print(f"compiler={'true' if compiler else 'false'}")
     return 0
 
 

@@ -1,0 +1,64 @@
+name: Compiler unit tests
+
+# The two-compiler `test compiler/` comparison (equivalence tier 1) on the pull-
+# request path, for changes that can reach it. bootstrap.yml runs the same
+# `scripts/compiler_test_parity.sh` after every push to `main`, so before this
+# workflow a pull request could merge green and break `main` (#1903, fixed by
+# #1904). Post-merge placement is kept: this adds an earlier signal, it does
+# not replace that one.
+#
+# Gated by the `compiler` output of `scripts/ci_docs_only.py` (the compiler
+# sources, their tests and the harness around them), not by `code`: the suite
+# costs a bootstrap build plus the two test runs, so a pull request that cannot
+# reach it does not pay for it. #1171 tracks the self-hosted suite's cost.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Classify changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      compiler: ${{ steps.classify.outputs.compiler }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/ci_docs_only.py --base "$BASE_SHA" --head "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+  compiler-tests:
+    needs: changes
+    if: needs.changes.outputs.compiler == 'true'
+    name: Compiler test suite, both compilers
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install ESBMC
+        uses: ./.github/actions/install-esbmc
+      - name: Install Bitwuzla
+        uses: ./.github/actions/install-bitwuzla
+      - name: Bootstrap without verification
+        # The same three-stage build and fixed-point check as bootstrap.yml, so
+        # the suite runs on the same `build/vowc` it does post-merge. Codegen
+        # does not depend on verification, which belongs to that workflow.
+        run: scripts/bootstrap.sh --no-verify
+      - name: Compiler test suite, both compilers (equivalence tier 1)
+        # Inherits the 30 s default timeout of test_ir_dominance_corpus, which
+        # can expire under load (#1914).
+        timeout-minutes: 40
+        run: scripts/compiler_test_parity.sh

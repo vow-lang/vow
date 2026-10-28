@@ -50,9 +50,11 @@ parity sections of `scripts/full_test.sh`. The same functions still run inside
 the complete `full-test.yml` suite after every push to `main` and nightly, so
 the two paths cannot drift from `scripts/parity.py`'s comparison and suppression
 rules. The Linux `bootstrap.yml` job independently runs the two-compiler
-`vow test compiler/` comparison after pushes to `main` and nightly; that half
-of Tier 1 remains off the pull-request path pending #1171. All three placements
-fail when their Tier-1 comparison fails. The compiler comparison covers the
+`vow test compiler/` comparison (`scripts/compiler_test_parity.sh`) after pushes
+to `main` and nightly. `compiler-tests.yml` runs the same script on pull
+requests that touch `compiler/` or its harness (`compiler` output of
+`scripts/ci_docs_only.py`). All placements fail when their Tier-1 comparison
+fails. The compiler comparison covers the
 whole documented `vow test` contract — every field in
 `docs/spec/schemas/test-result.schema.json` except the wall-clock `duration_ms`
 and `tests[].diagnostics`, read back out of the schema so a field added there is
@@ -90,11 +92,9 @@ The self-hosted suite produced no JSON before a 45-minute bound in one fresh
 concatenated run; the full Section 10b later completed both compilers plus its
 interface checks in 17.8 minutes. Both measurements came from a contended
 development host and are placement evidence, not clean benchmarks. #1171 tracks
-the performance gap that prevents responsible per-PR placement of the compiler
-comparison. Until that gap closes, promoted fixtures catch covered regressions
-before merge, while the broader compiler comparison catches its regressions on
-the first `main` push that includes them rather than adding roughly 40 minutes
-to every pull request.
+the performance gap; the compiler comparison therefore runs per pull request
+only when compiler sources or their harness change, and otherwise on the first
+`main` push that includes the change.
 
 **Tier 2** re-establishes equivalence against a moving codebase. It is
 deterministic and credential-free, so it runs unattended.
