@@ -331,25 +331,16 @@ fn vc_pf_cfg(c: VcPfCtx) {
     let off: Vec<i64> = dom_pred_offsets(nb, succ, rpo);
     let preds: Vec<i64> = dom_pred_list(nb, succ, rpo, off);
     let nums: Vec<i64> = dom_tree_numbers(nb, dom_idoms(nb, rpo, order, off, preds), order);
+    vc_pf_append(c.nums, nums);
+    vc_pf_append(c.poff, off);
+    vc_pf_append(c.plist, preds);
+    vc_pf_append(c.scc, dom_scc(nb, succ));
+}
+
+fn vc_pf_append(dst: Vec<i64>, src: Vec<i64>) {
     let mut i: u64 = 0;
-    while i < nums.len() {
-        c.nums.push(nums[i]);
-        i = i + 1;
-    }
-    i = 0;
-    while i < off.len() {
-        c.poff.push(off[i]);
-        i = i + 1;
-    }
-    i = 0;
-    while i < preds.len() {
-        c.plist.push(preds[i]);
-        i = i + 1;
-    }
-    let scc: Vec<i64> = dom_scc(nb, succ);
-    i = 0;
-    while i < scc.len() {
-        c.scc.push(scc[i]);
+    while i < src.len() {
+        dst.push(src[i]);
         i = i + 1;
     }
 }

@@ -267,12 +267,7 @@ fn native_plan(fns: Vec<IrFunction>, ir_mod: IrModule, vm: IrModule, const_fn_in
 // summaries that stand for a callee of `f` are pushed on `ids`, for the waves (`VcRootSums`).
 fn native_skip_rescuable(f: IrFunction, vm: IrModule, budget: i64, ids: Vec<i64>) -> bool {
     let sm: VcSummarised = vc_summary_module(f, vm, vc_trust_all(), budget);
-    let used: Vec<i64> = sm.used_ids;
-    let mut k: u64 = 0;
-    while k < used.len() {
-        ids.push(used[k] + 0);
-        k = k + 1;
-    }
+    vc_ids_append(ids, sm.used_ids);
     sm.used
 }
 

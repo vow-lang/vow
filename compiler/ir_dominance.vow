@@ -282,6 +282,7 @@ fn dom_dominates(nums: Vec<i64>, nb: u64, a: i64, b: i64) -> bool {
 // block of another component has the larger number: a smaller number cannot reach it.
 fn dom_scc(nb: u64, succ: Vec<i64>) -> Vec<i64> {
     let out: Vec<i64> = dom_fill(nb, -1);
+    if nb == 0 { return out; }
     let idx: Vec<i64> = dom_fill(nb, -1);
     let low: Vec<i64> = dom_fill(nb, 0);
     let on_stack: Vec<i64> = dom_fill(nb, 0);
