@@ -192,11 +192,13 @@ fn vc_nest_cells(cs: VcClaims, k: u64, p: VcNestPlan, rows: Vec<i64>, bound: i64
 }
 
 // Asserts that each value of `ans` is the one it gave; `names` and `widths` are the entries of the
-// query in the order of `ans.values`, beyond which there is nothing.
-fn vc_nest_pin(ar: VcArena, ans: VcSolverAnswer, s: SmtScript, names: Vec<String>, widths: Vec<i64>) {
+// query in the order of `ans.values`, beyond which there is nothing. False, with the rest unfixed,
+// when a value is a float, which cannot be: the contents would belong to another counterexample.
+fn vc_nest_pin(ar: VcArena, ans: VcSolverAnswer, s: SmtScript, names: Vec<String>, widths: Vec<i64>) -> bool {
     let mut j: u64 = 0;
     while j < names.len() && j < ans.values.len() {
         let w: i64 = widths[j];
+        if w == VC_SORT_F32() || w == VC_SORT_F64() { return false; }
         if w < VC_SORT_ARRAY64() {
             let sym: i64 = vc_tm_var(ar, names[j]);
             if w == VC_SORT_BOOL() {
@@ -207,6 +209,7 @@ fn vc_nest_pin(ar: VcArena, ans: VcSolverAnswer, s: SmtScript, names: Vec<String
         }
         j = j + 1;
     }
+    true
 }
 
 // One ask for the contents of the objects of `plan` in the model `first` gave, every collection at
@@ -221,7 +224,7 @@ fn vc_ask_nested(cache: VcCache, bin: String, cs: VcClaims, k: u64, first: VcSol
     vc_append_vec_projection(cs, vc_cex_vecs(cs, k), per, s, names, widths);
     vc_append_field_rows(cs, vc_field_rows(cs, k), per, s, names, widths);
     vc_append_read_rows(cs, rows, s, names, widths);
-    vc_nest_pin(ar, first, s, names, widths);
+    if !vc_nest_pin(ar, first, s, names, widths) { return vc_answer_plain(VC_ANS_ERROR(), String::from("")); }
     let cells: Vec<String> = Vec::new();
     vc_nest_cells(cs, k, plan, rows, bound, s, cells);
     vc_script_assert(s, cs.negated_goals[k]);

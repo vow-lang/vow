@@ -268,11 +268,21 @@ fn check_pin_fixes_scalars_only() -> i64 {
     vals.push(0);
     vals.push(0);
     vals.push(0);
-    vc_nest_pin(cs.arena, answer_of(vals), s, names, widths);
+    if !vc_nest_pin(cs.arena, answer_of(vals), s, names, widths) { return 79; }
     if s.kinds.len() != 3 { return 80; }
     if vc_command_text(cs.arena, s, 0) != String::from("(assert (= x #x0000000000000007))") { return 81; }
     if vc_command_text(cs.arena, s, 1) != String::from("(assert b)") { return 82; }
     if vc_command_text(cs.arena, s, 2) != String::from("(assert (not flag))") { return 83; }
+    widths.push(VC_SORT_F64());
+    names.push(String::from("f"));
+    let more: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < 5 {
+        more.push(0);
+        i = i + 1;
+    }
+    more.push(0);
+    if vc_nest_pin(cs.arena, answer_of(more), s, names, widths) { return 84; }
     0
 }
 
@@ -330,6 +340,28 @@ fn check_append_stops_at_the_bound() -> i64 {
     0
 }
 
+// A slot is recorded for a registered object read, once, and for nothing else.
+fn check_slots_are_noted_once() -> i64 {
+    let cs: VcClaims = nested_claims();
+    let ar: VcArena = cs.arena;
+    let ls: VcHeapListed = cs.listed;
+    let h: i64 = vc_tm_var(ar, String::from("h"));
+    vc_reads_note_slot(ls, ar, cs.header, h, 3);
+    if ls.rs_read.len() != 0 { return 110; }
+    vc_reads_note(ls, ar, cs.header, VC_READ_VEC(), h);
+    vc_reads_note_slot(ls, ar, cs.header, h, 3);
+    if ls.rs_read.len() != 0 { return 111; }
+    vc_reads_note(ls, ar, cs.header, VC_READ_OBJ(), h);
+    vc_reads_note_slot(ls, ar, cs.header, vc_tm_var(ar, String::from("h")), 3);
+    vc_reads_note_slot(ls, ar, cs.header, h, 3);
+    vc_reads_note_slot(ls, ar, cs.header, h, 4);
+    if ls.rs_read.len() != 2 || ls.rs_read[0] != 1 || ls.rs_slot[0] != 3 || ls.rs_slot[1] != 4 { return 112; }
+    ls.rd_over = true;
+    vc_reads_note_slot(ls, ar, cs.header, h, 5);
+    if ls.rs_read.len() != 2 { return 113; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_plan_groups_by_kind_and_address();
     if r == 0 { r = check_plan_is_capped(); }
@@ -342,5 +374,6 @@ fn main() -> i32 {
     if r == 0 { r = check_pin_fixes_scalars_only(); }
     if r == 0 { r = check_attach_and_append(); }
     if r == 0 { r = check_append_stops_at_the_bound(); }
+    if r == 0 { r = check_slots_are_noted_once(); }
     i64_to_i32_wrap(r)
 }
