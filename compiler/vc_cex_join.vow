@@ -1,0 +1,305 @@
+module VcCexJoin
+
+use ast
+use replay_alias
+use replay_ints
+use replay_listed
+use vc_reads
+use vc_cex_elem
+use vc_cex_path
+use vc_cex_reads
+
+// Contents behind the addresses a native counterexample lists. A position is the address of a
+// `Vec`, a `String` or a struct (`vc_cex_path`); one the function read through has its contents
+// listed where the verifier could (`vc_nested`), which this module copies under the position:
+//
+//   - another position with the same kind, declared type and address is the same object, and when
+//     it lists contents they are copied (the alias rule);
+//   - otherwise the contents the verifier listed for the object read at that address are, once
+//     the address is the address of no parameter and of no object of another type.
+//
+// The copy takes what is listed, typed as the position's declaration reads it back: `.len` and
+// `[<j>]` for a collection, `.<slot>` for a struct. A position whose contents cannot be copied
+// stays unlisted. A listing cap bounds the entries the copies add.
+
+fn VC_JOIN_CAP() -> i64 { 4096 }
+
+// The positions of a counterexample: per position the entry that holds it, its name, kind, resolved
+// type and the spelling of the type, address and whether it is a parameter itself (`<p>.addr`),
+// which has no verdict of its own. `added` is the number of entries the copies added.
+struct VcCexPos {
+    at: Vec<u64>,
+    name: Vec<String>,
+    cls: Vec<i64>,
+    tid: Vec<i64>,
+    key: Vec<String>,
+    bits: Vec<u64>,
+    param: Vec<bool>,
+    added: i64,
+}
+
+fn vc_cex_pos_new() -> VcCexPos {
+    VcCexPos { at: Vec::new(), name: Vec::new(), cls: Vec::new(), tid: Vec::new(), key: Vec::new(), bits: Vec::new(), param: Vec::new(), added: 0 }
+}
+
+fn vc_cex_ends_addr(name: String) -> bool {
+    let n: u64 = name.len();
+    n > 5 && name.substring(n - 5, n) == String::from(".addr")
+}
+
+// Adds the entries `from` to `to` that hold an address to `ps`.
+fn vc_cex_pos_scan(m: Module, fn_name: String, ps: VcCexPos, names: Vec<String>, vals: Vec<String>, from: u64, to: u64) {
+    let mut j: u64 = from;
+    while j < to {
+        let param: bool = vc_cex_ends_addr(names[j]);
+        let owner: String = { if param { names[j].substring(0, names[j].len() - 5) } else { String::from(names[j]) } };
+        let tid: i64 = vc_cex_position_type(m, fn_name, owner);
+        let cls: i64 = vc_cex_type_class(m, tid);
+        if cls != 0 && (param || owner.len() > 0) {
+            match replay_addr_bits(vals[j]) {
+                Option::Some(b) => {
+                    ps.at.push(j);
+                    ps.name.push(owner);
+                    ps.cls.push(cls);
+                    ps.tid.push(tid);
+                    ps.key.push(vc_cex_type_key(m, tid));
+                    ps.bits.push(b);
+                    ps.param.push(param);
+                },
+                Option::None => {},
+            }
+        }
+        j = j + 1;
+    }
+}
+
+fn vc_cex_pos_of(ps: VcCexPos, at: u64) -> i64 {
+    let mut i: u64 = 0;
+    while i < ps.at.len() {
+        if ps.at[i] == at { return i as i64; }
+        i = i + 1;
+    }
+    -1
+}
+
+// 1 when the object named `name` of kind `cls` lists its contents, 2 when it lists a length it does
+// not list the elements of, else 0.
+fn vc_cex_listed(names: Vec<String>, vals: Vec<String>, name: String, cls: i64) -> i64 {
+    if cls == VC_READ_OBJ() {
+        if replay_listed_has_rows(names, name) { return 1; }
+        return 0;
+    }
+    let raw: String = replay_listed_value(names, vals, replay_listed_len_key(name));
+    if raw.len() == 0 { return 0; }
+    match raw.parse_u64() {
+        Option::Some(l) => {
+            let first: String = String::from(name);
+            first.push_str(String::from("[0]"));
+            if l > 0 && replay_listed_value(names, vals, first).len() == 0 { return 2; }
+            1
+        },
+        Option::None => 2,
+    }
+}
+
+fn vc_cex_index_suffix(j: i64) -> String {
+    let out: String = String::from("[");
+    out.push_str(i64_to_string(j));
+    out.push_str(String::from("]"));
+    out
+}
+
+// True when the entry `name` is part of the contents the object `from` of kind `cls` lists: its
+// length or an element, or a slot row.
+fn vc_cex_is_content(name: String, from: String, cls: i64) -> bool {
+    if cls == VC_READ_OBJ() { return replay_listed_is_row(name, from); }
+    if name == replay_listed_len_key(from) { return true; }
+    name.len() > from.len() && name.substring(0, from.len()) == from && vc_cex_plain_index(name.substring(from.len(), name.len()))
+}
+
+// Copies the contents the object at position `qi` lists under the object `to`.
+fn vc_cex_copy_alias(ps: VcCexPos, qi: u64, to: String, names: Vec<String>, vals: Vec<String>) {
+    let from: String = ps.name[qi];
+    let n0: u64 = names.len();
+    let mut i: u64 = 0;
+    while i < n0 {
+        if vc_cex_is_content(names[i], from, ps.cls[qi]) {
+            let key: String = String::from(to);
+            key.push_str(names[i].substring(from.len(), names[i].len()));
+            names.push(key);
+            vals.push(vals[i]);
+            ps.added = ps.added + 1;
+        }
+        i = i + 1;
+    }
+}
+
+// True when `s` is `[<digits>]`.
+fn vc_cex_plain_index(s: String) -> bool {
+    if s.len() < 3 || s.byte_at(0) != 91 || s.byte_at(s.len() - 1) != 93 { return false; }
+    let mut i: u64 = 1;
+    while i + 1 < s.len() {
+        if s.byte_at(i) < 48 || s.byte_at(i) > 57 { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+// Name of the elements' type of a `Vec` or `String` of type `tid`, "" when the elements are not
+// scalars the driver names (a nested `Vec` or struct holds an address), and "?" for the element
+// types whose slots it cannot show (128-bit integers and floats).
+fn vc_cex_elem_kind(m: Module, tid: i64) -> String {
+    let name: String = vc_cex_type_elem_name(m.arena, tid);
+    if name == String::from("i128") || name == String::from("u128") || name == String::from("f32") || name == String::from("f64") {
+        return String::from("?");
+    }
+    name
+}
+
+// The contents the verifier listed for the read `rd`, typed as the collection `tid` reads them
+// back, as the entries `<to>.len` and `<to>[<j>]`; false when none are listed or they cannot be
+// shown.
+fn vc_cex_read_collection(m: Module, tid: i64, rs: VcCexReads, rd: i64, to: String, tn: Vec<String>, tv: Vec<String>) -> bool {
+    let kind: String = vc_cex_elem_kind(m, tid);
+    if kind == String::from("?") { return false; }
+    let p0: i64 = vc_cex_nested_at(rs, rd, String::from(".len"));
+    if p0 < 0 { return false; }
+    let mut len: u64 = 0;
+    match rs.n_val[p0 as u64].parse_u64() {
+        Option::Some(l) => { len = l; },
+        Option::None => { return false; },
+    }
+    if len > 1000000 { return false; }
+    let key: String = String::from(to);
+    key.push_str(String::from(".len"));
+    tn.push(key);
+    tv.push(uint_to_string(len));
+    let mut j: u64 = 0;
+    while j < len {
+        let at: u64 = (p0 as u64) + 1 + j;
+        if at >= rs.n_read.len() || rs.n_read[at] != rd || rs.n_suffix[at] != vc_cex_index_suffix(j as i64) { return false; }
+        let item: String = String::from(to);
+        item.push_str(vc_cex_index_suffix(j as i64));
+        tn.push(item);
+        match rs.n_val[at].parse_u64() {
+            Option::Some(slot) => {
+                if kind.len() > 0 { tv.push(vc_cex_elem_text(kind, slot)); } else { tv.push(uint_to_string(slot)); }
+            },
+            Option::None => { return false; },
+        }
+        j = j + 1;
+    }
+    true
+}
+
+// The text of the raw slot `slot` of a field of type `ftid`: the value of a scalar, the signed
+// address of an object; false for any other field.
+fn vc_cex_slot_text(m: Module, ftid: i64, slot: u64, out: Vec<String>) -> bool {
+    let a: AstArena = m.arena;
+    if type_tag(a, ftid) == TY_NAMED() {
+        let name: String = arena_str(a, type_a(a, ftid));
+        if name == String::from("bool") || replay_int_bits(name) > 0 {
+            out.push(vc_cex_elem_text(name, slot));
+            return true;
+        }
+    }
+    if vc_cex_type_class(m, ftid) != 0 {
+        out.push(i64_to_string(slot as i64));
+        return true;
+    }
+    false
+}
+
+// The slots the verifier listed for the struct read `rd`, as the entries `<to>.<slot>`, each shown
+// as its field of the struct `tid` reads it; false when none are listed or one cannot be shown.
+fn vc_cex_read_struct(m: Module, tid: i64, rs: VcCexReads, rd: i64, to: String, tn: Vec<String>, tv: Vec<String>) -> bool {
+    let mut i: u64 = 0;
+    while i < rs.n_read.len() {
+        if rs.n_read[i] == rd {
+            let suffix: String = rs.n_suffix[i];
+            if suffix.byte_at(0) != 46 || suffix.len() < 2 { return false; }
+            let mut slot: i64 = 0;
+            let mut d: u64 = 1;
+            while d < suffix.len() && suffix.byte_at(d) >= 48 && suffix.byte_at(d) <= 57 && slot < 100000000 {
+                slot = slot * 10 + (suffix.byte_at(d) - 48);
+                d = d + 1;
+            }
+            if d != suffix.len() { return false; }
+            let ftid: i64 = vc_cex_field_type_at(m, tid, slot);
+            if ftid < 0 { return false; }
+            let shown: Vec<String> = Vec::new();
+            match rs.n_val[i].parse_u64() {
+                Option::Some(raw) => {
+                    if !vc_cex_slot_text(m, replay_resolve_type(m, ftid, 0), raw, shown) { return false; }
+                },
+                Option::None => { return false; },
+            }
+            let key: String = String::from(to);
+            key.push_str(suffix);
+            tn.push(key);
+            tv.push(shown[0]);
+        }
+        i = i + 1;
+    }
+    tn.len() > 0
+}
+
+// Copies the contents the verifier listed for the object read at the address of position `pi` under
+// it; false, with nothing added, when none are listed or they cannot be shown.
+fn vc_cex_copy_read(m: Module, ps: VcCexPos, pi: u64, rs: VcCexReads, rd: i64, names: Vec<String>, vals: Vec<String>) -> bool {
+    let tn: Vec<String> = Vec::new();
+    let tv: Vec<String> = Vec::new();
+    let shown: bool = {
+        if ps.cls[pi] == VC_READ_OBJ() { vc_cex_read_struct(m, ps.tid[pi], rs, rd, ps.name[pi], tn, tv) }
+        else { vc_cex_read_collection(m, ps.tid[pi], rs, rd, ps.name[pi], tn, tv) }
+    };
+    if !shown || ps.added + (tn.len() as i64) > VC_JOIN_CAP() { return false; }
+    let mut i: u64 = 0;
+    while i < tn.len() {
+        names.push(tn[i]);
+        vals.push(tv[i]);
+        i = i + 1;
+    }
+    ps.added = ps.added + (tn.len() as i64);
+    true
+}
+
+// The position of another object of the same kind, declared type and address as position `pi`
+// that lists its contents, or -1.
+fn vc_cex_alias_source(ps: VcCexPos, pi: u64, names: Vec<String>, vals: Vec<String>) -> i64 {
+    let mut q: u64 = 0;
+    while q < ps.at.len() {
+        if q != pi && ps.cls[q] == ps.cls[pi] && ps.bits[q] == ps.bits[pi] && ps.key[q] == ps.key[pi]
+            && vc_cex_listed(names, vals, ps.name[q], ps.cls[q]) == 1 {
+            return q as i64;
+        }
+        q = q + 1;
+    }
+    -1
+}
+
+// True when something else than the position `pi` is at its address and kind: a parameter, or an
+// object of another declared type. Its contents are then not the contents of the position.
+fn vc_cex_address_shared(ps: VcCexPos, pi: u64) -> bool {
+    let mut q: u64 = 0;
+    while q < ps.at.len() {
+        if q != pi && ps.cls[q] == ps.cls[pi] && ps.bits[q] == ps.bits[pi] && (ps.param[q] || ps.key[q] != ps.key[pi]) { return true; }
+        q = q + 1;
+    }
+    false
+}
+
+// Lists the contents of the position `pi` that the function read through, from an object it is the
+// alias of or from the verifier's listing; false when it cannot.
+fn vc_cex_fill(m: Module, ps: VcCexPos, pi: u64, rs: VcCexReads, names: Vec<String>, vals: Vec<String>) -> bool {
+    if ps.added >= VC_JOIN_CAP() { return false; }
+    let src: i64 = vc_cex_alias_source(ps, pi, names, vals);
+    if src >= 0 {
+        vc_cex_copy_alias(ps, src as u64, ps.name[pi], names, vals);
+        return true;
+    }
+    if vc_cex_address_shared(ps, pi) { return false; }
+    let rd: i64 = vc_cex_first_read(rs, ps.cls[pi], ps.bits[pi]);
+    if rd < 0 { return false; }
+    vc_cex_copy_read(m, ps, pi, rs, rd, names, vals)
+}

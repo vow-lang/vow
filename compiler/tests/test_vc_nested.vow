@@ -1,0 +1,346 @@
+module TestVcNested
+
+use ir
+use verifier
+use vc_solver
+use vc_exec
+use vc_smt
+use vc_term
+use vc_vecmodel
+use vc_heap
+use vc_reads
+use vc_readrows
+use vc_nested
+use vc_ops
+
+// Claim 0's query holds the first 10 header commands: `p0`'s length is declared at position 2.
+fn nested_claims() -> VcClaims {
+    let cs: VcClaims = VcClaims {
+        arena: vc_arena_new(),
+        header: vc_script_new(),
+        assumed: Vec::new(),
+        kinds: Vec::new(),
+        frames: Vec::new(),
+        fr: vc_frames_new(),
+        pre_only: false,
+        step: false,
+        hyp_now: false,
+        vow_ids: Vec::new(),
+        labels: Vec::new(),
+        ostarts: Vec::new(),
+        olens: Vec::new(),
+        negated_goals: Vec::new(),
+        header_lens: Vec::new(),
+        assumed_lens: Vec::new(),
+        model_names: Vec::new(),
+        model_params: Vec::new(),
+        model_paths: Vec::new(),
+        model_tys: Vec::new(),
+        model_widths: Vec::new(),
+        model_slots: Vec::new(),
+        model_hdr: Vec::new(),
+        model_ambig: Vec::new(),
+        hook_vars: Vec::new(),
+        map_vars: Vec::new(),
+        vec_param: Vec::new(),
+        vec_arr: Vec::new(),
+        vec_len: Vec::new(),
+        vec_hdr: Vec::new(),
+        vec_wide: Vec::new(),
+        vec_path: Vec::new(),
+        vec_handle: Vec::new(),
+        map_len: Vec::new(),
+        map_len_hdr: Vec::new(),
+        listed: vc_heap_listed_new(),
+    };
+    cs.header_lens.push(10);
+    cs.model_names.push(String::from("x"));
+    cs.model_params.push(0);
+    cs.model_paths.push(String::from(""));
+    cs.model_tys.push(ITY_I64());
+    cs.model_widths.push(64);
+    cs.model_slots.push(-1);
+    cs.model_hdr.push(2);
+    let ls: VcHeapListed = cs.listed;
+    ls.rd_ok = true;
+    cs
+}
+
+fn note_read(cs: VcClaims, cls: i64, name: String) {
+    let ls: VcHeapListed = cs.listed;
+    ls.rd_cls.push(cls);
+    ls.rd_term.push(vc_tm_var(cs.arena, name));
+    ls.rd_hdr.push(3);
+}
+
+fn note_slot(cs: VcClaims, rd: i64, slot: i64, hdr: i64) {
+    let ls: VcHeapListed = cs.listed;
+    ls.rs_read.push(rd);
+    ls.rs_slot.push(slot);
+    ls.rs_hdr.push(hdr);
+}
+
+fn answer_of(vals: Vec<i64>) -> VcSolverAnswer {
+    let highs: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < vals.len() {
+        highs.push(0);
+        i = i + 1;
+    }
+    VcSolverAnswer { verdict: VC_ANS_SAT(), values: vals, highs: highs, raw: String::from("") }
+}
+
+// A Vec read at 5, a String at 5, a struct at 5 (slots 0 and 2) and a Vec at 5 again through another term.
+fn check_plan_groups_by_kind_and_address() -> i64 {
+    let cs: VcClaims = nested_claims();
+    note_read(cs, VC_READ_VEC(), String::from("a"));
+    note_read(cs, VC_READ_STR(), String::from("b"));
+    note_read(cs, VC_READ_OBJ(), String::from("c"));
+    note_read(cs, VC_READ_VEC(), String::from("d"));
+    note_slot(cs, 2, 0, 3);
+    note_slot(cs, 2, 2, 4);
+    note_slot(cs, 2, 0, 5);
+    note_slot(cs, 2, 7, 11);
+    let vals: Vec<i64> = Vec::new();
+    vals.push(1);
+    vals.push(5);
+    vals.push(5);
+    vals.push(5);
+    vals.push(5);
+    let plan: VcNestPlan = vc_nest_plan(cs, 0, answer_of(vals), 1);
+    if plan.cls.len() != 3 || plan.row[0] != 0 || plan.row[1] != 1 || plan.row[2] != 2 { return 1; }
+    if plan.s_grp.len() != 2 || plan.s_slot[0] != 0 || plan.s_slot[1] != 2 { return 2; }
+    if vc_nest_slot_count(plan, 2) != 2 || vc_nest_collections(plan) != 2 { return 3; }
+    0
+}
+
+fn check_plan_is_capped() -> i64 {
+    let cs: VcClaims = nested_claims();
+    let vals: Vec<i64> = Vec::new();
+    vals.push(1);
+    let mut i: i64 = 0;
+    while i < VC_NEST_CAP() + 5 {
+        note_read(cs, VC_READ_VEC(), i64_to_string(i));
+        vals.push(100 + i);
+        i = i + 1;
+    }
+    let plan: VcNestPlan = vc_nest_plan(cs, 0, answer_of(vals), 1);
+    if plan.cls.len() as i64 != VC_NEST_CAP() { return 10; }
+    0
+}
+
+// A listed row count: `bound` slots per collection, one length each, and the slots of each struct.
+fn check_bound_follows_the_cells() -> i64 {
+    let cs: VcClaims = nested_claims();
+    note_read(cs, VC_READ_VEC(), String::from("a"));
+    note_read(cs, VC_READ_OBJ(), String::from("c"));
+    note_slot(cs, 1, 0, 3);
+    note_slot(cs, 1, 1, 3);
+    let vals: Vec<i64> = Vec::new();
+    vals.push(1);
+    vals.push(5);
+    vals.push(6);
+    let plan: VcNestPlan = vc_nest_plan(cs, 0, answer_of(vals), 1);
+    if vc_nest_bound_of(plan, 2 + 3) != 2 { return 20; }
+    if vc_nest_bound_of(plan, 3) != 0 { return 21; }
+    0
+}
+
+// Every enriched answer ends in the count of its contents; an answer that was not enriched has none.
+fn check_extra_counts_the_contents() -> i64 {
+    let cs: VcClaims = nested_claims();
+    note_read(cs, VC_READ_VEC(), String::from("a"));
+    note_read(cs, VC_READ_STR(), String::from("b"));
+    let n: u64 = vc_claim_model_count(cs, 0);
+    let plain: Vec<i64> = Vec::new();
+    plain.push(4);
+    if vc_nest_extra(cs, 0, answer_of(plain)) != 0 { return 30; }
+    let sealed: Vec<i64> = Vec::new();
+    sealed.push(4);
+    sealed.push(1);
+    sealed.push(2);
+    sealed.push(0);
+    if vc_nest_extra(cs, 0, answer_of(sealed)) != 1 || n != 1 { return 31; }
+    let listed: Vec<i64> = Vec::new();
+    listed.push(4);
+    listed.push(1);
+    listed.push(2);
+    listed.push(9);
+    listed.push(8);
+    listed.push(2);
+    if vc_nest_extra(cs, 0, answer_of(listed)) != 3 { return 32; }
+    let torn: Vec<i64> = Vec::new();
+    torn.push(4);
+    torn.push(1);
+    torn.push(2);
+    torn.push(7);
+    if vc_nest_extra(cs, 0, answer_of(torn)) != 0 { return 33; }
+    0
+}
+
+fn check_seal_closes_enriched_answers_only() -> i64 {
+    let cs: VcClaims = nested_claims();
+    note_read(cs, VC_READ_VEC(), String::from("a"));
+    let vals: Vec<i64> = Vec::new();
+    vals.push(4);
+    vals.push(1);
+    let sealed: VcSolverAnswer = vc_nest_seal(cs, 0, answer_of(vals));
+    if sealed.values.len() != 3 || sealed.values[2] != 0 || sealed.highs.len() != 3 { return 40; }
+    if vc_answer_body(cs, 0, sealed) != 1 { return 41; }
+    let unsat: VcSolverAnswer = vc_answer_plain(VC_ANS_UNSAT(), String::from(""));
+    if vc_nest_seal(cs, 0, unsat).values.len() != 0 { return 42; }
+    let bare: VcClaims = nested_claims();
+    let bare_ls: VcHeapListed = bare.listed;
+    bare_ls.rd_ok = false;
+    let kept: Vec<i64> = Vec::new();
+    kept.push(4);
+    if vc_nest_seal(bare, 0, answer_of(kept)).values.len() != 1 { return 43; }
+    0
+}
+
+fn check_a_float_disables_the_listing() -> i64 {
+    let cs: VcClaims = nested_claims();
+    note_read(cs, VC_READ_VEC(), String::from("a"));
+    if !vc_nest_enabled(cs, 0) { return 50; }
+    cs.model_widths[0] = VC_SORT_F64();
+    if vc_nest_enabled(cs, 0) { return 51; }
+    0
+}
+
+fn check_cells_are_defined_from_the_handles() -> i64 {
+    let cs: VcClaims = nested_claims();
+    note_read(cs, VC_READ_VEC(), String::from("a"));
+    note_read(cs, VC_READ_OBJ(), String::from("c"));
+    note_slot(cs, 1, 3, 3);
+    let vals: Vec<i64> = Vec::new();
+    vals.push(1);
+    vals.push(5);
+    vals.push(6);
+    let plan: VcNestPlan = vc_nest_plan(cs, 0, answer_of(vals), 1);
+    let s: SmtScript = vc_script_prefix(cs.header, 0);
+    let names: Vec<String> = Vec::new();
+    vc_nest_cells(cs, 0, plan, vc_read_rows(cs, 0), 2, s, names);
+    if names.len() != 4 { return 58; }
+    if names[0] != String::from("hn0_len0") || names[1] != String::from("hne0_0") || names[2] != String::from("hne0_1") || names[3] != String::from("hns1_3") { return 60; }
+    let text: String = String::from("");
+    let mut i: u64 = 0;
+    while i < s.kinds.len() {
+        text.push_str(vc_command_text(cs.arena, s, i));
+        text.push_str(String::from("\n"));
+        i = i + 1;
+    }
+    if str_find_str(text, String::from("(declare-const hlen (Array (_ BitVec 64) (_ BitVec 64)))")) < 0 { return 61; }
+    if str_find_str(text, String::from("(declare-const helem (Array (_ BitVec 128) (_ BitVec 64)))")) < 0 { return 62; }
+    if str_find_str(text, String::from("(define-fun hn0_len0 () (_ BitVec 64) (select hlen hrd0))")) < 0 { return 63; }
+    if str_find_str(text, String::from("(define-fun hne0_1 () (_ BitVec 64) (select helem (concat hrd0 #x0000000000000001)))")) < 0 { return 64; }
+    if str_find_str(text, String::from("(define-fun hns1_3 () (_ BitVec 64) (select hf3 hrd1))")) < 0 { return 65; }
+    if str_find_str(text, String::from("(assert (bvule hn0_len0 #x0000000000000002))")) < 0 { return 66; }
+    0
+}
+
+fn check_an_array_the_claim_declares_is_reused() -> i64 {
+    let cs: VcClaims = nested_claims();
+    let s: SmtScript = vc_script_new();
+    vc_script_declare_const(s, String::from("hlen"), VC_SORT_ARRAY64());
+    vc_nest_array(cs.arena, s, String::from("hlen"), VC_SORT_ARRAY64());
+    if s.kinds.len() != 1 { return 70; }
+    vc_nest_array(cs.arena, s, String::from("hbyte"), VC_SORT_ARRAY128());
+    if s.kinds.len() != 2 { return 71; }
+    0
+}
+
+fn check_pin_fixes_scalars_only() -> i64 {
+    let cs: VcClaims = nested_claims();
+    let s: SmtScript = vc_script_new();
+    let names: Vec<String> = Vec::new();
+    let widths: Vec<i64> = Vec::new();
+    names.push(String::from("x"));
+    widths.push(64);
+    names.push(String::from("b"));
+    widths.push(VC_SORT_BOOL());
+    names.push(String::from("flag"));
+    widths.push(VC_SORT_BOOL());
+    names.push(String::from("mem"));
+    widths.push(VC_SORT_ARRAY64());
+    let vals: Vec<i64> = Vec::new();
+    vals.push(7);
+    vals.push(1);
+    vals.push(0);
+    vals.push(0);
+    vals.push(0);
+    vc_nest_pin(cs.arena, answer_of(vals), s, names, widths);
+    if s.kinds.len() != 3 { return 80; }
+    if vc_command_text(cs.arena, s, 0) != String::from("(assert (= x #x0000000000000007))") { return 81; }
+    if vc_command_text(cs.arena, s, 1) != String::from("(assert b)") { return 82; }
+    if vc_command_text(cs.arena, s, 2) != String::from("(assert (not flag))") { return 83; }
+    0
+}
+
+// The cells replace the count that closed the enriched answer, and are read back as entries.
+fn check_attach_and_append() -> i64 {
+    let cs: VcClaims = nested_claims();
+    note_read(cs, VC_READ_VEC(), String::from("a"));
+    note_read(cs, VC_READ_OBJ(), String::from("c"));
+    note_slot(cs, 1, 3, 3);
+    let vals: Vec<i64> = Vec::new();
+    vals.push(1);
+    vals.push(5);
+    vals.push(6);
+    vals.push(0);
+    let first: VcSolverAnswer = answer_of(vals);
+    let cells: Vec<i64> = Vec::new();
+    cells.push(2);
+    cells.push(-1);
+    cells.push(40);
+    cells.push(9);
+    let ans: VcSolverAnswer = vc_nest_attach(first, answer_of(cells));
+    if ans.values.len() != 8 || ans.values[7] != 4 || ans.values[3] != 2 || ans.values[4] != -1 { return 90; }
+    if vc_nest_extra(cs, 0, ans) != 5 || vc_answer_body(cs, 0, ans) != 1 { return 91; }
+    let names: Vec<String> = Vec::new();
+    let values: Vec<String> = Vec::new();
+    vc_append_nested_answer(cs, 0, ans, names, values);
+    if names.len() != 4 || names[0] != String::from("$read.0.len") || values[0] != String::from("2") { return 92; }
+    if names[1] != String::from("$read.0[0]") || values[1] != String::from("18446744073709551615") { return 93; }
+    if names[2] != String::from("$read.0[1]") || values[2] != String::from("40") { return 94; }
+    if names[3] != String::from("$read.1.3") || values[3] != String::from("9") { return 95; }
+    let failed: VcSolverAnswer = vc_nest_attach(first, vc_answer_plain(VC_ANS_UNSAT(), String::from("")));
+    if failed.values.len() != 4 || failed.values[3] != 0 || vc_nest_extra(cs, 0, failed) != 1 { return 96; }
+    let none: Vec<String> = Vec::new();
+    vc_append_nested_answer(cs, 0, failed, none, Vec::new());
+    if none.len() != 0 { return 97; }
+    0
+}
+
+// A length above the listed bound lists the elements below the bound only.
+fn check_append_stops_at_the_bound() -> i64 {
+    let cs: VcClaims = nested_claims();
+    note_read(cs, VC_READ_STR(), String::from("a"));
+    let vals: Vec<i64> = Vec::new();
+    vals.push(1);
+    vals.push(5);
+    vals.push(0);
+    let cells: Vec<i64> = Vec::new();
+    cells.push(1);
+    cells.push(104);
+    let ans: VcSolverAnswer = vc_nest_attach(answer_of(vals), answer_of(cells));
+    let names: Vec<String> = Vec::new();
+    let values: Vec<String> = Vec::new();
+    vc_append_nested_answer(cs, 0, ans, names, values);
+    if names.len() != 2 || names[0] != String::from("$read.0.len") || names[1] != String::from("$read.0[0]") || values[1] != String::from("104") { return 100; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_plan_groups_by_kind_and_address();
+    if r == 0 { r = check_plan_is_capped(); }
+    if r == 0 { r = check_bound_follows_the_cells(); }
+    if r == 0 { r = check_extra_counts_the_contents(); }
+    if r == 0 { r = check_seal_closes_enriched_answers_only(); }
+    if r == 0 { r = check_a_float_disables_the_listing(); }
+    if r == 0 { r = check_cells_are_defined_from_the_handles(); }
+    if r == 0 { r = check_an_array_the_claim_declares_is_reused(); }
+    if r == 0 { r = check_pin_fixes_scalars_only(); }
+    if r == 0 { r = check_attach_and_append(); }
+    if r == 0 { r = check_append_stops_at_the_bound(); }
+    i64_to_i32_wrap(r)
+}

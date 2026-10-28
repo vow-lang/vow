@@ -186,8 +186,8 @@ fn check_rows_are_defined_after_everything() -> i64 {
     0
 }
 
-// The reads close the answer: a plain answer has none, an enriched one carries them behind the
-// elements of the `Vec` parameters.
+// The reads follow the elements of the `Vec` parameters in an enriched answer, which ends in the
+// count of the contents behind them (`vc_nest_extra`); a plain answer has none of it.
 fn check_answer_layout_with_reads() -> i64 {
     let cs: VcClaims = read_claims();
     let ls: VcHeapListed = cs.listed;
@@ -201,11 +201,11 @@ fn check_answer_layout_with_reads() -> i64 {
     let n: u64 = vc_claim_model_count(cs, 0);
     if vc_answer_body(cs, 0, answer_with(n)) != n { return 40; }
     if vc_answer_regular_count(cs, 0, answer_with(n)) != n { return 41; }
-    if vc_answer_body(cs, 0, answer_with(n + 8 + 2)) != n + 8 { return 42; }
-    if vc_answer_regular_count(cs, 0, answer_with(n + 8 + 2)) != n { return 43; }
-    if vc_answer_elems_per_vec(cs, 0, answer_with(n + 8 + 2)) != 8 { return 44; }
-    if vc_answer_regular_count(cs, 0, answer_with(n + 2)) != n { return 45; }
-    if vc_answer_elems_per_vec(cs, 0, answer_with(n + 2)) != 0 { return 46; }
+    if vc_answer_body(cs, 0, answer_with(n + 8 + 2 + 1)) != n + 8 { return 42; }
+    if vc_answer_regular_count(cs, 0, answer_with(n + 8 + 2 + 1)) != n { return 43; }
+    if vc_answer_elems_per_vec(cs, 0, answer_with(n + 8 + 2 + 1)) != 8 { return 44; }
+    if vc_answer_regular_count(cs, 0, answer_with(n + 2 + 1)) != n { return 45; }
+    if vc_answer_elems_per_vec(cs, 0, answer_with(n + 2 + 1)) != 0 { return 46; }
     0
 }
 
@@ -223,9 +223,9 @@ fn check_answer_layout_with_vecs_rows_and_reads() -> i64 {
     ls.ehdr.push(5);
     let n: u64 = vc_claim_model_count(cs, 0);
     if vc_field_rows(cs, 0).len() != 1 { return 50; }
-    if vc_answer_regular_count(cs, 0, answer_with(n + 2 * 4 + 1)) != n { return 51; }
-    if vc_answer_elems_per_vec(cs, 0, answer_with(n + 2 * 4 + 1)) != 4 { return 52; }
-    if vc_answer_body(cs, 0, answer_with(n + 2 * 4 + 1)) != n + 8 { return 53; }
+    if vc_answer_regular_count(cs, 0, answer_with(n + 2 * 4 + 1 + 1)) != n { return 51; }
+    if vc_answer_elems_per_vec(cs, 0, answer_with(n + 2 * 4 + 1 + 1)) != 4 { return 52; }
+    if vc_answer_body(cs, 0, answer_with(n + 2 * 4 + 1 + 1)) != n + 8 { return 53; }
     0
 }
 
@@ -250,7 +250,7 @@ fn check_read_entries() -> i64 {
     let missing_values: Vec<String> = Vec::new();
     vc_append_read_answer(cs, 0, answer_with(n), missing, missing_values);
     if missing.len() != 0 { return 62; }
-    let ans: VcSolverAnswer = answer_with(n + 8 + 2);
+    let ans: VcSolverAnswer = answer_with(n + 8 + 2 + 1);
     ans.values[n + 8] = -2;
     ans.values[n + 9] = 7;
     let got: Vec<String> = Vec::new();

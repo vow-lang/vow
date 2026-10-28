@@ -17,7 +17,7 @@ use vc_slice
 use vc_unroll
 use vc_induct
 use vc_cex
-use vc_vecmodel
+use vc_nested
 use vc_clause
 use vc_recheck
 use vc_term

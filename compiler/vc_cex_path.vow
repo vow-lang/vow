@@ -1,0 +1,88 @@
+module VcCexPath
+
+use ast
+use contract_text
+use replay_alias
+use replay_main
+use vc_reads
+use vc_cex_elem
+
+// The declared type of a position of a native counterexample. A position is a path from a
+// parameter of the function: `.<slot>` steps into a struct (a slot is an 8-byte word, so a 128-bit
+// field takes two) and `[<index>]` steps into the elements of a `Vec`. The driver walks the
+// declarations of the program, since the IR carries no types.
+
+// Resolved AST type of the position `name` of the function `fn_name` (the parameter it starts from
+// when `name` has no step), or -1 when `name` is no such path or leaves the types the driver can
+// follow: an enum, an `Option`, a `Result` (the variant is not known) or a `String`'s bytes.
+fn vc_cex_position_type(m: Module, fn_name: String, name: String) -> i64 {
+    let a: AstArena = m.arena;
+    let mut at: u64 = 0;
+    while at < name.len() && name.byte_at(at) != 46 && name.byte_at(at) != 91 {
+        at = at + 1;
+    }
+    let tid: i64 = vc_cex_param_type(m, fn_name, name.substring(0, at));
+    if tid < 0 { return -1; }
+    let mut cur: i64 = replay_resolve_type(m, tid, 0);
+    while at < name.len() && cur >= 0 {
+        let open: i64 = name.byte_at(at);
+        let mut end: u64 = at + 1;
+        while end < name.len() && name.byte_at(end) >= 48 && name.byte_at(end) <= 57 {
+            end = end + 1;
+        }
+        if end == at + 1 { return -1; }
+        let mut digits: i64 = 0;
+        let mut d: u64 = at + 1;
+        while d < end && digits < 100000000 {
+            digits = digits * 10 + (name.byte_at(d) - 48);
+            d = d + 1;
+        }
+        if open == 46 {
+            if end < name.len() && name.byte_at(end) != 46 && name.byte_at(end) != 91 { return -1; }
+            let f: i64 = vc_cex_field_type_at(m, cur, digits);
+            if f < 0 { return -1; }
+            cur = replay_resolve_type(m, f, 0);
+            at = end;
+        } else {
+            if end >= name.len() || name.byte_at(end) != 93 { return -1; }
+            if type_tag(a, cur) != TY_GENERIC() || arena_str(a, type_a(a, cur)) != String::from("Vec") { return -1; }
+            let args: i64 = type_b(a, cur);
+            if list_len(a, args) != 1 { return -1; }
+            cur = replay_resolve_type(m, list_get(a, args, 0), 0);
+            at = end + 1;
+        }
+    }
+    cur
+}
+
+// Kind (`VC_READ_*`) of the object a value of the resolved type `tid` holds the address of: a
+// `Vec`, a `String` or a struct that is not linear; 0 for any other type.
+fn vc_cex_type_class(m: Module, tid: i64) -> i64 {
+    let a: AstArena = m.arena;
+    if tid < 0 { return 0; }
+    if type_tag(a, tid) == TY_GENERIC() && arena_str(a, type_a(a, tid)) == String::from("Vec") { return VC_READ_VEC(); }
+    if type_tag(a, tid) != TY_NAMED() { return 0; }
+    let tname: String = arena_str(a, type_a(a, tid));
+    if tname == String::from("String") { return VC_READ_STR(); }
+    let sid: i64 = replay_find_struct(m, tname);
+    if sid >= 0 && sdef_is_linear(a, sid) == 0 { return VC_READ_OBJ(); }
+    0
+}
+
+// Kind of the object the position `name` of `fn_name` holds the address of, or 0 when `name` is
+// not a path of slots and indices to a `Vec`, a `String` or a struct. A parameter itself is no
+// position.
+fn vc_cex_position_class(m: Module, fn_name: String, name: String) -> i64 {
+    let mut i: u64 = 0;
+    while i < name.len() && name.byte_at(i) != 46 && name.byte_at(i) != 91 {
+        i = i + 1;
+    }
+    if i == name.len() { return 0; }
+    vc_cex_type_class(m, vc_cex_position_type(m, fn_name, name))
+}
+
+// Spelling of the resolved type `tid`, equal for two positions exactly when their objects have one
+// declared type.
+fn vc_cex_type_key(m: Module, tid: i64) -> String {
+    print_type_text(m.arena, tid)
+}

@@ -16,7 +16,7 @@ use vc_readrows
 // such a parameter is an SMT array plus a 64-bit length (`vc_vec`); the array is
 // infinite, so a counterexample cannot list it whole. A claim's first model gives
 // the length (`<param>.len`). When some `Vec` or `String` parameter is declared
-// before the claim, `vc_enrich_vec_model` asks the claim's query again with every
+// before the claim, `vc_enrich_vec_first` asks the claim's query again with every
 // such length bounded, by 2, then 8, 64 and `VC_CEX_VEC_MAX`, and reads back the
 // elements below the bound (`<param>[<i>]`, the 8-byte slot the runtime keeps: a
 // `String` byte is its low 8 bits). The bound only picks which counterexample the
@@ -191,7 +191,7 @@ fn vc_ask_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, vecs: Vec
     vc_append_read_rows(cs, vc_read_rows(cs, k), s, names, widths);
     vc_script_check_sat(s);
     vc_script_get_value(s, names);
-    vc_solver_check_cached(cache, bin, vc_smt_render(ar, s), names, widths, budget_ms, scratch)
+    vc_nest_seal(cs, k, vc_solver_check_cached(cache, bin, vc_smt_render(ar, s), names, widths, budget_ms, scratch))
 }
 
 // The longest length any `Vec`/`String` parameter has in the regular entries of
@@ -243,7 +243,7 @@ fn vc_shrink_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, vecs: 
 // scalars of `ans` (`vc_pin_model`): a claim that reaches a float-text hook was
 // checked to fail for those scalars whatever the hook returns (`vc_hook_recheck`),
 // and another set of scalars might not.
-fn vc_enrich_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: VcSolverAnswer, pin: bool, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+fn vc_enrich_vec_first(cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: VcSolverAnswer, pin: bool, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
     let vecs: Vec<i64> = vc_cex_vecs(cs, k);
     if vecs.len() == 0 && vc_cex_map_lens(cs, k).len() == 0 && vc_read_rows(cs, k).len() == 0 { return ans; }
     let started: i64 = time_micros();
@@ -264,17 +264,18 @@ fn vc_enrich_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: V
 }
 
 // How many of `ans.values` come before the claim's handle reads (`vc_append_read_rows`): all of
-// them unless the answer carries those, which close it.
+// them unless the answer carries those, which only the contents behind them follow (`vc_nested`).
 fn vc_answer_body(cs: VcClaims, k: u64, ans: VcSolverAnswer) -> u64 {
     let total: u64 = ans.values.len();
     let reads: u64 = vc_read_rows(cs, k).len();
-    if reads > 0 && total >= vc_claim_model_count(cs, k) + reads { return total - reads; }
+    let after: u64 = vc_nest_extra(cs, k, ans);
+    if reads > 0 && total >= vc_claim_model_count(cs, k) + reads + after { return total - reads - after; }
     total
 }
 
 // How many of `ans.values` are the claim's regular model entries: all of the body,
 // unless the answer carries elements of the claim's `Vec`/`String` parameters
-// behind them (`vc_enrich_vec_model`).
+// behind them (`vc_enrich_vec_first`).
 fn vc_answer_regular_count(cs: VcClaims, k: u64, ans: VcSolverAnswer) -> u64 {
     let body: u64 = vc_answer_body(cs, k, ans);
     let vecs: u64 = vc_cex_vecs(cs, k).len();
@@ -315,7 +316,7 @@ fn vc_answer_vec_len(cs: VcClaims, ans: VcSolverAnswer, n: u64, v: i64) -> i64 {
 }
 
 // Appends `<param>[<i>]` for the elements below each `Vec`/`String` parameter's
-// length when the answer carries the contents (`vc_enrich_vec_model`: `n`
+// length when the answer carries the contents (`vc_enrich_vec_first`: `n`
 // regular entries, then the same number of raw 8-byte slots per parameter of
 // `vc_cex_vecs`). A slot prints as its unsigned 64-bit value here, since the IR
 // has no element type, and the driver retypes it from the source declaration
