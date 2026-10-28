@@ -100,13 +100,11 @@ fn replay_listed_under(name: String, prefix: String) -> bool {
     prefix.len() > 0u64 && name.len() >= prefix.len() && name.substring(0u64, prefix.len()) == prefix
 }
 
-fn replay_listed_free_token() -> String { String::from("unconstrained") }
-
 // True when the position `key` is marked free.
 fn replay_listed_unread(names: Vec<String>, vals: Vec<String>, key: String) -> bool {
     let at: String = String::from(key);
     at.push_str(String::from(".contents"));
-    replay_listed_value(names, vals, at) == replay_listed_free_token()
+    replay_listed_value(names, vals, at) == String::from("unconstrained")
 }
 
 // Why the object whose address is the entry `key` cannot be rebuilt from the counterexample, as the
