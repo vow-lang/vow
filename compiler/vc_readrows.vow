@@ -5,6 +5,7 @@ use vc_smt
 use vc_heap
 use vc_query
 use vc_reads
+use vc_solver
 
 // The handles a claim's query can read through (`vc_reads`), projected in the model of a failed
 // claim. Like the elements of a `Vec` parameter (`vc_vecmodel`) they are read back from the
@@ -43,4 +44,41 @@ fn vc_append_read_rows(cs: VcClaims, rows: Vec<i64>, s: SmtScript, names: Vec<St
         widths.push(64);
         q = q + 1;
     }
+}
+
+// True when the model of a failed claim `k` can be asked again for the contents behind the handles
+// it reads (`vc_nested`): it reads some, and every value it gives can be fixed in that second query.
+// A float cannot be, and the contents would then belong to another counterexample.
+fn vc_nest_enabled(cs: VcClaims, k: u64) -> bool {
+    if vc_read_rows(cs, k).len() == 0 { return false; }
+    let n: u64 = vc_claim_model_count(cs, k);
+    let mut j: u64 = 0;
+    while j < n {
+        if cs.model_widths[j] == VC_SORT_F32() || cs.model_widths[j] == VC_SORT_F64() { return false; }
+        j = j + 1;
+    }
+    true
+}
+
+// How many values `ans` carries after the claim's handle reads when `vc_nest_enabled`: the contents
+// behind the handles and the count of them, which closes the answer (0 for an answer that was not
+// enriched, which has neither reads nor count).
+fn vc_nest_extra(cs: VcClaims, k: u64, ans: VcSolverAnswer) -> u64 {
+    if !vc_nest_enabled(cs, k) { return 0; }
+    let total: u64 = ans.values.len();
+    let base: u64 = vc_claim_model_count(cs, k) + vc_read_rows(cs, k).len();
+    if total <= base { return 0; }
+    let cells: i64 = ans.values[total - 1];
+    if cells < 0 || (cells as u64) + 1 > total - base { return 0; }
+    (cells as u64) + 1
+}
+
+// Closes the enriched model `ans` of claim `k` with the count of the contents behind its handle
+// reads, none yet, so every enriched answer of a claim `vc_nest_enabled` ends in one.
+fn vc_nest_seal(cs: VcClaims, k: u64, ans: VcSolverAnswer) -> VcSolverAnswer {
+    if ans.verdict == VC_ANS_SAT() && vc_nest_enabled(cs, k) {
+        ans.values.push(0);
+        ans.highs.push(0);
+    }
+    ans
 }

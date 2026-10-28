@@ -12,6 +12,7 @@ use vc_vecmodel
 use vc_fieldrows
 use vc_readrows
 use vc_reads
+use vc_nested
 use vc_heap
 
 // Maps a solver answer for one claim onto the `VerifyResult` the shared
@@ -197,7 +198,7 @@ fn vc_append_field_answer(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnsw
 // Appends the handle reads of the claim (`vc_reads`) as the entries the driver compares the listed
 // addresses with (`vc_cex_verdict`), which strips them: `$read.n` their number and `$read.<i>` the
 // class and address of each. No `$read.n` says the reads are unknown (the registry was dropped, or
-// the answer carries no projection of them).
+// the answer carries no projection of them), then the contents behind them (`vc_nested`).
 fn vc_append_read_answer(cs: VcClaims, k: u64, ans: VcSolverAnswer, names: Vec<String>, values: Vec<String>) {
     let ls: VcHeapListed = cs.listed;
     if ls.rd_over || !ls.rd_ok { return; }
@@ -217,6 +218,7 @@ fn vc_append_read_answer(cs: VcClaims, k: u64, ans: VcSolverAnswer, names: Vec<S
         values.push(text);
         q = q + 1;
     }
+    vc_append_nested_answer(cs, k, ans, names, values);
 }
 
 // Result for claim `k` of `cs` given the solver's answer for it. `sat` is a

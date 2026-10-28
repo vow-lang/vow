@@ -63,3 +63,25 @@ fn vc_reads_note(ls: VcHeapListed, ar: VcArena, hdr: SmtScript, cls: i64, h: i64
     ls.rd_term.push(key);
     ls.rd_hdr.push(hdr.kinds.len() as i64);
 }
+
+// Records that the object read at the handle `h` (`vc_reads_note` as `VC_READ_OBJ`) was read at slot
+// `slot`, so a model can list that slot of the object (`vc_nested`).
+fn vc_reads_note_slot(ls: VcHeapListed, ar: VcArena, hdr: SmtScript, h: i64, slot: i64) {
+    if ls.rd_over || h < 0 || (h as u64) >= ar.kinds.len() { return; }
+    let key: i64 = vc_reads_key(ar, h);
+    let mut i: u64 = 0;
+    while i < ls.rd_cls.len() {
+        if ls.rd_cls[i] == VC_READ_OBJ() && vc_reads_same(ar, ls.rd_term[i], key) {
+            let mut r: u64 = 0;
+            while r < ls.rs_read.len() {
+                if ls.rs_read[r] == i as i64 && ls.rs_slot[r] == slot { return; }
+                r = r + 1;
+            }
+            ls.rs_read.push(i as i64);
+            ls.rs_slot.push(slot);
+            ls.rs_hdr.push(hdr.kinds.len() as i64);
+            return;
+        }
+        i = i + 1;
+    }
+}

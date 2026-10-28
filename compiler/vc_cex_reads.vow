@@ -1,0 +1,115 @@
+module VcCexReads
+
+use replay_listed
+use vc_reads
+
+// The handles a native counterexample reads through, as the verifier hands them over
+// (`vc_append_read_answer`, `vc_append_nested_answer`) behind the counterexample's own entries:
+//
+//   $read.n            the number of reads
+//   $read.<i>          <class>:<address> of read `i` (`vc_reads_class_name`)
+//   $read.<i>.len, $read.<i>[<j>], $read.<i>.<slot>
+//                      the contents of the object at the address of read `i`, listed once for
+//                      the first read of each object (`vc_nested`); the values are raw unsigned
+//                      64-bit slots
+//
+// Without `$read.n` the reads are unknown. The driver (`vc_cex_verdict`) strips all of them.
+
+struct VcCexReads {
+    known: bool,
+    cls: Vec<i64>,
+    bits: Vec<u64>,
+    n_read: Vec<i64>,
+    n_suffix: Vec<String>,
+    n_val: Vec<String>,
+}
+
+fn vc_cex_class_of_name(name: String) -> i64 {
+    if name == vc_reads_class_name(VC_READ_STR()) { return VC_READ_STR(); }
+    if name == vc_reads_class_name(VC_READ_OBJ()) { return VC_READ_OBJ(); }
+    if name == vc_reads_class_name(VC_READ_VEC()) { return VC_READ_VEC(); }
+    0
+}
+
+// Adds the entry `name` (`$read.<i>` followed by `.` or `[` and a suffix) to the contents of `rs`;
+// anything else is no contents.
+fn vc_cex_add_nested(rs: VcCexReads, name: String, val: String) {
+    let head: u64 = 6;
+    let mut at: u64 = head;
+    let mut i: i64 = 0;
+    while at < name.len() && name.byte_at(at) >= 48 && name.byte_at(at) <= 57 && i < 100000000 {
+        i = i * 10 + (name.byte_at(at) - 48);
+        at = at + 1;
+    }
+    if at == head || at == name.len() { return; }
+    if name.byte_at(at) != 46 && name.byte_at(at) != 91 { return; }
+    rs.n_read.push(i);
+    rs.n_suffix.push(name.substring(at, name.len()));
+    rs.n_val.push(val);
+}
+
+// Reads the `$read.*` entries from position `from` on. A malformed `$read.n` or `$read.<i>` makes
+// the reads unknown; a malformed entry after them is no contents.
+fn vc_cex_read_entries(names: Vec<String>, vals: Vec<String>, from: u64) -> VcCexReads {
+    let out: VcCexReads = VcCexReads { known: false, cls: Vec::new(), bits: Vec::new(), n_read: Vec::new(), n_suffix: Vec::new(), n_val: Vec::new() };
+    if from >= names.len() || names[from] != String::from("$read.n") { return out; }
+    let mut count: i64 = -1;
+    match parse_i64(vals[from]) {
+        Option::Some(v) => { count = v; },
+        Option::None => { return out; },
+    }
+    if count < 0 || from + 1 + (count as u64) > names.len() { return out; }
+    let end: u64 = from + 1 + (count as u64);
+    let mut i: u64 = from + 1;
+    while i < end {
+        let colon: i64 = str_find_str(vals[i], String::from(":"));
+        if colon < 1 { return out; }
+        let cls: i64 = vc_cex_class_of_name(vals[i].substring(0, colon as u64));
+        if cls == 0 { return out; }
+        match replay_addr_bits(vals[i].substring((colon + 1) as u64, vals[i].len())) {
+            Option::Some(b) => {
+                out.cls.push(cls);
+                out.bits.push(b);
+            },
+            Option::None => { return out; },
+        }
+        i = i + 1;
+    }
+    while i < names.len() {
+        vc_cex_add_nested(out, names[i], vals[i]);
+        i = i + 1;
+    }
+    out.known = true;
+    out
+}
+
+fn vc_cex_was_read(rs: VcCexReads, cls: i64, bits: u64) -> bool {
+    let mut i: u64 = 0;
+    while i < rs.cls.len() {
+        if rs.cls[i] == cls && rs.bits[i] == bits { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// The first read of an object of kind `cls` at `bits`, which is the one its contents are listed
+// under, or -1.
+fn vc_cex_first_read(rs: VcCexReads, cls: i64, bits: u64) -> i64 {
+    let mut i: u64 = 0;
+    while i < rs.cls.len() {
+        if rs.cls[i] == cls && rs.bits[i] == bits { return i as i64; }
+        i = i + 1;
+    }
+    -1
+}
+
+// Position among the contents of `rs` of the first entry of read `rd` whose suffix is `suffix`
+// (a `.len`, `[<j>]` or `.<slot>`), or -1.
+fn vc_cex_nested_at(rs: VcCexReads, rd: i64, suffix: String) -> i64 {
+    let mut i: u64 = 0;
+    while i < rs.n_read.len() {
+        if rs.n_read[i] == rd && rs.n_suffix[i] == suffix { return i as i64; }
+        i = i + 1;
+    }
+    -1
+}

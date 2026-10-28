@@ -40,7 +40,23 @@ Replay builds the simplest value for an `unconstrained` position (empty `Vec`/`S
 
 ## Consequences
 
-Only new keys appear; `values` stays a string map. Positions of type `Option`, enum or `linear struct`, and
-contents behind an element that the function reads, are not yet listed (`unlisted`); later stages of #1890
-list them and rebuild them. The replay harness is a differential test of the markers: a wrong
+Only new keys appear; `values` stays a string map. Positions of type `Option`, enum or `linear struct` carry
+no marker and list nothing yet, and replay does not rebuild the contents behind an element (stage 3 of #1890). The replay harness is a differential test of the markers: a wrong
 `unconstrained` shows as `diverged`.
+
+## Stage 2: the contents behind a read element
+
+A position the function reads through and that no earlier listing covers (an element of a `Vec<String>` or
+`Vec<Vec<_>>`, a struct element of a held `Vec`) gets its contents instead of `unlisted`. After the first
+enrichment the verifier asks the claim once more with every value of that model fixed (regular entries, the
+elements and the handles), so the contents belong to the same counterexample, and projects `hlen[h]`,
+`helem[h ++ i]` or `hbyte[h ++ i]`, or `hf<k>[h]` for each slot the function read at `h`, for one handle per
+distinct (kind, address), at most 32. The lengths are bounded by 2, 8, 64 and 512 and shrunk like the first
+enrichment, in a query that is outside the layout of the first answer (the closing count of
+`vc_nest_extra`). A model with a float, an unanswered query or a length above 512 lists nothing, and the driver
+keeps `unlisted`. The handoff entries `$read.<i>.len`, `$read.<i>[<j>]` and `$read.<i>.<slot>` carry raw
+slots; the driver (`vc_cex_join`) copies them under every position of that kind, address and declared type,
+typed from the declaration, and settles the positions the copies add in the next round (4096 entries at
+most). A position at the address of a parameter or of an object of another declared type is not copied to.
+Replay is unchanged: it still skips a `Vec` of collections whose elements carry contents (stage 3 rebuilds
+them).

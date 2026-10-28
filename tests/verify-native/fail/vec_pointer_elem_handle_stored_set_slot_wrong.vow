@@ -1,8 +1,8 @@
-// TEST: replay-skipped the element of a Vec<Vec<i64>> parameter is read through memory and its contents are not listed (`src[0].contents` is `unlisted`), so replay cannot rebuild it (#1890)
+// TEST: replay-skipped the element of a Vec<Vec<i64>> parameter is read through memory and its contents are listed (`src[0].len`), but replay does not rebuild a Vec of collections yet (#1890)
 // TEST: counterexample-fn "swap_in"
 // TEST: counterexample-vow-id 1
 // TEST: counterexample-blame Callee
-// TEST: counterexample-value src[0].contents unlisted
+// TEST: counterexample-value src[0].len 0
 // The object in the first slot was replaced by a handle, so the first slot no longer has the one
 // element that was pushed to it: its length is whatever the given `Vec` has.
 module VecPointerElemHandleStoredSetSlotWrong

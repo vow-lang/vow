@@ -42,6 +42,8 @@ use vc_agg
 // `rd_*` is the registry of every handle the function read memory through (`vc_reads`): per read its
 // class, the handle's term and the header position the read was made at; `rd_over` is set when
 // there were too many to keep, and `rd_ok` once the walk finished and the registry is complete.
+// `rs_*` are the slots an object read (`VC_READ_OBJ`) was read at: per slot the registry position of
+// the read, the slot and the header position of the read.
 struct VcHeapListed {
     names: Vec<String>,
     param: Vec<i64>,
@@ -60,13 +62,16 @@ struct VcHeapListed {
     rd_hdr: Vec<i64>,
     rd_over: bool,
     rd_ok: bool,
+    rs_read: Vec<i64>,
+    rs_slot: Vec<i64>,
+    rs_hdr: Vec<i64>,
 }
 
 // Listed fields of a `Vec` parameter's elements read as handles are rows too: per row the array of
 // the `Vec`, the slot and type read, and the header position after which the claims list them
 // (`<param>[<i>].<slot>`, behind the elements in the enrichment of `vc_vecmodel`).
 fn vc_heap_listed_new() -> VcHeapListed {
-    VcHeapListed { names: Vec::new(), param: Vec::new(), path: Vec::new(), slot: Vec::new(), ty: Vec::new(), hdr: Vec::new(), handle: Vec::new(), earr: Vec::new(), eslot: Vec::new(), ety: Vec::new(), ehdr: Vec::new(), bad: false, rd_cls: Vec::new(), rd_term: Vec::new(), rd_hdr: Vec::new(), rd_over: false, rd_ok: false }
+    VcHeapListed { names: Vec::new(), param: Vec::new(), path: Vec::new(), slot: Vec::new(), ty: Vec::new(), hdr: Vec::new(), handle: Vec::new(), earr: Vec::new(), eslot: Vec::new(), ety: Vec::new(), ehdr: Vec::new(), bad: false, rd_cls: Vec::new(), rd_term: Vec::new(), rd_hdr: Vec::new(), rd_over: false, rd_ok: false, rs_read: Vec::new(), rs_slot: Vec::new(), rs_hdr: Vec::new() }
 }
 
 struct VcHeap {

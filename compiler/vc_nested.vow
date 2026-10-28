@@ -1,0 +1,390 @@
+module VcNested
+
+use vc_smt
+use vc_term
+use vc_ops
+use vc_solver
+use vc_cache
+use vc_query
+use vc_heap
+use vc_fieldrows
+use vc_readrows
+use vc_reads
+use vc_vecmodel
+
+// The contents behind the handles a failed claim reads (`vc_reads`). The counterexample of a
+// claim lists the address of every `Vec`, `String` or struct the function reached through memory
+// and, for those it measured through a parameter or a field, their contents (`vc_vecmodel`,
+// `vc_heaplist`). An element of a `Vec<Vec<_>>`, of a `Vec<String>` or a field of a held struct is
+// a handle too, and the function may read through it: this module asks the model of the claim
+// once more and lists what is at those addresses, `hlen[h]` and `helem[h ++ i]` (`hbyte[h ++ i]`
+// for a `String`) below the length, or `hf<k>[h]` for each slot `k` the function read (`rs_*`).
+//
+// The ask fixes every value the first enriched answer gave (`vc_nest_pin`): the regular values,
+// the elements and the handles themselves, so the contents belong to the counterexample the
+// addresses do, and only the cells nothing else constrains are free. The lengths of the
+// collections are bounded by 2, then 8, 64 and `VC_CEX_VEC_MAX`, and shrunk, as the first
+// enrichment does; when no bound has a model, or the budget ends, nothing is listed and the driver
+// calls those objects `unlisted` (`vc_cex_verdict`). A handle is listed once per address and kind:
+// reads of one kind at one address are one object. A listing cap bounds the number of objects
+// (`VC_NEST_CAP`), and the cells are the model's, not a bound on any contract.
+//
+// The answer of the first enrichment is closed by the count of the values that follow the handle
+// reads (`vc_nest_extra`); here it is replaced by the cells and their number.
+
+fn VC_NEST_CAP() -> i64 { 32 }
+
+// The objects to list: per object its kind (`VC_READ_*`), the index among the claim's read rows of
+// its first read, its address, and (`s_*`) for a struct the slots read at it, as group and slot.
+struct VcNestPlan {
+    cls: Vec<i64>,
+    row: Vec<i64>,
+    addr: Vec<i64>,
+    s_grp: Vec<i64>,
+    s_slot: Vec<i64>,
+}
+
+fn vc_nest_group_at(p: VcNestPlan, cls: i64, addr: i64) -> i64 {
+    let mut g: u64 = 0;
+    while g < p.cls.len() {
+        if p.cls[g] == cls && p.addr[g] == addr { return g as i64; }
+        g = g + 1;
+    }
+    -1
+}
+
+// Adds to group `g` the slots read at the registry read `pos` that the claim's query can name.
+fn vc_nest_add_slots(cs: VcClaims, k: u64, p: VcNestPlan, g: i64, pos: i64) {
+    let ls: VcHeapListed = cs.listed;
+    let mut r: u64 = 0;
+    while r < ls.rs_read.len() {
+        if ls.rs_read[r] == pos && ls.rs_hdr[r] <= cs.header_lens[k] {
+            let mut have: bool = false;
+            let mut i: u64 = 0;
+            while i < p.s_grp.len() {
+                if p.s_grp[i] == g && p.s_slot[i] == ls.rs_slot[r] { have = true; }
+                i = i + 1;
+            }
+            if !have {
+                p.s_grp.push(g);
+                p.s_slot.push(ls.rs_slot[r]);
+            }
+        }
+        r = r + 1;
+    }
+}
+
+// The objects the answer `ans` reads through: its read rows start at `body`, and each distinct
+// (kind, address) is one object, up to `VC_NEST_CAP`. A struct no query slot names lists nothing.
+fn vc_nest_plan(cs: VcClaims, k: u64, ans: VcSolverAnswer, body: u64) -> VcNestPlan {
+    let p: VcNestPlan = VcNestPlan { cls: Vec::new(), row: Vec::new(), addr: Vec::new(), s_grp: Vec::new(), s_slot: Vec::new() };
+    let ls: VcHeapListed = cs.listed;
+    let rows: Vec<i64> = vc_read_rows(cs, k);
+    let mut q: u64 = 0;
+    while q < rows.len() && body + q < ans.values.len() {
+        let cls: i64 = ls.rd_cls[rows[q] as u64];
+        let addr: i64 = ans.values[body + q];
+        let mut g: i64 = vc_nest_group_at(p, cls, addr);
+        if g < 0 && (p.cls.len() as i64) < VC_NEST_CAP() {
+            p.cls.push(cls);
+            p.row.push(q as i64);
+            p.addr.push(addr);
+            g = (p.cls.len() as i64) - 1;
+        }
+        if g >= 0 && cls == VC_READ_OBJ() { vc_nest_add_slots(cs, k, p, g, rows[q]); }
+        q = q + 1;
+    }
+    p
+}
+
+fn vc_nest_slot_count(p: VcNestPlan, g: u64) -> i64 {
+    let mut n: i64 = 0;
+    let mut i: u64 = 0;
+    while i < p.s_grp.len() {
+        if p.s_grp[i] == g as i64 { n = n + 1; }
+        i = i + 1;
+    }
+    n
+}
+
+fn vc_nest_collections(p: VcNestPlan) -> i64 {
+    let mut n: i64 = 0;
+    let mut g: u64 = 0;
+    while g < p.cls.len() {
+        if p.cls[g] != VC_READ_OBJ() { n = n + 1; }
+        g = g + 1;
+    }
+    n
+}
+
+// The elements listed per collection when the cells number `cells`: a length and the elements
+// (`vc_nest_cells`).
+fn vc_nest_bound_of(p: VcNestPlan, cells: u64) -> i64 {
+    let colls: i64 = vc_nest_collections(p);
+    if colls == 0 { return 0; }
+    let mut slots: i64 = 0;
+    let mut g: u64 = 0;
+    while g < p.cls.len() {
+        if p.cls[g] == VC_READ_OBJ() { slots = slots + vc_nest_slot_count(p, g); }
+        g = g + 1;
+    }
+    (((cells as i64) - slots) / colls) - 1
+}
+
+// The array `name` of the heap, declared in the script `s` when the claim's prefix does not have
+// it (an array no read of the claim touches is unconstrained).
+fn vc_nest_array(ar: VcArena, s: SmtScript, name: String, sort: i64) -> i64 {
+    let mut i: u64 = 0;
+    while i < s.kinds.len() {
+        if s.kinds[i] == VC_CMD_DECLARE_CONST() && s.names[i] == name { return vc_tm_var(ar, name); }
+        i = i + 1;
+    }
+    vc_script_declare_const(s, name, sort);
+    vc_tm_var(ar, name)
+}
+
+fn vc_nest_cell_name(prefix: String, g: u64, sep: String, i: i64) -> String {
+    let out: String = String::from(prefix);
+    out.push_str(i64_to_string(g as i64));
+    out.push_str(sep);
+    out.push_str(i64_to_string(i));
+    out
+}
+
+// Defines the cells of the objects of `p`, in order: for a `Vec` or `String`, its length (asserted
+// at most `bound`) and the slots below `bound`; for a struct, each slot read at it. Each is the
+// 64-bit raw slot of the heap array at the handle of the object's first read.
+fn vc_nest_cells(cs: VcClaims, k: u64, p: VcNestPlan, rows: Vec<i64>, bound: i64, s: SmtScript, names: Vec<String>) {
+    let ar: VcArena = cs.arena;
+    let mut g: u64 = 0;
+    while g < p.cls.len() {
+        let rep: i64 = vc_tm_var(ar, vc_read_row_name(rows[p.row[g] as u64]));
+        if p.cls[g] == VC_READ_OBJ() {
+            let mut i: u64 = 0;
+            while i < p.s_grp.len() {
+                if p.s_grp[i] == g as i64 {
+                    let arr: i64 = vc_nest_array(ar, s, vc_heap_slot_name(p.s_slot[i]), VC_SORT_ARRAY64());
+                    let name: String = vc_nest_cell_name(String::from("hns"), g, String::from("_"), p.s_slot[i]);
+                    vc_script_define_fun(s, name, 64, vc_tm_app2(ar, VC_OP_SELECT(), arr, rep));
+                    names.push(name);
+                }
+                i = i + 1;
+            }
+        } else {
+            let lens: i64 = vc_nest_array(ar, s, String::from("hlen"), VC_SORT_ARRAY64());
+            let len_name: String = vc_nest_cell_name(String::from("hn"), g, String::from("_len"), 0);
+            vc_script_define_fun(s, len_name, 64, vc_tm_app2(ar, VC_OP_SELECT(), lens, rep));
+            vc_script_assert(s, vc_tm_app2(ar, VC_OP_BVULE(), vc_tm_var(ar, len_name), vc_tm_bv(ar, 64, bound, 0)));
+            names.push(len_name);
+            let heap_name: String = { if p.cls[g] == VC_READ_STR() { String::from("hbyte") } else { String::from("helem") } };
+            let arr: i64 = vc_nest_array(ar, s, heap_name, VC_SORT_ARRAY128());
+            let mut j: i64 = 0;
+            while j < bound {
+                let name: String = vc_nest_cell_name(String::from("hne"), g, String::from("_"), j);
+                let key: i64 = vc_tm_app2(ar, VC_OP_CONCAT(), rep, vc_tm_bv(ar, 64, j, 0));
+                vc_script_define_fun(s, name, 64, vc_tm_app2(ar, VC_OP_SELECT(), arr, key));
+                names.push(name);
+                j = j + 1;
+            }
+        }
+        g = g + 1;
+    }
+}
+
+// Asserts that each value of `ans` is the one it gave; `names` and `widths` are the entries of the
+// query in the order of `ans.values`, beyond which there is nothing. False, with the rest unfixed,
+// when a value is a float, which cannot be: the contents would belong to another counterexample.
+fn vc_nest_pin(ar: VcArena, ans: VcSolverAnswer, s: SmtScript, names: Vec<String>, widths: Vec<i64>) -> bool {
+    let mut j: u64 = 0;
+    while j < names.len() && j < ans.values.len() {
+        let w: i64 = widths[j];
+        if w == VC_SORT_F32() || w == VC_SORT_F64() { return false; }
+        if w < VC_SORT_ARRAY64() {
+            let sym: i64 = vc_tm_var(ar, names[j]);
+            if w == VC_SORT_BOOL() {
+                if ans.values[j] != 0 { vc_script_assert(s, sym); } else { vc_script_assert(s, vc_tm_app1(ar, VC_OP_NOT(), sym)); }
+            } else {
+                vc_script_assert(s, vc_tm_app2(ar, VC_OP_EQ(), sym, vc_tm_bv(ar, w, ans.values[j], ans.highs[j])));
+            }
+        }
+        j = j + 1;
+    }
+    true
+}
+
+// One ask for the contents of the objects of `plan` in the model `first` gave, every collection at
+// most `bound` long; the answer carries only the cells (`vc_nest_cells`).
+fn vc_ask_nested(cache: VcCache, bin: String, cs: VcClaims, k: u64, first: VcSolverAnswer, plan: VcNestPlan, bound: i64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+    let ar: VcArena = cs.arena;
+    let s: SmtScript = vc_claim_context_script(cs, k);
+    let names: Vec<String> = vc_claim_model_names(cs, k);
+    let widths: Vec<i64> = vc_claim_model_widths(cs, k);
+    let rows: Vec<i64> = vc_read_rows(cs, k);
+    let per: i64 = vc_answer_elems_per_vec(cs, k, first) as i64;
+    vc_append_vec_projection(cs, vc_cex_vecs(cs, k), per, s, names, widths);
+    vc_append_field_rows(cs, vc_field_rows(cs, k), per, s, names, widths);
+    vc_append_read_rows(cs, rows, s, names, widths);
+    if !vc_nest_pin(ar, first, s, names, widths) { return vc_answer_plain(VC_ANS_ERROR(), String::from("")); }
+    let cells: Vec<String> = Vec::new();
+    vc_nest_cells(cs, k, plan, rows, bound, s, cells);
+    vc_script_assert(s, cs.negated_goals[k]);
+    vc_script_check_sat(s);
+    vc_script_get_value(s, cells);
+    let cell_widths: Vec<i64> = Vec::new();
+    let mut c: u64 = 0;
+    while c < cells.len() {
+        cell_widths.push(64);
+        c = c + 1;
+    }
+    vc_solver_check_cached(cache, bin, vc_smt_render(ar, s), cells, cell_widths, budget_ms, scratch)
+}
+
+// The longest length among the collections in the cells of `ans`.
+fn vc_nest_max_len(plan: VcNestPlan, ans: VcSolverAnswer) -> i64 {
+    let bound: i64 = vc_nest_bound_of(plan, ans.values.len());
+    let mut most: i64 = 0;
+    let mut at: u64 = 0;
+    let mut g: u64 = 0;
+    while g < plan.cls.len() && at < ans.values.len() {
+        if plan.cls[g] == VC_READ_OBJ() {
+            at = at + vc_nest_slot_count(plan, g) as u64;
+        } else {
+            if ans.values[at] > most { most = ans.values[at]; }
+            at = at + 1 + bound as u64;
+        }
+        g = g + 1;
+    }
+    most
+}
+
+// `found`, the cells of a model with every collection at most some bound, shrunk by bisection to
+// the shortest the solver still finds, given that none has all lengths at most `lo`.
+fn vc_nest_shrink(cache: VcCache, bin: String, cs: VcClaims, k: u64, first: VcSolverAnswer, plan: VcNestPlan, found: VcSolverAnswer, lo0: i64, started: i64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+    let mut best: VcSolverAnswer = found;
+    let mut lo: i64 = lo0;
+    let mut hi: i64 = vc_nest_max_len(plan, best);
+    while hi - lo > 1 {
+        let left_ms: i64 = budget_ms - (time_micros() - started) / 1000;
+        if left_ms <= 0 { return best; }
+        let mid: i64 = (lo + hi) / 2;
+        let again: VcSolverAnswer = vc_ask_nested(cache, bin, cs, k, first, plan, mid, left_ms, scratch);
+        if again.verdict == VC_ANS_SAT() {
+            best = again;
+            hi = vc_nest_max_len(plan, best);
+        } else if again.verdict == VC_ANS_UNSAT() {
+            lo = mid;
+        } else {
+            return best;
+        }
+    }
+    best
+}
+
+// The cells of the objects of `plan`: the bounds 2, 8, 64 and `VC_CEX_VEC_MAX`, the first with a
+// model shrunk. A plan of structs alone has no length to bound and is asked once.
+fn vc_nest_run(cache: VcCache, bin: String, cs: VcClaims, k: u64, first: VcSolverAnswer, plan: VcNestPlan, started: i64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+    let mut lo: i64 = -1;
+    let mut bound: i64 = 2;
+    if vc_nest_collections(plan) == 0 { bound = VC_CEX_VEC_MAX(); }
+    while bound <= VC_CEX_VEC_MAX() {
+        let left_ms: i64 = budget_ms - (time_micros() - started) / 1000;
+        if left_ms <= 0 { return vc_answer_plain(VC_ANS_TIMEOUT(), String::from("")); }
+        let again: VcSolverAnswer = vc_ask_nested(cache, bin, cs, k, first, plan, bound, left_ms, scratch);
+        if again.verdict == VC_ANS_SAT() {
+            if vc_nest_collections(plan) == 0 { return again; }
+            return vc_nest_shrink(cache, bin, cs, k, first, plan, again, lo, started, budget_ms, scratch);
+        }
+        if again.verdict != VC_ANS_UNSAT() { return again; }
+        lo = bound;
+        bound = vc_next_vec_bound(bound);
+    }
+    vc_answer_plain(VC_ANS_UNSAT(), String::from(""))
+}
+
+// `first` with the cells of `nested` in place of its closing count, or with a count of none when
+// `nested` is not a model.
+fn vc_nest_attach(first: VcSolverAnswer, nested: VcSolverAnswer) -> VcSolverAnswer {
+    let values: Vec<i64> = Vec::new();
+    let highs: Vec<i64> = Vec::new();
+    let mut j: u64 = 0;
+    while j + 1 < first.values.len() {
+        values.push(first.values[j]);
+        highs.push(first.highs[j]);
+        j = j + 1;
+    }
+    let mut cells: i64 = 0;
+    if nested.verdict == VC_ANS_SAT() {
+        cells = nested.values.len() as i64;
+        let mut c: u64 = 0;
+        while c < nested.values.len() {
+            values.push(nested.values[c]);
+            highs.push(0);
+            c = c + 1;
+        }
+    }
+    values.push(cells);
+    highs.push(0);
+    vc_answer(first.verdict, values, highs, first.raw)
+}
+
+// The model of claim `k` with the contents of its `Vec` and `String` parameters (`vc_vecmodel`) and
+// of the objects behind the handles it reads. `budget_ms` is shared by both asks. An answer that
+// was enriched ends in the count of its contents (`vc_nest_extra`), 0 when none were listed.
+fn vc_enrich_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: VcSolverAnswer, pin: bool, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+    let started: i64 = time_micros();
+    let first: VcSolverAnswer = vc_enrich_vec_first(cache, bin, cs, k, ans, pin, budget_ms, scratch);
+    if !vc_nest_enabled(cs, k) || first.values.len() <= vc_claim_model_count(cs, k) { return first; }
+    let plan: VcNestPlan = vc_nest_plan(cs, k, first, vc_answer_body(cs, k, first));
+    if plan.cls.len() == 0 || (vc_nest_collections(plan) == 0 && plan.s_grp.len() == 0) { return first; }
+    vc_nest_attach(first, vc_nest_run(cache, bin, cs, k, first, plan, started, budget_ms, scratch))
+}
+
+// Appends the contents `ans` carries behind the handles the claim reads as the entries the driver
+// joins to the listed positions (`vc_cex_verdict`), after `$read.<i>` of each read: `$read.<i>.len` and
+// `$read.<i>[<j>]` for a collection, `$read.<i>.<slot>` for a struct, with `<i>` the read row of the
+// object's first read and every value the raw unsigned 64-bit slot.
+fn vc_append_nested_answer(cs: VcClaims, k: u64, ans: VcSolverAnswer, names: Vec<String>, values: Vec<String>) {
+    let extra: u64 = vc_nest_extra(cs, k, ans);
+    if extra <= 1 { return; }
+    let plan: VcNestPlan = vc_nest_plan(cs, k, ans, vc_answer_body(cs, k, ans));
+    let cells: u64 = extra - 1;
+    let bound: i64 = vc_nest_bound_of(plan, cells);
+    let mut at: u64 = ans.values.len() - extra;
+    let mut g: u64 = 0;
+    while g < plan.cls.len() {
+        let base: String = String::from("$read.");
+        base.push_str(i64_to_string(plan.row[g]));
+        if plan.cls[g] == VC_READ_OBJ() {
+            let mut i: u64 = 0;
+            while i < plan.s_grp.len() {
+                if plan.s_grp[i] == g as i64 {
+                    let key: String = String::from(base);
+                    key.push_str(String::from("."));
+                    key.push_str(i64_to_string(plan.s_slot[i]));
+                    names.push(key);
+                    values.push(uint_to_string(ans.values[at] as u64));
+                    at = at + 1;
+                }
+                i = i + 1;
+            }
+        } else {
+            let len: i64 = ans.values[at];
+            let key: String = String::from(base);
+            key.push_str(String::from(".len"));
+            names.push(key);
+            values.push(uint_to_string(len as u64));
+            let mut j: i64 = 0;
+            while j < len && j < bound {
+                let item: String = String::from(base);
+                item.push_str(String::from("["));
+                item.push_str(i64_to_string(j));
+                item.push_str(String::from("]"));
+                names.push(item);
+                values.push(uint_to_string(ans.values[at + 1 + j as u64] as u64));
+                j = j + 1;
+            }
+            at = at + 1 + bound as u64;
+        }
+        g = g + 1;
+    }
+}

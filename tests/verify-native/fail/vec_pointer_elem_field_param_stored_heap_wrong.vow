@@ -1,6 +1,7 @@
 // TEST: counterexample-fn "bump"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
+// TEST: counterexample-value h.0.0 0
 // `h.p` may be the `Pair` that was pushed, and then the write through the element changes what is
 // read through `h`: the claim that it does not is refuted. Replay builds `s` once and puts it in `h`.
 module VecPointerElemFieldParamStoredHeapWrong
