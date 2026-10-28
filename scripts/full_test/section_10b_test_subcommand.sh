@@ -11,8 +11,9 @@ section_begin "Section 10b: Test Subcommand"
 heap_order_test="tests/stdlib/heap_order_predicates.vow"
 heap_rust=$($RUST test --module-root stdlib/heap "$heap_order_test" 2>/dev/null) || true
 heap_self=$(run_self test --module-root stdlib/heap "$heap_order_test" 2>/dev/null) || true
-heap_rust_status=$(printf '%s' "$heap_rust" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null) || heap_rust_status=""
-heap_self_status=$(printf '%s' "$heap_self" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null) || heap_self_status=""
+heap_status() { printf '%s' "$1" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || true; }
+heap_rust_status=$(heap_status "$heap_rust")
+heap_self_status=$(heap_status "$heap_self")
 if [ "$heap_rust_status" = "TestsPassed" ] && [ "$heap_self_status" = "TestsPassed" ]; then
     pass "test/heap-order-predicates"
 else
