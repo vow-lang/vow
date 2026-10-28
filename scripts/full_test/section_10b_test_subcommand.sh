@@ -5,6 +5,20 @@
 
 section_begin "Section 10b: Test Subcommand"
 
+# `vow test` builds in debug mode, so the loop invariants of the shipped
+# stdlib/heap is_min_heap / is_max_heap are checked at runtime (empty heap
+# included) in both compilers.
+heap_order_test="tests/stdlib/heap_order_predicates.vow"
+heap_rust=$($RUST test --module-root stdlib/heap "$heap_order_test" 2>/dev/null) || true
+heap_self=$(run_self test --module-root stdlib/heap "$heap_order_test" 2>/dev/null) || true
+heap_rust_status=$(printf '%s' "$heap_rust" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null) || heap_rust_status=""
+heap_self_status=$(printf '%s' "$heap_self" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null) || heap_self_status=""
+if [ "$heap_rust_status" = "TestsPassed" ] && [ "$heap_self_status" = "TestsPassed" ]; then
+    pass "test/heap-order-predicates"
+else
+    fail "test/heap-order-predicates" "rust=$heap_rust_status self=$heap_self_status"
+fi
+
 # Run vowc test with both compilers on compiler/ directory.
 rust_test_exit=0 self_test_exit=0
 rust_test_json=$($RUST test compiler/ 2>/dev/null) || rust_test_exit=$?
@@ -43,19 +57,6 @@ if ! check_empty_output "test/subcommand" "$rust_test_json" "$self_test_json" "$
         pass "test/single-file-module-root"
     else
         fail "test/single-file-module-root" "rust=$rust_single_status self=$self_single_status"
-    fi
-
-    # `vow test` runs in debug mode, so the loop invariants of is_min_heap /
-    # is_max_heap are checked at runtime on an empty heap (a false-at-entry
-    # invariant aborts the run), in both compilers.
-    rust_heap=$($RUST test tests/multi/heap/main.vow 2>/dev/null) || true
-    self_heap=$(run_self test tests/multi/heap/main.vow 2>/dev/null) || true
-    rust_heap_status=$(echo "$rust_heap" | uv run python -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null) || rust_heap_status=""
-    self_heap_status=$(echo "$self_heap" | uv run python -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null) || self_heap_status=""
-    if [ "$rust_heap_status" = "TestsPassed" ] && [ "$self_heap_status" = "TestsPassed" ]; then
-        pass "test/heap-empty-order-invariant"
-    else
-        fail "test/heap-empty-order-invariant" "rust=$rust_heap_status self=$self_heap_status"
     fi
 
     # A nonexistent path and a hung test must both fail closed in both

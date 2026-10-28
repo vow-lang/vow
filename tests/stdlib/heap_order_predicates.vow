@@ -1,0 +1,50 @@
+// Run against the shipped modules: vow test --module-root stdlib/heap <this file>
+// `vow test` builds in debug mode, so the loop invariants of is_min_heap and
+// is_max_heap are checked at runtime, including at loop entry for an empty heap.
+module Main
+use min_heap
+use max_heap
+
+fn check(ok: bool) -> i32 [io] {
+    if ok {
+        0
+    } else {
+        print_str(String::from("check failed\n"));
+        1
+    }
+}
+
+fn two(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v.push(b);
+    v
+}
+
+fn main() -> i32 [io] {
+    let mut bad: i32 = 0;
+
+    bad = bad + check(is_min_heap(min_heap_new()));
+    bad = bad + check(is_max_heap(max_heap_new()));
+    bad = bad + check(is_min_heap(min_heap_push(min_heap_new(), 7)));
+    bad = bad + check(is_max_heap(max_heap_push(max_heap_new(), 7)));
+    bad = bad + check(is_min_heap(min_heap_pop(min_heap_push(min_heap_new(), 7))));
+    bad = bad + check(is_max_heap(max_heap_pop(max_heap_push(max_heap_new(), 7))));
+
+    let mut mn: MinHeap = min_heap_new();
+    let mut mx: MaxHeap = max_heap_new();
+    let mut k: i64 = 0;
+    while k < 9 {
+        mn = min_heap_push(mn, (k * 5) % 7);
+        mx = max_heap_push(mx, (k * 5) % 7);
+        k = k + 1;
+    }
+    bad = bad + check(is_min_heap(mn));
+    bad = bad + check(is_max_heap(mx));
+
+    bad = bad + check(is_min_heap(MinHeap { data: two(1, 5), size: 2 }));
+    bad = bad + check(!is_min_heap(MinHeap { data: two(5, 1), size: 2 }));
+    bad = bad + check(is_max_heap(MaxHeap { data: two(5, 1), size: 2 }));
+    bad = bad + check(!is_max_heap(MaxHeap { data: two(1, 5), size: 2 }));
+    bad
+}
