@@ -1,5 +1,5 @@
 // TEST: skip-reason unsupported-opcode
-// TEST: native-gap "a pointer written through an element of a Vec stores an object address in a field of the element, which the model does not do (ESBMC ends in an error verdict here)" #1663
+// TEST: native-gap "a pointer written through an element of a Vec stores an object address in a field of the element, which the model does not do (ESBMC ends in an error verdict here)" #1908
 // A pointer written through an element (`people[0].tag = ...`) stores an object address in a field of
 // the element, which the model does not do: the function stays `Skipped`.
 module VecPointerElemFieldPointerValueSkipped
