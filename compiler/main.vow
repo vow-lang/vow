@@ -33,6 +33,7 @@ use mutants_main
 use complexity
 use complexity_main
 use cli_flags
+use replay_entry
 use replay_main
 use replay_elems
 use decl_main
