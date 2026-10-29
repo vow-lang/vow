@@ -41,8 +41,8 @@ Replay builds the simplest value for an `unconstrained` position (empty `Vec`/`S
 ## Consequences
 
 Only new keys appear; `values` stays a string map. Positions of type `Option`, enum or `linear struct` carry
-no marker and list nothing yet, and replay does not rebuild the contents behind an element (stage 3 of #1890). The replay harness is a differential test of the markers: a wrong
-`unconstrained` shows as `diverged`.
+no marker and list nothing yet. The replay harness is a differential test of the markers: a wrong
+`unconstrained` shows as `diverged`, which surfaces as the `VerifierBug` diagnostic.
 
 ## Stage 2: the contents behind a read element
 
@@ -58,5 +58,26 @@ keeps `unlisted`. The handoff entries `$read.<i>.len`, `$read.<i>[<j>]` and `$re
 slots; the driver (`vc_cex_join`) copies them under every position of that kind, address and declared type,
 typed from the declaration, and settles the positions the copies add in the next round (4096 entries at
 most). A position at the address of a parameter or of an object of another declared type is not copied to.
-Replay is unchanged: it still skips a `Vec` of collections whose elements carry contents (stage 3 rebuilds
-them).
+Replay is unchanged by this stage: it still skips a `Vec` of collections whose elements carry contents
+(stage 3 rebuilds them).
+
+## Stage 3: replay rebuilds what is listed
+
+Replay (`replay_nested`) builds the object behind every address a position holds, from the rows listed behind
+it: a `Vec` from `<position>.len` and its elements (scalars from `<position>[<j>]`, objects recursively), a
+`String` from its bytes, a struct from `<position>.<slot>`. A position marked `unconstrained` is built as the
+simplest value; `unlisted`, no marker and no contents, a marker next to contents, and a length above 512 are
+`skipped` with a reason that names the position, never `diverged` and never a guess.
+
+The harness declares one object per (type, address), as a `let` of its own, and every position at that address
+names the binding, because Vec, String and struct addresses share one number space in the model and a model
+with `q.p` and `people[0]` at one address has one object. Before it builds anything, a position takes the
+parameter of its own type whose `.addr` is that address. A parameter of the same class and another type at
+the address is a handle the model typed differently than the program: the position is `skipped`, unless it is
+`unconstrained`, when nothing reads through it. A parameter of another class at the number is a coincidence
+and is ignored. A second position at an address that lists contents must list the same ones as the first,
+or the replay is `skipped`.
+
+Not part of this stage: a counterexample whose model needs a type-different alias (`q.p` is the `Node`
+parameter `q` where a `Pair` is declared, `vec_pointer_elem_field_foreign_handle_value_wrong`) stays
+`skipped`; stage 4 would ask the solver to prefer a type-consistent model.
