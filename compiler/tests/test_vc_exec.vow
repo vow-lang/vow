@@ -1,5 +1,7 @@
 module TestVcExec
 
+use vc_query
+use verifier
 use ir
 use vc_term
 use vc_smt
@@ -984,7 +986,7 @@ fn check_step_hypotheses_are_assumed() -> i64 {
     0
 }
 
-// Round policy skips a repeated checked-arithmetic site after its first reachable abort.
+// A reachable abort site is not decided twice.
 fn check_known_site_is_not_decided_again() -> i64 {
     let i: Vec<IrInst> = Vec::new();
     i.push(mk_inst_arg(0, ITY_I64(), 0));

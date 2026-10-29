@@ -1,5 +1,7 @@
 module TestVcWorker
 
+use ir
+use vc_ops
 use verifier
 use vc_clause
 use vc_native

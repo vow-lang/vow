@@ -1,5 +1,7 @@
 module TestVcSession
 
+use vc_query
+use vc_ops
 use ir
 use vc_term
 use vc_smt

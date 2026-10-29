@@ -1,5 +1,6 @@
 module VcNative
 
+use vc_cex
 use ir
 use verifier
 use vc_cache

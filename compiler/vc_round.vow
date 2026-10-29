@@ -13,7 +13,7 @@ use vc_slice
 use vc_cex
 use vc_clause
 use vc_recheck
-use vc_vecmodel
+use vc_nested
 use vc_claim_solver
 
 // Complete claim decision for one verification round. Callers supply a shared
