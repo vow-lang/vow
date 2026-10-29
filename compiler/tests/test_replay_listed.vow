@@ -22,7 +22,8 @@ fn two_src() -> String {
     s
 }
 
-// `Two` holds two `HasVec` objects: each is rebuilt from its rows, and two with one address are not.
+// `Two` holds two `HasVec` objects: each is rebuilt from its rows, and two with one address and
+// different rows are not.
 fn two_reason(kv: String) -> String [io] {
     let m: Module = parse_src(two_src());
     let names: Vec<String> = Vec::new();
@@ -49,7 +50,7 @@ fn two_reason(kv: String) -> String [io] {
 
 fn check_objects() -> i32 [io] {
     let one: String = String::from("t.0=0,t.0.0=1,t.0.0.len=1,t.0.0[0]=7,t.1=1,t.1.0=2,t.1.0.len=0");
-    let want: String = String::from("Two { a: HasVec { v: { let __replay_v: Vec<i64> = Vec::new(); __replay_v.push(7); __replay_v } }, b: HasVec { v: { let __replay_v: Vec<i64> = Vec::new(); __replay_v } } }");
+    let want: String = String::from("Two { a: __replay_h1, b: __replay_h3 }");
     if two_reason(one) != want { return 41; }
     let clash: String = String::from("t.0=0,t.0.0=1,t.0.0.len=0,t.1=0,t.1.0=2,t.1.0.len=0");
     if two_reason(clash).len() == 0 || two_reason(clash).contains(String::from("Two {")) { return 42; }

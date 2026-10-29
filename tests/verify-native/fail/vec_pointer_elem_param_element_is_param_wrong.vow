@@ -1,0 +1,24 @@
+// TEST: counterexample-fn "grow"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value v[0].len 1
+// The element may be the other parameter: a push through that parameter is then visible through it.
+module VecPointerElemParamElementIsParamWrong
+
+fn grow(a: Vec<i64>, v: Vec<Vec<i64>>) -> bool vow {
+  requires: v.len() == 1
+  ensures: result
+} {
+  let before: u64 = v[0].len();
+  a.push(1);
+  v[0].len() == before
+}
+
+fn main() -> i32 [io] {
+  let a: Vec<i64> = Vec::new();
+  let v: Vec<Vec<i64>> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  v.push(b);
+  if grow(a, v) { print_i64(1); }
+  0
+}

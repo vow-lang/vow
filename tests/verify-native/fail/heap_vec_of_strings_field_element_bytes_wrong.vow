@@ -4,9 +4,8 @@
 // TEST: counterexample-value n.0.len 1
 // TEST: counterexample-value n.0[0].len 2
 // TEST: counterexample-value n.0[0][1] 104
-// TEST: replay-skipped the String in a Vec<String> held in a field lists its bytes, and replay does not rebuild a Vec of collections yet (#1890)
 // The failing String has two bytes and the second is 104: the held Vec lists the String, the String lists its bytes.
-module HeapVecOfStringsFieldElementBytesSkipped
+module HeapVecOfStringsFieldElementBytesWrong
 
 struct Names { items: Vec<String>, tag: i64 }
 

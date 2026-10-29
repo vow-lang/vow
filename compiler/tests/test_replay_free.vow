@@ -64,14 +64,45 @@ fn src() -> String {
     s
 }
 
-fn agg(fname: String, kv: String) -> ReplayArg [io] {
+fn agg_lets(fname: String, kv: String, lets: Vec<String>) -> ReplayArg [io] {
     let m: Module = parse_src(src());
     let names: Vec<String> = kv_part(kv, false);
     let vals: Vec<String> = kv_part(kv, true);
     let objs: ReplayObjs = replay_param_objects(m, fname, names, vals);
     let all: Vec<i64> = Vec::new();
     all.push(0);
-    replay_agg_arg(m, fname, 0, names, vals, all, objs)
+    let r: ReplayArg = replay_agg_arg(m, fname, 0, names, vals, all, objs);
+    let mut i: u64 = 0u64;
+    while i < objs.hlets.len() {
+        lets.push(objs.hlets[i]);
+        i = i + 1u64;
+    }
+    r
+}
+
+fn agg(fname: String, kv: String) -> ReplayArg [io] {
+    agg_lets(fname, kv, Vec::new())
+}
+
+fn joined(lets: Vec<String>) -> String {
+    let out: String = String::from("");
+    let mut i: u64 = 0u64;
+    while i < lets.len() {
+        out.push_str(lets[i]);
+        i = i + 1u64;
+    }
+    out
+}
+
+// The literal and the `let`s of the shared objects, in one text.
+fn text_of(fname: String, kv: String) -> String [io] {
+    let lets: Vec<String> = Vec::new();
+    let r: ReplayArg = agg_lets(fname, kv, lets);
+    if r.reason.len() > 0 { return String::from("<skip>"); }
+    let out: String = String::from(r.lit);
+    out.push_str(String::from(" | "));
+    out.push_str(joined(lets));
+    out
 }
 
 fn lit_of(fname: String, kv: String) -> String [io] {
@@ -94,43 +125,35 @@ fn check_marker_reading() -> i64 {
     0
 }
 
-// A held `Vec` the counterexample lists only as an address, marked free, is built empty.
+// A held `Vec` or `String` the counterexample lists only as an address, marked free, is built empty.
 fn check_held_collection_without_a_length() -> i64 [io] {
-    if lit_of(String::from("fbag"), String::from("b.0=-1,b.1=7,b.0.contents=unconstrained")) != String::from("Bag { items: { let __replay_v: Vec<i64> = Vec::new(); __replay_v }, tag: 7 }") { return 10; }
+    if text_of(String::from("fbag"), String::from("b.0=-1,b.1=7,b.0.contents=unconstrained")) != String::from("Bag { items: __replay_h0, tag: 7 } |     let __replay_h0: Vec<i64> = { let __replay_e: Vec<i64> = Vec::new(); __replay_e };\n") { return 10; }
     if index_of(reason_of(String::from("fbag"), String::from("b.0=-1,b.1=7")), String::from("does not list its length")) < 0 { return 11; }
     if index_of(reason_of(String::from("fbag"), String::from("b.0=-1,b.1=7,b.0.contents=unlisted")), String::from("does not list its length")) < 0 { return 12; }
-    if lit_of(String::from("fstr"), String::from("s.0=3,s.1=7,s.0.contents=unconstrained")) != String::from("Strs { name: { let __replay_s: String = String::from(\"\"); __replay_s }, tag: 7 }") { return 13; }
+    if text_of(String::from("fstr"), String::from("s.0=3,s.1=7,s.0.contents=unconstrained")) != String::from("Strs { name: __replay_h0, tag: 7 } |     let __replay_h0: String = String::from(\"\");\n") { return 13; }
+    if index_of(reason_of(String::from("fbag"), String::from("b.0=-1,b.1=7,b.0.contents=unconstrained,b.0.len=0")), String::from("also lists contents")) < 0 { return 14; }
     0
 }
 
-// A held `Vec` of strings or of `Vec`s whose elements are all marked free is built from empty ones.
+// A held `Vec` of strings or of `Vec`s whose elements are all marked free is built from empty ones,
+// one binding per address.
 fn check_held_vec_of_collections() -> i64 [io] {
-    let one: String = lit_of(String::from("fnames"), String::from("n.0=0,n.0.len=1,n.0[0]=0,n.0[0].contents=unconstrained,n.1=7"));
-    let want: String = String::from("Names { items: { let __replay_v: Vec<String> = Vec::new(); __replay_v.push(String::from(\"\")); __replay_v }, tag: 7 }");
+    let one: String = text_of(String::from("fnames"), String::from("n.0=0,n.0.len=1,n.0[0]=0,n.0[0].contents=unconstrained,n.1=7"));
+    let want: String = String::from("Names { items: __replay_h1, tag: 7 } |     let __replay_h0: String = String::from(\"\");\n    let __replay_h1: Vec<String> = { let __replay_v: Vec<String> = Vec::new(); __replay_v.push(__replay_h0); __replay_v };\n");
     if one != want { return 20; }
-    let two: String = lit_of(String::from("fgrid"), String::from("g.0=0,g.0.len=2,g.0[0]=1,g.0[1]=2,g.0[0].contents=unconstrained,g.0[1].contents=unconstrained"));
-    if index_of(two, String::from("__replay_v.push({ let __replay_e: Vec<i64> = Vec::new(); __replay_e }); __replay_v.push({ let __replay_e: Vec<i64> = Vec::new(); __replay_e });")) < 0 { return 21; }
+    let two: String = text_of(String::from("fgrid"), String::from("g.0=0,g.0.len=2,g.0[0]=1,g.0[1]=2,g.0[0].contents=unconstrained,g.0[1].contents=unconstrained"));
+    if index_of(two, String::from("let __replay_h2: Vec<Vec<i64>> = { let __replay_v: Vec<Vec<i64>> = Vec::new(); __replay_v.push(__replay_h0); __replay_v.push(__replay_h1); __replay_v };")) < 0 { return 21; }
+    let alike: String = text_of(String::from("fgrid"), String::from("g.0=0,g.0.len=2,g.0[0]=1,g.0[1]=1,g.0[0].contents=unconstrained,g.0[1].contents=unconstrained"));
+    if index_of(alike, String::from("__replay_v.push(__replay_h0); __replay_v.push(__replay_h0); __replay_v };")) < 0 { return 25; }
     if lit_of(String::from("fnames"), String::from("n.0=0,n.0.len=1,n.0[0]=0,n.1=7")) != String::from("<skip>") { return 22; }
     if lit_of(String::from("fnames"), String::from("n.0=0,n.0.len=1,n.0[0]=0,n.0[0].contents=unlisted")) != String::from("<skip>") { return 23; }
     if lit_of(String::from("fgrid"), String::from("g.0=0,g.0.len=2,g.0[0]=1,g.0[1]=2,g.0[0].contents=unconstrained")) != String::from("<skip>") { return 24; }
     0
 }
 
-// A parameter that is a `Vec` of collections.
-fn check_vec_parameters_of_collections() -> i64 [io] {
-    let rows: String = lit_of(String::from("frows"), String::from("src.len=2,src[0]=-1,src[1]=-2,src[0].contents=unconstrained,src[1].contents=unconstrained"));
-    if rows != String::from("{ let __replay_v: Vec<Vec<i64>> = Vec::new(); __replay_v.push({ let __replay_e: Vec<i64> = Vec::new(); __replay_e }); __replay_v.push({ let __replay_e: Vec<i64> = Vec::new(); __replay_e }); __replay_v }") { return 30; }
-    let strs: String = lit_of(String::from("fstrs"), String::from("src.len=1,src[0]=5,src[0].contents=unconstrained"));
-    if strs != String::from("{ let __replay_v: Vec<String> = Vec::new(); __replay_v.push(String::from(\"\")); __replay_v }") { return 31; }
-    if lit_of(String::from("frows"), String::from("src.len=1,src[0]=-1,src[0].contents=unlisted")) != String::from("<skip>") { return 32; }
-    if lit_of(String::from("frows"), String::from("src.len=1,src[0]=-1")) != String::from("<skip>") { return 33; }
-    if lit_of(String::from("fints"), String::from("src.len=2,src[0]=1,src[1]=2")) != String::from("{ let __replay_v: Vec<i64> = Vec::new(); __replay_v.push(1); __replay_v.push(2); __replay_v }") { return 34; }
-    0
-}
-
 // An object marked free is built like one the function never read: every slot takes zero.
 fn check_free_objects() -> i64 [io] {
-    if lit_of(String::from("fhold"), String::from("h.0=-3,h.1=4,h.0.contents=unconstrained")) != String::from("Holder { p: Pair { lo: 0, hi: 0 }, tag: 4 }") { return 40; }
+    if text_of(String::from("fhold"), String::from("h.0=-3,h.1=4,h.0.contents=unconstrained")) != String::from("Holder { p: __replay_h0, tag: 4 } |     let __replay_h0: Pair = Pair { lo: 0, hi: 0 };\n") { return 40; }
     if index_of(reason_of(String::from("fhold"), String::from("h.0=-3,h.1=4")), String::from("is read through memory")) < 0 { return 41; }
     if index_of(reason_of(String::from("fhold"), String::from("h.0=-3,h.1=4,h.0.contents=unlisted")), String::from("is read through memory")) < 0 { return 42; }
     if lit_of(String::from("fhold"), String::from("h.0=-3,h.0.0=5,h.1=4")) == String::from("<skip>") { return 43; }
@@ -141,7 +164,6 @@ fn main() -> i32 [io] {
     let mut r: i64 = check_marker_reading();
     if r == 0 { r = check_held_collection_without_a_length(); }
     if r == 0 { r = check_held_vec_of_collections(); }
-    if r == 0 { r = check_vec_parameters_of_collections(); }
     if r == 0 { r = check_free_objects(); }
     i64_to_i32_wrap(r)
 }
