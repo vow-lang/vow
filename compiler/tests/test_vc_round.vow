@@ -1,0 +1,172 @@
+module TestVcRound
+
+use ir
+use verifier
+use vc_ops
+use vc_exec
+use vc_query
+use vc_solver
+use vc_cache
+use vc_clause
+use vc_round
+use tests.builders
+
+fn round_args(a: i64, b: i64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    out.push(a);
+    out.push(b);
+    out
+}
+
+// Three distinct hard claims keep a live session useful after the first ask.
+fn round_function(claims: bool) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_I64(), 0));
+    let mut k: i64 = 0;
+    if claims {
+        while k < 3 {
+            let id: i64 = 1 + 3 * k;
+            insts.push(mk_inst_const_i64(id, k));
+            insts.push(mk_inst(id + 1, IOP_GT(), ITY_BOOL(), round_args(0, id)));
+            let arg: Vec<i64> = Vec::new();
+            arg.push(id + 1);
+            insts.push(ir_inst_new(id + 2, IOP_VOW_ENS(), ITY_UNIT(), arg, IDATA_VOW_ID(), 10 + k, 0, String::from("")));
+            k = k + 1;
+        }
+    }
+    insts.push(mk_inst_return(20, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_I64());
+    mk_function(1, String::from("round"), params, ITY_I64(), blocks)
+}
+
+fn decide(f: IrFunction, cache: VcCache, timeout_ms: i64, all: bool, acc: VcClauseAcc, scratch: String) -> VcRound [io, read, write] {
+    let env: VcRoundEnvironment = VcRoundEnvironment { target: f, frames: vc_frames_new(), started: time_micros(), scratch: scratch, cache: cache, slicing: true, full: true };
+    let req: VcRoundRequest = VcRoundRequest { body: f, hyp: Vec::new(), sites: Vec::new(), timeout_ms: timeout_ms, all_claims: all, clauses: acc, cover: Vec::new() };
+    vc_decide_round(env, req)
+}
+
+fn check_child(mode: String, root: String) -> i64 [io, read, write] {
+    let f: IrFunction = round_function(true);
+    let acc: VcClauseAcc = vc_clause_acc_new();
+    let mut cache: VcCache = vc_cache_off();
+    let mut timeout_ms: i64 = 10000;
+    if mode == String::from("zero") {
+        let dir: String = String::from(root);
+        dir.push_str(String::from("/cache"));
+        if fs_mkdir(dir) != 0 { return 1; }
+        cache = VcCache { dir: dir, solver_id: String::from("round-test") };
+        let cs: VcClaims = vc_claims_step(f, vc_frames_new(), false, Vec::new());
+        vc_cache_put(cache, vc_claim_query(cs, 0), vc_answer_plain(VC_ANS_UNSAT(), String::from("")));
+        if vc_cache_peek(cache, vc_claim_query(cs, 0), 1).verdict != VC_ANS_UNSAT() { return 2; }
+        timeout_ms = 0;
+    }
+    if mode == String::from("missing") {
+        // No obligations means no binary lookup, even with an exhausted budget.
+        let empty: VcRound = decide(round_function(false), cache, 0, false, acc, root);
+        if empty.ended || empty.open || empty.halted || empty.soft { return 3; }
+        if empty.result.status != VERIFY_PROVEN() { return 4; }
+    }
+    let all: bool = mode == String::from("all");
+    let r: VcRound = decide(f, cache, timeout_ms, all, acc, root);
+    let result: VerifyResult = r.result;
+    if mode == String::from("missing") {
+        if result.status != VERIFY_NOT_FOUND() { return 5; }
+        if !r.ended || r.open || !r.halted || r.soft || r.frame != -1 { return 6; }
+        return 0;
+    }
+    let log_path: String = String::from(root);
+    log_path.push_str(String::from("/traffic"));
+    let traffic: String = fs_read(log_path);
+    if mode == String::from("zero") {
+        if result.status != VERIFY_TIMEOUT() || !r.ended { return 7; }
+        if traffic.len() != 0 { return 8; }
+    } else if mode == String::from("sat") || all {
+        if result.status != VERIFY_FAILED() || !r.ended || r.open || r.halted { return 9; }
+        if result.vow_id != 10 { return 10; }
+        let values: Vec<String> = result.var_values;
+        let names: Vec<String> = result.var_names;
+        if values.len() == 0 || names[0] != String::from("p0") || values[0] != String::from("7") { return 11; }
+        if all {
+            if traffic != String::from("session\nstandalone\nstandalone\nstandalone\n") { return 12; }
+            if acc.ids.len() != 3 || acc.ids[0] != 10 || acc.ids[2] != 12 { return 13; }
+            if acc.states[0] != VC_CLAUSE_FAILED() || acc.states[2] != VC_CLAUSE_FAILED() { return 14; }
+        } else if traffic != String::from("session\nstandalone\n") { return 15; }
+    } else {
+        if result.status != VERIFY_PROVEN() || r.ended || r.open || r.halted || r.soft { return 16; }
+        if mode == String::from("unknown") {
+            if traffic != String::from("session\nstandalone\nstandalone\nstandalone\n") { return 17; }
+        } else if traffic != String::from("session\n") { return 18; }
+    }
+    0
+}
+
+// The executable seam has two adapters: this deterministic local solver and Bitwuzla.
+// It deliberately supplies the model only in standalone mode.
+fn fake_solver() -> String {
+    String::from("#!/bin/sh\ncase \"$*\" in\n*.smt2)\n  printf 'standalone\\n' >> \"$VOW_ROUND_TEST_ROOT/traffic\"\n  case \"$VOW_ROUND_TEST_MODE\" in\n    sat|all) printf 'sat\\n((p0 (_ bv7 64)))\\n' ;;\n    *) printf 'unsat\\n' ;;\n  esac\n  exit 0 ;;\nesac\nprintf 'session\\n' >> \"$VOW_ROUND_TEST_ROOT/traffic\"\nwhile IFS= read -r line; do\n  case \"$line\" in\n    '(check-sat)')\n      case \"$VOW_ROUND_TEST_MODE\" in\n        sat|all) printf 'sat\\n' ;;\n        unknown) printf 'unknown\\n' ;;\n        *) printf 'unsat\\n' ;;\n      esac ;;\n    '(echo '*)\n      msg=${line#'(echo '}\n      printf '%s\\n' \"${msg%)}\" ;;\n  esac\ndone\n")
+}
+
+fn launch_case(exe: String, mode: String) -> i64 [io, read, write] {
+    let root: String = mktemp_dir(String::from("vow-round-test-"));
+    if root.len() == 0 { return 20; }
+    let bin: String = String::from(root);
+    bin.push_str(String::from("/bitwuzla"));
+    let mut rc: i64 = 0;
+    if mode != String::from("missing") {
+        rc = fs_write(bin, fake_solver());
+        if rc == 0 {
+            let chmod: Vec<String> = Vec::new();
+            chmod.push(String::from("+x"));
+            chmod.push(bin);
+            rc = process_run(String::from("chmod"), chmod);
+        }
+    }
+    if rc == 0 {
+        let env: Vec<String> = Vec::new();
+        let path: String = String::from("PATH=");
+        path.push_str(root);
+        env.push(path);
+        let mode_env: String = String::from("VOW_ROUND_TEST_MODE=");
+        mode_env.push_str(mode);
+        env.push(mode_env);
+        let root_env: String = String::from("VOW_ROUND_TEST_ROOT=");
+        root_env.push_str(root);
+        env.push(root_env);
+        env.push(String::from("VOW_VERIFY_NO_INCREMENTAL=0"));
+        env.push(exe);
+        rc = process_run(String::from("env"), env);
+    }
+    let remove: Vec<String> = Vec::new();
+    remove.push(String::from("-rf"));
+    remove.push(root);
+    let removed: i64 = process_run(String::from("rm"), remove);
+    if rc == 0 { rc = removed; }
+    rc
+}
+
+fn main() -> i32 [io, read, write] {
+    let mode: String = getenv(String::from("VOW_ROUND_TEST_MODE"));
+    if mode.len() > 0 { return i64_to_i32_wrap(check_child(mode, getenv(String::from("VOW_ROUND_TEST_ROOT")))); }
+    let argv: Vec<String> = args();
+    let modes: Vec<String> = Vec::new();
+    modes.push(String::from("missing"));
+    modes.push(String::from("unsat"));
+    modes.push(String::from("sat"));
+    modes.push(String::from("unknown"));
+    modes.push(String::from("all"));
+    modes.push(String::from("zero"));
+    let mut i: u64 = 0;
+    while i < modes.len() {
+        let rc: i64 = launch_case(argv[0], modes[i]);
+        if rc != 0 {
+            print_str(modes[i]);
+            print_i64(rc);
+            return 1;
+        }
+        i = i + 1;
+    }
+    0
+}

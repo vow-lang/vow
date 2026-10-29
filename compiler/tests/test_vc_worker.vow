@@ -3,6 +3,7 @@ module TestVcWorker
 use verifier
 use vc_clause
 use vc_native
+use vc_round
 use vc_cex
 use vc_worker
 use tests.builders

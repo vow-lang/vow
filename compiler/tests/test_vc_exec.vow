@@ -7,7 +7,8 @@ use vc_gate
 use vc_exec
 use vc_ops
 use vc_unroll
-use vc_native
+use vc_round
+use vc_claim_solver
 use vc_session
 use tests.builders
 
@@ -983,8 +984,7 @@ fn check_step_hypotheses_are_assumed() -> i64 {
     0
 }
 
-// Two checked additions of one site (the copies of an inlined operator): once the first is known
-// to abort, the second has nothing left to decide.
+// Round policy skips a repeated checked-arithmetic site after its first reachable abort.
 fn check_known_site_is_not_decided_again() -> i64 {
     let i: Vec<IrInst> = Vec::new();
     i.push(mk_inst_arg(0, ITY_I64(), 0));
