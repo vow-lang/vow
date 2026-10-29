@@ -6,7 +6,7 @@
 
 An agent-first programming language with formal verification.
 
-Vow programs carry machine-checked contracts (preconditions, postconditions, loop invariants) that are statically verified by [ESBMC](https://esbmc.org/) bounded model checking. The compiler emits structured JSON output designed for AI agents to consume, enabling a CEGIS (counterexample-guided inductive synthesis) workflow: write code → compile → verify → read counterexamples → fix → iterate.
+Vow programs carry machine-checked contracts (preconditions, postconditions, loop invariants) that are statically verified by a symbolic checker over SMT ([Bitwuzla](https://bitwuzla.github.io/)), with [ESBMC](https://esbmc.org/) bounded model checking still selectable via `--backend esbmc`. The compiler emits structured JSON output designed for AI agents to consume, enabling a CEGIS (counterexample-guided inductive synthesis) workflow: write code → compile → verify → read counterexamples → fix → iterate.
 
 For project design details, see [docs/vow_design.md](docs/vow_design.md).
 
@@ -30,7 +30,7 @@ build/vowc build --mode debug examples/divide.vow  # runtime vow checks
 
 ### Verification prerequisites
 
-The native verifier (epic #1398) shells out to `bitwuzla`, which must be on `PATH` at the pinned release alongside ESBMC. Today's `vowc verify` still runs on ESBMC alone, but CI already installs both. The release is pinned, with per-platform SHA-256 checksums, in `.github/actions/install-bitwuzla/action.yml`; CI installs it through that action. Prebuilt archives exist for Linux x86_64, Linux arm64 and macOS arm64 only. The binary links GMP and MPFR dynamically: on macOS run `brew install gmp mpfr` (it uses Homebrew's copies), and on Debian or Ubuntu run `apt install libgmp10 libmpfr6` if they are missing. Check the install with `bitwuzla --version`.
+`vowc build`, `verify`, `contracts --verify` and `test --verify` verify with the native verifier (epic #1398), which shells out to `bitwuzla`; it must be on `PATH` at the pinned release. `--backend esbmc` selects ESBMC instead (kept for two releases, issue #1863), which then must be on `PATH`; the Rust bootstrap compiler `vow` always uses ESBMC, so CI installs both. The release is pinned, with per-platform SHA-256 checksums, in `.github/actions/install-bitwuzla/action.yml`; CI installs it through that action. Prebuilt archives exist for Linux x86_64, Linux arm64 and macOS arm64 only. The binary links GMP and MPFR dynamically: on macOS run `brew install gmp mpfr` (it uses Homebrew's copies), and on Debian or Ubuntu run `apt install libgmp10 libmpfr6` if they are missing. Check the install with `bitwuzla --version`.
 
 ## Development checks
 

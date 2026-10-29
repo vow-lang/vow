@@ -98,7 +98,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io, read, write] {
     // The ESBMC loop below is serial and ignores it; the native pool runs this
     // many workers at a time.
     let cjobs: i64 = resolve_verify_jobs(argv);
-    let native: bool = get_flag_arg(argv, "--backend") == "native";
+    let native: bool = backend_is_native(argv);
 
     // Collect per-contract entries into parallel arrays
     let e_vow_ids: Vec<i64> = Vec::new();

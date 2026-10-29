@@ -42,8 +42,8 @@ for fixture in tests/verify-fail/skip_after_failure.vow stdlib/heap/main.vow tes
         fi
     done
 
-    self_base_json=$(run_self verify --no-cache --verify-jobs 1 "$fixture" 2>/dev/null) || true
-    self_jobs4_json=$(run_self verify --no-cache --verify-jobs 4 "$fixture" 2>/dev/null) || true
+    self_base_json=$(run_self verify --backend esbmc --no-cache --verify-jobs 1 "$fixture" 2>/dev/null) || true
+    self_jobs4_json=$(run_self verify --backend esbmc --no-cache --verify-jobs 4 "$fixture" 2>/dev/null) || true
     if [ "$(skip_set_summary "$self_base_json")" != "$base" ]; then
         errors+=("self --verify-jobs 1 differs from rust")
     fi
@@ -137,7 +137,7 @@ for compiler in rust self; do
     if [ "$compiler" = rust ]; then
         j=$($RUST verify "$arith_dir/wrapping.vow" 2>/dev/null) || true
     else
-        j=$(run_self verify "$arith_dir/wrapping.vow" 2>/dev/null) || true
+        j=$(run_self verify --backend esbmc "$arith_dir/wrapping.vow" 2>/dev/null) || true
     fi
     [ "$(arith_status "$j")" = "VerifyFailed" ] || errors+=("wrapping '-' should fail, got $(arith_status "$j")")
 
@@ -147,7 +147,7 @@ for compiler in rust self; do
     if [ "$compiler" = rust ]; then
         j=$($RUST verify "$arith_dir/checked.vow" 2>/dev/null) || true
     else
-        j=$(run_self verify "$arith_dir/checked.vow" 2>/dev/null) || true
+        j=$(run_self verify --backend esbmc "$arith_dir/checked.vow" 2>/dev/null) || true
     fi
     [ "$(arith_status "$j")" = "Verified" ] || errors+=("checked '-!' should verify, got $(arith_status "$j")")
     [ "$(diag_query arith-warns "$j" last_index)" = "1" ] || errors+=("checked '-!' should warn once, got $(diag_query arith-warns "$j" last_index)")
@@ -158,7 +158,7 @@ for compiler in rust self; do
     if [ "$compiler" = rust ]; then
         j=$($RUST verify tests/verify/checked_arith_abort_modelled.vow 2>/dev/null) || true
     else
-        j=$(run_self verify tests/verify/checked_arith_abort_modelled.vow 2>/dev/null) || true
+        j=$(run_self verify --backend esbmc tests/verify/checked_arith_abort_modelled.vow 2>/dev/null) || true
     fi
     [ "$(arith_status "$j")" = "Verified" ] || errors+=("fixture should verify, got $(arith_status "$j")")
     for fn in twice scale doomed; do
@@ -174,7 +174,7 @@ for compiler in rust self; do
     if [ "$compiler" = rust ]; then
         j=$($RUST verify tests/verify/checked_arith_callee_attribution.vow 2>/dev/null) || true
     else
-        j=$(run_self verify tests/verify/checked_arith_callee_attribution.vow 2>/dev/null) || true
+        j=$(run_self verify --backend esbmc tests/verify/checked_arith_callee_attribution.vow 2>/dev/null) || true
     fi
     [ "$(arith_status "$j")" = "Verified" ] || errors+=("attribution fixture status $(arith_status "$j")")
     [ "$(diag_query arith-warns "$j" helper)" = "1" ] || errors+=("site must be attributed to helper exactly once, got $(diag_query arith-warns "$j" helper)")
@@ -210,7 +210,7 @@ for cmd in verify build; do
         if [ "$compiler" = rust ]; then
             j=$($RUST "$cmd" --no-cache "$fixture" ${extra[@]+"${extra[@]}"} 2>/dev/null) || true
         else
-            j=$(run_self "$cmd" --no-cache "$fixture" ${extra[@]+"${extra[@]}"} 2>/dev/null) || true
+            j=$(run_self "$cmd" --backend esbmc --no-cache "$fixture" ${extra[@]+"${extra[@]}"} 2>/dev/null) || true
         fi
         errors=()
         if [ "$cmd" = build ] && [ "$(arith_status "$j")" != "Verified" ]; then
@@ -258,7 +258,7 @@ for compiler in rust self; do
     if [ "$compiler" = rust ]; then
         j=$($RUST verify --no-cache compiler/parser.vow 2>/dev/null) || true
     else
-        j=$(run_self verify --no-cache compiler/parser.vow 2>/dev/null) || true
+        j=$(run_self verify --backend esbmc --no-cache compiler/parser.vow 2>/dev/null) || true
     fi
     errors=()
     [ "$(arith_status "$j")" = "Verified" ] || errors+=("compiler/parser.vow should verify, got $(arith_status "$j")")

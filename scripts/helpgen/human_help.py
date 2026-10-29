@@ -163,14 +163,14 @@ def build_help_human(data: dict) -> str:
         native = vdefaults.get("native", {})
         lines.append("VERIFICATION DEFAULTS")
         lines.append(
-            f"  ESBMC backend (default) : {vdefaults.get('strategy', 'incremental-bmc')} (incremental BMC up to --max-k-step; forward-condition completeness, no k-induction step)"
+            f"  ESBMC backend (opt-out) : {vdefaults.get('strategy', 'incremental-bmc')} (incremental BMC up to --max-k-step; forward-condition completeness, no k-induction step)"
         )
         lines.append(
-            f"  Incremental BMC         : {vdefaults.get('max_k_step', DEFAULT_MAX_K_STEP)} max iterations (--max-k-step)"
+            f"  Incremental BMC         : {vdefaults.get('max_k_step', DEFAULT_MAX_K_STEP)} max iterations (--max-k-step, with --backend esbmc)"
         )
         if native:
             lines.append(
-                f"  Native backend          : {native.get('strategy', '')} (--backend native; no bound flag, {', '.join(native.get('tuning_flags', []))} is the only knob)"
+                f"  Native backend (default): {native.get('strategy', '')} (no bound flag, {', '.join(native.get('tuning_flags', []))} is the only knob)"
             )
 
     return "\n".join(lines)

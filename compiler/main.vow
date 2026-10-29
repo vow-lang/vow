@@ -58,35 +58,42 @@ use main_contracts
 use help_text_gen
 use skill_text_gen
 
-// Usage error for a misplaced or malformed `--backend`, else "". Only `verify`,
-// `contracts --verify` and `test --verify` have a native backend; accepting the
-// flag elsewhere would run ESBMC silently.
+// Usage error for a misplaced or malformed `--backend`, else "". The default
+// backend is native; `--backend esbmc` opts out and is accepted anywhere. Only
+// `build`, `verify`, `contracts --verify` and `test --verify` verify, so an
+// explicit `--backend native` elsewhere would be silently ignored. The ESBMC-only
+// flags are a usage error unless `--backend esbmc` is given.
 fn backend_flag_error(argv: Vec<String>, cmd: i64) -> String {
-    if !has_flag(argv, "--backend") {
-        return String::from("");
-    }
+    let explicit: bool = has_flag(argv, "--backend");
     let backend: String = get_flag_arg(argv, "--backend");
-    if backend != "esbmc" && backend != "native" {
+    if explicit && backend != "esbmc" && backend != "native" {
         return String::from("error: --backend must be `esbmc` or `native`");
     }
     if backend == "esbmc" {
         return String::from("");
     }
-    let verifying: bool = cmd == CMD_VERIFY() || ((cmd == CMD_CONTRACTS() || cmd == CMD_TEST()) && has_flag(argv, "--verify"));
-    if !verifying {
+    let builds: bool = cmd == CMD_BUILD() || cmd == CMD_NONE();
+    let verifying: bool = cmd == CMD_VERIFY() || (builds && !has_flag(argv, "--no-verify")) || ((cmd == CMD_CONTRACTS() || cmd == CMD_TEST()) && has_flag(argv, "--verify"));
+    if explicit && !verifying {
         if cmd == CMD_CONTRACTS() || cmd == CMD_TEST() {
             return String::from("error: --backend native requires --verify");
         }
-        return String::from("error: --backend native is only supported by `vowc verify`, `vowc contracts --verify` and `vowc test --verify`");
+        if builds {
+            return String::from("error: --backend native conflicts with --no-verify");
+        }
+        return String::from("error: --backend native is only supported by `vowc build`, `vowc verify`, `vowc contracts --verify` and `vowc test --verify`");
+    }
+    if !verifying {
+        return String::from("");
     }
     if has_flag(argv, "--max-k-step") {
-        return String::from("error: --max-k-step is not supported with --backend native");
+        return String::from("error: --max-k-step is ESBMC-only; pass --backend esbmc");
     }
     if has_flag(argv, "--solver") {
-        return String::from("error: --solver is not supported with --backend native");
+        return String::from("error: --solver is ESBMC-only; pass --backend esbmc");
     }
     if has_flag(argv, "--encoding") {
-        return String::from("error: --encoding is not supported with --backend native");
+        return String::from("error: --encoding is ESBMC-only; pass --backend esbmc");
     }
     String::from("")
 }

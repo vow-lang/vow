@@ -12,7 +12,7 @@ for vow_file in examples/*.vow; do
 
     rust_json="" self_json="" rust_exit=0 self_exit=0
     rust_json=$($RUST verify "$vow_file" 2>/dev/null) || rust_exit=$?
-    self_json=$(run_self verify "$vow_file" 2>/dev/null) || self_exit=$?
+    self_json=$(run_self verify --backend esbmc "$vow_file" 2>/dev/null) || self_exit=$?
 
     if check_empty_output "${name}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
         continue
@@ -82,7 +82,7 @@ rust_json="" self_json="" rust_exit=0 self_exit=0
 rust_json=$(PATH="$fake_esbmc_dir:$PATH" VOW_ESBMC_CAPTURE_DIR="$rust_capture" \
     "$RUST" verify --no-cache --verify-jobs 1 "$u64_preamble_fixture" 2>/dev/null) || rust_exit=$?
 self_json=$(PATH="$fake_esbmc_dir:$PATH" VOW_ESBMC_CAPTURE_DIR="$self_capture" \
-    run_self verify --no-cache --verify-jobs 1 "$u64_preamble_fixture" 2>/dev/null) || self_exit=$?
+    run_self verify --backend esbmc --no-cache --verify-jobs 1 "$u64_preamble_fixture" 2>/dev/null) || self_exit=$?
 
 if [ -z "$rust_json" ]; then
     fail "verifier-preamble/rust" "empty output (exit=$rust_exit)"
@@ -110,7 +110,7 @@ fi
 
 for stage_compiler in rust self; do
     if [ "$stage_compiler" = rust ]; then stage_bin="$RUST"; else stage_bin="$SELF"; fi
-    if VOWC_BIN="$stage_bin" bash tests/build-staging/tests.sh >"$TMPDIR/build-staging-$stage_compiler.log" 2>&1; then
+    if VOWC_BIN="$stage_bin" VOWC_KIND="$stage_compiler" bash tests/build-staging/tests.sh >"$TMPDIR/build-staging-$stage_compiler.log" 2>&1; then
         pass "build-staging/$stage_compiler"
     else
         fail "build-staging/$stage_compiler" "$(tail -10 "$TMPDIR/build-staging-$stage_compiler.log")"

@@ -5,12 +5,12 @@ module MainVerifyRun
 // functions from a shared queue, against the module this process lowered (see
 // `vc_pool`). Results are reported in IR order, so the output does not depend on
 // which worker finishes first, and reporting stops at the first function that is
-// not proven, as the sequential driver did.
-fn run_verify_native(argv: Vec<String>, fr: LoweredFrontend, path: String, tctx: TraceCtx) -> i32 [io, read, write] {
+// not proven, as the sequential driver did. `building` is set by `build`, which has
+// already linked `out`; the result reported is then the build result.
+fn run_verify_native(argv: Vec<String>, fr: LoweredFrontend, path: String, tctx: TraceCtx, building: bool, out: String) -> i32 [io, read, write] {
     let checked: CheckedFrontend = fr.checked;
     let dctx: DiagCtx = checked.dctx;
     let ir_mod: IrModule = fr.ir_mod;
-    emit_ir_warnings(ir_mod, dctx);
     let fns: Vec<IrFunction> = ir_mod.functions;
     let ces: Vec<VerifyCE> = Vec::new();
     let soft_meta: Vec<String> = Vec::new();
@@ -73,6 +73,9 @@ fn run_verify_native(argv: Vec<String>, fr: LoweredFrontend, path: String, tctx:
         else if any_skipped { String::from("Skipped") }
         else { String::from("Verified") }
     };
+    if building {
+        return build_finish(argv, fr, fns, path, out, dctx, tctx, status_str, ces, soft_meta, !all_proven || any_skipped);
+    }
     verify_finish(argv, fr.merged, fns, path, replay_main_start(argv, fr, path), dctx, tctx, status_str, ces, soft_meta, !all_proven || any_skipped)
 }
 
@@ -197,8 +200,9 @@ fn run_verify(argv: Vec<String>) -> i32 [io, read, write] {
         diag_emit_verify_json(String::from("CompileFailed"), dctx, Vec::new());
         return 1;
     }
-    if get_flag_arg(argv, "--backend") == "native" {
-        return run_verify_native(argv, fr, path, tctx);
+    if backend_is_native(argv) {
+        emit_ir_warnings(fr.ir_mod, dctx);
+        return run_verify_native(argv, fr, path, tctx, false, String::from(""));
     }
     let max_k_step_str: String = get_flag_arg(argv, "--max-k-step");
     let max_k_step: String = {
@@ -249,7 +253,7 @@ fn run_verify(argv: Vec<String>) -> i32 [io, read, write] {
 // Shared tail of `verify`: counterexample selection, replay, trace output and
 // the JSON result. Returns the process exit code.
 fn verify_finish(argv: Vec<String>, m: Module, fns: Vec<IrFunction>, path: String, main_start: i64, dctx: DiagCtx, tctx: TraceCtx, status_str: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, failed: bool) -> i32 [io, read, write] {
-    let native: bool = get_flag_arg(argv, "--backend") == "native";
+    let native: bool = backend_is_native(argv);
     let mut ces_final: Vec<VerifyCE> = Vec::new();
     let ce_wins: bool = vf_prefers_counterexample(ces, soft_meta, fns);
     if ce_wins {

@@ -139,6 +139,35 @@ fn build_codegen_phase(ir_mod: IrModule, out: String, mode: i64, trace: i64, pat
     0
 }
 
+// Shared tail of `build`: counterexample selection, replay, trace output and the
+// JSON result. Returns the process exit code.
+fn build_finish(argv: Vec<String>, fr: LoweredFrontend, fns: Vec<IrFunction>, path: String, out: String, dctx: DiagCtx, tctx: TraceCtx, status_str: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, failed: bool) -> i32 [io, read, write] {
+    let mut ces_final: Vec<VerifyCE> = Vec::new();
+    let ce_wins: bool = vf_prefers_counterexample(ces, soft_meta, fns);
+    if ce_wins {
+        ces_final = ces;
+    }
+    if has_flag(argv, "--replay-cex") && ces_final.len() > 0 {
+        ces_final = replay_all(ces_final, fr.merged, fns, path, replay_main_start(argv, fr, path), argv[0], backend_is_native(argv));
+    }
+    let vstatus: String = { if ce_wins { String::from("") } else if soft_meta.len() >= 1 { soft_meta[0] } else { String::from("") } };
+    let vmsg: String = { if ce_wins { String::from("") } else if soft_meta.len() >= 2 { soft_meta[1] } else { String::from("") } };
+    let mut vf_func: String = String::from("");
+    let mut vf_ce: String = String::from("");
+    if status_str == String::from("VerifyFailed") {
+        let legacy: Vec<String> = vf_legacy_fields(ces_final, soft_meta, fns);
+        vf_func = legacy[0];
+        vf_ce = legacy[1];
+    }
+    trace_write(tctx);
+    vf_add_ce_diagnostics(dctx, ces_final);
+    diag_emit_build_verify_json_full(status_str, out, dctx, ces_final, vstatus, vmsg, vf_func, vf_ce);
+    if failed {
+        return 1;
+    }
+    0
+}
+
 fn run_build(argv: Vec<String>) -> i32 [io, read, write] {
     run_build_cmd(argv, true)
 }
@@ -192,11 +221,12 @@ fn run_build_cmd(argv: Vec<String>, sub: bool) -> i32 [io, read, write] {
     }
     emit_ir_warnings(ir_mod, dctx);
     let do_verify: bool = !has_flag(argv, "--no-verify");
+    let native: bool = backend_is_native(argv);
     let esbmc_bin: String = {
-        if do_verify { esbmc_path() }
+        if do_verify && !native { esbmc_path() }
         else { String::from("") }
     };
-    if do_verify {
+    if do_verify && !native {
         if !esbmc_exists(esbmc_bin) {
             diag_eprintln_best_effort(String::from("error: ESBMC not found; install ESBMC or use --no-verify to skip verification"));
             diag_emit_build_verify_json(String::from("VerifyFailed"), String::from(""), dctx, Vec::new());
@@ -247,6 +277,9 @@ fn run_build_cmd(argv: Vec<String>, sub: bool) -> i32 [io, read, write] {
         diag_emit_build_verify_json(String::from("Unverified"), out, dctx, Vec::new());
         return 0;
     }
+    if native {
+        return run_verify_native(argv, fr, path, tctx, true, out);
+    }
     // Verification starts only after codegen and linking so ESBMC children
     // never overlap the Cranelift working set; the pool bounds what remains (#179).
     let verify_origin: i64 = trace_now(tctx);
@@ -264,28 +297,5 @@ fn run_build_cmd(argv: Vec<String>, sub: bool) -> i32 [io, read, write] {
         else if any_skipped == 1 { String::from("Skipped") }
         else { String::from("Verified") }
     };
-    let mut ces_final: Vec<VerifyCE> = Vec::new();
-    let ce_wins: bool = vf_prefers_counterexample(ces, soft_meta, fns);
-    if ce_wins {
-        ces_final = ces;
-    }
-    if has_flag(argv, "--replay-cex") && ces_final.len() > 0 {
-        ces_final = replay_all(ces_final, fr.merged, fns, path, replay_main_start(argv, fr, path), argv[0], false);
-    }
-    let vstatus: String = { if ce_wins { String::from("") } else if soft_meta.len() >= 1 { soft_meta[0] } else { String::from("") } };
-    let vmsg: String = { if ce_wins { String::from("") } else if soft_meta.len() >= 2 { soft_meta[1] } else { String::from("") } };
-    let mut vf_func: String = String::from("");
-    let mut vf_ce: String = String::from("");
-    if status_str == String::from("VerifyFailed") {
-        let legacy: Vec<String> = vf_legacy_fields(ces_final, soft_meta, fns);
-        vf_func = legacy[0];
-        vf_ce = legacy[1];
-    }
-    trace_write(tctx);
-    vf_add_ce_diagnostics(dctx, ces_final);
-    diag_emit_build_verify_json_full(status_str, out, dctx, ces_final, vstatus, vmsg, vf_func, vf_ce);
-    if all_proven == 0 || any_skipped == 1 {
-        return 1;
-    }
-    0
+    build_finish(argv, fr, fns, path, out, dctx, tctx, status_str, ces, soft_meta, all_proven == 0 || any_skipped == 1)
 }

@@ -1,7 +1,7 @@
 
 #### Native backend: `contracts` and `test`
 
-`vowc contracts --verify --backend native` and `vowc test --verify --backend native` (issue #1427) run the same native checker and worker pool as `verify`, with the status vocabulary, JSON schemas and exit codes of the ESBMC path unchanged. Self-hosted `vowc` only; the default stays `esbmc`.
+`vowc contracts --verify --backend native` and `vowc test --verify --backend native` (issue #1427) run the same native checker and worker pool as `verify`, with the status vocabulary, JSON schemas and exit codes of the ESBMC path unchanged. Self-hosted `vowc` only; native is the default and `--backend esbmc` opts out.
 
 - **Selection.** Both commands check the functions that carry a `vow` block, exactly as the ESBMC path does (`verify` also checks callers of contracted functions, these do not). A function outside the native subset is `skipped` in `contracts` (a status only, no diagnostic, as for ESBMC) and makes the file `contract_skipped` in `test` (with one `VerificationSkipped` diagnostic of severity `error` in the entry's `diagnostics`, fixed message `contract verification skipped: function not modelable`, no reason code), and needs no solver.
 - **No early stop.** `verify` reports up to the first function that is not proven; a `contracts` report or a `test` verdict spans functions, so a failed function never cancels a later one. Every function is verified at most `--verify-jobs` at a time, and the result does not depend on which worker finishes first.
@@ -23,15 +23,15 @@ vow contracts [OPTIONS] <source.vow>
 
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
-| `--verify`        | (off)       | Run verification (the ESBMC backend by default, or the native backend with `--backend native`) and report per-contract status |
+| `--verify`        | (off)       | Run verification (the native backend by default, or ESBMC with `--backend esbmc`) and report per-contract status |
 | `--no-cache`      | (off)       | Disable verification result caching        |
-| `--max-k-step <N>` | `50`       | ESBMC backend only; a usage error under `--backend native`. ESBMC incremental BMC max iterations (with --verify) |
-| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC SMT solver (with --verify) |
-| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC encoding mode (with --verify); ir requires z3 |
+| `--max-k-step <N>` | `50`       | ESBMC backend only; a usage error unless `--backend esbmc` is given. ESBMC incremental BMC max iterations (with --verify) |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC backend only; a usage error unless `--backend esbmc` is given. ESBMC SMT solver (with --verify) |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC backend only; a usage error unless `--backend esbmc` is given. ESBMC encoding mode (with --verify); ir requires z3 |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent `verify-worker` subprocesses under `--backend native`; a no-op under ESBMC (the ESBMC loop is serial) |
-| `--backend <esbmc\|native>` | `esbmc` | Verification backend; `native` requires `--verify` (see "Native backend: `contracts` and `test`") |
+| `--backend <esbmc\|native>` | `native` | Verification backend; an explicit `--backend native` requires `--verify` (see "Native backend: `contracts` and `test`") |
 | `--timeout <N>` | `300` (native) | Seconds per function (and per probe) under `--backend native`; ESBMC's own timeout otherwise |
 
 **Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven — i.e. any `failed`, `timeout`, `unknown`, `error`, `skipped`, or `vacuous` — and **0** only when every contract is `proven` (or `proven-ir`, an ESBMC-only status no compiler produces today). Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)
 
-When `--verify` is requested but the verifier is not installed (ESBMC, or `bitwuzla` under `--backend native`), the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` (under native, only for functions that need the solver) and exits with code 1 (fail-closed). Install the verifier, or omit `--verify`, to obtain proven/failed/unknown statuses.
+When `--verify` is requested but the verifier is not installed (`bitwuzla` by default, ESBMC under `--backend esbmc`), the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` (under native, only for functions that need the solver) and exits with code 1 (fail-closed). Install the verifier, or omit `--verify`, to obtain proven/failed/unknown statuses.

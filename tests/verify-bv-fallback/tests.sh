@@ -73,7 +73,7 @@ run_case() {
     local log="$TMP_ROOT/$name.log" err="$TMP_ROOT/$name.stderr" out="$TMP_ROOT/$name.json"
     : > "$log"
     PATH="$FAKE_BIN:$PATH" VOW_FAKE_LOG="$log" VOW_FAKE_BV="$bv" VOW_FAKE_IR="$ir" \
-        "$VOWC_BIN" verify --no-cache --verify-jobs 1 "$@" "$FIXTURE" >"$out" 2>"$err" || true
+        "$VOWC_BIN" verify --backend esbmc --no-cache --verify-jobs 1 "$@" "$FIXTURE" >"$out" 2>"$err" || true
 
     local calls
     calls=$(wc -l < "$log" | tr -d ' ')

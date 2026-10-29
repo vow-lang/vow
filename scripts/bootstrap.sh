@@ -168,7 +168,7 @@ fi
 # instead (#180).
 stage1_build_flags="--verify-jobs 1"
 self_build_flags="--no-verify"
-verify_flags="--verify-jobs 1"
+verify_flags="--backend esbmc --verify-jobs 1"
 if [ "$NO_VERIFY" = true ]; then
     stage1_build_flags="--no-verify"
 fi

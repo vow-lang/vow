@@ -66,7 +66,7 @@ chmod +x "$FAKE_BIN/sh" "$FAKE_BIN/esbmc"
 verify_json=""
 verify_exit=0
 verify_json=$(PATH="$FAKE_BIN:$PATH" VOW_ESBMC_LOOKUP_COUNT="$LOOKUP_COUNT" \
-    run_vowc verify --no-cache --verify-jobs 1 "$FIXTURE" 2>"$TMP_ROOT/verify.stderr") || verify_exit=$?
+    run_vowc verify --backend esbmc --no-cache --verify-jobs 1 "$FIXTURE" 2>"$TMP_ROOT/verify.stderr") || verify_exit=$?
 
 if [ "$verify_exit" -ne 0 ]; then
     printf 'self-hosted verify failed with exit %s\n' "$verify_exit" >&2

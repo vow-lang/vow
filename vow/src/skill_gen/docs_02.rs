@@ -25,12 +25,12 @@ The bare `vow <source.vow>` form is exactly `vow build`: it verifies by default,
 | `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |
 | `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
 | `--no-cache`    | (off)       | Disable verification result caching, and (for `--no-verify` builds) the compile-object cache. See "Compile-object cache behavior" below |
-| `--max-k-step <N>` | `50`     | ESBMC backend only; a usage error under `--backend native`. ESBMC incremental BMC max iterations |
-| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC SMT solver; auto selects per-function via heuristic |
-| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
+| `--max-k-step <N>` | `50`     | ESBMC backend only; a usage error unless `--backend esbmc` is given. ESBMC incremental BMC max iterations |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC backend only; a usage error unless `--backend esbmc` is given. ESBMC SMT solver; auto selects per-function via heuristic |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC backend only; a usage error unless `--backend esbmc` is given. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
 | `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | Per-function verification timeout in seconds; the only resource knob of the native backend, where the default is a fixed `300`. ESBMC backend: under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is an immediate watchdog kill under ESBMC and a zero budget (no solver is spawned; statically decided claims still resolve) under `--backend native` |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent verification jobs (ESBMC processes, or `verify-worker` subprocesses under `--backend native`) |
-| `--backend <esbmc\|native>` | `esbmc` | Verification backend. `native` is accepted only by `vowc verify`, `contracts --verify` and `test --verify`; on `build` and the bare form it is a usage error (exit 1) that points at `vowc verify`, and `esbmc` is accepted silently |
+| `--backend <esbmc\|native>` | `native` | Verification backend of the self-hosted `vowc`; the Rust `vow` has no `--backend` and always verifies with ESBMC. `native` (the default) is the symbolic checker with Bitwuzla, run in `verify-worker` subprocesses (epic #1398, see "Native backend" below); `esbmc` is the opt-out and is accepted by every command. An explicit `--backend native` together with `--no-verify` is a usage error (exit 1), as are `--max-k-step`, `--solver` and `--encoding` unless `--backend esbmc` is given. Any value other than `esbmc` or `native` is a usage error |
 | `--replay-cex`    | (off)       | Differential test the verifier model against runtime semantics (same as `vow verify --replay-cex`; see below) |
 | `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this compilation to `<path>` (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link and, under the ESBMC backend, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from `--mode profile`, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. |
 
@@ -49,18 +49,18 @@ vow verify [OPTIONS] <source.vow>
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
 | `--no-cache`      | (off)       | Disable verification result caching; under `--backend native` it disables the native result cache of `verify` (see "Result cache" below) |
-| `--max-k-step <N>` | `50`       | ESBMC backend only; a usage error under `--backend native`. ESBMC incremental BMC max iterations |
-| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC SMT solver; auto selects per-function via heuristic |
-| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
+| `--max-k-step <N>` | `50`       | ESBMC backend only; a usage error unless `--backend esbmc` is given. ESBMC incremental BMC max iterations |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC backend only; a usage error unless `--backend esbmc` is given. ESBMC SMT solver; auto selects per-function via heuristic |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC backend only; a usage error unless `--backend esbmc` is given. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
 | `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | Per-function verification timeout in seconds; the only resource knob of the native backend, where the default is a fixed `300`. ESBMC backend: under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is an immediate watchdog kill under ESBMC and a zero budget (no solver is spawned; statically decided claims still resolve) under `--backend native` |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent verification jobs (ESBMC processes, or `verify-worker` subprocesses under `--backend native`) |
-| `--backend <esbmc\|native>` | `esbmc` | Verification backend. `native` is the symbolic checker with Bitwuzla, run in `verify-worker` subprocesses (epic #1398); self-hosted `vowc` only, see "Native backend" below. Accepted by `verify`, `contracts --verify` and `test --verify`; `contracts` and `test` without `--verify`, `build` and the bare `vowc <file>` form (identical to `build`) reject `--backend native` with a usage error (exit 1) instead of silently running ESBMC or reporting `not_verified` as if the native backend had run. Any value other than `esbmc` or `native` is a usage error |
+| `--backend <esbmc\|native>` | `native` | Verification backend of the self-hosted `vowc`; the Rust `vow` has no `--backend` and always verifies with ESBMC. `native` (the default) is the symbolic checker with Bitwuzla, run in `verify-worker` subprocesses (epic #1398), see "Native backend" below; `esbmc` is the opt-out, kept for two releases after the flip (issue #1863), and is accepted by every command. `contracts` and `test` without `--verify` reject an explicit `--backend native` with a usage error (exit 1) instead of silently ignoring it; the same holds for `build` with `--no-verify`. `--max-k-step`, `--solver` and `--encoding` are usage errors unless `--backend esbmc` is given. Any value other than `esbmc` or `native` is a usage error |
 | `--replay-cex`    | (off)       | Differential test of the verifier model against runtime semantics. After the verifier reports a counterexample, build a `--mode debug` harness that calls the failing function with the counterexample's concrete inputs and check that the runtime `VowViolation` agrees (same `vow_id` and blame). Adds a `replay` field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by `vow build`. |
 | `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this verification run to `<path>` (load directly at ui.perfetto.dev). Captures frontend phase spans and, under the ESBMC backend, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process; under `--backend native` it records the frontend phase spans (`module-load`, `parse`, `typecheck`, `lower`, ...) and one `verification` span (no per-claim worker or solver spans, no per-worker RSS yet). Accepted only by `build` and `verify`. Pure side artifact. |
 
 #### Native backend (`vowc verify --backend native`; also `contracts --verify` and `test --verify`, see "Native backend: `contracts` and `test`" below)
 
-Opt-in; the default stays `esbmc`. Implemented only by the self-hosted `vowc`: the Rust `vow` does not accept `--backend` until verification is delegated to a pinned seed `vowc`. Scope (issues #1408, #1411):
+The default backend of the self-hosted `vowc` (`vowc build`, `verify`, `contracts --verify` and `test --verify`); `--backend esbmc` selects ESBMC instead, which is kept for two releases after the flip (issue #1863). Implemented only by the self-hosted `vowc`: the Rust `vow` does not accept `--backend` and always verifies with ESBMC until verification is delegated to a pinned seed `vowc`. Scope (issues #1408, #1411):
 
 - **Subset.** A function is verified when its only effect is `panic` (or it has none), its loops are reducible `while`/`loop` loops (see "Loops" below), and it uses only these operations on integers of every width (`i8`..`i128`, `u8`..`u128`), `f32`, `f64` and `bool`: constants, `bool`, integer and float parameters, wrapping `+ - * / %`, the checked `+! -! *! /! %!`, `& | ^`, `<<` and `>>` (the shifted type's signedness picks arithmetic or logical `>>`), integer `as` casts (widening, same-width, and the truncating casts the lowerer emits for coerced literals), comparisons (`==`/`!=` also on `bool`), float `+ - * /` and comparisons (see "Floats" below), `!`, `if`/`else` (including nested, early `return`, and the `&&`/`||` that lower to branches) with the variables they update, `while` and `loop` with `break`/`continue`, `requires`/`ensures` and loop `invariant` clauses, and struct, enum and `Option`/`Result` values (see "Aggregates" below). Integers are fixed-width bit-vectors, so wrapping, signedness and 128-bit values are exact. Everything else (calls of builtins; calls of other functions are inlined, see "Calls" below), the `io`/`read`/`write`/`unsafe` effects, float `%` and unary minus, `String`) is **`Skipped`**, never `Verified`. A `Vec` of `bool`, integers (`i128` and `u128` included) or floats, and a `HashMap` or `BTreeMap` with keys and values of `bool` or an integer up to 64 bits, is modelled (see "Collections" below). The diagnostic is a `VerificationSkipped` warning whose message is ``skipped verification of `f`: <code>: <detail>`` with a code from the closed list in [`errors.md`](errors.md#verificationskipped) and a free-form detail (the runtime symbol, `Op[type]`, or a control-flow shape such as `irreducible loop (back edge to a block that does not dominate its source)`, `loop value used outside its loop`, `entry block is a loop header` or `loop nest deeper than 8`). A machine-readable `reason_code` field is not emitted yet.
 - **Proof obligations.** One query per `ensures` clause and per abort site, in walk order (blocks in reverse postorder); a `requires` is an assumption only for the obligations after it, and so is every earlier abort guard on the same path (an aborting run never reaches a later obligation). An obligation is asked only on the paths that reach it: its query asserts the block's path condition, and an assumption made inside a branch holds only under that branch's condition. A variable updated in a branch is merged with one `ite` over the incoming edges, and only when the arms supply different values; a branch whose condition is constant, or was already decided by an enclosing branch on the same value, leaves the other arm unexecuted. The query grows with the number of branches and updated variables, not with the number of paths. Three kinds of abort follow the language:
@@ -89,7 +89,7 @@ Opt-in; the default stays `esbmc`. Implemented only by the self-hosted `vowc`: t
 
 #### Native backend: `contracts` and `test`
 
-`vowc contracts --verify --backend native` and `vowc test --verify --backend native` (issue #1427) run the same native checker and worker pool as `verify`, with the status vocabulary, JSON schemas and exit codes of the ESBMC path unchanged. Self-hosted `vowc` only; the default stays `esbmc`.
+`vowc contracts --verify --backend native` and `vowc test --verify --backend native` (issue #1427) run the same native checker and worker pool as `verify`, with the status vocabulary, JSON schemas and exit codes of the ESBMC path unchanged. Self-hosted `vowc` only; native is the default and `--backend esbmc` opts out.
 
 - **Selection.** Both commands check the functions that carry a `vow` block, exactly as the ESBMC path does (`verify` also checks callers of contracted functions, these do not). A function outside the native subset is `skipped` in `contracts` (a status only, no diagnostic, as for ESBMC) and makes the file `contract_skipped` in `test` (with one `VerificationSkipped` diagnostic of severity `error` in the entry's `diagnostics`, fixed message `contract verification skipped: function not modelable`, no reason code), and needs no solver.
 - **No early stop.** `verify` reports up to the first function that is not proven; a `contracts` report or a `test` verdict spans functions, so a failed function never cancels a later one. Every function is verified at most `--verify-jobs` at a time, and the result does not depend on which worker finishes first.
@@ -111,18 +111,18 @@ vow contracts [OPTIONS] <source.vow>
 
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
-| `--verify`        | (off)       | Run verification (the ESBMC backend by default, or the native backend with `--backend native`) and report per-contract status |
+| `--verify`        | (off)       | Run verification (the native backend by default, or ESBMC with `--backend esbmc`) and report per-contract status |
 | `--no-cache`      | (off)       | Disable verification result caching        |
-| `--max-k-step <N>` | `50`       | ESBMC backend only; a usage error under `--backend native`. ESBMC incremental BMC max iterations (with --verify) |
-| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC SMT solver (with --verify) |
-| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC encoding mode (with --verify); ir requires z3 |
+| `--max-k-step <N>` | `50`       | ESBMC backend only; a usage error unless `--backend esbmc` is given. ESBMC incremental BMC max iterations (with --verify) |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC backend only; a usage error unless `--backend esbmc` is given. ESBMC SMT solver (with --verify) |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC backend only; a usage error unless `--backend esbmc` is given. ESBMC encoding mode (with --verify); ir requires z3 |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent `verify-worker` subprocesses under `--backend native`; a no-op under ESBMC (the ESBMC loop is serial) |
-| `--backend <esbmc\|native>` | `esbmc` | Verification backend; `native` requires `--verify` (see "Native backend: `contracts` and `test`") |
+| `--backend <esbmc\|native>` | `native` | Verification backend; an explicit `--backend native` requires `--verify` (see "Native backend: `contracts` and `test`") |
 | `--timeout <N>` | `300` (native) | Seconds per function (and per probe) under `--backend native`; ESBMC's own timeout otherwise |
 
 **Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven — i.e. any `failed`, `timeout`, `unknown`, `error`, `skipped`, or `vacuous` — and **0** only when every contract is `proven` (or `proven-ir`, an ESBMC-only status no compiler produces today). Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)
 
-When `--verify` is requested but the verifier is not installed (ESBMC, or `bitwuzla` under `--backend native`), the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` (under native, only for functions that need the solver) and exits with code 1 (fail-closed). Install the verifier, or omit `--verify`, to obtain proven/failed/unknown statuses.
+When `--verify` is requested but the verifier is not installed (`bitwuzla` by default, ESBMC under `--backend esbmc`), the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` (under native, only for functions that need the solver) and exits with code 1 (fail-closed). Install the verifier, or omit `--verify`, to obtain proven/failed/unknown statuses.
 
 ### `vow skill`
 
@@ -162,15 +162,15 @@ vow test [OPTIONS] [<path>]
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
 | `<path>`          | `.`         | Directory to scan or single `.vow` file    |
-| `--verify`        | (off)       | Run verification (ESBMC, or the native backend with `--backend native`) on test files |
-| `--backend <esbmc\|native>` | `esbmc` | Verification backend; `native` requires `--verify` (see "Native backend: `contracts` and `test`") |
+| `--verify`        | (off)       | Run verification (the native backend by default, or ESBMC with `--backend esbmc`) on test files |
+| `--backend <esbmc\|native>` | `native` | Verification backend; an explicit `--backend native` requires `--verify` (see "Native backend: `contracts` and `test`") |
 | `--filter <pat>`  | (none)      | Only run tests whose file stem contains pat |
 | `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the nearest ancestor of the entry file that resolves all of its `use` declarations. |
 | `--jobs <N>`      | `min(num_cpus/2, 8)` (`1` with `--verify`) | Max test files compiled and run concurrently |
 | `--mode debug`    | (default)   | Insert runtime vow checks                 |
 | `--mode release`  | `debug`     | Omit all vow checks for performance       |
 | `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
-| `--max-k-step <N>` | `50`       | ESBMC backend only; a usage error under `--backend native`. ESBMC incremental BMC max iterations (with --verify) |
+| `--max-k-step <N>` | `50`       | ESBMC backend only; a usage error unless `--backend esbmc` is given. ESBMC incremental BMC max iterations (with --verify) |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent verification jobs (with --verify) |
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
@@ -757,7 +757,7 @@ Always check stderr for human-readable diagnostics alongside the JSON on stdout.
 
 const SKILL_DOC_REFERENCE_CONTRACTS_MD: &str = r#"# Contract Authoring and Verification
 
-Vow statically verifies contracts with one of two backends: ESBMC (a bounded model checker, `--backend esbmc`, the default today) or the native verifier (`--backend native`, self-hosted `vowc` only, which emits SMT-LIB for Bitwuzla). Both report the same verdict surface (statuses, blame, `vow_id`). This document covers contract patterns, verification behavior, and common pitfalls.
+Vow statically verifies contracts with one of two backends: the native verifier (the default of the self-hosted `vowc`, `--backend native`, which emits SMT-LIB for Bitwuzla) or ESBMC (a bounded model checker, `--backend esbmc`, the opt-out and the only backend of the Rust `vow`). Both report the same verdict surface (statuses, blame, `vow_id`). This document covers contract patterns, verification behavior, and common pitfalls.
 
 ## Semantic Contracts Are Backend-Independent
 
@@ -784,7 +784,7 @@ honest contract, report that limitation outside the contract.
 
 Codegen (Cranelift) and linking finish before verification starts, so peak memory is the larger of the two phases rather than their sum. A codegen or link failure ends the build before any verifier process is started. Verification itself runs up to `--verify-jobs` verifier processes at a time.
 
-| | Native backend (`--backend native`) | ESBMC backend (`--backend esbmc`, default) |
+| | Native backend (`--backend native`, default) | ESBMC backend (`--backend esbmc`) |
 |---|---|---|
 | Pipeline | `IR → symbolic executor → SMT-LIB → Bitwuzla`, one `verify-worker` subprocess per function | `IR → C emit → ESBMC` |
 | Clauses | `requires` is an assumption for the obligations after it; `ensures`, `invariant` and every abort site are obligations | `requires` → `__ESBMC_assume()`, `ensures`/`invariant` → `__ESBMC_assert()` |

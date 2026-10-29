@@ -157,7 +157,7 @@ build/vowc --help --human                              # human-readable capabili
 ```
 
 Debug mode is required to see runtime `VowViolation` output. Release omits all vow checks.
-`vowc build` verifies by default; use `--no-verify` to skip ESBMC verification.
+`vowc build` verifies by default with the native verifier (Bitwuzla); `--no-verify` skips verification and `--backend esbmc` selects ESBMC instead. The Rust `vow` has no `--backend` and always uses ESBMC.
 `vowc verify` runs only the frontend + verification pipeline (no codegen, no executable output).
 
 ## Bootstrap (Rust Compiler)

@@ -3,8 +3,8 @@
 
 # ─── Section 4g: Native Verifier (tests/verify-native/, #1408) ────
 #
-# `vowc verify --backend native` exists only in the self-hosted compiler (epic
-# #1398, ADR-2026-10-08-1421), so there is no Rust twin and no parity check. The
+# The native verifier, the default backend of the self-hosted compiler, exists only
+# there (epic #1398, ADR-2026-10-08-1421), so there is no Rust twin and no parity check. The
 # wiring tier uses a fake Bitwuzla and always runs; the real-solver tier is
 # skipped, not passed, when `bitwuzla` is not on PATH.
 # tests/verify-native/ is deliberately outside Section 2c's explicit globs.
@@ -15,6 +15,13 @@ if VOWC_BIN="$SELF" bash tests/verify-native/tests.sh >"$native_wiring_log" 2>&1
     pass "verify-native/wiring"
 else
     fail "verify-native/wiring" "$(tail -20 "$native_wiring_log")"
+fi
+
+native_default_log="$TMPDIR/verify-native-default-backend.log"
+if VOWC_BIN="$SELF" bash tests/verify-native/default-backend/tests.sh >"$native_default_log" 2>&1; then
+    pass "verify-native/default-backend"
+else
+    fail "verify-native/default-backend" "$(tail -20 "$native_default_log")"
 fi
 
 native_have_solver=0

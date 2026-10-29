@@ -133,14 +133,14 @@ None currently open.
 cargo build --release -p vow
 python3 scripts/verify_eval.py
 
-# Local, against the fixed-point self-hosted compiler:
+# Local, self-hosted compiler:
 scripts/bootstrap.sh
-python3 scripts/verify_eval.py --verifier build/vowc --output-dir /tmp/verify-eval-self
+python3 scripts/verify_eval.py --verifier build/vowc --backend esbmc --output-dir /tmp/verify-eval-self
 
 # The native backend (self-hosted vowc only): `--backend` reaches the verify, vacuity and
 # replay runs. A program the corpus labels incorrect only because ESBMC refutes it through
 # its capacity assertion (`esbmc-capacity-artifact`) is reported as an explained extra proof,
-# not a soundness regression. The expected status mismatches for `Skipped` are expected.
+# not a soundness regression. Status mismatches for `Skipped` are expected.
 python3 scripts/verify_eval.py --verifier build/vowc --backend native
 
 # Authoring aid — print actual outcomes for every program:

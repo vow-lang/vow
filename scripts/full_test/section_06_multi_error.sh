@@ -22,7 +22,7 @@ for multi in stack geometry bignum gc math heap; do
     rust_json="" self_json="" rust_exit=0 self_exit=0
     multi_cache_dir=$(mktemp -d "$TMPDIR/multi-cache.XXXXXX")
     rust_json=$(VOW_CACHE_DIR="$multi_cache_dir" $RUST verify "$main_file" 2>/dev/null) || rust_exit=$?
-    self_json=$(run_self verify "$main_file" 2>/dev/null) || self_exit=$?
+    self_json=$(run_self verify --backend esbmc "$main_file" 2>/dev/null) || self_exit=$?
     rm -rf "$multi_cache_dir"
 
     if ! check_empty_output "${multi}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then

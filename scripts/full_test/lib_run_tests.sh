@@ -15,7 +15,7 @@ run_promoted_run_tests() {
         if grep -q '^// TEST: verify-only$' "$vow_file"; then
             rust_json="" self_json="" rust_exit=0 self_exit=0
             rust_json=$($RUST verify "$vow_file" 2>/dev/null) || rust_exit=$?
-            self_json=$(run_self verify "$vow_file" 2>/dev/null) || self_exit=$?
+            self_json=$(run_self verify --backend esbmc "$vow_file" 2>/dev/null) || self_exit=$?
 
             if ! check_empty_output "${name}/test-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
                 compare_full_json "${name}/test-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
