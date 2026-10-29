@@ -286,6 +286,7 @@ fn replay_one_ce(ce: VerifyCE, m: Module, fns: Vec<IrFunction>, path: String, ma
         call_args.push_str(aname);
         pi = pi + 1;
     }
+    replay_heap_lets(objs, lets, defs, uses);
     let ordered: ReplayArg = replay_ordered_lets(lets, defs, uses);
     if ordered.reason.len() > 0 { return replay_skip(ordered.reason); }
     let body: String = ordered.lit;

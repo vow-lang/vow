@@ -3,9 +3,8 @@
 // TEST: counterexample-blame Callee
 // TEST: counterexample-value t.0.len 1
 // TEST: counterexample-value t.0[0].0 42
-// TEST: replay-skipped the Person in a Vec<Person> held in a field lists its slots, and replay does not rebuild a held Vec of structs yet (#1890)
 // The struct in the held Vec is read through its address: its slots are listed under the element.
-module HeapVecOfStructsFieldElementSkipped
+module HeapVecOfStructsFieldElementWrong
 
 struct Person { age: i64, id: i64 }
 struct Team { members: Vec<Person>, size: i64 }

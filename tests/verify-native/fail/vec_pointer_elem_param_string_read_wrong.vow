@@ -1,0 +1,21 @@
+// TEST: counterexample-fn "first_len"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value names[0].len 2
+// TEST: counterexample-value names[0][1] 0
+// The first String the caller gave has two bytes: the element lists its length and its bytes.
+module VecPointerElemParamStringReadWrong
+
+fn first_len(names: Vec<String>) -> u64 vow {
+  requires: names.len() == 1
+  ensures: result != 2
+} {
+  names[0].len()
+}
+
+fn main() -> i32 [io] {
+  let names: Vec<String> = Vec::new();
+  names.push(String::from("hi"));
+  print_u64(first_len(names));
+  0
+}

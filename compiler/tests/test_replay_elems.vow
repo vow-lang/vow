@@ -27,10 +27,11 @@ fn elems_src() -> String {
     s.push_str(String::from("fn falias(p: Who, people: Vec<Who>) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fgrid(p: Person, grid: Vec<Vec<i64>>) -> i64 { 0 }\n"));
     s.push_str(String::from("fn ftok(people: Vec<Tok>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fstrs(strs: Vec<String>) -> i64 { 0 }\n"));
     s
 }
 
-fn value(fname: String, pi: i64, kv: String) -> ReplayArg [io] {
+fn value_lets(fname: String, pi: i64, kv: String, lets: Vec<String>) -> ReplayArg [io] {
     let m: Module = parse_src(elems_src());
     let names: Vec<String> = Vec::new();
     let vals: Vec<String> = Vec::new();
@@ -51,7 +52,27 @@ fn value(fname: String, pi: i64, kv: String) -> ReplayArg [io] {
     }
     let objs: ReplayObjs = replay_param_objects(m, fname, names, vals);
     let avoid: Vec<i64> = Vec::new();
-    replay_param_value(m, fname, pi, names, vals, avoid, objs)
+    let r: ReplayArg = replay_param_value(m, fname, pi, names, vals, avoid, objs);
+    let mut i: u64 = 0u64;
+    while i < objs.hlets.len() {
+        lets.push(objs.hlets[i]);
+        i = i + 1u64;
+    }
+    r
+}
+
+fn value(fname: String, pi: i64, kv: String) -> ReplayArg [io] {
+    value_lets(fname, pi, kv, Vec::new())
+}
+
+fn joined(lets: Vec<String>) -> String {
+    let out: String = String::from("");
+    let mut i: u64 = 0u64;
+    while i < lets.len() {
+        out.push_str(lets[i]);
+        i = i + 1u64;
+    }
+    out
 }
 
 fn check_addresses() -> i32 {
@@ -108,15 +129,21 @@ fn check_element_is_unknown() -> i32 [io] {
 // An element whose fields the counterexample lists (`people[0].0`) is rebuilt from them; elements with
 // one address are one binding pushed twice, and elements with two addresses are two.
 fn check_element_listed() -> i32 [io] {
-    let one: ReplayArg = value(String::from("fone"), 1, String::from("p.addr=-1,people.addr=0,people.len=1,people[0]=0,people[0].0=4"));
+    let l1: Vec<String> = Vec::new();
+    let one: ReplayArg = value_lets(String::from("fone"), 1, String::from("p.addr=-1,people.addr=0,people.len=1,people[0]=0,people[0].0=4"), l1);
     if one.reason.len() != 0 { return 41; }
-    if one.lit != String::from("{ let __replay_v: Vec<Person> = Vec::new(); let __replay_o0: Person = Person { age: 4 }; __replay_v.push(__replay_o0); __replay_v }") { return 42; }
-    let same: ReplayArg = value(String::from("fone"), 1, String::from("p.addr=-1,people.len=2,people[0]=0,people[1]=0,people[0].0=4,people[1].0=4"));
+    if one.lit != String::from("{ let __replay_v: Vec<Person> = Vec::new(); __replay_v.push(__replay_h0); __replay_v }") { return 42; }
+    if joined(l1) != String::from("    let __replay_h0: Person = Person { age: 4 };\n") || one.deps != String::from("__replay_h0 ") { return 51; }
+    let l2: Vec<String> = Vec::new();
+    let same: ReplayArg = value_lets(String::from("fone"), 1, String::from("p.addr=-1,people.len=2,people[0]=0,people[1]=0,people[0].0=4,people[1].0=4"), l2);
     if same.reason.len() != 0 { return 43; }
-    if same.lit != String::from("{ let __replay_v: Vec<Person> = Vec::new(); let __replay_o0: Person = Person { age: 4 }; __replay_v.push(__replay_o0); __replay_v.push(__replay_o0); __replay_v }") { return 44; }
-    let apart: ReplayArg = value(String::from("fone"), 1, String::from("p.addr=-1,people.len=2,people[0]=0,people[1]=1,people[0].0=4,people[1].0=-5"));
+    if same.lit != String::from("{ let __replay_v: Vec<Person> = Vec::new(); __replay_v.push(__replay_h0); __replay_v.push(__replay_h0); __replay_v }") { return 44; }
+    if l2.len() != 1u64 { return 52; }
+    let l3: Vec<String> = Vec::new();
+    let apart: ReplayArg = value_lets(String::from("fone"), 1, String::from("p.addr=-1,people.len=2,people[0]=0,people[1]=1,people[0].0=4,people[1].0=-5"), l3);
     if apart.reason.len() != 0 { return 45; }
-    if apart.lit != String::from("{ let __replay_v: Vec<Person> = Vec::new(); let __replay_o0: Person = Person { age: 4 }; __replay_v.push(__replay_o0); let __replay_o1: Person = Person { age: -5 }; __replay_v.push(__replay_o1); __replay_v }") { return 46; }
+    if apart.lit != String::from("{ let __replay_v: Vec<Person> = Vec::new(); __replay_v.push(__replay_h0); __replay_v.push(__replay_h1); __replay_v }") { return 46; }
+    if joined(l3) != String::from("    let __replay_h0: Person = Person { age: 4 };\n    let __replay_h1: Person = Person { age: -5 };\n") { return 53; }
     let partial: ReplayArg = value(String::from("fone"), 1, String::from("p.addr=-1,people.len=2,people[0]=0,people[1]=1,people[0].0=4"));
     if partial.reason.len() == 0 { return 47; }
     let other: ReplayArg = value(String::from("fother"), 1, String::from("o.addr=5,people.len=1,people[0]=5,people[0].0=4"));
@@ -137,6 +164,28 @@ fn check_other_vectors() -> i32 [io] {
     0
 }
 
+// A parameter that is a `Vec` of collections is built from the contents listed behind each element: a
+// marked element is free, an unlisted one is not rebuilt, and elements with one address share a binding.
+fn check_vec_parameters_of_collections() -> i32 [io] {
+    let l1: Vec<String> = Vec::new();
+    let rows: ReplayArg = value_lets(String::from("fgrid"), 1, String::from("grid.len=2,grid[0]=-1,grid[1]=-2,grid[0].contents=unconstrained,grid[1].len=1,grid[1][0]=5"), l1);
+    if rows.reason.len() != 0 { return 61; }
+    if rows.lit != String::from("{ let __replay_v: Vec<Vec<i64>> = Vec::new(); __replay_v.push(__replay_h0); __replay_v.push(__replay_h1); __replay_v }") { return 62; }
+    if joined(l1) != String::from("    let __replay_h0: Vec<i64> = { let __replay_e: Vec<i64> = Vec::new(); __replay_e };\n    let __replay_h1: Vec<i64> = { let __replay_v: Vec<i64> = Vec::new(); __replay_v.push(5); __replay_v };\n") { return 63; }
+    let l2: Vec<String> = Vec::new();
+    let strs: ReplayArg = value_lets(String::from("fstrs"), 0, String::from("strs.len=2,strs[0]=5,strs[1]=5,strs[0].len=1,strs[0][0]=97"), l2);
+    if strs.reason.len() != 0 || strs.lit != String::from("{ let __replay_v: Vec<String> = Vec::new(); __replay_v.push(__replay_h0); __replay_v.push(__replay_h0); __replay_v }") { return 64; }
+    if joined(l2) != String::from("    let __replay_h0: String = { let __replay_s: String = String::from(\"\"); __replay_s.push_byte(97); __replay_s };\n") { return 65; }
+    if value(String::from("fgrid"), 1, String::from("grid.len=1,grid[0]=-1,grid[0].contents=unlisted")).reason.len() == 0 { return 66; }
+    let named: ReplayArg = value(String::from("fgrid"), 1, String::from("grid.len=1,grid[0]=-1"));
+    if named.reason.len() == 0 { return 67; }
+    let clash: ReplayArg = value(String::from("fgrid"), 1, String::from("grid.addr=-1,grid.len=1,grid[0]=-1,grid[0].len=0"));
+    if clash.reason.len() == 0 { return 68; }
+    let free_clash: ReplayArg = value(String::from("fgrid"), 1, String::from("grid.addr=-1,grid.len=1,grid[0]=-1,grid[0].contents=unconstrained"));
+    if free_clash.reason.len() != 0 { return 69; }
+    0
+}
+
 fn main() -> i32 [io] {
     let r1: i32 = check_addresses();
     if r1 != 0 { return r1; }
@@ -146,5 +195,7 @@ fn main() -> i32 [io] {
     if r3 != 0 { return r3; }
     let r4: i32 = check_element_listed();
     if r4 != 0 { return r4; }
-    check_other_vectors()
+    let r5: i32 = check_other_vectors();
+    if r5 != 0 { return r5; }
+    check_vec_parameters_of_collections()
 }

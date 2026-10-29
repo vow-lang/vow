@@ -5,9 +5,8 @@
 // TEST: counterexample-value grid[1][0].len 3
 // TEST: counterexample-value grid[1][0][2] 5
 // TEST: counterexample-value grid[0].contents unconstrained
-// TEST: replay-skipped the elements of a Vec<Vec<Vec<i64>>> parameter list contents behind their addresses, and replay does not rebuild a Vec of collections yet (#1890)
 // The cell the function reads is two collections deep: each level lists its length, and the cell is 5.
-module VecPointerElemNestedParamCellSkipped
+module VecPointerElemNestedParamCellWrong
 
 fn cell(grid: Vec<Vec<Vec<i64>>>) -> i64 vow {
   requires: grid.len() == 2 && grid[1].len() == 1 && grid[1][0].len() == 3

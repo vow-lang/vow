@@ -1,0 +1,187 @@
+module TestReplayNested
+
+use lexer
+use token
+use ast
+use diag
+use parser
+use replay_main
+use replay_nested
+use replay_elems
+use replay_listed
+
+fn parse_src(source: String) -> Module [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    parse_module_into(lex(source), arena, dctx, String::from("entry.vow"))
+}
+
+fn index_of(hay: String, needle: String) -> i64 {
+    let n: i64 = hay.len() as i64;
+    let k: i64 = needle.len() as i64;
+    let mut i: i64 = 0;
+    while i + k <= n {
+        if hay.substring(i as u64, (i + k) as u64) == needle { return i; }
+        i = i + 1;
+    }
+    -1
+}
+
+fn kv_part(kv: String, values: bool) -> Vec<String> {
+    let out: Vec<String> = Vec::new();
+    let mut start: u64 = 0u64;
+    let mut i: u64 = 0u64;
+    while i <= kv.len() {
+        if i == kv.len() || kv.byte_at(i) == 44 {
+            if i > start {
+                let pair: String = kv.substring(start, i);
+                let at: u64 = index_of(pair, String::from("=")) as u64;
+                if values { out.push(pair.substring(at + 1u64, pair.len())); } else { out.push(pair.substring(0u64, at)); }
+            }
+            start = i + 1u64;
+        }
+        i = i + 1u64;
+    }
+    out
+}
+
+fn src() -> String {
+    let s: String = String::from("module T\n");
+    s.push_str(String::from("struct Pair { lo: i64, hi: i64 }\n"));
+    s.push_str(String::from("struct Holder { p: Pair, n: i64 }\n"));
+    s.push_str(String::from("struct Node { val: i64, next: Node }\n"));
+    s.push_str(String::from("struct Team { members: Vec<Pair>, size: i64 }\n"));
+    s.push_str(String::from("struct Two { a: Pair, b: Pair }\n"));
+    s.push_str(String::from("fn fshare(q: Holder, people: Vec<Pair>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn ffields(t: Two) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fteam(t: Team) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fbag(a: Holder, b: Holder, c: Vec<i64>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fcell(grid: Vec<Vec<Vec<i64>>>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fowner(p: Pair, h: Holder) -> i64 { 0 }\n"));
+    s
+}
+
+// The harness items of the parameters of `fname` in order: each parameter's literal, then the
+// text of the shared objects, or the first reason a parameter is skipped.
+fn harness(fname: String, count: i64, kv: String) -> String [io] {
+    let m: Module = parse_src(src());
+    let names: Vec<String> = kv_part(kv, false);
+    let vals: Vec<String> = kv_part(kv, true);
+    let objs: ReplayObjs = replay_param_objects(m, fname, names, vals);
+    let avoid: Vec<i64> = Vec::new();
+    let out: String = String::from("");
+    let mut pi: i64 = 0;
+    while pi < count {
+        let r: ReplayArg = replay_param_value(m, fname, pi, names, vals, avoid, objs);
+        if r.reason.len() > 0 { return str3r(String::from("<skip: "), r.reason, String::from(">")); }
+        out.push_str(r.lit);
+        out.push_str(String::from(" | "));
+        pi = pi + 1;
+    }
+    let lets: Vec<String> = Vec::new();
+    let defs: Vec<String> = Vec::new();
+    let uses: Vec<String> = Vec::new();
+    replay_heap_lets(objs, lets, defs, uses);
+    let mut i: u64 = 0u64;
+    while i < lets.len() {
+        out.push_str(lets[i]);
+        i = i + 1u64;
+    }
+    out
+}
+
+fn skipped(text: String, why: String) -> bool {
+    text.len() > 6u64 && text.substring(0u64, 6u64) == String::from("<skip:") && index_of(text, why) >= 0
+}
+
+fn check_classes() -> i32 {
+    if replay_obj_class(String::from("String")) != 2 { return 1; }
+    if replay_obj_class(String::from("Vec<Vec<i64>>")) != 1 { return 2; }
+    if replay_obj_class(String::from("Pair")) != 3 { return 3; }
+    0
+}
+
+// A struct field and a Vec element holding one address are one object: the harness declares it once
+// and both name it, even though the field's value is the address of a Vec parameter by number.
+fn check_field_and_element_share() -> i32 [io] {
+    let kv: String = String::from("q.addr=-1,people.addr=-2,people.len=1,people[0]=18446744073709551614,people[0].0=-2,q.0=-2,q.0.0=-2");
+    let want: String = String::from("Holder { p: __replay_h0, n: 0 } | { let __replay_v: Vec<Pair> = Vec::new(); __replay_v.push(__replay_h0); __replay_v } |     let __replay_h0: Pair = Pair { lo: -2, hi: 0 };\n");
+    if harness(String::from("fshare"), 2, kv) != want { return 11; }
+    let apart: String = String::from("q.addr=-1,people.addr=-2,people.len=1,people[0]=18446744073709551613,people[0].0=-2,q.0=-4,q.0.0=-2");
+    if index_of(harness(String::from("fshare"), 2, apart), String::from("__replay_h1")) < 0 { return 12; }
+    0
+}
+
+// Two positions at one address that list different contents cannot be one object: nothing is guessed.
+fn check_disagreeing_contents() -> i32 [io] {
+    let kv: String = String::from("t.0=5,t.0.0=1,t.1=5,t.1.0=2");
+    if !skipped(harness(String::from("ffields"), 1, kv), String::from("differ from another position")) { return 21; }
+    let same: String = String::from("t.0=5,t.0.0=1,t.1=5,t.1.0=1");
+    let text: String = harness(String::from("ffields"), 1, same);
+    if text != String::from("Two { a: __replay_h0, b: __replay_h0 } |     let __replay_h0: Pair = Pair { lo: 1, hi: 0 };\n") { return 22; }
+    let lone: String = String::from("t.0=5,t.0.0=1,t.1=5");
+    if harness(String::from("ffields"), 1, lone) != text { return 23; }
+    0
+}
+
+// Contents that are `unlisted`, or neither listed nor marked, are skipped with the position named; a
+// marker next to contents contradicts itself.
+fn check_unlisted_and_inconsistent() -> i32 [io] {
+    let unlisted: String = String::from("t.0=5,t.0.contents=unlisted");
+    if !skipped(harness(String::from("ffields"), 1, unlisted), String::from("at `t.0` is read through memory")) { return 31; }
+    let bare: String = String::from("t.0=5");
+    if !skipped(harness(String::from("ffields"), 1, bare), String::from("at `t.0`")) { return 32; }
+    let both: String = String::from("t.0=5,t.0.0=1,t.0.contents=unconstrained");
+    if !skipped(harness(String::from("ffields"), 1, both), String::from("also lists contents")) { return 33; }
+    let free: String = String::from("t.0=5,t.0.contents=unconstrained,t.1=6,t.1.contents=unconstrained");
+    if harness(String::from("ffields"), 1, free) != String::from("Two { a: __replay_h0, b: __replay_h1 } |     let __replay_h0: Pair = Pair { lo: 0, hi: 0 };\n    let __replay_h1: Pair = Pair { lo: 0, hi: 0 };\n") { return 34; }
+    let noaddr: String = String::from("t.0.0=1");
+    if skipped(harness(String::from("ffields"), 1, noaddr), String::from("")) { return 35; }
+    0
+}
+
+// A parameter of the same class and another type at the address is a handle the model typed
+// differently: the position is skipped unless nothing reads through it. A parameter of another class
+// at the address is a number that happens to match.
+fn check_parameter_of_another_type() -> i32 [io] {
+    let clash: String = String::from("a.addr=-1,b.addr=-2,c.addr=-3,b.0=-1,b.0.0=4");
+    if !skipped(harness(String::from("fbag"), 2, clash), String::from("holds the object of a parameter of type `Holder`")) { return 41; }
+    let free: String = String::from("a.addr=-1,b.addr=-2,c.addr=-3,b.0=-1,b.0.contents=unconstrained");
+    if index_of(harness(String::from("fbag"), 2, free), String::from("let __replay_h0: Pair")) < 0 { return 42; }
+    let other_class: String = String::from("a.addr=-1,b.addr=-2,c.addr=-3,b.0=-3,b.0.0=4");
+    if index_of(harness(String::from("fbag"), 2, other_class), String::from("let __replay_h0: Pair = Pair { lo: 4, hi: 0 };")) < 0 { return 43; }
+    let owner: String = String::from("p.addr=-1,h.addr=-2,h.0=-1");
+    let text: String = harness(String::from("fowner"), 2, owner);
+    if text != String::from("Pair { lo: 0, hi: 0 } | Holder { p: __replay_a0, n: 0 } | ") { return 44; }
+    0
+}
+
+// A held Vec of structs lists each element's slots, and a Vec of Vecs of Vecs lists each level.
+fn check_held_and_nested_collections() -> i32 [io] {
+    let team: String = String::from("t.0=0,t.0.len=2,t.0[0]=0,t.0[1]=1,t.0[0].0=42,t.0[1].1=7,t.1=2");
+    let want: String = String::from("Team { members: __replay_h2, size: 2 } |     let __replay_h0: Pair = Pair { lo: 42, hi: 0 };\n    let __replay_h1: Pair = Pair { lo: 0, hi: 7 };\n    let __replay_h2: Vec<Pair> = { let __replay_v: Vec<Pair> = Vec::new(); __replay_v.push(__replay_h0); __replay_v.push(__replay_h1); __replay_v };\n");
+    if harness(String::from("fteam"), 1, team) != want { return 51; }
+    let cell: String = String::from("grid.len=2,grid[0]=0,grid[0].contents=unconstrained,grid[1]=-2,grid[1].len=1,grid[1][0]=-1,grid[1][0].len=2,grid[1][0][0]=1,grid[1][0][1]=5");
+    let text: String = harness(String::from("fcell"), 1, cell);
+    if index_of(text, String::from("let __replay_h1: Vec<i64> = { let __replay_v: Vec<i64> = Vec::new(); __replay_v.push(1); __replay_v.push(5); __replay_v };")) < 0 { return 52; }
+    if index_of(text, String::from("__replay_v.push(__replay_h0); __replay_v.push(__replay_h2); __replay_v }")) < 0 { return 53; }
+    let short: String = String::from("grid.len=1,grid[0]=-1,grid[0].len=1,grid[0][0]=-2");
+    if !skipped(harness(String::from("fcell"), 1, short), String::from("element 0 of `grid[0]`")) { return 54; }
+    let long: String = String::from("t.0=0,t.0.len=1000,t.1=2");
+    if !skipped(harness(String::from("fteam"), 1, long), String::from("is not a length replay can build")) { return 55; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let r1: i32 = check_classes();
+    if r1 != 0 { return r1; }
+    let r2: i32 = check_field_and_element_share();
+    if r2 != 0 { return r2; }
+    let r3: i32 = check_disagreeing_contents();
+    if r3 != 0 { return r3; }
+    let r4: i32 = check_unlisted_and_inconsistent();
+    if r4 != 0 { return r4; }
+    let r5: i32 = check_parameter_of_another_type();
+    if r5 != 0 { return r5; }
+    check_held_and_nested_collections()
+}

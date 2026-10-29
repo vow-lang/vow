@@ -1,10 +1,9 @@
-// TEST: replay-skipped the String in a Vec<String> held in a field is read and its length is listed, but replay does not rebuild a Vec of collections yet (#1890)
 // TEST: counterexample-fn "firstlen"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Callee
 // TEST: counterexample-value n.0[0].len 0
 // The counterexample needs one element and the function reads its length, so the element is an address that lists the contents the function read: the shortest String it fails for.
-module HeapVecOfStringsFieldElementReadSkipped
+module HeapVecOfStringsFieldElementReadWrong
 
 struct Names { items: Vec<String>, tag: i64 }
 

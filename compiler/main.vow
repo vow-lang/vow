@@ -37,6 +37,7 @@ use cli_flags
 use replay_entry
 use replay_free
 use replay_main
+use replay_nested
 use replay_elems
 use decl_main
 use main_args

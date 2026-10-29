@@ -1,0 +1,25 @@
+// TEST: counterexample-fn "bump"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value people[1].0 -2
+// The two elements may be one `Pair`: a write through the first is then visible through the second.
+module VecPointerElemParamStructsShareWrong
+
+struct Pair { lo: i64, hi: i64 }
+
+fn bump(people: Vec<Pair>) -> bool vow {
+  requires: people.len() == 2
+  ensures: result
+} {
+  let before: i64 = people[1].lo;
+  people[0].lo = before + 1;
+  people[1].lo == before
+}
+
+fn main() -> i32 [io] {
+  let people: Vec<Pair> = Vec::new();
+  people.push(Pair { lo: 1, hi: 2 });
+  people.push(Pair { lo: 3, hi: 4 });
+  if bump(people) { print_i64(1); }
+  0
+}

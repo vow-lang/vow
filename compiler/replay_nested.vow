@@ -1,0 +1,245 @@
+module ReplayNested
+
+use ast
+use contract_text
+use replay_main
+use replay_alias
+use replay_listed
+use replay_free
+
+// Objects behind an address. The counterexample lists the address of each `Vec`, `String` and
+// struct a position holds (a field, an element of a collection) and then what is behind it:
+// `<position>.len` and `<position>[<j>]` for a collection, `<position>.<slot>` for a struct, or
+// `<position>.contents` = `unconstrained` when the function never read through the address, so
+// any contents reproduce the failure (`vc_cex_verdict`). Replay builds each object once per
+// (type, address) and every position that holds the address names that binding, because the
+// model has one object where two names give the same address. A position whose address is a
+// parameter's `.addr` of the same type is that parameter. Contents that are `unlisted`, or not
+// listed at all, are never guessed: the replay is skipped and the reason names the position.
+
+// The class of an object of type text `text`: 1 for a `Vec`, 2 for a `String`, 3 for a struct.
+// The model keeps one address space for the three, so a number alone says nothing about type.
+fn replay_obj_class(text: String) -> i64 {
+    if text == String::from("String") { return 2; }
+    if text.len() > 4u64 && text.substring(0u64, 4u64) == String::from("Vec<") { return 1; }
+    3
+}
+
+// Index of the first parameter of type text `shown` whose address is `bits`; -1 when there is
+// none, -2 when parameters that are not one object share it.
+fn replay_param_at(shown: String, bits: u64, objs: ReplayObjs) -> i64 {
+    let addrs: Vec<String> = objs.addrs;
+    let tys: Vec<String> = objs.tys;
+    let mut first: i64 = -1;
+    let mut j: u64 = 0u64;
+    while j < addrs.len() && j < tys.len() {
+        if tys[j] == shown {
+            match replay_addr_bits(addrs[j]) {
+                Option::Some(x) => {
+                    if x == bits {
+                        if first < 0 {
+                            first = j as i64;
+                        } else if replay_obj_owner(objs, j as i64) != replay_obj_owner(objs, first) {
+                            return -2;
+                        }
+                    }
+                },
+                Option::None => {},
+            }
+        }
+        j = j + 1u64;
+    }
+    first
+}
+
+// The type text of a parameter of the class of `shown` but of another type whose address is
+// `bits`; "" when there is none. The model lets a handle stand for any parameter of its class.
+fn replay_param_clash(shown: String, bits: u64, objs: ReplayObjs) -> String {
+    let addrs: Vec<String> = objs.addrs;
+    let tys: Vec<String> = objs.tys;
+    let class: i64 = replay_obj_class(shown);
+    let mut j: u64 = 0u64;
+    while j < addrs.len() && j < tys.len() {
+        if tys[j] != shown && replay_obj_class(tys[j]) == class {
+            match replay_addr_bits(addrs[j]) {
+                Option::Some(x) => { if x == bits { return tys[j]; } },
+                Option::None => {},
+            }
+        }
+        j = j + 1u64;
+    }
+    String::from("")
+}
+
+// Index of the object built for `hk` (type text and address), or -1.
+fn replay_heap_index(objs: ReplayObjs, hk: String) -> i64 {
+    let keys: Vec<String> = objs.hkeys;
+    let mut i: u64 = 0u64;
+    while i < keys.len() {
+        if keys[i] == hk { return i as i64; }
+        i = i + 1u64;
+    }
+    -1
+}
+
+// The `let` of the harness that declares `bind`, of type text `shown`, as the value `built`.
+fn replay_heap_stmt(bind: String, shown: String, built: ReplayArg) -> String {
+    str3r(String::from("    let "), bind, str3r(String::from(": "), shown, str3r(String::from(" = "), built.lit, String::from(";\n"))))
+}
+
+// Declares the object built for `hk` as a `let` of the harness and returns its binding.
+fn replay_heap_add(objs: ReplayObjs, hk: String, shown: String, built: ReplayArg) -> String {
+    let bind: String = str3r(String::from("__replay_h"), i64_to_string(objs.hkeys.len() as i64), String::from(""));
+    objs.hkeys.push(hk);
+    objs.hbinds.push(bind);
+    objs.hdeps.push(built.deps);
+    objs.hlets.push(replay_heap_stmt(bind, shown, built));
+    bind
+}
+
+// Appends the objects built for shared positions to the harness items: a `let` each, declared
+// after the bindings its value names.
+fn replay_heap_lets(objs: ReplayObjs, lets: Vec<String>, defs: Vec<String>, uses: Vec<String>) {
+    let mut i: u64 = 0u64;
+    while i < objs.hlets.len() && i < objs.hbinds.len() && i < objs.hdeps.len() {
+        lets.push(objs.hlets[i]);
+        defs.push(objs.hbinds[i]);
+        uses.push(objs.hdeps[i]);
+        i = i + 1u64;
+    }
+}
+
+fn replay_obj_name(shown: String, key: String, tail: String) -> ReplayArg {
+    replay_field_skip(shown, str3r(String::from("` at `"), key, tail))
+}
+
+// The argument naming the binding `bind` of an object of type text `shown`; the binding must be
+// declared before the item that uses it.
+fn replay_bound(bind: String, shown: String) -> ReplayArg {
+    replay_arg_ok_deps(String::from(bind), shown, str3r(bind, String::from(" "), String::from("")))
+}
+
+// The elements `<key>[0]` .. `<key>[len - 1]` of the `Vec` of objects of type `tid`, each the
+// binding of `replay_obj_arg`.
+fn replay_obj_vec(m: Module, tid: i64, key: String, len: i64, names: Vec<String>, vals: Vec<String>, depth: i64, avoid: Vec<i64>, objs: ReplayObjs) -> ReplayArg {
+    let a: AstArena = m.arena;
+    let shown: String = print_type_text(a, tid);
+    let elem: i64 = list_get(a, type_b(a, tid), 0);
+    let lit: String = String::from("{ let __replay_v: ");
+    lit.push_str(shown);
+    lit.push_str(String::from(" = Vec::new();"));
+    let deps: String = String::from("");
+    let mut i: i64 = 0;
+    while i < len {
+        let at: String = str3r(key, String::from("["), str3r(i64_to_string(i), String::from("]"), String::from("")));
+        let el: ReplayArg = replay_obj_arg(m, elem, at, names, vals, depth + 1, avoid, objs);
+        if el.reason.len() > 0 {
+            return replay_arg_skip(str3r(String::from("element "), i64_to_string(i), str3r(String::from(" of `"), key, str3r(String::from("`: "), el.reason, String::from("")))));
+        }
+        lit.push_str(String::from(" __replay_v.push("));
+        lit.push_str(el.lit);
+        lit.push_str(String::from(");"));
+        deps.push_str(el.deps);
+        i = i + 1;
+    }
+    lit.push_str(String::from(" __replay_v }"));
+    replay_arg_ok_deps(lit, shown, deps)
+}
+
+fn replay_obj_is_struct(a: AstArena, tid: i64) -> bool {
+    type_tag(a, tid) == TY_NAMED() && print_type_text(a, tid) != String::from("String")
+}
+
+// True when the counterexample lists contents behind the address at `key`: slot rows for a struct,
+// a length for a `Vec` or `String`.
+fn replay_obj_listed(a: AstArena, tid: i64, key: String, names: Vec<String>, vals: Vec<String>) -> bool {
+    if replay_obj_is_struct(a, tid) { return replay_listed_has_rows(names, key); }
+    replay_vec_len(key, names, vals) != -1
+}
+
+// The value of the object of type `tid` at `key` from what the counterexample lists behind its
+// address; `free` is the `unconstrained` marker. A marker next to listed contents contradicts
+// itself, and neither a marker nor contents leaves the object undescribed: both are skipped.
+fn replay_obj_contents(m: Module, tid: i64, key: String, free: bool, names: Vec<String>, vals: Vec<String>, depth: i64, avoid: Vec<i64>, objs: ReplayObjs) -> ReplayArg {
+    let a: AstArena = m.arena;
+    let shown: String = print_type_text(a, tid);
+    let len: i64 = replay_vec_len(key, names, vals);
+    let is_struct: bool = replay_obj_is_struct(a, tid);
+    let listed: bool = replay_obj_listed(a, tid, key, names, vals);
+    if free && listed {
+        return replay_obj_name(shown, key, String::from("` is marked unconstrained and also lists contents"));
+    }
+    if !free && !listed {
+        if is_struct { return replay_obj_name(shown, key, String::from("` is read through memory; its fields are not listed")); }
+        return replay_obj_name(shown, key, String::from("`: the counterexample does not list its length (its contents are unlisted)"));
+    }
+    if free && !is_struct { return replay_arg_ok(replay_free_elem(a, tid), shown); }
+    if is_struct { return replay_struct_arg(m, replay_find_struct(m, shown), key, names, vals, depth + 1, avoid, objs); }
+    if shown == String::from("String") { return replay_string_arg(key, names, vals); }
+    if len == -2 {
+        return replay_arg_skip(str3r(String::from("length of `"), key, String::from("` is not a length replay can build")));
+    }
+    if len == 0 { return replay_arg_ok(replay_free_elem(a, tid), shown); }
+    let elem: i64 = replay_resolve_type(m, list_get(a, type_b(a, tid), 0), 0);
+    if replay_holds_object(m, elem) { return replay_obj_vec(m, tid, key, len, names, vals, depth, avoid, objs); }
+    if len > 0 && !replay_held_elem_scalar(a, elem) {
+        return replay_obj_name(shown, key, String::from("` holds elements replay cannot rebuild"));
+    }
+    replay_vec_arg(a, tid, key, names, vals)
+}
+
+// The object of type `tid` that the position `key` holds the address of: the binding of a
+// parameter of that type at the address, else the one object built for that type and address
+// from its contents. A parameter of another type of the same class at the address is a handle the
+// model typed differently than the program does, and is rebuilt only when nothing reads through
+// it (`unconstrained`).
+fn replay_obj_arg(m: Module, tid0: i64, key: String, names: Vec<String>, vals: Vec<String>, depth: i64, avoid: Vec<i64>, objs: ReplayObjs) -> ReplayArg {
+    let a: AstArena = m.arena;
+    let tid: i64 = replay_resolve_type(m, tid0, 0);
+    let shown: String = print_type_text(a, tid);
+    let raw: String = replay_cex_value(names, vals, key);
+    if raw.len() == 0 {
+        return replay_obj_name(shown, key, String::from("`: the counterexample lists no address for it"));
+    }
+    let mut bits: u64 = 0u64;
+    match replay_addr_bits(raw) {
+        Option::Some(b) => { bits = b; },
+        Option::None => { return replay_obj_name(shown, key, String::from("`: its address is not a number")); },
+    }
+    let free: bool = replay_listed_unread(names, vals, key);
+    let held: i64 = replay_param_at(shown, bits, objs);
+    if held == -2 {
+        return replay_field_skip(shown, String::from("` holds an address that several parameters share without being one object"));
+    }
+    if held >= 0 {
+        let bind: String = replay_obj_bind(objs, held);
+        if bind == replay_obj_bind(objs, objs.cur) {
+            return replay_field_skip(shown, String::from("` holds the very value that holds it, and a value must exist before a field can hold it, so replay cannot build the cycle"));
+        }
+        return replay_bound(bind, shown);
+    }
+    let clash: String = replay_param_clash(shown, bits, objs);
+    if clash.len() > 0 && !free {
+        return replay_field_skip(shown, str3r(String::from("` holds the object of a parameter of type `"), clash, String::from("`")));
+    }
+    let hk: String = str3r(shown, String::from("@"), uint_to_string(bits));
+    let at: i64 = replay_heap_index(objs, hk);
+    if at >= 0 {
+        let known: String = objs.hbinds[at as u64];
+        if replay_obj_listed(a, tid, key, names, vals) {
+            let again: ReplayArg = replay_obj_contents(m, tid, key, free, names, vals, depth, avoid, objs);
+            if again.reason.len() > 0 { return again; }
+            if replay_heap_stmt(known, shown, again) != objs.hlets[at as u64] {
+                return replay_obj_name(shown, key, String::from("` lists contents that differ from another position at the same address"));
+            }
+        }
+        return replay_bound(known, shown);
+    }
+    if depth >= REPLAY_MAX_DEPTH() {
+        return replay_field_skip(shown, String::from("` is nested too deep to rebuild"));
+    }
+    let built: ReplayArg = replay_obj_contents(m, tid, key, free, names, vals, depth, avoid, objs);
+    if built.reason.len() > 0 { return built; }
+    let bind: String = replay_heap_add(objs, hk, shown, built);
+    replay_bound(bind, shown)
+}

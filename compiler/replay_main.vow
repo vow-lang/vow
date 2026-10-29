@@ -10,6 +10,7 @@ use replay_ints
 use replay_alias
 use replay_listed
 use replay_free
+use replay_nested
 
 // Aggregate arguments for the native backend's `--replay-cex`. The native
 // counterexample lists an aggregate parameter's scalar slots as `<param>.<slot>`
@@ -248,6 +249,10 @@ struct ReplayObjs {
     tys: Vec<String>,
     owners: Vec<i64>,
     cur: i64,
+    hkeys: Vec<String>,
+    hbinds: Vec<String>,
+    hlets: Vec<String>,
+    hdeps: Vec<String>,
 }
 
 // A `linear struct` is consumed once, so a harness cannot name its binding in a second place.
@@ -298,11 +303,11 @@ fn replay_param_objects(m: Module, fn_name: String, names: Vec<String>, vals: Ve
             i = i + 1;
         }
     }
-    ReplayObjs { addrs: addrs, binds: binds, tys: tys, owners: owners, cur: -1 }
+    ReplayObjs { addrs: addrs, binds: binds, tys: tys, owners: owners, cur: -1, hkeys: Vec::new(), hbinds: Vec::new(), hlets: Vec::new(), hdeps: Vec::new() }
 }
 
 fn replay_objs_at(o: ReplayObjs, pi: i64) -> ReplayObjs {
-    ReplayObjs { addrs: o.addrs, binds: o.binds, tys: o.tys, owners: o.owners, cur: pi }
+    ReplayObjs { addrs: o.addrs, binds: o.binds, tys: o.tys, owners: o.owners, cur: pi, hkeys: o.hkeys, hbinds: o.hbinds, hlets: o.hlets, hdeps: o.hdeps }
 }
 
 fn replay_obj_bind(o: ReplayObjs, pi: i64) -> String {
@@ -321,39 +326,6 @@ fn replay_obj_ty(o: ReplayObjs, pi: i64) -> String {
     let tys: Vec<String> = o.tys;
     if pi >= 0 && pi < tys.len() as i64 { return tys[pi as u64]; }
     String::from("")
-}
-
-// Index of the first parameter whose address is the value of slot `key`; -1 when the slot is not
-// listed or names no parameter, -2 when parameters that are not one object share that address.
-fn replay_held_param(key: String, names: Vec<String>, vals: Vec<String>, objs: ReplayObjs) -> i64 {
-    let raw: String = replay_cex_value(names, vals, key);
-    if raw.len() == 0 { return -1; }
-    let addrs: Vec<String> = objs.addrs;
-    let mut first: i64 = -1;
-    let mut i: u64 = 0u64;
-    while i < addrs.len() {
-        if addrs[i] == raw {
-            if first < 0 { first = i as i64; }
-            else if replay_obj_owner(objs, i as i64) != replay_obj_owner(objs, first) { return -2; }
-        }
-        i = i + 1u64;
-    }
-    first
-}
-
-// A field of type text `shown` that holds the object of parameter `held` is that parameter's
-// binding. The model does not know types, so a parameter of another type is no such object. The
-// parameter being built cannot hold itself: its field would need a value before it exists.
-fn replay_alias_field(shown: String, held: i64, objs: ReplayObjs) -> ReplayArg {
-    let theirs: String = replay_obj_ty(objs, held);
-    if theirs != shown {
-        return replay_field_skip(shown, str3r(String::from("` holds the object of a parameter of type `"), theirs, String::from("`")));
-    }
-    let bind: String = replay_obj_bind(objs, held);
-    if bind == replay_obj_bind(objs, objs.cur) {
-        return replay_field_skip(shown, String::from("` holds the very value that holds it, and a value must exist before a field can hold it, so replay cannot build the cycle"));
-    }
-    replay_arg_ok_deps(String::from(bind), shown, str3r(bind, String::from(" "), String::from("")))
 }
 
 // Indices of the items in an order that declares each binding before a value names it. `defs[i]`
@@ -445,31 +417,15 @@ fn replay_held_elem_scalar(a: AstArena, tid: i64) -> bool {
     type_tag(a, tid) == TY_NAMED() && replay_held_elem_name(arena_str(a, type_a(a, tid)))
 }
 
-// The `Vec` or `String` a field of AST type `tid` holds at `slot`. A field the model never read
-// holds an empty collection: nothing the function did depended on it. A field whose address
-// is listed but whose length is not was read by something other than `len`, `v[i]` or
-// `byte_at`, and is not rebuilt.
+// The `Vec` or `String` a field of AST type `tid` holds when the counterexample lists no address
+// for it (`replay_obj_arg` builds the ones it does): the function never read it, so it is empty.
+// A field whose length is listed without its address is not rebuilt.
 fn replay_held_arg(a: AstArena, tid: i64, inner: String, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
     let shown: String = print_type_text(a, tid);
-    let is_vec: bool = type_tag(a, tid) == TY_GENERIC();
-    let entry: String = replay_cex_value(names, vals, inner);
-    let len: i64 = replay_vec_len(inner, names, vals);
-    if entry.len() == 0 && len != -1 {
+    if replay_vec_len(inner, names, vals) != -1 {
         return replay_field_skip(shown, String::from("`: the counterexample lists its length but not its address"));
     }
-    if entry.len() > 0 && len == -1 && !replay_listed_unread(names, vals, inner) {
-        return replay_field_skip(shown, String::from("`: the counterexample does not list its length"));
-    }
-    if !is_vec {
-        return replay_string_arg(inner, names, vals);
-    }
-    let elem: i64 = list_get(a, type_b(a, tid), 0);
-    if replay_held_elem_scalar(a, elem) { return replay_vec_arg(a, tid, inner, names, vals); }
-    if len > 0 || len == -2 {
-        let free: String = replay_free_vec(a, tid, inner, len, names, vals);
-        if free.len() > 0 { return replay_arg_ok(free, shown); }
-        return replay_field_skip(shown, String::from("` holds elements replay cannot rebuild"));
-    }
+    if type_tag(a, tid) != TY_GENERIC() { return replay_string_arg(inner, names, vals); }
     let lit: String = String::from("{ let __replay_v: ");
     lit.push_str(shown);
     lit.push_str(String::from(" = Vec::new(); __replay_v }"));
@@ -479,20 +435,17 @@ fn replay_held_arg(a: AstArena, tid: i64, inner: String, names: Vec<String>, val
 // The struct, enum, `Option` or `Result` a field of AST type `tid` holds at `slot`: a pointer
 // to an object whose slot `j` is the counterexample entry `<prefix>.<slot>.<j>` (the native
 // model names a held object by the path of slots that reach it), or the `Vec` or `String` it
-// holds. A field whose slot value is the address of a parameter is that parameter. Any other
-// field that has an entry of its own is a pointer the function loaded and read through memory:
-// the model lists its address, not its fields, so the object cannot be rebuilt.
+// holds. A field that lists an address is an object of its own that other positions may name
+// too (`replay_obj_arg`). Any other field that has an entry of its own is a pointer the function
+// loaded and read through memory: the model lists its address, not its fields, so the object
+// cannot be rebuilt.
 fn replay_nested_arg(m: Module, tid: i64, pname: String, slot: i64, names: Vec<String>, vals: Vec<String>, depth: i64, avoid: Vec<i64>, objs: ReplayObjs) -> ReplayArg {
     let a: AstArena = m.arena;
     let shown: String = print_type_text(a, tid);
     let not_scalar: ReplayArg = replay_arg_skip(str3r(String::from("field of type `"), shown, String::from("` is not a scalar")));
     let inner: String = replay_slot_key(pname, slot);
-    if replay_holds_object(m, tid) {
-        let held: i64 = replay_held_param(inner, names, vals, objs);
-        if held == -2 {
-            return replay_arg_skip(str3r(String::from("field of type `"), shown, String::from("` holds an address that several parameters share without being one object")));
-        }
-        if held >= 0 { return replay_alias_field(shown, held, objs); }
+    if replay_holds_object(m, tid) && replay_cex_value(names, vals, inner).len() > 0 {
+        return replay_obj_arg(m, tid, inner, names, vals, depth, avoid, objs);
     }
     if depth >= REPLAY_MAX_DEPTH() {
         return replay_arg_skip(str3r(String::from("field of type `"), shown, String::from("` is nested too deep to rebuild")));
@@ -832,8 +785,6 @@ fn replay_vec_arg(a: AstArena, tid: i64, pname: String, names: Vec<String>, vals
     let shown: String = print_type_text(a, tid);
     let args_lid: i64 = type_b(a, tid);
     let len: i64 = replay_vec_len(pname, names, vals);
-    let free: String = replay_free_vec(a, tid, pname, len, names, vals);
-    if free.len() > 0 { return replay_arg_ok(free, shown); }
     if list_len(a, args_lid) != 1 || type_tag(a, list_get(a, args_lid, 0)) != TY_NAMED() {
         return replay_arg_skip(str3r(String::from("parameter type `"), shown, String::from("` is not rebuilt by replay")));
     }
