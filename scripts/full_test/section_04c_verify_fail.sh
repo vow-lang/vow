@@ -9,7 +9,7 @@ for vow_file in tests/verify-fail/*.vow; do
 
     rust_json="" self_json="" rust_exit=0 self_exit=0
     rust_json=$($RUST verify "$vow_file" 2>/dev/null) || rust_exit=$?
-    self_json=$(run_self verify "$vow_file" 2>/dev/null) || self_exit=$?
+    self_json=$(run_self verify --backend esbmc "$vow_file" 2>/dev/null) || self_exit=$?
 
     if check_empty_output "${name}/verify-fail-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
         continue
@@ -55,7 +55,7 @@ print(cx[0].get('violation', '') if cx else '')
             if [ "$replay_side" = "rust" ]; then
                 replay_json=$($RUST verify --replay-cex --no-cache "$vow_file" 2>/dev/null) || true
             else
-                replay_json=$(run_self verify --replay-cex --no-cache "$vow_file" 2>/dev/null) || true
+                replay_json=$(run_self verify --backend esbmc --replay-cex --no-cache "$vow_file" 2>/dev/null) || true
             fi
             actual_replays=$(python3 -c "
 import json, sys
@@ -82,13 +82,13 @@ for mode in verify build legacy; do
     self_json="" self_exit=0
     case "$mode" in
         verify)
-            self_json=$(run_self verify --verify-jobs 2 "$fixture" 2>/dev/null) || self_exit=$?
+            self_json=$(run_self verify --backend esbmc --verify-jobs 2 "$fixture" 2>/dev/null) || self_exit=$?
             ;;
         build)
-            self_json=$(run_self build --verify-jobs 2 "$fixture" -o "$TMPDIR/ce_before_soft" 2>/dev/null) || self_exit=$?
+            self_json=$(run_self build --backend esbmc --verify-jobs 2 "$fixture" -o "$TMPDIR/ce_before_soft" 2>/dev/null) || self_exit=$?
             ;;
         legacy)
-            self_json=$(run_self --verify-jobs 2 "$fixture" -o "$TMPDIR/ce_before_soft_bare" 2>/dev/null) || self_exit=$?
+            self_json=$(run_self --backend esbmc --verify-jobs 2 "$fixture" -o "$TMPDIR/ce_before_soft_bare" 2>/dev/null) || self_exit=$?
             ;;
     esac
     actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$self_json" 2>/dev/null) || actual_status=""
@@ -119,11 +119,11 @@ for mode in verify build; do
     case "$mode" in
         verify)
             rust_json=$("$RUST" verify --no-cache --verify-jobs 3 "$fixture" 2>/dev/null) || rust_exit=$?
-            self_json=$(run_self verify --no-cache --verify-jobs 3 "$fixture" 2>/dev/null) || self_exit=$?
+            self_json=$(run_self verify --backend esbmc --no-cache --verify-jobs 3 "$fixture" 2>/dev/null) || self_exit=$?
             ;;
         build)
             rust_json=$("$RUST" build --no-cache --verify-jobs 3 "$fixture" -o "$TMPDIR/multi_hard_rust" 2>/dev/null) || rust_exit=$?
-            self_json=$(run_self build --no-cache --verify-jobs 3 "$fixture" -o "$TMPDIR/multi_hard_self" 2>/dev/null) || self_exit=$?
+            self_json=$(run_self build --backend esbmc --no-cache --verify-jobs 3 "$fixture" -o "$TMPDIR/multi_hard_self" 2>/dev/null) || self_exit=$?
             ;;
     esac
 

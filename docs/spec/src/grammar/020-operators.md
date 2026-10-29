@@ -175,7 +175,7 @@ Verification is a separate matter. 128-bit literals (in a body or in
 `requires`/`ensures`/`invariant`) are verifiable, and are modelled exactly under
 the bit-vector encoding (both backends), `i128::MIN`, `i128::MAX` and `u128::MAX` included; under
 ESBMC a proof obtained by the `--encoding ir` timeout fallback is weaker (it is
-reported as plain `proven`). Under the default ESBMC backend every 128-bit aggregate access
+reported as plain `proven`). Under the ESBMC backend every 128-bit aggregate access
 is `Skipped` rather than modelled: a contracted function that reads or writes a
 128-bit aggregate field or enum payload is reported `Skipped`, with `FieldGet at
 128-bit width` or `FieldSet at 128-bit width`, rather than being modelled through

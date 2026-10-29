@@ -54,13 +54,21 @@ def harness_function(c_source):
     return found.group(1) if found else None
 
 
-def capture(binary, fixture, shim_dir, capture_dir):
+def capture(binary, fixture, shim_dir, capture_dir, backend_args=()):
     """Run `binary verify` on `fixture`; return {function: {distinct C source}}."""
     env = dict(os.environ)
     env["PATH"] = f"{shim_dir}{os.pathsep}{env.get('PATH', '')}"
     env["VOW_ESBMC_CAPTURE_DIR"] = str(capture_dir)
     subprocess.run(
-        [binary, "verify", "--no-cache", "--verify-jobs", "1", str(fixture)],
+        [
+            binary,
+            "verify",
+            *backend_args,
+            "--no-cache",
+            "--verify-jobs",
+            "1",
+            str(fixture),
+        ],
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -122,10 +130,17 @@ def compare_fixture(rust_bin, self_bin, fixture):
         shim_dir.mkdir()
         install_shim(shim_dir)
         captures = []
-        for label, binary in (("rust", rust_bin), ("self", self_bin)):
+        # Only the self-hosted compiler has a backend choice; its default is
+        # native, which never reaches the ESBMC shim.
+        for label, binary, backend_args in (
+            ("rust", rust_bin, ()),
+            ("self", self_bin, ("--backend", "esbmc")),
+        ):
             capture_dir = Path(work) / label
             capture_dir.mkdir()
-            captures.append(capture(binary, fixture, shim_dir, capture_dir))
+            captures.append(
+                capture(binary, fixture, shim_dir, capture_dir, backend_args)
+            )
     rust, self_hosted = captures
     if not rust and not self_hosted:
         return None

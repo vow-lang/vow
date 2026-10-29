@@ -16,7 +16,7 @@ for vow_file in tests/verify-skip/*.vow; do
 
     rust_json="" self_json="" rust_exit=0 self_exit=0
     rust_json=$($RUST verify "$vow_file" 2>/dev/null) || rust_exit=$?
-    self_json=$(run_self verify "$vow_file" 2>/dev/null) || self_exit=$?
+    self_json=$(run_self verify --backend esbmc "$vow_file" 2>/dev/null) || self_exit=$?
 
     if check_empty_output "${name}/verify-skip-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
         continue
@@ -66,7 +66,7 @@ for dir in tests/verify-fail-multi/*/; do
 
     rust_json="" self_json="" rust_exit=0 self_exit=0
     rust_json=$($RUST verify "$main_file" 2>/dev/null) || rust_exit=$?
-    self_json=$(run_self verify "$main_file" 2>/dev/null) || self_exit=$?
+    self_json=$(run_self verify --backend esbmc "$main_file" 2>/dev/null) || self_exit=$?
 
     if check_empty_output "${name}/verify-fail-multi-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
         continue

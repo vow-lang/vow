@@ -105,8 +105,8 @@ nv_rss=$(measure_one no_verify build/vowc build --no-verify compiler/main.vow)
 echo "  median peak RSS (kbytes): $nv_rss" >&2
 
 if [ "$INCLUDE_VERIFY" = "1" ]; then
-    echo "Measuring build/vowc build --verify-jobs 1 compiler/main.vow ($SAMPLES samples)..." >&2
-    v_rss=$(measure_one verify_j1 build/vowc build --verify-jobs 1 compiler/main.vow)
+    echo "Measuring build/vowc build --backend esbmc --verify-jobs 1 compiler/main.vow ($SAMPLES samples)..." >&2
+    v_rss=$(measure_one verify_j1 build/vowc build --backend esbmc --verify-jobs 1 compiler/main.vow)
     echo "  median peak RSS (kbytes): $v_rss" >&2
 fi
 

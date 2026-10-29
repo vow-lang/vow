@@ -1,6 +1,6 @@
 # Contract Authoring and Verification
 
-Vow statically verifies contracts with one of two backends: ESBMC (a bounded model checker, `--backend esbmc`, the default today) or the native verifier (`--backend native`, self-hosted `vowc` only, which emits SMT-LIB for Bitwuzla). Both report the same verdict surface (statuses, blame, `vow_id`). This document covers contract patterns, verification behavior, and common pitfalls.
+Vow statically verifies contracts with one of two backends: the native verifier (the default of the self-hosted `vowc`, `--backend native`, which emits SMT-LIB for Bitwuzla) or ESBMC (a bounded model checker, `--backend esbmc`, the opt-out and the only backend of the Rust `vow`). Both report the same verdict surface (statuses, blame, `vow_id`). This document covers contract patterns, verification behavior, and common pitfalls.
 
 ## Semantic Contracts Are Backend-Independent
 
@@ -27,7 +27,7 @@ honest contract, report that limitation outside the contract.
 
 Codegen (Cranelift) and linking finish before verification starts, so peak memory is the larger of the two phases rather than their sum. A codegen or link failure ends the build before any verifier process is started. Verification itself runs up to `--verify-jobs` verifier processes at a time.
 
-| | Native backend (`--backend native`) | ESBMC backend (`--backend esbmc`, default) |
+| | Native backend (`--backend native`, default) | ESBMC backend (`--backend esbmc`) |
 |---|---|---|
 | Pipeline | `IR → symbolic executor → SMT-LIB → Bitwuzla`, one `verify-worker` subprocess per function | `IR → C emit → ESBMC` |
 | Clauses | `requires` is an assumption for the obligations after it; `ensures`, `invariant` and every abort site are obligations | `requires` → `__ESBMC_assume()`, `ensures`/`invariant` → `__ESBMC_assert()` |

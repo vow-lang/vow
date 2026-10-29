@@ -632,12 +632,12 @@ def check_file(
         # compiler binary, and both compilers share $VOW_CACHE_DIR. Without it a
         # cached object from the peer compiler can be linked in and the runtime
         # observable silently compares a binary to itself.
-        # A `// TEST: verify-only` fixture is a library module with no main.
-        # Building it produces no executable on either side, so the build path
-        # could only ever record "both rejected (no runtime check)" — and the
-        # verifier, which is the only thing the directive asks about, never ran.
+        # A `// TEST: verify-only` fixture is a library module with no main: it
+        # has no executable to build, so only the verifier can be compared, and
+        # on ESBMC, the only backend of the Rust compiler.
         if directives["verify_only"]:
-            rust_args = self_args = ["verify", "--no-cache", str(vow_file)]
+            rust_args = ["verify", "--no-cache", str(vow_file)]
+            self_args = ["verify", "--backend", "esbmc", "--no-cache", str(vow_file)]
         else:
             args = ["build", "--no-verify", "--no-cache", str(vow_file)]
             rust_args = args + ["-o", str(rust_out)]

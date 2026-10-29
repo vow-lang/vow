@@ -21,14 +21,14 @@ else
 fi
 # (c) verify --perfetto: esbmc proof span present + stdout parity (needs ESBMC).
 if command -v esbmc >/dev/null 2>&1; then
-    if run_self verify --perfetto "$ptrace_dir/verify.json.gz" examples/divide.vow >/dev/null 2>&1 \
+    if run_self verify --backend esbmc --perfetto "$ptrace_dir/verify.json.gz" examples/divide.vow >/dev/null 2>&1 \
        && python3 scripts/validate_trace_gz.py "$ptrace_dir/verify.json.gz" --require parse,esbmc >/dev/null 2>&1; then
         pass "perfetto/verify-trace (esbmc proof span + flow)"
     else
         fail "perfetto/verify-trace" "missing or malformed trace from verify --perfetto"
     fi
-    voff=$(run_self verify examples/divide.vow 2>/dev/null)
-    von=$(run_self verify --perfetto "$ptrace_dir/parity.json.gz" examples/divide.vow 2>/dev/null)
+    voff=$(run_self verify --backend esbmc examples/divide.vow 2>/dev/null)
+    von=$(run_self verify --backend esbmc --perfetto "$ptrace_dir/parity.json.gz" examples/divide.vow 2>/dev/null)
     if [ "$voff" = "$von" ]; then
         pass "perfetto/verify-stdout-parity (verify JSON identical with/without --perfetto)"
     else

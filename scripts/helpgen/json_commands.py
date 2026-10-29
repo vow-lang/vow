@@ -37,9 +37,10 @@ def verification_defaults() -> dict:
     # Collection model capacities (Vec/String/HashMap/BTreeMap) are deliberately
     # absent: they are internal verifier-model bounds, not language properties or
     # tunable CLI flags. See docs/design/verifier-model-bounds.md.
-    # `strategy`/`max_k_step` describe the default ESBMC backend and stay as
-    # they are for agents that read them; `native` describes `--backend native`.
+    # `strategy`/`max_k_step` describe the ESBMC backend (`--backend esbmc`) and
+    # stay as they are for agents that read them; `native` describes the default.
     return {
+        "default_backend": "native",
         "strategy": "incremental-bmc",
         "max_k_step": DEFAULT_MAX_K_STEP,
         "native": {

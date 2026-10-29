@@ -1182,7 +1182,7 @@ fn count_up() -> u64 {
 ### EsbmcNotFound
 
 **Phase:** Verification
-**Meaning:** ESBMC is not installed or not on `$PATH`. When verification is enabled with the ESBMC backend (the default for `vowc build`, always for `vowc verify`), the compiler checks for ESBMC upfront before compilation. If ESBMC is not found, the build aborts immediately with exit code 1. Under `--backend native` the verifier is Bitwuzla instead: a missing `bitwuzla` is reported per function as `VerifyFailed` with `verify_status: "tool_not_found"` (clause `status` `error` in `vowc contracts --verify`), and ESBMC is never consulted.
+**Meaning:** ESBMC is not installed or not on `$PATH`. When verification is enabled with the ESBMC backend (`--backend esbmc`, and always for the Rust `vow`), the compiler checks for ESBMC upfront before compilation. If ESBMC is not found, the build aborts immediately with exit code 1. Under the native backend (the default of the self-hosted `vowc`) the verifier is Bitwuzla instead: a missing `bitwuzla` is reported per function as `VerifyFailed` with `verify_status: "tool_not_found"` (clause `status` `error` in `vowc contracts --verify`), and ESBMC is never consulted.
 
 **Wrong:**
 

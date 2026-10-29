@@ -22,7 +22,7 @@ fn run_test(argv: Vec<String>) -> i32 [io, read, write] {
         else { 30000 }
     };
     let do_verify: bool = has_flag(argv, "--verify");
-    let t_native: bool = get_flag_arg(argv, "--backend") == "native";
+    let t_native: bool = backend_is_native(argv);
     let esbmc_bin: String = {
         if do_verify && !t_native { esbmc_path() }
         else { String::from("") }

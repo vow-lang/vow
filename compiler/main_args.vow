@@ -24,6 +24,11 @@ fn get_flag_arg(argv: Vec<String>, flag: String) -> String {
     String::from("")
 }
 
+// The verification backend: native unless `--backend esbmc` is given.
+fn backend_is_native(argv: Vec<String>) -> bool {
+    get_flag_arg(argv, "--backend") != "esbmc"
+}
+
 // `-o` and `--output` are the same flag; `-o` wins when both are given.
 fn output_flag_value(argv: Vec<String>) -> String {
     if has_flag(argv, "-o") { return get_flag_arg(argv, "-o"); }

@@ -91,7 +91,7 @@ jobs:
       - name: Verifier-evaluation suite (self-hosted)
         # Holds the fixed-point self-hosted compiler to the same exact
         # ground-truth blame/vow_id corpus as the Rust verifier.
-        run: python3 scripts/verify_eval.py --verifier build/vowc --output-dir /tmp/verify-eval-self
+        run: python3 scripts/verify_eval.py --verifier build/vowc --backend esbmc --output-dir /tmp/verify-eval-self
 
   bootstrap-macos:
     needs: changes

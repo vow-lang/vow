@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # `build` finishes codegen and linking before any ESBMC process starts (#179).
-# Runs against either compiler: VOWC_BIN=target/release/vow or build/vowc.
+# Runs against either compiler: VOWC_BIN=target/release/vow VOWC_KIND=rust or build/vowc.
 set -euo pipefail
 
 VOWC_BIN="${VOWC_BIN:-build/vowc}"
+BACKEND=(--backend esbmc)
+[ "${VOWC_KIND:-self}" = rust ] && BACKEND=()
 TMP_ROOT=$(mktemp -d)
 trap 'rm -rf "$TMP_ROOT"' EXIT
 # Kill signals re-raise so the EXIT handler above still does the removal:
@@ -78,7 +80,7 @@ build() {
     rm -f "$EXE" "$LOG"
     BUILD_EXIT=0
     BUILD_JSON=$(PATH="$FAKE_BIN:$PATH" VOW_TEST_EXE="$EXE" VOW_TEST_LOG="$LOG" \
-        "$VOWC_BIN" build "$@" "$fixture" -o "$EXE" 2>"$TMP_ROOT/$name.stderr") || BUILD_EXIT=$?
+        "$VOWC_BIN" build ${BACKEND[@]+"${BACKEND[@]}"} "$@" "$fixture" -o "$EXE" 2>"$TMP_ROOT/$name.stderr") || BUILD_EXIT=$?
 }
 
 build verified "$TMP_ROOT/ok.vow" --no-cache --verify-jobs 1

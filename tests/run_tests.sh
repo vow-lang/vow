@@ -46,14 +46,15 @@ done
 
 # --- Helpers ---
 
+# Native is the default backend; this harness checks ESBMC verdicts.
 run_vowc() {
-  "$VOWC" "$@"
+  "$VOWC" "$1" --backend esbmc "${@:2}"
 }
 
 run_vowc_with_tmpdir() {
   local tmp_root="$1"
   shift
-  ( export TMPDIR="$tmp_root"; "$VOWC" "$@" )
+  ( export TMPDIR="$tmp_root"; run_vowc "$@" )
 }
 
 run_bin() {
@@ -500,7 +501,7 @@ print('ok' if any(s in ('proven', 'proven-ir') for s in ss) else 'no_proven')
           verify_json="$(run_vowc build --verify-jobs 2 "$SCRIPT_DIR/verify-fail/verify_jobs_ce_before_soft.vow" -o "$TMPDIR/ce_before_soft" 2>/dev/null)"
           ;;
         legacy)
-          verify_json="$(run_vowc --verify-jobs 2 "$SCRIPT_DIR/verify-fail/verify_jobs_ce_before_soft.vow" -o "$TMPDIR/ce_before_soft_bare" 2>/dev/null)"
+          verify_json="$("$VOWC" --backend esbmc --verify-jobs 2 "$SCRIPT_DIR/verify-fail/verify_jobs_ce_before_soft.vow" -o "$TMPDIR/ce_before_soft_bare" 2>/dev/null)"
           ;;
       esac
       verify_exit=$?
@@ -615,10 +616,8 @@ else:
 
   name="contracts_weakness_trivially_satisfiable"
   if matches_filter "$name"; then
-    # PR-C (#81): a weak postcondition (`result >= 0`) is satisfied by a trivial
-    # `return 0` body, so the body-replace probe flags it trivially_satisfiable;
-    # a tight one (`result == x + 1`) is not. Informational (no exit-code change).
-    # Mirrors the Rust contracts_verify_flags_trivially_satisfiable_ensures test.
+    # PR-C (#81): the weak `result >= 0` is satisfied by a trivial `return 0` body
+    # (trivially_satisfiable), the tight `result == x + 1` is not. Informational.
     src="$TMPDIR/${name}.vow"
     cat > "$src" <<'VOWEOF'
 module M

@@ -104,7 +104,7 @@ run_mode() {
             ;;
         verify)
             rust_json=$($RUST verify "$vow_file" 2>/dev/null) || rust_exit=$?
-            self_json=$($SELF verify "$vow_file" 2>/dev/null) || self_exit=$?
+            self_json=$($SELF verify --backend esbmc "$vow_file" 2>/dev/null) || self_exit=$?
             ;;
     esac
 

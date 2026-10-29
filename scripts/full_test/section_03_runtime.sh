@@ -41,7 +41,7 @@ for vow_file in tests/verify/*.vow; do
 
     rust_json="" self_json="" rust_exit=0 self_exit=0
     rust_json=$($RUST verify "$vow_file" 2>/dev/null) || rust_exit=$?
-    self_json=$(run_self verify "$vow_file" 2>/dev/null) || self_exit=$?
+    self_json=$(run_self verify --backend esbmc "$vow_file" 2>/dev/null) || self_exit=$?
 
     if check_empty_output "${name}/verify-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
         continue

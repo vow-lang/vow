@@ -37,15 +37,15 @@ vow test [OPTIONS] [<path>]
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
 | `<path>`          | `.`         | Directory to scan or single `.vow` file    |
-| `--verify`        | (off)       | Run verification (ESBMC, or the native backend with `--backend native`) on test files |
-| `--backend <esbmc\|native>` | `esbmc` | Verification backend; `native` requires `--verify` (see "Native backend: `contracts` and `test`") |
+| `--verify`        | (off)       | Run verification (the native backend by default, or ESBMC with `--backend esbmc`) on test files |
+| `--backend <esbmc\|native>` | `native` | Verification backend; an explicit `--backend native` requires `--verify` (see "Native backend: `contracts` and `test`") |
 | `--filter <pat>`  | (none)      | Only run tests whose file stem contains pat |
 | `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the nearest ancestor of the entry file that resolves all of its `use` declarations. |
 | `--jobs <N>`      | `min(num_cpus/2, 8)` (`1` with `--verify`) | Max test files compiled and run concurrently |
 | `--mode debug`    | (default)   | Insert runtime vow checks                 |
 | `--mode release`  | `debug`     | Omit all vow checks for performance       |
 | `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
-| `--max-k-step <N>` | `50`       | ESBMC backend only; a usage error under `--backend native`. ESBMC incremental BMC max iterations (with --verify) |
+| `--max-k-step <N>` | `50`       | ESBMC backend only; a usage error unless `--backend esbmc` is given. ESBMC incremental BMC max iterations (with --verify) |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent verification jobs (with --verify) |
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.

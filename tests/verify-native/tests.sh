@@ -211,7 +211,7 @@ run_cmd() {
 
 run_native() {
     local mode="$1"; shift
-    run_cmd "$mode" verify --no-cache --backend native "$@"
+    run_cmd "$mode" verify --no-cache "$@"
 }
 
 # the same, with the claims of a round sharing one solver process.
@@ -995,13 +995,13 @@ usage_error() {
 }
 usage_error "--backend must be" verify --backend bogus "$ONE_CLAIM"
 usage_error "--backend must be" verify "$ONE_CLAIM" --backend
-usage_error "only supported by" build --backend native "$ONE_CLAIM"
+usage_error "conflicts" build --no-verify --backend native "$ONE_CLAIM"
 usage_error "requires --verify" contracts --backend native "$ONE_CLAIM"
 usage_error "requires --verify" test --backend native "$ONE_CLAIM"
 usage_error "--solver" contracts --verify --backend native --solver z3 "$ONE_CLAIM"
 usage_error "--solver" test --verify --backend native --solver z3 "$ONE_CLAIM"
 usage_error "--max-k-step" test --verify --backend native --max-k-step 5 "$ONE_CLAIM"
-usage_error "only supported by" "$ONE_CLAIM" --backend native
+usage_error "conflicts" "$ONE_CLAIM" --no-verify --backend native
 usage_error "--max-k-step" verify --backend native --max-k-step 5 "$ONE_CLAIM"
 usage_error "--solver" verify --backend native --solver z3 "$ONE_CLAIM"
 usage_error "--encoding" verify --backend native --encoding bv "$ONE_CLAIM"
