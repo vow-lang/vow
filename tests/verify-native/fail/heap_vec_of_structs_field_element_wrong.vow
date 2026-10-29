@@ -3,6 +3,7 @@
 // TEST: counterexample-blame Callee
 // TEST: counterexample-value t.0.len 1
 // TEST: counterexample-value t.0[0].0 42
+// TEST: esbmc-model-artifact fn="age_of" blame=None vow_id=4294967293 "ESBMC reads the Vec field t.members as a fresh value of nondeterministic length at each use, so the requires t.members.len() == 1 does not bound the read of t.members[0] and it reports an out-of-bounds read instead of the ensures violation; the native model reads one field as one value. A debug-mode run aborts only on the ensures violation the native counterexample names, never with an out-of-bounds read"
 // The struct in the held Vec is read through its address: its slots are listed under the element.
 module HeapVecOfStructsFieldElementWrong
 
