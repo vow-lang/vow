@@ -113,6 +113,12 @@ fn replay_obj_name(shown: String, key: String, tail: String) -> ReplayArg {
     replay_field_skip(shown, str3r(String::from("` at `"), key, tail))
 }
 
+// The argument naming the binding `bind` of an object of type text `shown`; the binding must be
+// declared before the item that uses it.
+fn replay_bound(bind: String, shown: String) -> ReplayArg {
+    replay_arg_ok_deps(String::from(bind), shown, str3r(bind, String::from(" "), String::from("")))
+}
+
 // The elements `<key>[0]` .. `<key>[len - 1]` of the `Vec` of objects of type `tid`, each the
 // binding of `replay_obj_arg`.
 fn replay_obj_vec(m: Module, tid: i64, key: String, len: i64, names: Vec<String>, vals: Vec<String>, depth: i64, avoid: Vec<i64>, objs: ReplayObjs) -> ReplayArg {
@@ -210,7 +216,7 @@ fn replay_obj_arg(m: Module, tid0: i64, key: String, names: Vec<String>, vals: V
         if bind == replay_obj_bind(objs, objs.cur) {
             return replay_field_skip(shown, String::from("` holds the very value that holds it, and a value must exist before a field can hold it, so replay cannot build the cycle"));
         }
-        return replay_arg_ok_deps(String::from(bind), shown, str3r(bind, String::from(" "), String::from("")));
+        return replay_bound(bind, shown);
     }
     let clash: String = replay_param_clash(shown, bits, objs);
     if clash.len() > 0 && !free {
@@ -227,7 +233,7 @@ fn replay_obj_arg(m: Module, tid0: i64, key: String, names: Vec<String>, vals: V
                 return replay_obj_name(shown, key, String::from("` lists contents that differ from another position at the same address"));
             }
         }
-        return replay_arg_ok_deps(String::from(known), shown, str3r(known, String::from(" "), String::from("")));
+        return replay_bound(known, shown);
     }
     if depth >= REPLAY_MAX_DEPTH() {
         return replay_field_skip(shown, String::from("` is nested too deep to rebuild"));
@@ -235,5 +241,5 @@ fn replay_obj_arg(m: Module, tid0: i64, key: String, names: Vec<String>, vals: V
     let built: ReplayArg = replay_obj_contents(m, tid, key, free, names, vals, depth, avoid, objs);
     if built.reason.len() > 0 { return built; }
     let bind: String = replay_heap_add(objs, hk, shown, built);
-    replay_arg_ok_deps(String::from(bind), shown, str3r(bind, String::from(" "), String::from("")))
+    replay_bound(bind, shown)
 }
