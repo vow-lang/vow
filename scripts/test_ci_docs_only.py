@@ -308,6 +308,56 @@ class IsArenaInputTest(unittest.TestCase):
                 self.assertFalse(ci_docs_only.is_arena_input(path))
 
 
+class IsCompilerInputTest(unittest.TestCase):
+    def test_compiler_sources_tests_and_generated_modules_are_inputs(self):
+        for path in (
+            "compiler/lexer.vow",
+            "compiler/tests/test_replay_main.vow",
+            "compiler/replay_main.vow",
+            "compiler/vc_cache.vow",
+            "compiler/help_gen.vow",
+            "examples/divide.vow",
+            "tests/fixtures/vec_bool_layout.vow",
+            "tests/verify-native/summary/ensures_shadowed_param.vow",
+            "docs/spec/schemas/test-result.schema.json",
+            "tests/run/map_narrow_values.vow",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(ci_docs_only.is_compiler_input(path))
+
+    def test_harness_and_gate_are_inputs(self):
+        for path in (
+            "scripts/compiler_test_parity.sh",
+            "scripts/concat_vow.sh",
+            "scripts/parity.py",
+            "scripts/bootstrap.sh",
+            "scripts/ci_docs_only.py",
+            ".github/workflows/compiler-tests.yml",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(ci_docs_only.is_compiler_input(path))
+
+    def test_unrelated_paths_are_not_inputs(self):
+        for path in (
+            "vow/src/main.rs",
+            "vow-runtime/src/lib.rs",
+            "README.md",
+            ".github/workflows/ci.yml",
+            "tests/run/unrelated_fixture.vow",
+            "scripts/compiler_test_parity.sh.bak",
+            "compiler-extra/lexer.vow",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(ci_docs_only.is_compiler_input(path))
+
+    def test_changeset_helper(self):
+        self.assertTrue(
+            ci_docs_only.touches_compiler(["README.md", "compiler/tests/t.vow"])
+        )
+        self.assertFalse(ci_docs_only.touches_compiler(["vow/src/main.rs", ""]))
+        self.assertFalse(ci_docs_only.touches_compiler([]))
+
+
 class TouchesArenaTest(unittest.TestCase):
     def test_any_arena_input_in_the_changeset_wins(self):
         self.assertTrue(
@@ -338,7 +388,9 @@ class MainTest(GitRepoFixture):
         # Both gates fail open: refusing to classify must not skip a job. This
         # is also the shape of a `schedule` event, which carries no range and
         # so opts the nightly arena run in without a condition of its own.
-        self.assertEqual({"code": "true", "arena": "true"}, self.classify())
+        self.assertEqual(
+            {"code": "true", "arena": "true", "compiler": "true"}, self.classify()
+        )
 
     def test_arena_input_in_the_range_opens_the_arena_gate(self):
         base = self.head()
@@ -348,7 +400,7 @@ class MainTest(GitRepoFixture):
         head = self.commit("fix(vow-runtime): touch the arena implementation")
 
         self.assertEqual(
-            {"code": "true", "arena": "true"},
+            {"code": "true", "arena": "true", "compiler": "false"},
             self.classify("--base", base, "--head", head),
         )
 
@@ -360,17 +412,28 @@ class MainTest(GitRepoFixture):
         head = self.commit("feat: change the compiler")
 
         self.assertEqual(
-            {"code": "true", "arena": "false"},
+            {"code": "true", "arena": "false", "compiler": "false"},
             self.classify("--base", base, "--head", head),
         )
 
-    def test_prose_change_closes_both_gates(self):
+    def test_compiler_source_change_opens_the_compiler_gate(self):
+        base = self.head()
+        (self.repo / "compiler").mkdir()
+        (self.repo / "compiler" / "lexer.vow").write_text("// changed\n")
+        head = self.commit("fix(lexer): change a compiler source")
+
+        self.assertEqual(
+            {"code": "true", "arena": "false", "compiler": "true"},
+            self.classify("--base", base, "--head", head),
+        )
+
+    def test_prose_change_closes_every_gate(self):
         base = self.head()
         (self.repo / "README.md").write_text("changed\n")
         head = self.commit("docs: tweak")
 
         self.assertEqual(
-            {"code": "false", "arena": "false"},
+            {"code": "false", "arena": "false", "compiler": "false"},
             self.classify("--base", base, "--head", head),
         )
 

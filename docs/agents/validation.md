@@ -31,6 +31,8 @@ Sections 4g and 8c call those same two scripts (through `run_shared_check`) rath
 copies, so there is one place to change a directive. Run
 `scripts/check_native_fixtures.sh [--filter <path substring>] [--jobs N] build/vowc` before
 pushing a fixture. The rest of `full_test.sh` is still post-merge only (`full-test.yml`).
+`compiler/` changes also run `scripts/compiler_test_parity.sh` (`vow test compiler/` under both
+compilers) at PR time via `compiler-tests.yml`; it needs `build/vowc` from `scripts/bootstrap.sh`.
 
 `scripts/full_test.sh` is only the entry script (setup, the `VOW_FULL_TEST_*` mode gates, the
 Tier 1.5 cut-off and the summary). Its helpers and sections live in `scripts/full_test/`, one
