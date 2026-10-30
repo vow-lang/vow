@@ -1,0 +1,79 @@
+module VcTypeKeys
+
+use ast
+use ir
+use lower_keys
+
+// The declared type of each slot of each struct, for the native verifier. The IR types a field that
+// holds an object `ptr` (the `Node { p: ptr, n: i64 }` of `struct Node { p: Pair, n: i64 }`), so a
+// counterexample that makes the `Pair` of one parameter the address of a `Node` parameter is
+// not visibly wrong in the IR. This pass reads the declarations once, after lowering, and records
+// per struct, per slot, the key of the declared type (`lower_param_key`: `Pair`, `Vec<Node>`,
+// `String`; aliases resolved), "" for a slot without one. The verifier consults it only to tell
+// a model that gives two objects of different declared types one address from one that does
+// not (`vc_typed`); the IR instructions are unchanged.
+
+// Slots the declared type `tid` takes: a 128-bit integer takes two 8-byte words, everything else one.
+fn vc_key_slots(a: AstArena, tid: i64, alias_names: Vec<String>, alias_target_tids: Vec<i64>) -> i64 {
+    let r: i64 = lower_resolve_alias_tid(a, tid, alias_names, alias_target_tids);
+    if r == -1 || type_tag(a, r) != TY_NAMED() { return 1; }
+    let name: String = arena_str(a, type_a(a, r));
+    if name == String::from("i128") || name == String::from("u128") { return 2; }
+    1
+}
+
+fn vc_key_layout_at(ir_mod: IrModule, name: String) -> i64 {
+    let mut i: u64 = 0;
+    while i < ir_mod.struct_layouts.len() {
+        if ir_mod.struct_layouts[i].name == name { return i as i64; }
+        i = i + 1;
+    }
+    -1
+}
+
+// Fills `ir_mod.field_keys`, parallel to its struct layouts, from the struct declarations of `m`.
+fn vc_annotate_field_keys(ir_mod: IrModule, m: Module) {
+    let a: AstArena = m.arena;
+    let alias_names: Vec<String> = Vec::new();
+    let alias_target_tids: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < m.items.len() {
+        let item: i64 = m.items[i];
+        if item >= 0 && item_kind(item) == ITEM_TYPE_ALIAS() {
+            alias_names.push(arena_str(a, alias_name_sid(a, item_id(item))));
+            alias_target_tids.push(alias_type_tid(a, item_id(item)));
+        }
+        i = i + 1;
+    }
+    let keys: Vec<Vec<String>> = Vec::new();
+    let mut s: u64 = 0;
+    while s < ir_mod.struct_layouts.len() {
+        keys.push(Vec::new());
+        s = s + 1;
+    }
+    i = 0;
+    while i < m.items.len() {
+        let item: i64 = m.items[i];
+        if item >= 0 && item_kind(item) == ITEM_STRUCT() {
+            let sid: i64 = item_id(item);
+            let at: i64 = vc_key_layout_at(ir_mod, arena_str(a, sdef_name_sid(a, sid)));
+            if at >= 0 && keys[at as u64].len() == 0 {
+                let fields_lid: i64 = sdef_fields_lid(a, sid);
+                let per_slot: Vec<String> = keys[at as u64];
+                let mut f: i64 = 0;
+                while f < list_len(a, fields_lid) / 2 {
+                    let ftid: i64 = list_get(a, fields_lid, f * 2 + 1);
+                    per_slot.push(lower_param_key(a, ftid, alias_names, alias_target_tids));
+                    let mut extra: i64 = vc_key_slots(a, ftid, alias_names, alias_target_tids) - 1;
+                    while extra > 0 {
+                        per_slot.push(String::from(""));
+                        extra = extra - 1;
+                    }
+                    f = f + 1;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    ir_mod.field_keys = keys;
+}

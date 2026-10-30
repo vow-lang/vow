@@ -79,5 +79,21 @@ and is ignored. A second position at an address that lists contents must list th
 or the replay is `skipped`.
 
 Not part of this stage: a counterexample whose model needs a type-different alias (`q.p` is the `Node`
-parameter `q` where a `Pair` is declared, `vec_pointer_elem_field_foreign_handle_value_wrong`) stays
-`skipped`; stage 4 would ask the solver to prefer a type-consistent model.
+parameter `q` where a `Pair` is declared) stays `skipped`; stage 4 asks the solver for a type-consistent model.
+
+## Stage 4: a model that keeps objects of two declared types apart
+
+The heap arrays are keyed by slot, not by type (ADR-2026-10-24-0900, item 6), so a model of a failed claim
+may give a `Pair` and a `Node` one address (`q.p` is the address of `q`): a counterexample no run has, which
+replay declines (#1909). The first enriched model is checked (`vc_typed`): the declared key of each entry that
+holds an object's address (a parameter's `.addr`, a listed slot, a `Vec` element, a slot read through an
+element) comes from the program, not the IR instructions: `IrFunction.param_keys` and the per-slot keys of each
+struct (`IrModule.field_keys`, filled from the declarations by `vc_annotate_field_keys` after lowering, empty
+in a module nothing annotated, never read by codegen). When two entries of one kind and two keys hold an
+address the function reads through, the enrichment is asked again with those entries required to differ
+(`vc_assert_apart`, by symbol name, so the pairs survive a change of length bound), at most 3 times, and the
+last model with no such pair, or the last that the solver found, is listed. The extra assertions only choose
+among models of the claim's own query and run only after the claim failed, so no verdict, proof or cost of a
+proof changes. When no model keeps the types apart the first stands and replay skips it as before. Not keyed, so
+not kept apart: the handles read through (`$read.<i>`) and anything else without a struct, `Vec` or `String`
+key, such as an `Option` payload, an enum or a `HashMap`.
