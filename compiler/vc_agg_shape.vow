@@ -228,8 +228,8 @@ fn vc_agg_read_use_ok(inst: IrInst, a: u64) -> bool {
     op == IOP_FIELD_SET() || op == IOP_UPSILON() || op == IOP_RETURN() || op == IOP_LINEAR_CONSUME()
 }
 
-// True when operand `a` of `inst` is an object operand of a `Vec`, `String` or map-free collection
-// operation: the receiver, and the further strings of a string operation.
+// True when operand `a` of `inst` is an object operand of a `Vec` or `String` operation: the
+// receiver, and the further strings of a string operation.
 fn vc_agg_collection_operand(inst: IrInst, a: u64) -> bool {
     let k: i64 = vc_inst_vec_kind(inst);
     k != VC_VEC_NONE() && a < vc_str_kind_object_operands(k)

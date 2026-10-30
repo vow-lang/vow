@@ -36,9 +36,9 @@ parameter's state is one per alias group (ADR-2026-10-19-1700).
    gives a parameter that a `push`, `set` or field write stores (through Phis) its declared class in
    the alias analysis, so a function that stores one and changes another of its declared type gets
    the identities of ADR-2026-10-19-1700 even when the stored parameter is never an operand. The two
-   are one object exactly when their identities are equal, the address of a group's members is one
-   (`<param>.addr` is equal in a counterexample), and a write through one is applied to the other, so
-   the element read back sees it. `vc_ptr_store_resolvable` no longer refuses a collection parameter
+   are one object exactly when their identities are equal, and a write through one is applied to the
+   other under that test, so the element read back, a read of the state of the parameter whose
+   address the slot holds, sees it. `vc_ptr_store_resolvable` no longer refuses a collection parameter
    (the `collection` table of `vc_objects` is gone).
 3. **Counterexamples** list the identities and addresses as for any aliased parameter; `--replay-cex`
    rebuilds both parameters as one value and confirms them.
