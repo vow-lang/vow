@@ -199,8 +199,7 @@ fn vc_define(w: VcWalk, inst: IrInst, t: i64) {
 
 // The term for an operand read at type `at`: an `i64` literal against another
 // integer type is rebuilt at that type, sign-extended into the high limb only
-// for a signed `at` (the checker has range-checked it, so an unsigned type never
-// sees a negative literal).
+// for a signed `at` (range-checked: never negative for an unsigned type).
 fn vc_operand_at(w: VcWalk, at: i64, id: i64) -> i64 {
     let term: i64 = w.var_of[id as u64];
     if w.tys[id as u64] == at || w.lits[id as u64] != 1 { return term; }
@@ -743,16 +742,16 @@ fn vc_walk_clause(w: VcWalk, inst: IrInst, pc: i64) {
     vc_assume(cs, pc, goal);
 }
 
-// A narrowing intrinsic (`vc_narrow`): a `wrap` or `sat` call defines a closed term
-// of its operand; a `try` call creates the `Option` it returns, tag and payload
-// slots both functions of the operand, so a `match` on it reads exact values.
+// A narrowing intrinsic or saturating `u8` op (`vc_narrow`): `try` creates an `Option`
+// (tag and payload both functions of the operand), the rest a closed term.
 fn vc_walk_narrow(w: VcWalk, bi: u64, inst: IrInst) -> bool {
     let nar: VcNarrow = vc_narrow_of(inst);
     if nar.kind == VC_NAR_NONE() { return false; }
     let ar: VcArena = w.cs.arena;
-    let x: i64 = w.var_of[inst.args[0] as u64];
+    let x: i64 = vc_operand_at(w, nar.src, inst.args[0]);
     if nar.kind != VC_NAR_TRY() {
-        vc_define(w, inst, vc_narrow_value(ar, nar, x));
+        let y: i64 = vc_operand_at(w, nar.src, inst.args[inst.args.len() - 1]);
+        vc_define(w, inst, vc_narrow_apply(ar, nar, x, y));
         return true;
     }
     let obj: i64 = vc_walk_new_obj(w, bi, inst);

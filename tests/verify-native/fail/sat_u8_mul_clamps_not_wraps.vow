@@ -1,0 +1,18 @@
+// TEST: counterexample-fn "mul_equals_wrapping_product"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures result == a * b"
+// `mul_sat_u8` saturates at 255, while `a * b` on `u8` wraps modulo 256: the two
+// disagree as soon as the product overflows (for example `16 * 16`).
+module SatU8MulClampsNotWraps
+
+fn mul_equals_wrapping_product(a: u8, b: u8) -> u8 vow {
+  ensures: result == a * b
+} {
+  mul_sat_u8(a, b)
+}
+
+fn main() -> i32 [io] {
+  print_i64(mul_equals_wrapping_product(2, 3) as i64);
+  0
+}

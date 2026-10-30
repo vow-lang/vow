@@ -17,6 +17,10 @@ use vc_int
 //         whose tag slot is the 64-bit `1`/`0` and whose payload slot holds the
 //         destination-width value (the cell `alloc_option_in_arena` fills).
 //
+// The saturating `u8` operations `__vow_{add,sub,mul}_sat_u8` live here too: two `u8`
+// operands, the exact result clamped to `[0, 255]` (`ite` of the unsigned overflow
+// predicate, so the term is closed and the solver sees the real arithmetic).
+//
 // The family is not in the operation catalogue (ADR-2026-10-13-1048 keeps it
 // excluded); the symbol is parsed here instead, like the `Vec` operations of
 // `vc_ops`.
@@ -25,6 +29,9 @@ fn VC_NAR_NONE() -> i64 { 0 }
 fn VC_NAR_WRAP() -> i64 { 1 }
 fn VC_NAR_SAT() -> i64 { 2 }
 fn VC_NAR_TRY() -> i64 { 3 }
+fn VC_NAR_ADD_SAT() -> i64 { 4 }
+fn VC_NAR_SUB_SAT() -> i64 { 5 }
+fn VC_NAR_MUL_SAT() -> i64 { 6 }
 
 // `kind` is a `VC_NAR_*`; `src` and `dst` are IR integer type codes (-1 when `kind`
 // is `VC_NAR_NONE`).
@@ -70,9 +77,22 @@ fn vc_narrow_find_byte(s: String, from: u64, needle: i64) -> i64 {
     -1
 }
 
+fn vc_narrow_sat_kind(sym: String) -> i64 {
+    if sym == String::from("__vow_add_sat_u8") { return VC_NAR_ADD_SAT(); }
+    if sym == String::from("__vow_sub_sat_u8") { return VC_NAR_SUB_SAT(); }
+    if sym == String::from("__vow_mul_sat_u8") { return VC_NAR_MUL_SAT(); }
+    VC_NAR_NONE()
+}
+
+fn vc_narrow_is_sat_op(nar: VcNarrow) -> bool {
+    nar.kind >= VC_NAR_ADD_SAT()
+}
+
 // `__vow_<src>_to_<dst>_<kind>` is 18 bytes at the shortest (`__vow_i8_to_u8_try`)
 // and 23 at the longest (`__vow_u128_to_i128_wrap`).
 fn vc_narrow_parse(sym: String) -> VcNarrow {
+    let sat: i64 = vc_narrow_sat_kind(sym);
+    if sat != VC_NAR_NONE() { return VcNarrow { kind: sat, src: ITY_U8(), dst: ITY_U8() }; }
     let n: u64 = sym.len();
     if n < 18 || n > 23 { return vc_narrow_none(); }
     if string_starts_with(sym, String::from("__vow_")) != 1 { return vc_narrow_none(); }
@@ -115,7 +135,9 @@ fn vc_narrow_of(inst: IrInst) -> VcNarrow {
 // Operand and result types of a call to `nar`: the operand is the symbol's source
 // type, the result its destination (`ptr` for `try`: an `Option` cell holding a payload
 // of at most one 8-byte slot, since every `try` destination is 32 bits or narrower).
-fn vc_narrow_shape_ok(nar: VcNarrow, inst: IrInst, arg_ty: i64) -> bool {
+// A saturating `u8` operation takes two operands, `sat_args_u8` when both read as `u8`.
+fn vc_narrow_shape_ok(nar: VcNarrow, inst: IrInst, arg_ty: i64, sat_args_u8: bool) -> bool {
+    if vc_narrow_is_sat_op(nar) { return inst.args.len() == 2 && sat_args_u8 && inst.ty == ITY_U8(); }
     if inst.args.len() != 1 || arg_ty != nar.src { return false; }
     if nar.kind == VC_NAR_TRY() { return inst.ty == ITY_PTR(); }
     inst.ty == nar.dst
@@ -176,6 +198,30 @@ fn vc_narrow_value(ar: VcArena, nar: VcNarrow, x: i64) -> i64 {
     let below: i64 = vc_narrow_below(ar, nar, x);
     if below >= 0 { r = vc_tm_app3(ar, VC_OP_ITE(), below, vc_narrow_dst_min(ar, nar.dst), r); }
     r
+}
+
+// The result of a saturating `u8` call on the operand terms `a` and `b`: the 8-bit
+// result, or 255 when the exact sum or product does not fit, or 0 when `a < b`.
+fn vc_narrow_sat_op(ar: VcArena, nar: VcNarrow, a: i64, b: i64) -> i64 {
+    if nar.kind == VC_NAR_SUB_SAT() {
+        let under: i64 = vc_tm_app2(ar, VC_OP_BVULT(), a, b);
+        return vc_tm_app3(ar, VC_OP_ITE(), under, vc_int_zero(ar, ITY_U8()), vc_tm_app2(ar, VC_OP_BVSUB(), a, b));
+    }
+    let mut op: i64 = VC_OP_BVADD();
+    let mut over: i64 = VC_OP_BVUADDO();
+    if nar.kind == VC_NAR_MUL_SAT() {
+        op = VC_OP_BVMUL();
+        over = VC_OP_BVUMULO();
+    }
+    let max: i64 = vc_int_minus_one(ar, ITY_U8());
+    vc_tm_app3(ar, VC_OP_ITE(), vc_tm_app2(ar, over, a, b), max, vc_tm_app2(ar, op, a, b))
+}
+
+// The result of a call that defines a closed term (`wrap`, `sat` or a saturating `u8`
+// operation) on its operand terms `x` and `y` (`y` is `x` for a unary call).
+fn vc_narrow_apply(ar: VcArena, nar: VcNarrow, x: i64, y: i64) -> i64 {
+    if vc_narrow_is_sat_op(nar) { return vc_narrow_sat_op(ar, nar, x, y); }
+    vc_narrow_value(ar, nar, x)
 }
 
 // The tag slot of a `try` call's `Option`: 64-bit `1` (`Some`) in range, else `0`.

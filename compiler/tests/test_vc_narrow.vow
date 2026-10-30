@@ -147,6 +147,78 @@ fn check_wide_sources() -> i64 {
     0
 }
 
+fn sat_value(sym: String, a: i64, b: i64) -> i64 {
+    let ar: VcArena = vc_arena_new();
+    folded(ar, vc_narrow_apply(ar, nar(sym), cst(ar, ITY_U8(), a), cst(ar, ITY_U8(), b)))
+}
+
+fn check_sat_u8_parse() -> i64 {
+    let a: VcNarrow = nar(String::from("__vow_add_sat_u8"));
+    if a.kind != VC_NAR_ADD_SAT() || a.src != ITY_U8() || a.dst != ITY_U8() { return 120; }
+    if nar(String::from("__vow_sub_sat_u8")).kind != VC_NAR_SUB_SAT() { return 121; }
+    if nar(String::from("__vow_mul_sat_u8")).kind != VC_NAR_MUL_SAT() { return 122; }
+    if nar(String::from("__vow_add_sat_u16")).kind != VC_NAR_NONE() { return 123; }
+    if nar(String::from("add_sat_u8")).kind != VC_NAR_NONE() { return 124; }
+    if nar(String::from("__vow_add_sat_u8_in_arena")).kind != VC_NAR_NONE() { return 125; }
+    0
+}
+
+fn check_sat_u8_values() -> i64 {
+    let add: String = String::from("__vow_add_sat_u8");
+    if sat_value(add, 200, 55) != 255 { return 130; }
+    if sat_value(add, 200, 56) != 255 { return 131; }
+    if sat_value(add, 255, 255) != 255 { return 132; }
+    if sat_value(add, 100, 55) != 155 { return 133; }
+    if sat_value(add, 0, 0) != 0 { return 134; }
+    let sub: String = String::from("__vow_sub_sat_u8");
+    if sat_value(sub, 5, 7) != 0 { return 135; }
+    if sat_value(sub, 7, 5) != 2 { return 136; }
+    if sat_value(sub, 0, 255) != 0 { return 137; }
+    if sat_value(sub, 255, 0) != 255 { return 138; }
+    let mul: String = String::from("__vow_mul_sat_u8");
+    if sat_value(mul, 16, 16) != 255 { return 139; }
+    if sat_value(mul, 15, 17) != 255 { return 140; }
+    if sat_value(mul, 15, 16) != 240 { return 141; }
+    if sat_value(mul, 255, 255) != 255 { return 142; }
+    if sat_value(mul, 0, 255) != 0 { return 143; }
+    0
+}
+
+fn sat_fn(sym: String, a_ty: i64, b_ty: i64, ret: i64) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, a_ty, 0));
+    insts.push(mk_inst_arg(1, b_ty, 1));
+    insts.push(mk_inst_call_extern(2, ret, args2(0, 1), sym));
+    insts.push(mk_probe(3, ITY_U8(), 7));
+    insts.push(ir_inst_new(4, IOP_NE(), ITY_BOOL(), args2(2, 3), IDATA_NONE(), 0, 0, String::from("")));
+    insts.push(ir_inst_new(5, IOP_VOW_ENS(), ITY_UNIT(), args1(4), IDATA_VOW_ID(), 0, 0, String::from("")));
+    insts.push(mk_inst_return(6, 2));
+    let p: Vec<i64> = Vec::new();
+    p.push(a_ty);
+    p.push(b_ty);
+    one_block(p, ret, insts)
+}
+
+fn check_sat_u8_gate() -> i64 {
+    let add: String = String::from("__vow_add_sat_u8");
+    if vc_skip_reason(sat_fn(add, ITY_U8(), ITY_U8(), ITY_U8())).len() != 0 { return 150; }
+    if vc_skip_reason(sat_fn(String::from("__vow_sub_sat_u8"), ITY_U8(), ITY_U8(), ITY_U8())).len() != 0 { return 151; }
+    if vc_skip_reason(sat_fn(String::from("__vow_mul_sat_u8"), ITY_U8(), ITY_U8(), ITY_U8())).len() != 0 { return 152; }
+    if vc_skip_reason(sat_fn(add, ITY_U8(), ITY_I8(), ITY_U8())).len() == 0 { return 153; }
+    if vc_skip_reason(sat_fn(add, ITY_U16(), ITY_U8(), ITY_U8())).len() == 0 { return 154; }
+    if vc_skip_reason(sat_fn(add, ITY_U8(), ITY_U8(), ITY_I8())).len() == 0 { return 155; }
+    0
+}
+
+fn check_sat_u8_claim_is_closed_term() -> i64 {
+    let c: VcClaims = vc_claims(sat_fn(String::from("__vow_add_sat_u8"), ITY_U8(), ITY_U8(), ITY_U8()));
+    if c.kinds.len() != 1 || c.assumed.len() != 0 { return 160; }
+    let q: String = vc_smt_render(c.arena, vc_claim_script(c, 0));
+    if !contains(q, String::from("bvadd")) { return 161; }
+    if contains(q, String::from("forall")) { return 162; }
+    0
+}
+
 fn mk_probe(id: i64, ty: i64, v: i64) -> IrInst {
     if ty == ITY_U8() || ty == ITY_I8() {
         return ir_inst_new(id, IOP_CONST_U8(), ty, Vec::new(), IDATA_CONST_I64(), v, 0, String::from(""));
@@ -253,5 +325,9 @@ fn main() -> i32 {
     if r == 0 { r = check_unrelated_symbol_stays_unmodeled(); }
     if r == 0 { r = check_claim_is_closed_term(); }
     if r == 0 { r = check_try_option_is_read_back(); }
+    if r == 0 { r = check_sat_u8_parse(); }
+    if r == 0 { r = check_sat_u8_values(); }
+    if r == 0 { r = check_sat_u8_gate(); }
+    if r == 0 { r = check_sat_u8_claim_is_closed_term(); }
     i64_to_i32_wrap(r)
 }
