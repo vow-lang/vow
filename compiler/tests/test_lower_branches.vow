@@ -1,0 +1,251 @@
+module TestLowerBranches
+
+use ast
+use diag
+use lexer
+use parser
+use ir
+use lower
+use lower_branches
+
+fn branch_expression(ctx: LowerCtx, text: String) -> Module {
+    let source: String = String::from("module Branches\nfn f() { let result = ");
+    source.push_str(text);
+    source.push_str(String::from("; }"));
+    let parsed: Module = parse_module_into(lex(source), ctx.arena, diag_ctx_new(), String::from("branches.vow"));
+    parsed
+}
+
+fn branch_expression_id(parsed: Module) -> i64 {
+    let a: AstArena = parsed.arena;
+    let body: i64 = fn_body_bid(a, item_id(parsed.items[0]));
+    stmt_c(a, list_get(a, blk_stmts(a, body), 0))
+}
+
+fn branch_define(ctx: LowerCtx, name: String, text: String) -> i64 {
+    let parsed: Module = branch_expression(ctx, text);
+    let value: i64 = lower_expr(ctx, branch_expression_id(parsed));
+    lctx_define(ctx, name, value);
+    value
+}
+
+// Exercise the join interface directly for if, and keep match coverage through
+// the real pattern dispatcher so payload scope and termination are exercised.
+fn lower_test_branch(ctx: LowerCtx, eid: i64) -> i64 {
+    let a: AstArena = ctx.arena;
+    if expr_tag(a, eid) != EXPR_IF() { return lower_expr(ctx, eid); }
+    let names: Vec<String> = collect_if_mutations(ctx, expr_b(a, eid), expr_c(a, eid));
+    let cond: i64 = lower_expr(ctx, expr_a(a, eid));
+    let mutations: ScopedVars = lctx_in_scope_vars(ctx, names);
+    let then_block: i64 = lctx_new_block(ctx);
+    let else_block: i64 = lctx_new_block(ctx);
+    let merge: i64 = lctx_new_block(ctx);
+    let args: Vec<i64> = Vec::new();
+    args.push(cond);
+    lctx_emit(ctx, IOP_BRANCH(), ITY_UNIT(), args, IDATA_BRANCH_TARGETS(), then_block, else_block, String::from(""), expr_span(a, eid));
+    let join: LowerBranchJoin = lower_branch_join_new(ctx, eid, merge, mutations);
+    lctx_switch_to_block(ctx, then_block);
+    let then_result: i64 = lower_block(ctx, expr_b(a, eid));
+    lower_branch_join_capture(ctx, join, 0, then_result);
+    lctx_switch_to_block(ctx, else_block);
+    let else_eid: i64 = expr_c(a, eid);
+    let else_result: i64 = if else_eid != -1 {
+        lower_value_expr(ctx, else_eid)
+    } else {
+        lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""), expr_span(a, eid))
+    };
+    lower_branch_join_capture(ctx, join, 1, else_result);
+    lower_branch_join_finish(ctx, join)
+}
+
+fn branch_count(ctx: LowerCtx, op: i64) -> i64 {
+    let f: IrFunction = ctx.func;
+    let mut out: i64 = 0;
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let blk: IrBlock = f.blocks[b];
+        let mut i: u64 = 0;
+        while i < blk.insts.len() {
+            if blk.insts[i].op == op { out = out + 1; }
+            i = i + 1;
+        }
+        b = b + 1;
+    }
+    out
+}
+
+fn branch_all_patched(ctx: LowerCtx) -> bool {
+    let f: IrFunction = ctx.func;
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let blk: IrBlock = f.blocks[b];
+        let mut i: u64 = 0;
+        while i < blk.insts.len() {
+            let up: IrInst = blk.insts[i];
+            if up.op == IOP_UPSILON() {
+                let mut found: bool = false;
+                let mut d: u64 = 0;
+                while d < f.blocks.len() {
+                    let dest: IrBlock = f.blocks[d];
+                    let mut p: u64 = 0;
+                    while p < dest.insts.len() {
+                        let phi: IrInst = dest.insts[p];
+                        if phi.op == IOP_PHI() && phi.id == up.dv { found = true; }
+                        p = p + 1;
+                    }
+                    d = d + 1;
+                }
+                if !found { return false; }
+            }
+            i = i + 1;
+        }
+        b = b + 1;
+    }
+    true
+}
+
+fn branch_tail(ctx: LowerCtx, block: u64, targets: Vec<i64>, eid: i64) -> bool {
+    let f: IrFunction = ctx.func;
+    let blk: IrBlock = f.blocks[block];
+    if blk.insts.len() < targets.len() + 1 { return false; }
+    let base: u64 = blk.insts.len() - targets.len() - 1;
+    let mut i: u64 = 0;
+    while i < targets.len() {
+        let up: IrInst = blk.insts[base + i];
+        if up.op != IOP_UPSILON() || up.dv != targets[i] || up.ostart != span_unpack_start(expr_span(ctx.arena, eid)) { return false; }
+        i = i + 1;
+    }
+    let jump: IrInst = blk.insts[blk.insts.len() - 1];
+    jump.op == IOP_JUMP() && jump.dv == 3
+}
+
+fn check_branch_mutations() -> i64 {
+    let ctx: LowerCtx = lctx_new(String::from("mutations"), ITY_PTR(), 0, arena_new(), Vec::new());
+    branch_define(ctx, String::from("x"), String::from("4"));
+    branch_define(ctx, String::from("text"), String::from("\"before\""));
+    let parsed: Module = branch_expression(ctx, String::from("if true { x = 8; text = \"left\"; text } else { x = 9; text = \"right\"; text }"));
+    let eid: i64 = branch_expression_id(parsed);
+    let result: i64 = lower_test_branch(ctx, eid);
+    let targets: Vec<i64> = Vec::new();
+    targets.push(lctx_lookup(ctx, String::from("x")));
+    targets.push(lctx_lookup(ctx, String::from("text")));
+    targets.push(result);
+    if !branch_tail(ctx, 1, targets, eid) || !branch_tail(ctx, 2, targets, eid) { return 1; }
+    if branch_count(ctx, IOP_PHI()) != 3 || !branch_all_patched(ctx) { return 2; }
+    if lctx_get_tag(ctx, result) != String::from("String") || lctx_get_tag(ctx, targets[1]) != String::from("String") { return 3; }
+    let f: IrFunction = ctx.func;
+    let merge: IrBlock = f.blocks[3];
+    if merge.insts[0].id != targets[0] || merge.insts[1].id != targets[1] || merge.insts[2].id != result { return 4; }
+    0
+}
+
+fn check_branch_termination() -> i64 {
+    let ctx: LowerCtx = lctx_new(String::from("one"), ITY_I64(), 0, arena_new(), Vec::new());
+    branch_define(ctx, String::from("x"), String::from("4"));
+    let parsed: Module = branch_expression(ctx, String::from("if true { x = 8; return 1; } else { x = 9; 2 }"));
+    let eid: i64 = branch_expression_id(parsed);
+    lower_test_branch(ctx, eid);
+    if branch_count(ctx, IOP_PHI()) != 2 || branch_count(ctx, IOP_UPSILON()) != 2 || !branch_all_patched(ctx) { return 10; }
+    let dead: LowerCtx = lctx_new(String::from("dead"), ITY_I64(), 0, arena_new(), Vec::new());
+    branch_define(dead, String::from("x"), String::from("4"));
+    let dead_parsed: Module = branch_expression(dead, String::from("if true { x = 8; return 1; } else { x = 9; return 2; }"));
+    lower_test_branch(dead, branch_expression_id(dead_parsed));
+    if branch_count(dead, IOP_PHI()) != 1 || branch_count(dead, IOP_UPSILON()) != 0 || branch_count(dead, IOP_UNREACHABLE()) != 1 { return 11; }
+    0
+}
+
+fn check_branch_marker() -> i64 {
+    let ctx: LowerCtx = lctx_new(String::from("marker"), ITY_I16(), 0, arena_new(), Vec::new());
+    let parsed: Module = branch_expression(ctx, String::from("if true { -1 } else { 7 as i16 }"));
+    let eid: i64 = branch_expression_id(parsed);
+    let result: i64 = lower_test_branch(ctx, eid);
+    if lctx_inst_ty(ctx, result) != ITY_I16() || !branch_all_patched(ctx) { return 20; }
+    let f: IrFunction = ctx.func;
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let blk: IrBlock = f.blocks[b];
+        let mut i: u64 = 0;
+        while i < blk.insts.len() {
+            let up: IrInst = blk.insts[i];
+            if up.op == IOP_UPSILON() && up.dv == result && lctx_inst_ty(ctx, up.args[0]) != ITY_I16() { return 21; }
+            i = i + 1;
+        }
+        b = b + 1;
+    }
+    0
+}
+
+fn check_branch_match() -> i64 {
+    let ctx: LowerCtx = lctx_new(String::from("match"), ITY_I16(), 0, arena_new(), Vec::new());
+    branch_define(ctx, String::from("x"), String::from("4"));
+    let opt: i64 = branch_define(ctx, String::from("opt"), String::from("Option::Some(7 as i16)"));
+    lctx_tag_option_elem(ctx, opt, ITY_I16());
+    let parsed: Module = branch_expression(ctx, String::from("match opt { Option::Some(v) => { x = 8; v }, Option::None => -1, }"));
+    let eid: i64 = branch_expression_id(parsed);
+    let result: i64 = lower_test_branch(ctx, eid);
+    if lctx_inst_ty(ctx, result) != ITY_I16() || !branch_all_patched(ctx) { return 30; }
+    if branch_count(ctx, IOP_PHI()) != 2 || lctx_lookup(ctx, String::from("v")) != -1 { return 31; }
+    let dead: LowerCtx = lctx_new(String::from("match_dead"), ITY_I64(), 0, arena_new(), Vec::new());
+    branch_define(dead, String::from("x"), String::from("4"));
+    branch_define(dead, String::from("opt"), String::from("Option::Some(7)"));
+    let dead_parsed: Module = branch_expression(dead, String::from("match opt { Option::Some(v) => { x = 8; return v; }, Option::None => { return 1; }, }"));
+    lower_test_branch(dead, branch_expression_id(dead_parsed));
+    if branch_count(dead, IOP_PHI()) != 0 || branch_count(dead, IOP_UPSILON()) != 0 || branch_count(dead, IOP_UNREACHABLE()) != 1 { return 32; }
+    0
+}
+
+// A condition assignment belongs to both branch entries. Capturing values
+// before the condition, or restoring only ScopeSnap's lengths, loses it.
+fn check_branch_entry_scope() -> i64 {
+    let ctx: LowerCtx = lctx_new(String::from("entry"), ITY_I64(), 0, arena_new(), Vec::new());
+    branch_define(ctx, String::from("x"), String::from("4"));
+    let parsed: Module = branch_expression(ctx, String::from("if { x = 5; true } { x = 8; x } else { x }"));
+    lower_test_branch(ctx, branch_expression_id(parsed));
+    let f: IrFunction = ctx.func;
+    let otherwise: IrBlock = f.blocks[2];
+    let mutation_up: IrInst = otherwise.insts[0];
+    let result_up: IrInst = otherwise.insts[1];
+    if mutation_up.op != IOP_UPSILON() || result_up.op != IOP_UPSILON() { return 40; }
+    if mutation_up.args[0] != 1 || result_up.args[0] != 1 { return 41; }
+    let empty: LowerCtx = lctx_new(String::from("no_else"), ITY_UNIT(), 0, arena_new(), Vec::new());
+    branch_define(empty, String::from("x"), String::from("4"));
+    let empty_parsed: Module = branch_expression(empty, String::from("if true { x = 8; }"));
+    let result: i64 = lower_test_branch(empty, branch_expression_id(empty_parsed));
+    if lctx_inst_ty(empty, result) != ITY_UNIT() || branch_count(empty, IOP_PHI()) != 2 || !branch_all_patched(empty) { return 42; }
+    0
+}
+
+// Unsupported syntax retains the dispatcher's existing unit fallback and
+// entry mutation inputs; it does not lower that pattern's body.
+fn check_branch_fallback() -> i64 {
+    let ctx: LowerCtx = lctx_new(String::from("fallback"), ITY_UNIT(), 0, arena_new(), Vec::new());
+    let initial: i64 = branch_define(ctx, String::from("x"), String::from("4"));
+    branch_define(ctx, String::from("opt"), String::from("Option::Some(7)"));
+    let parsed: Module = branch_expression(ctx, String::from("match opt { 1 => { x = 9; 8 }, }"));
+    let result: i64 = lower_test_branch(ctx, branch_expression_id(parsed));
+    if lctx_inst_ty(ctx, result) != ITY_UNIT() || branch_count(ctx, IOP_PHI()) != 2 || !branch_all_patched(ctx) { return 50; }
+    let mutation: i64 = lctx_lookup(ctx, String::from("x"));
+    let f: IrFunction = ctx.func;
+    let entry: IrBlock = f.blocks[0];
+    let mut i: u64 = 0;
+    while i < entry.insts.len() {
+        let inst: IrInst = entry.insts[i];
+        if inst.op == IOP_UPSILON() && inst.dv == mutation {
+            if inst.args[0] != initial { return 51; }
+            return 0;
+        }
+        i = i + 1;
+    }
+    52
+}
+
+fn main() -> i32 [io] {
+    let mut code: i64 = check_branch_mutations();
+    if code == 0 { code = check_branch_termination(); }
+    if code == 0 { code = check_branch_marker(); }
+    if code == 0 { code = check_branch_match(); }
+    if code == 0 { code = check_branch_entry_scope(); }
+    if code == 0 { code = check_branch_fallback(); }
+    if code != 0 { print_i64(code); return 1; }
+    0
+}
