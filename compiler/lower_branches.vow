@@ -1,0 +1,282 @@
+module LowerBranches
+
+use ast
+use ir
+use lower
+
+// The SSA join of an if or match. Syntax dispatch lowers each branch body, then
+// hands its exit to this module. Mutation capture, entry-scope restoration,
+// transfer ordering, Phi wiring and aggregate metadata stay together here.
+struct LowerBranchExit {
+    block: i64,
+    result: i64,
+    ty: i64,
+    reaches: bool,
+    values: Vec<i64>,
+    upsilons: Vec<i64>,
+    result_upsilon: i64,
+    marker: bool,
+    body: i64,
+}
+
+struct LowerBranchJoin {
+    source: i64,
+    merge: i64,
+    origin: i64,
+    names: Vec<String>,
+    saved: Vec<i64>,
+    snapshot: ScopeSnap,
+    exits: Vec<LowerBranchExit>,
+}
+
+// `mutations` is collected at the syntax caller's existing point: an if's names
+// precede its condition, but its saved values follow it. A match saves both
+// after lowering the scrutinee. No body has been lowered when this is called.
+fn lower_branch_join_new(ctx: LowerCtx, source: i64, merge: i64, mutations: ScopedVars) -> LowerBranchJoin {
+    LowerBranchJoin {
+        source: source,
+        merge: merge,
+        origin: expr_span(ctx.arena, source),
+        names: mutations.names,
+        saved: mutations.vals,
+        snapshot: lctx_snapshot(ctx),
+        exits: Vec::new(),
+    }
+}
+
+fn branch_join_restore(ctx: LowerCtx, join: LowerBranchJoin) {
+    lctx_restore(ctx, join.snapshot);
+    // ScopeSnap truncates new bindings but cannot undo an in-place assignment.
+    let mut i: u64 = 0;
+    while i < join.names.len() {
+        lctx_assign(ctx, join.names[i], join.saved[i]);
+        i = i + 1;
+    }
+}
+
+fn branch_join_upsilon(ctx: LowerCtx, value: i64, origin: i64) -> i64 {
+    let args: Vec<i64> = Vec::new();
+    args.push(value);
+    lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""), origin)
+}
+
+// Capture the branch at `index` in source order, then restore its entry scope.
+// A match keeps only reaching exits. An if also keeps dead mutation values for
+// its existing type-merge rule; lctx_emit refuses to append after a terminator,
+// so its attempted transfer ids never create an edge from a dead branch.
+fn lower_branch_join_capture(ctx: LowerCtx, join: LowerBranchJoin, index: i64, result: i64) {
+    let a: AstArena = ctx.arena;
+    let is_if: bool = expr_tag(a, join.source) == EXPR_IF();
+    let reaches: bool = !lctx_is_terminated(ctx);
+    if !is_if && !reaches {
+        branch_join_restore(ctx, join);
+        return;
+    }
+    let mut body: i64 = -1;
+    let mut marker: bool = false;
+    let mut fallback: bool = false;
+    if is_if {
+        if index == 0 {
+            let bid: i64 = expr_b(a, join.source);
+            body = block_result_eid(a, bid);
+            marker = block_result_is_coercible_int_marker(a, bid);
+        } else {
+            body = expr_c(a, join.source);
+            marker = body != -1 && expr_is_coercible_int_marker(a, body);
+        }
+    } else {
+        let arms: i64 = expr_b(a, join.source);
+        let pattern: i64 = list_get(a, arms, index * 2);
+        let tag: i64 = pat_tag(a, pattern);
+        fallback = tag != PAT_ENUM() && tag != PAT_WILD() && tag != PAT_IDENT();
+        if !fallback {
+            body = list_get(a, arms, index * 2 + 1);
+            marker = expr_is_coercible_int_marker(a, body);
+        }
+    }
+    let values: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < join.names.len() {
+        values.push(if fallback { join.saved[i] } else { lctx_lookup(ctx, join.names[i]) });
+        i = i + 1;
+    }
+    let upsilons: Vec<i64> = Vec::new();
+    i = 0;
+    while i < values.len() {
+        upsilons.push(branch_join_upsilon(ctx, values[i], join.origin));
+        i = i + 1;
+    }
+    let up: i64 = branch_join_upsilon(ctx, result, join.origin);
+    if !lctx_is_terminated(ctx) {
+        lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), Vec::new(), IDATA_JUMP_TARGET(), join.merge, 0, String::from(""), join.origin);
+    }
+    join.exits.push(LowerBranchExit {
+        block: ctx.current_block,
+        result: result,
+        ty: lctx_inst_ty(ctx, result),
+        reaches: reaches,
+        values: values,
+        upsilons: upsilons,
+        result_upsilon: up,
+        marker: marker,
+        body: body,
+    });
+    branch_join_restore(ctx, join);
+}
+
+fn branch_join_mutations(ctx: LowerCtx, join: LowerBranchJoin) {
+    let exits: Vec<LowerBranchExit> = join.exits;
+    let mut i: u64 = 0;
+    while i < join.names.len() {
+        let first: LowerBranchExit = exits[0];
+        let mut ty: i64 = lctx_inst_ty(ctx, first.values[i]);
+        let mut j: u64 = 1;
+        while j < exits.len() {
+            let exit: LowerBranchExit = exits[j];
+            ty = merge_phi_ty(ty, lctx_inst_ty(ctx, exit.values[i]));
+            j = j + 1;
+        }
+        let phi: i64 = lctx_emit(ctx, IOP_PHI(), ty, Vec::new(), IDATA_NONE(), 0, 0, String::from(""), join.origin);
+        j = 0;
+        while j < exits.len() {
+            let exit: LowerBranchExit = exits[j];
+            backpatch_upsilon(ctx, exit.block, exit.upsilons[i], phi);
+            j = j + 1;
+        }
+        let sources: Vec<i64> = Vec::new();
+        j = 0;
+        while j < exits.len() {
+            let exit: LowerBranchExit = exits[j];
+            if exit.reaches { sources.push(exit.values[i]); }
+            j = j + 1;
+        }
+        lctx_merge_compatible_aggregate_metadata(ctx, sources, phi);
+        lctx_assign(ctx, join.names[i], phi);
+        i = i + 1;
+    }
+}
+
+fn choose_match_result_ty(result_tys: Vec<i64>, result_markers: Vec<bool>) -> i64 {
+    if result_tys.len() == 0 {
+        return ITY_I64();
+    }
+    let n_result_tys: u64 = result_tys.len();
+    let mut linear_i: u64 = 0;
+    while linear_i < n_result_tys {
+        if result_tys[linear_i] == ITY_LPTR() {
+            // Empty Option/Result variants have no payload from which lowering
+            // can infer ownership. Preserve the linear sibling's checked
+            // wrapper type on the merge Phi.
+            return ITY_LPTR();
+        }
+        linear_i = linear_i + 1;
+    }
+    let mut result_ty: i64 = result_tys[0];
+    let mut result_is_marker: bool = result_markers[0];
+    let mut i: u64 = 1;
+    while i < n_result_tys {
+        let arm_ty: i64 = result_tys[i];
+        let arm_is_marker: bool = result_markers[i];
+        if result_is_marker && ir_ty_is_integer(arm_ty) {
+            result_ty = arm_ty;
+            result_is_marker = arm_is_marker && arm_ty == ITY_I64();
+        } else if !(arm_is_marker && ir_ty_is_integer(result_ty)) {
+            result_is_marker = false;
+        }
+        i = i + 1;
+    }
+    result_ty
+}
+
+// Mirrors choose_match_result_ty's marker-aware merge rule, reduced to the
+// two arms an if/else expression has: when the then side is a speculative
+// integer-literal marker and the else side is a genuinely narrow-typed
+// value, the narrow side's type wins instead of the marker's default i64
+// width. Twin of merge_if_result_ty in vow-ir/src/lower/branch_join.rs.
+fn merge_if_result_ty(then_ty: i64, then_is_marker: bool, else_ty: i64) -> i64 {
+    if then_ty == ITY_LPTR() || else_ty == ITY_LPTR() {
+        return ITY_LPTR();
+    }
+    if then_is_marker && ir_ty_is_integer(else_ty) {
+        return else_ty;
+    }
+    then_ty
+}
+
+fn branch_join_result_ty(join: LowerBranchJoin, is_if: bool) -> i64 {
+    let exits: Vec<LowerBranchExit> = join.exits;
+    let tys: Vec<i64> = Vec::new();
+    let markers: Vec<bool> = Vec::new();
+    let mut i: u64 = 0;
+    while i < exits.len() {
+        let exit: LowerBranchExit = exits[i];
+        if exit.reaches {
+            tys.push(exit.ty);
+            markers.push(exit.marker);
+        }
+        i = i + 1;
+    }
+    if is_if {
+        if tys.len() == 1 { return tys[0]; }
+        return merge_if_result_ty(tys[0], markers[0], tys[1]);
+    }
+    choose_match_result_ty(tys, markers)
+}
+
+// Finish the join in its existing merge block. Result marker coercions use the
+// original source body; aggregate metadata uses the original result value even
+// when the result's Upsilon is replaced with a correctly sized marker.
+fn lower_branch_join_finish(ctx: LowerCtx, join: LowerBranchJoin) -> i64 {
+    lctx_switch_to_block(ctx, join.merge);
+    let exits: Vec<LowerBranchExit> = join.exits;
+    let is_if: bool = expr_tag(ctx.arena, join.source) == EXPR_IF();
+    if !is_if && exits.len() == 0 {
+        return lctx_emit(ctx, IOP_UNREACHABLE(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""), join.origin);
+    }
+    branch_join_mutations(ctx, join);
+    // If reads result types after mutation Phis have propagated their types;
+    // match retains the arm types captured before building those Phis.
+    if is_if {
+        let mut e: u64 = 0;
+        while e < exits.len() {
+            let exit: LowerBranchExit = exits[e];
+            if exit.reaches { exit.ty = lctx_inst_ty(ctx, exit.result); }
+            e = e + 1;
+        }
+    }
+    let sources: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < exits.len() {
+        let exit: LowerBranchExit = exits[i];
+        if exit.reaches { sources.push(exit.result); }
+        i = i + 1;
+    }
+    if sources.len() == 0 {
+        return lctx_emit(ctx, IOP_UNREACHABLE(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""), join.origin);
+    }
+    let ty: i64 = branch_join_result_ty(join, is_if);
+    // A single reaching if branch needs no marker re-lowering: its own type
+    // already determines the Phi. Match retains its existing marker pass.
+    if narrow_int_width(ty) != 0 && (!is_if || sources.len() == 2) {
+        i = 0;
+        while i < exits.len() {
+            let exit: LowerBranchExit = exits[i];
+            if exit.reaches && exit.marker && exit.ty != ty && exit.body != -1 {
+                exit.result_upsilon = renarrow_if_branch_result(ctx, ctx.arena, exit.block, exit.result_upsilon, exit.body, ty, join.origin);
+            }
+            i = i + 1;
+        }
+        lctx_switch_to_block(ctx, join.merge);
+    }
+    let phi: i64 = lctx_emit(ctx, IOP_PHI(), ty, Vec::new(), IDATA_NONE(), 0, 0, String::from(""), join.origin);
+    // Match published metadata before patching its inputs; if did so after.
+    if !is_if { lctx_merge_compatible_aggregate_metadata(ctx, sources, phi); }
+    i = 0;
+    while i < exits.len() {
+        let exit: LowerBranchExit = exits[i];
+        if exit.reaches { backpatch_upsilon(ctx, exit.block, exit.result_upsilon, phi); }
+        i = i + 1;
+    }
+    if is_if { lctx_merge_compatible_aggregate_metadata(ctx, sources, phi); }
+    phi
+}
