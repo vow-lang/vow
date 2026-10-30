@@ -1,0 +1,30 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// A `Vec` parameter stored in a field of a struct that is pushed into a `Vec` is as much the object
+// the caller passed as one pushed directly: `b` may be that object, so the push through `b` shows in
+// the length read back and the claim that it is 0 is refuted (#1905). ESBMC cannot check this row, its
+// C model has no `Vec` in a struct field (#1624).
+module VecPointerElemCollectionParamInFieldWrong
+
+struct Holder { v: Vec<i64> }
+
+fn f(a: Vec<i64>, b: Vec<i64>) -> u64 vow {
+  requires: a.len() == 0 && b.len() == 0
+  ensures: result == 0
+} {
+  let outer: Vec<Holder> = Vec::new();
+  let h: Holder = Holder { v: a };
+  outer.push(h);
+  b.push(1);
+  let t: Holder = outer[0];
+  let x: Vec<i64> = t.v;
+  x.len()
+}
+
+fn main() -> i32 [io] {
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  print_u64(f(a, b));
+  0
+}

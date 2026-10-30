@@ -1,0 +1,30 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// A `Vec` parameter that is only stored, never used as an operand: pushing it into a `Vec` is enough
+// for it to be the object another `Vec` parameter may be (#1905), so the length read through the slot
+// before and after a push through `b` need not agree.
+module VecPointerElemCollectionParamOnlyStoredWrong
+
+fn f(a: Vec<i64>, b: Vec<i64>) -> bool vow {
+  ensures: result
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  outer.push(a);
+  let q: Vec<i64> = outer[0];
+  let before: u64 = q.len();
+  b.push(1);
+  let r: Vec<i64> = outer[0];
+  r.len() == before
+}
+
+fn main() -> i32 [io] {
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  if f(a, b) {
+    print_i64(1);
+  } else {
+    print_i64(0);
+  }
+  0
+}

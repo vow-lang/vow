@@ -94,15 +94,34 @@ fn check_param_write() -> i64 {
     0
 }
 
-// A payload used as a `Vec` is not an object of the aggregate model and not a struct a handle
-// names: the function is left as it is, and stays skipped.
-fn check_collection_use_kept() -> i64 {
+// A payload used as the object of a `Vec` operation is read as a handle (#1906): the collection is the
+// object at the address, not a parameter's `Vec`.
+fn check_collection_use_retyped() -> i64 {
     let a: Vec<IrInst> = Vec::new();
     a.push(mk_inst_alloc(0, 16));
     a.push(mk_inst_field_get(1, ITY_PTR(), 0, 1));
     a.push(mk_inst_call_extern(2, ITY_U64(), args1(1), String::from("__vow_vec_len")));
     a.push(mk_inst_return(3, 2));
     let f: IrFunction = one_fn(Vec::new(), ITY_U64(), a);
+    let g: IrFunction = vc_retype_payload_reads(f);
+    if find(g, 1).ty != ITY_I64() || !vc_heap_is_payload_read(find(g, 1)) { return 1; }
+    if find(g, 2).args.len() != 1 || find(g, 2).args[0] != 1 { return 2; }
+    0
+}
+
+// A payload that is the stored operand of a `Vec` operation (not its object) is not served by the
+// handle read: it is the pointer stored, which the aggregate model does not take.
+fn check_collection_stored_kept() -> i64 {
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_alloc(0, 16));
+    a.push(mk_inst_field_get(1, ITY_PTR(), 0, 1));
+    a.push(mk_inst_call_extern(2, ITY_PTR(), Vec::new(), String::from("__vow_vec_new")));
+    let pushed: Vec<i64> = Vec::new();
+    pushed.push(2);
+    pushed.push(1);
+    a.push(mk_inst_call_extern(3, ITY_UNIT(), pushed, String::from("__vow_vec_push_val")));
+    a.push(mk_inst_return(4, 3));
+    let f: IrFunction = one_fn(Vec::new(), ITY_UNIT(), a);
     if find(vc_retype_payload_reads(f), 1).ty != ITY_PTR() { return 1; }
     0
 }
@@ -167,7 +186,8 @@ fn main() -> i32 {
     let mut r: i64 = check_allocation_base();
     if r == 0 { r = check_child_model_kept() + 10; if r == 10 { r = 0; } }
     if r == 0 { r = check_param_write() + 20; if r == 20 { r = 0; } }
-    if r == 0 { r = check_collection_use_kept() + 30; if r == 30 { r = 0; } }
+    if r == 0 { r = check_collection_use_retyped() + 30; if r == 30 { r = 0; } }
+    if r == 0 { r = check_collection_stored_kept() + 70; if r == 70 { r = 0; } }
     if r == 0 { r = check_handle_base_kept() + 40; if r == 40 { r = 0; } }
     if r == 0 { r = check_merged_params() + 50; if r == 50 { r = 0; } }
     if r == 0 { r = check_no_payload() + 60; if r == 60 { r = 0; } }

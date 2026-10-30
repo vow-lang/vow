@@ -1,0 +1,25 @@
+// TEST: counterexample-fn "first"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-value o.1.len 1
+// TEST: counterexample-value o.1[0] 7
+// The first element of the `Vec` the payload holds can be 7.
+module OptionVecPayloadElemWrong
+
+fn first(o: Option<Vec<i64>>) -> i64 vow {
+  ensures: result != 7
+} {
+  match o {
+    Option::Some(v) => {
+      if v.len() > 0u64 { v[0] } else { 0 }
+    },
+    Option::None => 0,
+  }
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(7);
+  print_i64(first(Option::Some(v)));
+  0
+}

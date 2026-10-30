@@ -1,8 +1,10 @@
-// TEST: skip-reason unsupported-opcode
-// A `Vec` parameter stored into a `Vec` and read back stays `Skipped`: two `Vec` parameters may be
-// one value (#1905), so a push through `b` shows in the element read back, which the model, that
-// takes the parameters for distinct objects, would not see.
-module VecPointerElemCollectionParamStoredSkipped
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// A `Vec` parameter pushed into a `Vec` is the object the caller passed, which another `Vec`
+// parameter may be too (#1905): a push through `b` shows in the element read back, so `q.len()` need
+// not be the length `a` had.
+module VecPointerElemCollectionParamStoredWrong
 
 fn f(a: Vec<i64>, b: Vec<i64>) -> bool vow {
   ensures: result

@@ -61,6 +61,28 @@ fn two_vecs(ka: String, kb: String, mutate: bool) -> IrFunction {
     f
 }
 
+// fn f(a, b) { let outer = Vec::new(); outer.push(a); b.push(1) }: `a` is only stored. `mutate` false
+// reads `b.len()` instead of pushing.
+fn stored_param(ka: String, kb: String, mutate: bool) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_arg(1, ITY_PTR(), 1));
+    i.push(mk_inst_call_extern(2, ITY_PTR(), Vec::new(), String::from("__vow_vec_new")));
+    i.push(mk_inst_call_extern(3, ITY_UNIT(), args2(2, 0), String::from("__vow_vec_push_val")));
+    i.push(mk_inst_const_i64(4, 1));
+    if mutate {
+        i.push(mk_inst_call_extern(5, ITY_UNIT(), args2(1, 4), String::from("__vow_vec_push_val")));
+    } else {
+        i.push(mk_inst_call_extern(5, ITY_U64(), args1(1), String::from("__vow_vec_len")));
+    }
+    i.push(mk_inst_return(6, 5));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, i));
+    let f: IrFunction = mk_function(1, String::from("f"), two_ptrs(), ITY_UNIT(), blocks);
+    f.param_keys = keys2(ka, kb);
+    f
+}
+
 fn ids_text(f: IrFunction) -> String {
     let ids: Vec<i64> = vc_vecalias_params(f, vc_vecalias_classes(f, vc_ty_table(f).len()));
     let out: String = String::from("");
@@ -133,6 +155,16 @@ fn two_maps(ka: String, kb: String, mutate: bool) -> IrFunction {
     f
 }
 
+// A parameter that is only stored joins the group of its declared type (#1905): the other
+// parameter's push reaches the object the slot holds.
+fn check_stored_param_selected() -> i64 {
+    let vi: String = String::from("Vec<i64>");
+    if ids_text(stored_param(vi, vi, true)) != String::from("0,1,") { return 50; }
+    if ids_text(stored_param(vi, String::from("Vec<u8>"), true)).len() != 0 { return 51; }
+    if ids_text(stored_param(vi, vi, false)).len() != 0 { return 52; }
+    0
+}
+
 fn check_map_params_selected() -> i64 {
     let hm: String = String::from("HashMap<i64,i64>");
     if ids_text(two_maps(hm, hm, true)) != String::from("0,1,") { return 40; }
@@ -161,6 +193,7 @@ fn check_identity_spreads_a_map_write() -> i64 {
 
 fn main() -> i32 {
     let mut r: i64 = check_params_selected();
+    if r == 0 { r = check_stored_param_selected(); }
     if r == 0 { r = check_map_params_selected(); }
     if r == 0 { r = check_identity_spreads_a_map_write(); }
     if r == 0 { r = check_identity_spreads_a_write(); }

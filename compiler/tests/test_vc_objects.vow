@@ -65,9 +65,6 @@ fn check_objects() -> i64 {
     if vc_objects_stored_class(o, 15) != VC_OV_STRUCT() { return 7; }
     if vc_objects_stored_class(o, 16) != 0 || vc_objects_stored_class(o, 17) != 0 { return 8; }
     if vc_objects_stored_class(o, -1) != 0 || vc_objects_stored_class(o, 19) != 0 { return 9; }
-    if !vc_objects_is_collection_param(o, 1) || !vc_objects_is_collection_param(o, 8) { return 10; }
-    if vc_objects_is_collection_param(o, 4) || vc_objects_is_collection_param(o, 0) { return 11; }
-    if vc_objects_is_collection_param(o, -1) || vc_objects_is_collection_param(o, 19) { return 12; }
     let vecs: Vec<i64> = vc_objects_params(o, VC_OV_VEC());
     if vecs.len() != 1 || vecs[0] != 0 { return 13; }
     let strs: Vec<i64> = vc_objects_params(o, VC_OV_STRING());
@@ -120,7 +117,7 @@ fn check_parameter_keys() -> i64 {
 fn check_empty() -> i64 {
     let f: IrFunction = mk_function(0, String::from("empty"), Vec::new(), ITY_UNIT(), Vec::new());
     let o: VcObjects = vc_objects_analyze(f, Vec::new());
-    if vc_objects_stored_class(o, 0) != 0 || vc_objects_is_collection_param(o, 0) { return 40; }
+    if vc_objects_stored_class(o, 0) != 0 { return 40; }
     if vc_objects_params(o, VC_OV_VEC()).len() != 0 { return 41; }
     0
 }

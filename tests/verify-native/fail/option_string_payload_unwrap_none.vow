@@ -1,0 +1,20 @@
+// Native-only: ESBMC skips `[panic]` functions (see tests/verify-skip/unwrap_panic_effect.vow).
+// TEST: counterexample-fn "name_len"
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-blame None
+// TEST: counterexample-violation "unwrap() called on None"
+// TEST: counterexample-value o.0 0
+// The payload of an `Option<String>` parameter is read as a handle, so `unwrap` of `None` is the
+// abort the function can reach, as for an `Option<i64>`.
+module OptionStringPayloadUnwrapNone
+
+fn name_len(o: Option<String>) -> i64 [panic] vow {
+  ensures: result >= 0
+} {
+  o.unwrap().len() as i64
+}
+
+fn main() -> i32 [io, panic] {
+  print_i64(name_len(Option::Some(String::from("ab"))));
+  0
+}

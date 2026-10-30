@@ -1,0 +1,23 @@
+// Two parameters stored, the second written: the slot that holds it reads its length, whether or not
+// the first is the same object.
+module VecPointerElemCollectionParamSecondSlot
+
+fn f(a: Vec<i64>, b: Vec<i64>) -> bool vow {
+  ensures: result
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  outer.push(a);
+  outer.push(b);
+  b.push(1);
+  let q: Vec<i64> = outer[1];
+  q.len() == b.len()
+}
+
+fn main() -> i32 [io] {
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  if f(a, b) {
+    print_i64(1);
+  }
+  0
+}

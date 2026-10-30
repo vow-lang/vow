@@ -1,0 +1,32 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// A `Vec` parameter stored in a field of a struct parameter is the object the caller passed, which
+// `b` may be too: a push through `b` shows in the length read back through the field. The parameter
+// is only stored, never an operand, so it is in the group of `b` for being stored (#1905).
+module PtrFieldVecParamStoredWrong
+
+struct Holder { v: Vec<i64> }
+
+fn f(h: Holder, a: Vec<i64>, b: Vec<i64>) -> bool vow {
+  ensures: result
+} {
+  h.v = a;
+  let t: Vec<i64> = h.v;
+  let before: u64 = t.len();
+  b.push(1);
+  let u: Vec<i64> = h.v;
+  u.len() == before
+}
+
+fn main() -> i32 [io] {
+  let h: Holder = Holder { v: Vec::new() };
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  if f(h, a, b) {
+    print_i64(1);
+  } else {
+    print_i64(0);
+  }
+  0
+}

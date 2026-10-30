@@ -29,8 +29,9 @@ use vc_handle_phis
 // The rewrite applies when
 //   - every pointer read has a pointer base (a parameter, an allocation, a merge, a call result
 //     or another payload), never a handle: the object at a handle is not a payload's;
-//   - every use of a read is one the aggregate model understands (`vc_agg_read_use_ok`): a
-//     payload that is a `Vec`, a `String` or a value stays skipped;
+//   - every use of a read is one the aggregate model understands (`vc_agg_read_use_ok`) or the
+//     object operand of a `Vec` or `String` operation, which a read through the handle serves
+//     (#1906); a payload that is a value, or stored as an element, stays skipped;
 //   - the child gate rejects the function, for the base or for the aliasing of its parameters.
 // A function that is rewritten then goes through the ordinary gate: a write through a payload,
 // a payload stored in a field it is not the address of, or a returned payload the signature
@@ -53,7 +54,7 @@ fn vc_payload_applicable(f: IrFunction, n_ids: u64, tys: Vec<i64>) -> bool {
         }
         bi = bi + 1;
     }
-    if !vc_agg_ptr_reads_used_ok(f, n_ids) { return false; }
+    if !vc_agg_ptr_reads_used_ok(f, n_ids, true) { return false; }
     vc_agg_child_detail(f, n_ids).len() > 0
 }
 

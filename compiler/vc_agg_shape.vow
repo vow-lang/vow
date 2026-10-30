@@ -5,6 +5,7 @@ use ir_dominance
 use vc_wide
 use vc_heap
 use vc_ops
+use vc_strops
 use vc_elemgate
 
 // Gate and set-up for the aggregate model (`vc_agg`): which writes it accepts and
@@ -227,9 +228,17 @@ fn vc_agg_read_use_ok(inst: IrInst, a: u64) -> bool {
     op == IOP_FIELD_SET() || op == IOP_UPSILON() || op == IOP_RETURN() || op == IOP_LINEAR_CONSUME()
 }
 
+// True when operand `a` of `inst` is an object operand of a `Vec` or `String` operation: the
+// receiver, and the further strings of a string operation.
+fn vc_agg_collection_operand(inst: IrInst, a: u64) -> bool {
+    let k: i64 = vc_inst_vec_kind(inst);
+    k != VC_VEC_NONE() && a < vc_str_kind_object_operands(k)
+}
+
 // True when every use of a pointer read out of a field (and of the Phis merging them) is one the
-// aggregate model understands (`vc_agg_read_use_ok`).
-fn vc_agg_ptr_reads_used_ok(f: IrFunction, n_ids: u64) -> bool {
+// aggregate model understands (`vc_agg_read_use_ok`), or, with `collections`, the object operand of
+// a `Vec` or `String` operation, which a read typed as a handle serves.
+fn vc_agg_ptr_reads_used_ok(f: IrFunction, n_ids: u64, collections: bool) -> bool {
     let held: Vec<i64> = dom_fill(n_ids, 0);
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
@@ -252,7 +261,7 @@ fn vc_agg_ptr_reads_used_ok(f: IrFunction, n_ids: u64) -> bool {
             let mut a: u64 = 0;
             while a < inst.args.len() {
                 let id: i64 = inst.args[a];
-                if id >= 0 && (id as u64) < n_ids && held[id as u64] == 1 && !vc_agg_read_use_ok(inst, a) { return false; }
+                if id >= 0 && (id as u64) < n_ids && held[id as u64] == 1 && !vc_agg_read_use_ok(inst, a) && !(collections && vc_agg_collection_operand(inst, a)) { return false; }
                 a = a + 1;
             }
             ii = ii + 1;
@@ -304,7 +313,7 @@ fn vc_agg_child_detail(f: IrFunction, n_ids: u64) -> String {
         bi = bi + 1;
     }
     if !any { return String::from(""); }
-    if !vc_agg_ptr_reads_used_ok(f, n_ids) {
+    if !vc_agg_ptr_reads_used_ok(f, n_ids, false) {
         return String::from("a pointer read out of a field is used as a collection, a string or a value");
     }
     if vc_agg_alias_marked(f, n_ids).len() > 0 {

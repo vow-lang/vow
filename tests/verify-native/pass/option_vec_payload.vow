@@ -1,0 +1,17 @@
+// The payload of an `Option` parameter is a `Vec`: the pointer read out of the field is read as a
+// handle (`vc_payload`), as the pointer a struct field holds is, and `len` of it is a read through
+// that handle (ADR-2026-10-30-0900).
+module OptionVecPayload
+
+fn first_len(o: Option<Vec<i64>>) -> i64 vow {
+  ensures: result >= 0
+} {
+  match o {
+    Option::Some(v) => v.len() as i64,
+    Option::None => 0,
+  }
+}
+
+fn main() -> i32 {
+  0
+}

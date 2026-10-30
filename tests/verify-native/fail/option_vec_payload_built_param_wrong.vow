@@ -1,0 +1,29 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// An `Option` built around the parameter `a` holds the object `a` names, which `b` may name too: a
+// push through `b` shows in the payload read back.
+module OptionVecPayloadBuiltParamWrong
+
+fn f(a: Vec<i64>, b: Vec<i64>) -> bool vow {
+  ensures: result
+} {
+  let o: Option<Vec<i64>> = Option::Some(a);
+  let before: u64 = a.len();
+  b.push(1);
+  match o {
+    Option::Some(v) => v.len() == before,
+    Option::None => true,
+  }
+}
+
+fn main() -> i32 [io] {
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  if f(a, b) {
+    print_i64(1);
+  } else {
+    print_i64(0);
+  }
+  0
+}

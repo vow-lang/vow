@@ -1,0 +1,31 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The stored value is the merge of two parameters: it is the object of either, and a third parameter
+// may be that object.
+module VecPointerElemCollectionParamPhiWrong
+
+fn f(a: Vec<i64>, b: Vec<i64>, c: Vec<i64>, k: bool) -> bool vow {
+  ensures: result
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let x: Vec<i64> = if k { a } else { b };
+  outer.push(x);
+  let q: Vec<i64> = outer[0];
+  let before: u64 = q.len();
+  c.push(1);
+  let r: Vec<i64> = outer[0];
+  r.len() == before
+}
+
+fn main() -> i32 [io] {
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  let c: Vec<i64> = Vec::new();
+  if f(a, b, c, true) {
+    print_i64(1);
+  } else {
+    print_i64(0);
+  }
+  0
+}
