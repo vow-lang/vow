@@ -23,6 +23,26 @@ use vc_mapdom
 // and has two collection parameters of one declared type (`Vec<i64>` and `Vec<u8>` are two
 // types); a function that only reads them cannot tell.
 
+// A `Vec` or `String` parameter that `inst` stores (as an element, or into a field) is stored as its
+// object's address, which a write through another parameter of its type reaches when the two are one
+// object: the parameter takes its declared class, so it joins its type group even when the function
+// never uses it as an operand.
+fn vc_vecalias_stored_classes(f: IrFunction, src: VcSources, arg_param: Vec<i64>, n_ids: u64, inst: IrInst, cls: Vec<i64>) {
+    let stored: i64 = vc_inst_stored_operand(inst);
+    if stored < 0 || (stored as u64) >= n_ids { return; }
+    let leaves: Vec<i64> = vc_sources_leaves(src, stored);
+    let mut li: u64 = 0;
+    while li < leaves.len() {
+        let l: i64 = leaves[li];
+        if l >= 0 && (l as u64) < n_ids && arg_param[l as u64] >= 0 {
+            let p: u64 = arg_param[l as u64] as u64;
+            let declared: i64 = vc_overlay_param_class(f, p as i64);
+            if declared == VC_OV_VEC() || declared == VC_OV_STRING() { cls[p] = cls[p] | declared; }
+        }
+        li = li + 1;
+    }
+}
+
 // Per parameter, the classes (`VC_OV_VEC`, `VC_OV_STRING`, `VC_OV_MAP`) it is used as an object of by
 // a `Vec`, `String` or map operation, looking through Phis, and `VC_VA_CHANGED` when such an
 // operation changes it.
@@ -59,6 +79,7 @@ fn vc_vecalias_classes(f: IrFunction, n_ids: u64) -> Vec<i64> {
                         j = j + 1;
                     }
                 }
+                vc_vecalias_stored_classes(f, src, arg_param, n_ids, inst, cls);
                 ii = ii + 1;
             }
         }

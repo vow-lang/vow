@@ -1,0 +1,15 @@
+// The `Ok` payload of a `Result` parameter is read as a handle like an `Option` payload.
+module ResultVecPayload
+
+fn ok_len(r: Result<Vec<i64>, i64>) -> i64 vow {
+  ensures: result >= 0
+} {
+  match r {
+    Result::Ok(v) => v.len() as i64,
+    Result::Err(e) => 0,
+  }
+}
+
+fn main() -> i32 {
+  0
+}

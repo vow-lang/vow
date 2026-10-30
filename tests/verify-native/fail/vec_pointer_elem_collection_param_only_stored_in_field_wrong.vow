@@ -1,0 +1,32 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// As `collection_param_only_stored_wrong`, with the parameter stored in a field of a struct that is
+// pushed into the `Vec`.
+module VecPointerElemCollectionParamOnlyStoredInFieldWrong
+
+struct Holder { v: Vec<i64> }
+
+fn f(a: Vec<i64>, b: Vec<i64>) -> bool vow {
+  ensures: result
+} {
+  let outer: Vec<Holder> = Vec::new();
+  let h: Holder = Holder { v: a };
+  outer.push(h);
+  let t: Holder = outer[0];
+  let before: u64 = t.v.len();
+  b.push(1);
+  let u: Holder = outer[0];
+  u.v.len() == before
+}
+
+fn main() -> i32 [io] {
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  if f(a, b) {
+    print_i64(1);
+  } else {
+    print_i64(0);
+  }
+  0
+}

@@ -113,8 +113,8 @@ fn vc_ptr_store_known(f: IrFunction, tys: Vec<i64>, calls: bool) -> Vec<i64> {
             let inst: IrInst = blk.insts[ii];
             if inst.id >= 0 && (inst.id as u64) < n_ids {
                 let k: i64 = vc_inst_vec_kind(inst);
-                // A parameter whose declared class is not recorded may be a `Vec` or a `String`
-                // (#1823): unknown, so refused.
+                // A parameter whose declared class is not recorded may be a `Vec` or a `String`,
+                // which `vc_vecalias_stored_classes` could not group: unknown, so refused.
                 if inst.op == IOP_GET_ARG() && inst.ty == ITY_PTR() && vc_overlay_param_class(f, inst.dv) != 0 { known[inst.id as u64] = 1; }
                 if inst.op == IOP_REGION_ALLOC() || inst.op == IOP_CONST_STR() { known[inst.id as u64] = 1; }
                 if inst.op == IOP_CALL() && (k == VC_VEC_NEW() || vc_str_kind_creates(k)) { known[inst.id as u64] = 1; }
@@ -179,8 +179,9 @@ fn vc_ptr_store_known(f: IrFunction, tys: Vec<i64>, calls: bool) -> Vec<i64> {
 //     an address the function stored, never one of the memory it was given, which a stored
 //     address is assumed different from (`vc_overlay_tag_start`);
 //   - each pointer stored is a known object with a class (`vc_ptr_store_known`; a `Vec` or `String`
-//     parameter is none of them, since two such parameters may be one value, #1823; an object used as
-//     no `Vec`, `String` or struct, and not built as one, has no state to read back) and nothing
+//     parameter is one, with the address of its alias group, because `vc_vecalias_stored_classes` puts it
+//     in its type group, #1905; an object used as no `Vec`, `String` or struct, and not built as one, has
+//     no state to read back) and nothing
 //     but a pointer is stored (a handle read out of memory is no address the tags know), except the
 //     `get` of a `Vec` parameter, which `vc_ptr_handle_status` admits and which keeps the chain open;
 //   - an element read of any other `Vec` is not used as an object, since it may equal the address
@@ -206,7 +207,6 @@ fn vc_ptr_store_resolvable(f: IrFunction, held: Vec<i64>, tys: Vec<i64>, calls: 
                 if !deferred && !(inst.op == IOP_CALL() && k == VC_VEC_NEW()) { return false; }
             }
             let stored: i64 = vc_inst_stored_operand(inst);
-            if stored >= 0 && (stored as u64) < n_ids && vc_objects_is_collection_param(objects, stored) { return false; }
             if inst.op == IOP_CALL() && inst.args.len() > 0 && vc_ptr_store_is_held(held, inst.args[0]) && stored >= 0
                 && !(status == VC_PH_GIVEN() && (stored as u64) < n_ids && gets[stored as u64] >= 0) {
                 if vc_heap_ty(tys, stored) != ITY_PTR() || known[stored as u64] == 0 { return false; }

@@ -1,0 +1,22 @@
+// A parameter stored and then written through itself: the element read back is the parameter, whatever
+// the other parameter of its type is.
+module VecPointerElemCollectionParamPushedThrough
+
+fn f(a: Vec<i64>, b: Vec<i64>) -> bool vow {
+  ensures: result
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  outer.push(a);
+  a.push(1);
+  let q: Vec<i64> = outer[0];
+  q.len() == a.len()
+}
+
+fn main() -> i32 [io] {
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  if f(a, b) {
+    print_i64(1);
+  }
+  0
+}

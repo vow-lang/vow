@@ -1,0 +1,17 @@
+// The payload of an `Option<String>` parameter is a `String` read as a handle: `len` of it is a read
+// through the handle, and the `None` arm needs no payload.
+module OptionStringPayload
+
+fn name_len(o: Option<String>) -> i64 vow {
+  ensures: result >= 0
+} {
+  match o {
+    Option::Some(s) => s.len() as i64,
+    Option::None => 0,
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(name_len(Option::Some(String::from("ab"))));
+  0
+}

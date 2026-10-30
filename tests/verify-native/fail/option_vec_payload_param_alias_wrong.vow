@@ -1,0 +1,30 @@
+// TEST: esbmc-model-artifact fn="grow" blame=None vow_id=4294967293 "ESBMC reads the Vec payload of the Option as a fresh Vec of nondeterministic length and fails its own Vec capacity assertion at length 128, not the ensures; its parameters are distinct locals, so it never reaches the aliasing the native counterexample names, which --replay-cex confirms and a debug-mode run of main with one Vec passed twice reproduces"
+// TEST: counterexample-fn "grow"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The payload of `o` may be the very `Vec` that `a` names, and then the push through `a` changes the
+// length the payload reads: the claim that it does not is refuted. A model that kept the payload
+// apart from the parameters would prove it.
+module OptionVecPayloadParamAliasWrong
+
+fn grow(o: Option<Vec<i64>>, a: Vec<i64>) -> bool vow {
+  ensures: result
+} {
+  match o {
+    Option::Some(v) => {
+      let before: u64 = v.len();
+      a.push(1);
+      v.len() == before
+    },
+    Option::None => true,
+  }
+}
+
+fn main() -> i32 [io] {
+  let a: Vec<i64> = Vec::new();
+  let v: Vec<i64> = Vec::new();
+  if grow(Option::Some(v), a) {
+    print_i64(1);
+  }
+  0
+}

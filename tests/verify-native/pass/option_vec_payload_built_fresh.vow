@@ -1,0 +1,22 @@
+// An `Option` the function builds around a `Vec` it created holds an object no parameter is: a
+// push through a parameter does not reach it.
+module OptionVecPayloadBuiltFresh
+
+fn f(a: Vec<i64>) -> bool vow {
+  ensures: result
+} {
+  let o: Option<Vec<i64>> = Option::Some(Vec::new());
+  a.push(1);
+  match o {
+    Option::Some(v) => v.len() == 0u64,
+    Option::None => true,
+  }
+}
+
+fn main() -> i32 [io] {
+  let a: Vec<i64> = Vec::new();
+  if f(a) {
+    print_i64(1);
+  }
+  0
+}

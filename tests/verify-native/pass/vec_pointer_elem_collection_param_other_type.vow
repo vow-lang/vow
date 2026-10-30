@@ -1,0 +1,24 @@
+// Parameters of different declared types are never one object, so a push through a `Vec<u8>` does not
+// show in the `Vec<i64>` parameter stored and read back.
+module VecPointerElemCollectionParamOtherType
+
+fn f(a: Vec<i64>, b: Vec<u8>) -> bool vow {
+  ensures: result
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  outer.push(a);
+  let q: Vec<i64> = outer[0];
+  let before: u64 = q.len();
+  b.push(1u8);
+  let r: Vec<i64> = outer[0];
+  r.len() == before
+}
+
+fn main() -> i32 [io] {
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<u8> = Vec::new();
+  if f(a, b) {
+    print_i64(1);
+  }
+  0
+}

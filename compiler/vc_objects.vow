@@ -43,12 +43,10 @@ fn vc_overlay_param_class(f: IrFunction, k: i64) -> i64 {
 }
 
 // A finished analysis of one function. `stored` is the effective class of an address
-// stored for each value; `collection` marks declared Vec/String parameters and their
-// Phi results. `params` records observed classes by parameter, independent of declared
-// or constructed provenance. Consumers use the queries below, never combine tables.
+// stored for each value. `params` records observed classes by parameter, independent of
+// declared or constructed provenance. Consumers use the queries below, never combine tables.
 struct VcObjects {
     stored: Vec<i64>,
-    collection: Vec<i64>,
     params: Vec<i64>,
 }
 
@@ -70,7 +68,7 @@ fn vc_objects_built_class(inst: IrInst, k: i64) -> i64 {
     cls
 }
 
-fn vc_objects_seed(f: IrFunction, tys: Vec<i64>, used: Vec<i64>, stored: Vec<i64>, collection: Vec<i64>) {
+fn vc_objects_seed(f: IrFunction, tys: Vec<i64>, used: Vec<i64>, stored: Vec<i64>) {
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
         let blk: IrBlock = f.blocks[bi];
@@ -95,9 +93,7 @@ fn vc_objects_seed(f: IrFunction, tys: Vec<i64>, used: Vec<i64>, stored: Vec<i64
             if inst.id >= 0 && (inst.id as u64) < tys.len() {
                 let mut cls: i64 = vc_objects_built_class(inst, k);
                 if inst.op == IOP_GET_ARG() && inst.ty == ITY_PTR() {
-                    let declared: i64 = vc_overlay_param_class(f, inst.dv);
-                    cls = cls | declared;
-                    if (declared & (VC_OV_VEC() | VC_OV_STRING())) != 0 { collection[inst.id as u64] = 1; }
+                    cls = cls | vc_overlay_param_class(f, inst.dv);
                 }
                 stored[inst.id as u64] = cls;
             }
@@ -107,9 +103,9 @@ fn vc_objects_seed(f: IrFunction, tys: Vec<i64>, used: Vec<i64>, stored: Vec<i64
     }
 }
 
-// Used classes flow in both directions; stored classes and collection provenance
-// flow forward. No observed use can turn a fresh Phi source into a parameter.
-fn vc_objects_close(f: IrFunction, used: Vec<i64>, stored: Vec<i64>, collection: Vec<i64>) {
+// Used classes flow in both directions; stored classes flow forward. No observed use can turn
+// a fresh Phi source into a parameter.
+fn vc_objects_close(f: IrFunction, used: Vec<i64>, stored: Vec<i64>) {
     let mut changed: bool = true;
     while changed {
         changed = false;
@@ -125,12 +121,10 @@ fn vc_objects_close(f: IrFunction, used: Vec<i64>, stored: Vec<i64>, collection:
                     let val: u64 = inst.args[0] as u64;
                     let use_cls: i64 = used[phi] | used[val];
                     let store_cls: i64 = stored[phi] | stored[val];
-                    let coll: i64 = collection[phi] | collection[val];
-                    if used[phi] != use_cls || used[val] != use_cls || stored[phi] != store_cls || collection[phi] != coll {
+                    if used[phi] != use_cls || used[val] != use_cls || stored[phi] != store_cls {
                         used[phi] = use_cls;
                         used[val] = use_cls;
                         stored[phi] = store_cls;
-                        collection[phi] = coll;
                         changed = true;
                     }
                 }
@@ -146,9 +140,8 @@ fn vc_objects_close(f: IrFunction, used: Vec<i64>, stored: Vec<i64>, collection:
 fn vc_objects_analyze(f: IrFunction, tys: Vec<i64>) -> VcObjects {
     let used: Vec<i64> = dom_fill(tys.len(), 0);
     let stored: Vec<i64> = dom_fill(tys.len(), 0);
-    let collection: Vec<i64> = dom_fill(tys.len(), 0);
-    vc_objects_seed(f, tys, used, stored, collection);
-    vc_objects_close(f, used, stored, collection);
+    vc_objects_seed(f, tys, used, stored);
+    vc_objects_close(f, used, stored);
     let params: Vec<i64> = dom_fill(f.params.len(), 0);
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
@@ -169,19 +162,13 @@ fn vc_objects_analyze(f: IrFunction, tys: Vec<i64>) -> VcObjects {
         stored[v] = stored[v] | used[v];
         v = v + 1;
     }
-    VcObjects { stored: stored, collection: collection, params: params }
+    VcObjects { stored: stored, params: params }
 }
 
 // The classes the address stored for value `id` must carry; unknown ids have none.
 fn vc_objects_stored_class(objects: VcObjects, id: i64) -> i64 {
     if id < 0 || (id as u64) >= objects.stored.len() { return 0; }
     objects.stored[id as u64]
-}
-
-// A declared Vec/String parameter or a Phi fed by one cannot use the stored-address
-// model: distinct parameters may alias, even when their own observed uses differ.
-fn vc_objects_is_collection_param(objects: VcObjects, id: i64) -> bool {
-    id >= 0 && (id as u64) < objects.collection.len() && objects.collection[id as u64] == 1
 }
 
 // Pointer parameters observed as `cls`, ascending, with repeated reads deduplicated.

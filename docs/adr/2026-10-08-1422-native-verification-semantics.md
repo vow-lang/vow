@@ -1275,8 +1275,8 @@ object, the mechanism of #1756, for the functions that do read an element back.
   gate (`vc_ptr_store_resolvable`) states it: every receiver of a pointer store is a `Vec::new` (or a Phi of
   them; a collection read from a struct field is accepted before inlining and checked again after it); every
   pointer stored is a struct parameter, an allocation, a literal or a `String`/`Vec` creator with a class
-  (a `Vec` or `String` parameter is refused, stored in a field or a slot, and so is one whose declared
-  type is not recorded: two of them may be one value, #1823), and
+  (a `Vec` or `String` parameter is one, in its type group, ADR-2026-10-30-0900; one whose declared
+  type is not recorded is refused), and
   nothing else is stored into such a `Vec` (a handle read from another `Vec` is not an address the tags know,
   and tagging it as given memory would make the path infeasible when it is the address of an object the
   function built); and no element read of a `Vec` the function did not store into is used as an object (it
@@ -1303,7 +1303,7 @@ object, the mechanism of #1756, for the functions that do read an element back.
   parameters that are one value: ADR-2026-10-19-1700.
 - **What stays `Skipped`** (`a pointer element is read back`, as before): the elements of a `Vec` parameter
   that also receives a pointer, an element of an element of a `Vec` the function did not build used as an object
-  (`outer[i][j].len()` of built `Vec`s is modelled, ADR-2026-10-27-0300), a `Vec` or `String` parameter stored (#1823), a pointer stored that is none of the kinds above, and a stored object with no class.
+  (`outer[i][j].len()` of built `Vec`s is modelled, ADR-2026-10-27-0300), a pointer stored that is none of the kinds above, and a stored object with no class.
   Copies (`vec_sort`, `pin_to_root`) of a `Vec` that holds a pointer stay `Skipped` (`a Vec of pointer
   elements is copied`).
 - **Alternatives rejected.** Noting the result of `get` as a loaded term (tag 0) is unsound once a handle

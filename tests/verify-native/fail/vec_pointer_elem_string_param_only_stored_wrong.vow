@@ -1,0 +1,29 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// As `collection_param_only_stored_wrong`, for `String` parameters.
+module VecPointerElemStringParamOnlyStoredWrong
+
+fn f(a: String, b: String) -> bool vow {
+  ensures: result
+} {
+  let names: Vec<String> = Vec::new();
+  names.push(String::from("x"));
+  names[0] = a;
+  let q: String = names[0];
+  let before: u64 = q.len();
+  b.push_str(String::from("zz"));
+  let r: String = names[0];
+  r.len() == before
+}
+
+fn main() -> i32 [io] {
+  let a: String = String::from("a");
+  let b: String = String::from("b");
+  if f(a, b) {
+    print_i64(1);
+  } else {
+    print_i64(0);
+  }
+  0
+}

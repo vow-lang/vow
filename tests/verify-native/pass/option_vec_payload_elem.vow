@@ -1,0 +1,26 @@
+// An element of the `Vec` an `Option` parameter holds: the element is a symbol of the payload, bounded
+// by its length, and the branch that reads it is the one the guard opens.
+module OptionVecPayloadElem
+
+fn first(o: Option<Vec<i64>>) -> i64 vow {
+  ensures: result >= 0
+} {
+  match o {
+    Option::Some(v) => {
+      if v.len() > 0u64 {
+        let x: i64 = v[0];
+        if x < 0 { 0 } else { x }
+      } else {
+        0
+      }
+    },
+    Option::None => 0,
+  }
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(3);
+  print_i64(first(Option::Some(v)));
+  0
+}

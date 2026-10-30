@@ -1,0 +1,31 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// `Vec<Id>` and `Vec<i64>` are one declared type once the alias is resolved (ADR-2026-10-19-1700), so
+// the two parameters may be one object.
+module VecPointerElemCollectionParamAliasTypeWrong
+
+type Id = i64;
+
+fn f(a: Vec<Id>, b: Vec<i64>) -> bool vow {
+  ensures: result
+} {
+  let outer: Vec<Vec<Id>> = Vec::new();
+  outer.push(a);
+  let q: Vec<Id> = outer[0];
+  let before: u64 = q.len();
+  b.push(1);
+  let r: Vec<Id> = outer[0];
+  r.len() == before
+}
+
+fn main() -> i32 [io] {
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  if f(a, b) {
+    print_i64(1);
+  } else {
+    print_i64(0);
+  }
+  0
+}

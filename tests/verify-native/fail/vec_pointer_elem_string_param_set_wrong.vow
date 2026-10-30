@@ -1,7 +1,10 @@
-// TEST: skip-reason unsupported-opcode
-// A `String` parameter stored with `set` and read back stays `Skipped`, as a `Vec` parameter does:
-// two `String` parameters may be one value (#1905).
-module VecPointerElemStringParamSetSkipped
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// A `String` parameter stored with `set` is the object the caller passed, which another `String`
+// parameter may be too (#1905): `push_str` through `b` shows in the element read back, which is 3
+// bytes long, not 1.
+module VecPointerElemStringParamSetWrong
 
 fn f(a: String, b: String) -> u64 vow {
   requires: a.len() == 1 && b.len() == 1

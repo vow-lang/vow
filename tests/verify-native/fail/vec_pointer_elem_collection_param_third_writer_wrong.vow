@@ -1,0 +1,31 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// Three `Vec` parameters, the second stored and the third written: any two may be one object, so the
+// write through `c` can show in the element read back.
+module VecPointerElemCollectionParamThirdWriterWrong
+
+fn f(a: Vec<i64>, b: Vec<i64>, c: Vec<i64>) -> bool vow {
+  ensures: result
+} {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  outer.push(a);
+  outer.push(b);
+  let q: Vec<i64> = outer[1];
+  let before: u64 = q.len();
+  c.push(1);
+  let r: Vec<i64> = outer[1];
+  r.len() == before
+}
+
+fn main() -> i32 [io] {
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  let c: Vec<i64> = Vec::new();
+  if f(a, b, c) {
+    print_i64(1);
+  } else {
+    print_i64(0);
+  }
+  0
+}
