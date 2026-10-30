@@ -71,15 +71,11 @@ fn vc_erase_linear_fn(f: IrFunction) -> IrFunction {
 }
 
 fn vc_erase_linear(m: IrModule) -> IrModule {
-    let out: IrModule = ir_module_new(m.name);
+    let out: IrModule = ir_module_shell(m);
     let mut fi: u64 = 0;
     while fi < m.functions.len() {
         out.functions.push(vc_erase_linear_fn(m.functions[fi]));
         fi = fi + 1;
     }
-    out.strings = m.strings;
-    out.struct_layouts = m.struct_layouts;
-    out.enum_layouts = m.enum_layouts;
-    out.warnings = m.warnings;
     out
 }

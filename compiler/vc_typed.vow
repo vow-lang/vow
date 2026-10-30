@@ -1,0 +1,269 @@
+module VcTyped
+
+use ir
+use vc_ops
+use vc_int
+use vc_solver
+use vc_cache
+use vc_query
+use vc_heap
+use vc_reads
+use vc_fieldrows
+use vc_readrows
+use vc_vecmodel
+
+// A model that gives two objects of different declared types one address. The heap arrays of the
+// model are keyed by slot, not by type (ADR-2026-10-24-0900, item 6), so a model may make the
+// `Pair` that `q.p` names the `Node` parameter `q`: a counterexample no run has, which replay
+// declines (`parameter q: field p of Node: field of type Pair holds the object of a parameter of
+// type Node`). The declared types are in the program, not in the IR instructions (`vc_typekeys`).
+//
+// The enrichment that lists a claim's elements and handles asks the solver for a model of the
+// claim's own query. Here, when that model puts a handle of one declared type at the address of a
+// handle of another that the function reads through, the ask is repeated with those handles
+// required to differ, and the new model replaces the old one. Both are models of the same query,
+// so the verdict and the claim are untouched: the extra assertions only choose which of the
+// counterexamples is listed, and only after the claim failed. When no model keeps the types apart
+// (the refusal of ADR-2026-10-24-0900, item 6), the first model stands.
+
+fn VC_TYPED_ROUNDS() -> i64 { 3 }
+
+fn VC_TYPED_PAIRS() -> i64 { 64 }
+
+// The declared types the enrichment can consult: the key of each parameter of the target
+// (`IrFunction.param_keys`), and the struct layouts with the key of each of their slots
+// (`IrModule.field_keys`). `structs` holds the non-linear structs only.
+struct VcTypes {
+    params: Vec<String>,
+    structs: Vec<String>,
+    slots: Vec<Vec<String>>,
+}
+
+fn vc_types_none() -> VcTypes {
+    VcTypes { params: Vec::new(), structs: Vec::new(), slots: Vec::new() }
+}
+
+fn vc_types_of(f: IrFunction, m: IrModule) -> VcTypes {
+    let t: VcTypes = VcTypes { params: f.param_keys, structs: Vec::new(), slots: Vec::new() };
+    if m.field_keys.len() != m.struct_layouts.len() { return t; }
+    let mut i: u64 = 0;
+    while i < m.struct_layouts.len() {
+        if m.struct_layouts[i].is_linear == 0 {
+            t.structs.push(m.struct_layouts[i].name);
+            t.slots.push(m.field_keys[i]);
+        }
+        i = i + 1;
+    }
+    t
+}
+
+fn vc_key_struct(t: VcTypes, key: String) -> i64 {
+    let mut i: u64 = 0;
+    while i < t.structs.len() {
+        if t.structs[i] == key { return i as i64; }
+        i = i + 1;
+    }
+    -1
+}
+
+// Kind (`VC_READ_*`) of the object an address of declared type `key` names; 0 for any other.
+fn vc_key_class(t: VcTypes, key: String) -> i64 {
+    if key == String::from("String") { return VC_READ_STR(); }
+    if key == String::from("Vec") || (key.len() > 4 && key.substring(0, 4) == String::from("Vec<")) { return VC_READ_VEC(); }
+    if vc_key_struct(t, key) >= 0 { return VC_READ_OBJ(); }
+    0
+}
+
+// Key of the declared type of slot `slot` of the struct `key`, "" when there is none.
+fn vc_key_slot(t: VcTypes, key: String, slot: i64) -> String {
+    let at: i64 = vc_key_struct(t, key);
+    if at < 0 || slot < 0 { return String::from(""); }
+    let row: Vec<String> = t.slots[at as u64];
+    if slot >= row.len() as i64 { return String::from(""); }
+    row[slot as u64]
+}
+
+// Key of the elements of the `Vec` of key `key` (`Vec<Node>` is `Node`), "" when it has one type
+// argument that is not a bare head.
+fn vc_key_elem(key: String) -> String {
+    if key.len() < 6 || key.substring(0, 4) != String::from("Vec<") || key.byte_at(key.len() - 1) != 62 { return String::from(""); }
+    let inner: String = key.substring(4, key.len() - 1);
+    let mut i: u64 = 0;
+    while i < inner.len() {
+        if inner.byte_at(i) == 44 || inner.byte_at(i) == 60 { return String::from(""); }
+        i = i + 1;
+    }
+    inner
+}
+
+// Key of the declared type the steps of `path` (`.<slot>` each) reach from the type `key`.
+fn vc_key_walk(t: VcTypes, key: String, path: String) -> String {
+    let mut cur: String = key;
+    let mut i: u64 = 0;
+    while i < path.len() && cur.len() > 0 {
+        if path.byte_at(i) != 46 { return String::from(""); }
+        let mut slot: i64 = 0;
+        let mut j: u64 = i + 1;
+        while j < path.len() && path.byte_at(j) >= 48 && path.byte_at(j) <= 57 && slot < 100000000 {
+            slot = slot * 10 + (path.byte_at(j) - 48);
+            j = j + 1;
+        }
+        if j == i + 1 { return String::from(""); }
+        cur = vc_key_slot(t, cur, slot);
+        i = j;
+    }
+    cur
+}
+
+fn vc_param_key(t: VcTypes, p: i64) -> String {
+    if p < 0 || (p as u64) >= t.params.len() { return String::from(""); }
+    t.params[p as u64]
+}
+
+// The entries of an answer that hold the address of an object, with the declared key of each and
+// the symbol of the model that names it, in the order of the answer.
+struct VcTypedEntries {
+    at: Vec<i64>,
+    cls: Vec<i64>,
+    key: Vec<String>,
+    sym: Vec<String>,
+}
+
+fn vc_typed_add(t: VcTypes, es: VcTypedEntries, at: u64, key: String, sym: String) {
+    let cls: i64 = vc_key_class(t, key);
+    if cls == 0 { return; }
+    es.at.push(at as i64);
+    es.cls.push(cls);
+    es.key.push(key);
+    es.sym.push(sym);
+}
+
+// The entries of the answer `ans` of claim `k` that hold the address of an object of a declared
+// type: the address of a parameter, a slot of a struct parameter (or of a child object of one) that
+// the model lists, an element of a `Vec` parameter and a slot read through an element. The
+// handles the function reads (`vc_reads`) have no declared type here. The symbol is the name an
+// ask defines for the entry whatever the bound of its lengths (`vc_ask_vec_model`).
+fn vc_typed_entries(t: VcTypes, cs: VcClaims, k: u64, ans: VcSolverAnswer) -> VcTypedEntries {
+    let es: VcTypedEntries = VcTypedEntries { at: Vec::new(), cls: Vec::new(), key: Vec::new(), sym: Vec::new() };
+    let n: u64 = vc_answer_regular_count(cs, k, ans);
+    let mut j: u64 = 0;
+    while j < n {
+        let base: String = vc_param_key(t, cs.model_params[j]);
+        if cs.model_widths[j] == 64 {
+            if cs.model_slots[j] == VC_SLOT_ADDR() {
+                vc_typed_add(t, es, j, base, cs.model_names[j]);
+            } else if cs.model_slots[j] >= 0 {
+                vc_typed_add(t, es, j, vc_key_slot(t, vc_key_walk(t, base, cs.model_paths[j]), cs.model_slots[j]), cs.model_names[j]);
+            }
+        }
+        j = j + 1;
+    }
+    let vecs: Vec<i64> = vc_cex_vecs(cs, k);
+    let per: u64 = vc_answer_elems_per_vec(cs, k, ans);
+    let ls: VcHeapListed = cs.listed;
+    let elems: Vec<String> = Vec::new();
+    let lens: Vec<i64> = Vec::new();
+    let mut p: u64 = 0;
+    while p < vecs.len() {
+        let v: i64 = vecs[p];
+        let elem: String = vc_key_elem(vc_key_walk(t, vc_param_key(t, cs.vec_param[v as u64]), vc_cex_vec_path(cs, v)));
+        let len: i64 = vc_answer_vec_len(cs, ans, n, v);
+        elems.push(elem);
+        lens.push(len);
+        if vc_cex_wide_ty(cs, v) < 0 && vc_cex_float_ty(cs, v) < 0 {
+            let mut i: u64 = 0;
+            while i < per && (i as i64) < len {
+                vc_typed_add(t, es, n + p * per + i, elem, vc_cex_elem_name(cs, v, i as i64));
+                i = i + 1;
+            }
+        }
+        p = p + 1;
+    }
+    let rows: Vec<i64> = vc_field_rows(cs, k);
+    let mut q: u64 = 0;
+    while q < rows.len() {
+        let r: u64 = rows[q] as u64;
+        let mut owner: i64 = -1;
+        let mut o: u64 = 0;
+        while o < vecs.len() {
+            if cs.vec_arr[vecs[o] as u64] == ls.earr[r] { owner = o as i64; }
+            o = o + 1;
+        }
+        if owner >= 0 && vc_ty_sort(ls.ety[r]) == 64 {
+            let key: String = vc_key_slot(t, elems[owner as u64], ls.eslot[r]);
+            let mut i: u64 = 0;
+            while i < per && (i as i64) < lens[owner as u64] {
+                vc_typed_add(t, es, n + (vecs.len() as u64 + q) * per + i, key, vc_field_row_name(cs, rows[q], i as i64));
+                i = i + 1;
+            }
+        }
+        q = q + 1;
+    }
+    es
+}
+
+// True when a handle the function reads through, of kind `cls`, has the value `v`.
+fn vc_typed_read_at(cs: VcClaims, k: u64, ans: VcSolverAnswer, cls: i64, v: i64) -> bool {
+    let rows: Vec<i64> = vc_read_rows(cs, k);
+    let body: u64 = vc_answer_body(cs, k, ans);
+    let mut q: u64 = 0;
+    while q < rows.len() && body + q < ans.values.len() {
+        if cs.listed.rd_cls[rows[q] as u64] == cls && ans.values[body + q] == v { return true; }
+        q = q + 1;
+    }
+    false
+}
+
+fn vc_typed_has_pair(apart: Vec<String>, a: String, b: String) -> bool {
+    let mut i: u64 = 0;
+    while i + 1 < apart.len() {
+        if apart[i] == a && apart[i + 1] == b { return true; }
+        i = i + 2;
+    }
+    false
+}
+
+// Adds to `apart` each pair of symbols whose entries of `ans` hold one address that the function
+// reads through, as objects of one kind and two declared types. At most `VC_TYPED_PAIRS` pairs are
+// kept. True when it adds any.
+fn vc_typed_pairs(t: VcTypes, cs: VcClaims, k: u64, ans: VcSolverAnswer, apart: Vec<String>) -> bool {
+    let es: VcTypedEntries = vc_typed_entries(t, cs, k, ans);
+    let before: u64 = apart.len();
+    let mut a: u64 = 0;
+    while a < es.at.len() && apart.len() < 2 * (VC_TYPED_PAIRS() as u64) {
+        let x: u64 = es.at[a] as u64;
+        let cls: i64 = es.cls[a];
+        let mut b: u64 = a + 1;
+        while b < es.at.len() {
+            let y: u64 = es.at[b] as u64;
+            if ans.values[x] == ans.values[y] && ans.highs[x] == ans.highs[y] && cls == es.cls[b] && es.key[a] != es.key[b]
+                && vc_typed_read_at(cs, k, ans, cls, ans.values[x]) && !vc_typed_has_pair(apart, es.sym[a], es.sym[b]) {
+                apart.push(es.sym[a]);
+                apart.push(es.sym[b]);
+            }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    apart.len() > before
+}
+
+// `vc_enrich_vec_first`, repeated with the objects of two declared types kept at different
+// addresses (`vc_typed_pairs`), at most `VC_TYPED_ROUNDS` times, until the model has none. The
+// model of the last round that has one stands; `started` and `budget_ms` are the clock the caller
+// shares with the asks that follow.
+fn vc_enrich_typed(t: VcTypes, cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: VcSolverAnswer, pin: bool, started: i64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+    let apart: Vec<String> = Vec::new();
+    let mut best: VcSolverAnswer = vc_enrich_vec_first(cache, bin, cs, k, ans, pin, apart, budget_ms, scratch);
+    let n: u64 = vc_claim_model_count(cs, k);
+    let mut round: i64 = 0;
+    while round < VC_TYPED_ROUNDS() && t.structs.len() > 0 && best.values.len() > n && vc_typed_pairs(t, cs, k, best, apart) {
+        let left_ms: i64 = budget_ms - (time_micros() - started) / 1000;
+        if left_ms <= 0 { return best; }
+        let again: VcSolverAnswer = vc_enrich_vec_first(cache, bin, cs, k, ans, pin, apart, left_ms, scratch);
+        if again.verdict != VC_ANS_SAT() || again.values.len() <= n { return best; }
+        best = again;
+        round = round + 1;
+    }
+    best
+}
