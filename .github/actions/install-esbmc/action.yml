@@ -39,6 +39,18 @@ inputs:
     description: SHA-256 checksum of the Linux ARM64 release archive
     required: false
     default: 5470aac77f2057f60b232c95dfe0b9b71fef4e736246a53aeb19aaa549dd37f7
+  z3-version:
+    description: Homebrew z3 version ESBMC's macOS archive links against
+    required: false
+    default: "5.1.0"
+  z3-bottle-sha256:
+    description: SHA-256 of that z3 version's arm64_sequoia Homebrew bottle
+    required: false
+    default: 7012e78ff0eb81f292949f7992afa7a64388c950151f3435fb4fed4e6926db39
+  llvm-version:
+    description: Homebrew llvm@21 Cellar directory name ESBMC's macOS archive hardcodes
+    required: false
+    default: "21.1.8"
 
 runs:
   using: composite
@@ -121,10 +133,63 @@ runs:
     # boost and llvm@21 (confirmed via `llvm-objdump --macho
     # --dylibs-used`) and aborts at dyld load time without them. GitHub's
     # macOS runners have none of these preinstalled.
+    #
+    # z3 is the one that must not float: ESBMC 8.5 links the absolute path
+    # /opt/homebrew/opt/z3/lib/libz3.5.1.dylib, which only z3 5.1.x
+    # provides. Homebrew moved to z3 5.3.2 (libz3.5.3.dylib) on
+    # 2026-10-30, and every macOS job began failing with "Library not
+    # loaded" (#1930). Take z3 from the exact 5.1.0 Homebrew bottle,
+    # checksum-verified, instead of `brew install z3`. When bumping ESBMC,
+    # re-read its z3 dependency with `llvm-objdump --macho --dylibs-used`
+    # and move z3-version/z3-bottle-sha256 with it; the bottle digest is
+    # the `sh.brew.bottle.digest` annotation of the arm64_sequoia entry in
+    # the ghcr.io/v2/homebrew/core/z3/manifests/<version> index.
+    #
+    # llvm@21 has the same shape of problem in a milder form: ESBMC passes
+    # clang `-resource-dir /opt/homebrew/Cellar/llvm@21/21.1.8/lib/clang/21`,
+    # a path with the Cellar version baked in. Homebrew's rebuild revision
+    # 21.1.8_1 installs under a different directory name, clang then finds
+    # no stdint.h and every verification fails with "'stdint.h' file not
+    # found". Alias the expected directory to whatever got installed.
     - name: Install ESBMC runtime dependencies (macOS)
       if: runner.os == 'macOS'
       shell: bash
-      run: brew install z3 mpfr gmp boost llvm@21
+      env:
+        Z3_VERSION: ${{ inputs.z3-version }}
+        Z3_BOTTLE_SHA256: ${{ inputs.z3-bottle-sha256 }}
+        ESBMC_LLVM_VERSION: ${{ inputs.llvm-version }}
+      run: |
+        brew install mpfr gmp boost llvm@21
+
+        prefix="$(brew --prefix)"
+        cellar="$(brew --cellar)"
+        bottle="$RUNNER_TEMP/z3-bottle.tar.gz"
+        curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+          -H "Authorization: Bearer QQ==" -o "$bottle" \
+          "https://ghcr.io/v2/homebrew/core/z3/blobs/sha256:$Z3_BOTTLE_SHA256"
+        echo "$Z3_BOTTLE_SHA256  $bottle" | shasum -a 256 --check --strict -
+
+        rm -rf "$cellar/z3" "$prefix/opt/z3"
+        mkdir -p "$cellar" "$prefix/opt"
+        tar -xzf "$bottle" -C "$cellar"
+        rm "$bottle"
+
+        # The bottle is unrelocated: its install name still carries the
+        # @@HOMEBREW_PREFIX@@ placeholder that `brew install` would expand.
+        z3_lib="$cellar/z3/$Z3_VERSION/lib"
+        z3_soname=libz3.5.1.dylib
+        z3_real="$z3_lib/$(readlink "$z3_lib/$z3_soname")"
+        chmod u+w "$z3_real"
+        install_name_tool -id "$prefix/opt/z3/lib/$z3_soname" "$z3_real"
+        codesign --force --sign - "$z3_real"
+        ln -sfn "$cellar/z3/$Z3_VERSION" "$prefix/opt/z3"
+        ls -l "$prefix/opt/z3/lib/$z3_soname"
+
+        llvm_expected="$cellar/llvm@21/$ESBMC_LLVM_VERSION"
+        if [[ ! -e "$llvm_expected" ]]; then
+          ln -s "$(cd "$prefix/opt/llvm@21" && pwd -P)" "$llvm_expected"
+        fi
+        ls -d "$llvm_expected/lib/clang/21/include/stdint.h"
 
     # Locate the binary rather than assuming where it sits. The archive
     # layout is not stable across releases -- 8.1 unpacked `bin/esbmc`,
@@ -145,6 +210,15 @@ runs:
     # Fail here, at install time, rather than in the first job that needs
     # a solver. A version bump that breaks the archive layout or ships an
     # unrunnable binary should name itself.
+    #
+    # `--version` does not exercise the C frontend, so also parse a program
+    # that includes a system header: that is what failed on macOS when
+    # clang's resource directory went missing, and it surfaced only in the
+    # first verification of a later step.
     - name: Verify ESBMC runs
       shell: bash
-      run: esbmc --version
+      run: |
+        esbmc --version
+        smoke="$RUNNER_TEMP/esbmc-smoke.c"
+        printf '#include <stdint.h>\nint main(void) { return 0; }\n' > "$smoke"
+        esbmc "$smoke"
