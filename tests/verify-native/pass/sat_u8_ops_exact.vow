@@ -1,0 +1,57 @@
+// The saturating u8 builtins are modelled exactly: each contract is the documented
+// semantics (docs/spec/grammar.md, "Saturating Arithmetic") stated on the exact
+// i64 sum, difference or product of the operands, and the native verifier proves it.
+module SatU8OpsExact
+
+fn add_sat_is_clamped_sum(a: u8, b: u8) -> u8 vow {
+  ensures: (a as i64) + (b as i64) <= 255 && result as i64 == (a as i64) + (b as i64)
+    || (a as i64) + (b as i64) > 255 && result == 255
+} {
+  add_sat_u8(a, b)
+}
+
+fn sub_sat_is_clamped_difference(a: u8, b: u8) -> u8 vow {
+  ensures: a >= b && result as i64 == (a as i64) - (b as i64) || a < b && result == 0
+} {
+  sub_sat_u8(a, b)
+}
+
+fn mul_sat_is_clamped_product(a: u8, b: u8) -> u8 vow {
+  ensures: (a as i64) * (b as i64) <= 255 && result as i64 == (a as i64) * (b as i64)
+    || (a as i64) * (b as i64) > 255 && result == 255
+} {
+  mul_sat_u8(a, b)
+}
+
+fn add_sat_never_below_operands(a: u8, b: u8) -> u8 vow {
+  ensures: result >= a,
+  ensures: result >= b
+} {
+  add_sat_u8(a, b)
+}
+
+fn sub_sat_never_above_minuend(a: u8, b: u8) -> u8 vow {
+  ensures: result <= a
+} {
+  sub_sat_u8(a, b)
+}
+
+fn mul_sat_by_zero_is_zero(a: u8) -> u8 vow {
+  ensures: result == 0
+} {
+  mul_sat_u8(a, 0)
+}
+
+fn add_sat_is_commutative(a: u8, b: u8) -> bool vow {
+  ensures: result
+} {
+  add_sat_u8(a, b) == add_sat_u8(b, a)
+}
+
+fn add_sat_literal_saturates() -> u8 vow {
+  ensures: result == 255
+} {
+  add_sat_u8(200, 100)
+}
+
+fn main() -> i32 { 0 }
