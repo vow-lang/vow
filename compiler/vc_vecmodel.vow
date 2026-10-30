@@ -164,10 +164,33 @@ fn vc_append_vec_projection(cs: VcClaims, vecs: Vec<i64>, bound: i64, s: SmtScri
     }
 }
 
+// True when `names`, the entries of an ask's answer, holds the symbol `name`.
+fn vc_names_have(names: Vec<String>, name: String) -> bool {
+    let mut i: u64 = 0;
+    while i < names.len() {
+        if names[i] == name { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// Asserts that the two symbols of each pair of `apart` (a flat list, two names per pair) differ:
+// the objects of two declared types a model must not give one address (`vc_typed`). A pair whose
+// symbols the ask does not define, an element beyond its length bound, has nothing to keep apart.
+fn vc_assert_apart(ar: VcArena, s: SmtScript, names: Vec<String>, apart: Vec<String>) {
+    let mut i: u64 = 0;
+    while i + 1 < apart.len() {
+        if vc_names_have(names, apart[i]) && vc_names_have(names, apart[i + 1]) {
+            vc_script_assert(s, vc_tm_app1(ar, VC_OP_NOT(), vc_tm_app2(ar, VC_OP_EQ(), vc_tm_var(ar, apart[i]), vc_tm_var(ar, apart[i + 1]))));
+        }
+        i = i + 2;
+    }
+}
+
 // One ask for the model of claim `k` with every `Vec`/`String` length, and every map parameter's
 // length (`vc_cex_map_lens`), at most `bound`; the answer carries `bound` elements of each parameter in `vecs` behind
 // the claim's regular values.
-fn vc_ask_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, vecs: Vec<i64>, bound: i64, pin: bool, first: VcSolverAnswer, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+fn vc_ask_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, vecs: Vec<i64>, bound: i64, pin: bool, first: VcSolverAnswer, apart: Vec<String>, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
     let ar: VcArena = cs.arena;
     let s: SmtScript = vc_claim_context_script(cs, k);
     let mut p: u64 = 0;
@@ -189,6 +212,7 @@ fn vc_ask_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, vecs: Vec
     vc_append_vec_projection(cs, vecs, bound, s, names, widths);
     vc_append_field_rows(cs, vc_field_rows(cs, k), bound, s, names, widths);
     vc_append_read_rows(cs, vc_read_rows(cs, k), s, names, widths);
+    vc_assert_apart(ar, s, names, apart);
     vc_script_check_sat(s);
     vc_script_get_value(s, names);
     vc_nest_seal(cs, k, vc_solver_check_cached(cache, bin, vc_smt_render(ar, s), names, widths, budget_ms, scratch))
@@ -211,7 +235,7 @@ fn vc_answer_max_vec_len(cs: VcClaims, k: u64, ans: VcSolverAnswer) -> i64 {
 // the shortest the solver still finds, given that no model has all lengths at most
 // `lo`: each ask bounds the lengths by the midpoint of `lo` and the longest length
 // found so far, so a counterexample needing 101 elements is not reported with 512.
-fn vc_shrink_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, vecs: Vec<i64>, pin: bool, first: VcSolverAnswer, found: VcSolverAnswer, lo0: i64, started: i64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+fn vc_shrink_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, vecs: Vec<i64>, pin: bool, first: VcSolverAnswer, apart: Vec<String>, found: VcSolverAnswer, lo0: i64, started: i64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
     let mut best: VcSolverAnswer = found;
     let mut lo: i64 = lo0;
     let mut hi: i64 = vc_answer_max_vec_len(cs, k, best);
@@ -219,7 +243,7 @@ fn vc_shrink_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, vecs: 
         let left_ms: i64 = budget_ms - (time_micros() - started) / 1000;
         if left_ms <= 0 { return best; }
         let mid: i64 = (lo + hi) / 2;
-        let again: VcSolverAnswer = vc_ask_vec_model(cache, bin, cs, k, vecs, mid, pin, first, left_ms, scratch);
+        let again: VcSolverAnswer = vc_ask_vec_model(cache, bin, cs, k, vecs, mid, pin, first, apart, left_ms, scratch);
         if again.verdict == VC_ANS_SAT() {
             best = again;
             hi = vc_answer_max_vec_len(cs, k, best);
@@ -243,7 +267,7 @@ fn vc_shrink_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, vecs: 
 // scalars of `ans` (`vc_pin_model`): a claim that reaches a float-text hook was
 // checked to fail for those scalars whatever the hook returns (`vc_hook_recheck`),
 // and another set of scalars might not.
-fn vc_enrich_vec_first(cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: VcSolverAnswer, pin: bool, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+fn vc_enrich_vec_first(cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: VcSolverAnswer, pin: bool, apart: Vec<String>, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
     let vecs: Vec<i64> = vc_cex_vecs(cs, k);
     if vecs.len() == 0 && vc_cex_map_lens(cs, k).len() == 0 && vc_read_rows(cs, k).len() == 0 { return ans; }
     let started: i64 = time_micros();
@@ -252,9 +276,9 @@ fn vc_enrich_vec_first(cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: V
     while bound <= VC_CEX_VEC_MAX() {
         let left_ms: i64 = budget_ms - (time_micros() - started) / 1000;
         if left_ms <= 0 { return ans; }
-        let again: VcSolverAnswer = vc_ask_vec_model(cache, bin, cs, k, vecs, bound, pin, ans, left_ms, scratch);
+        let again: VcSolverAnswer = vc_ask_vec_model(cache, bin, cs, k, vecs, bound, pin, ans, apart, left_ms, scratch);
         if again.verdict == VC_ANS_SAT() {
-            return vc_shrink_vec_model(cache, bin, cs, k, vecs, pin, ans, again, lo, started, budget_ms, scratch);
+            return vc_shrink_vec_model(cache, bin, cs, k, vecs, pin, ans, apart, again, lo, started, budget_ms, scratch);
         }
         if again.verdict != VC_ANS_UNSAT() { return ans; }
         lo = bound;

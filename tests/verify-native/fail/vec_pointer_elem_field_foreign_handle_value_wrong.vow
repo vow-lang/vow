@@ -1,10 +1,12 @@
-// TEST: replay-skipped `q.p` holds the address of the parameter `q`, a `Node` where a `Pair` is declared: the model made one object two types, which replay does not rebuild (#1890)
 // TEST: counterexample-fn "f"
 // TEST: counterexample-vow-id 1
 // TEST: counterexample-blame Callee
-// TEST: counterexample-value q.0.contents unlisted
-// TEST: counterexample-value people[0].0.contents unconstrained
+// TEST: counterexample-value q.0.contents <absent>
+// TEST: counterexample-value people[0].0.contents <absent>
 // The element now names the object `q.p` names, not the one it was built with.
+// The heap arrays are keyed by slot, not by type, so a first model may put `q.p` (a `Pair`) at the address
+// of `q` (a `Node`); the listing asks again with the two kept apart (`vc_typed`), so `q.p` lists its own
+// contents and replay rebuilds it. Without that round `q.0.contents` is `unlisted` and replay skips.
 module VecPointerElemFieldForeignHandleValueWrong
 
 struct Pair { lo: i64 }

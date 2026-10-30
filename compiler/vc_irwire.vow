@@ -164,6 +164,12 @@ fn vc_irw_encode(m: IrModule) -> String {
         vc_irw_put(out, sl.is_linear);
         si = si + 1;
     }
+    vc_irw_put(out, m.field_keys.len() as i64);
+    let mut ki: u64 = 0;
+    while ki < m.field_keys.len() {
+        vc_irw_put_strs(out, m.field_keys[ki]);
+        ki = ki + 1;
+    }
     vc_irw_put(out, m.enum_layouts.len() as i64);
     let mut ei: u64 = 0;
     while ei < m.enum_layouts.len() {
@@ -399,6 +405,13 @@ fn vc_irw_decode(text: String) -> Option<IrModule> {
         struct_layouts.push(IrStructLayout { name: sname, fields: fields, is_linear: is_linear });
         si = si + 1;
     }
+    let field_keys: Vec<Vec<String>> = Vec::new();
+    let nk: u64 = vc_irw_get_count(r);
+    let mut ki: u64 = 0;
+    while ki < nk && !r.bad {
+        field_keys.push(vc_irw_get_strs(r));
+        ki = ki + 1;
+    }
     let enum_layouts: Vec<IrEnumLayout> = Vec::new();
     let ne: u64 = vc_irw_get_count(r);
     let mut ei: u64 = 0;
@@ -408,5 +421,5 @@ fn vc_irw_decode(text: String) -> Option<IrModule> {
     }
     let warnings: Vec<String> = vc_irw_get_strs(r);
     if r.bad || r.pos != text.len() { return Option::None; }
-    Option::Some(IrModule { name: name, functions: functions, strings: strings, struct_layouts: struct_layouts, enum_layouts: enum_layouts, warnings: warnings })
+    Option::Some(IrModule { name: name, functions: functions, strings: strings, struct_layouts: struct_layouts, enum_layouts: enum_layouts, warnings: warnings, field_keys: field_keys })
 }

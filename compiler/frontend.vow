@@ -10,6 +10,7 @@ use lower
 use ir
 use diag
 use region
+use vc_typekeys
 use perfetto
 
 struct CheckedFrontend {
@@ -390,6 +391,7 @@ fn frontend_lower_path_traced(path: String, module_root: String, t: TraceCtx) ->
             let t_markers: i64 = trace_now(t);
             let marked: IrModule = insert_region_markers_module(inferred);
             trace_span(t, String::from("region-markers"), PID_COMPILER(), TID_MAIN(), t_markers, trace_now(t) - t_markers, String::from(""));
+            vc_annotate_field_keys(marked, prep.merged);
             trace_sample(t, trace_now(t));
             marked
         }
