@@ -1,0 +1,18 @@
+// TEST: counterexample-fn "sub_below_zero"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures result < a"
+// `sub_sat_u8` stops at 0 rather than wrapping, but it does not drop below the
+// minuend strictly: with `b = 0` the result equals `a`.
+module SatU8SubWraps
+
+fn sub_below_zero(a: u8, b: u8) -> u8 vow {
+  ensures: result < a
+} {
+  sub_sat_u8(a, b)
+}
+
+fn main() -> i32 [io] {
+  print_i64(sub_below_zero(5, 3) as i64);
+  0
+}

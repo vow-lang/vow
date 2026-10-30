@@ -26,12 +26,12 @@ use ast
 // Fail-closed subset gate for the native verifier. `vc_skip_reason` returns ""
 // only for a function whose only effect is `panic` (the effect of `.unwrap()`)
 // and whose loops are reducible and unrollable (`vc_loops`), built from the
-// integer (8 to 128 bits), IEEE float (`f32`, `f64`) and Bool operations the
-// symbolic executor models and the struct, enum and `Option` values it
-// scalarises (`vc_agg`) and the `Vec`s of Bool and integers it
-// models as an array plus a length, with the control-flow shape `vc_cfg_detail` accepts;
-// every other function is `Skipped` with "<code>: <detail>" using the closed
-// codes of ADR-1430 (listed in `vc_ops`). An unknown opcode is never accepted.
+// integer (8 to 128 bits), IEEE float and Bool operations the symbolic executor
+// models, the struct, enum and `Option` values it scalarises (`vc_agg`) and the
+// `Vec`s of Bool and integers it models as an array plus a length, with the
+// control-flow shape `vc_cfg_detail` accepts; every other function is `Skipped`
+// with "<code>: <detail>" using the closed codes of ADR-1430 (listed in
+// `vc_ops`). An unknown opcode is never accepted.
 
 fn vc_reason(code: String, detail: String) -> String {
     let out: String = String::from(code);
@@ -87,11 +87,10 @@ fn vc_ty_table(f: IrFunction) -> Vec<i64> {
     tys
 }
 
-// 1 for every value defined by an `i64` literal (`ConstI64[i64]`), else 0. A
-// contract clause lowers a bare literal to `i64` even when the other operand of
-// the comparison is another integer type; the checker has range-checked the
-// literal against that type, so the comparison reads it at the other type. The
-// same holds for an arithmetic clause such as `result == x + 1` on a `u64`.
+// 1 for every value defined by an `i64` literal (`ConstI64[i64]`), else 0. A bare
+// literal lowers to `i64` even beside another integer type (a comparison, an
+// arithmetic clause such as `result == x + 1` on a `u64`, a saturating `u8` call
+// argument); the checker has range-checked it, so it is read at the other type.
 fn vc_literal_table(f: IrFunction, tys: Vec<i64>) -> Vec<i64> {
     let lits: Vec<i64> = Vec::new();
     let mut k: u64 = 0;
@@ -395,7 +394,7 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
             return n == 1 && inst.ty == ITY_U64() && vc_vec_index_ok(t0);
         }
         let nar: VcNarrow = vc_narrow_of(inst);
-        if nar.kind != VC_NAR_NONE() { return vc_narrow_shape_ok(nar, inst, t0); }
+        if nar.kind != VC_NAR_NONE() { return vc_narrow_shape_ok(nar, inst, t0, vc_operand_ok(inst, tys, lits, 0, ITY_U8()) && vc_operand_ok(inst, tys, lits, 1, ITY_U8())); }
         return calls && vc_call_inlinable(inst, tys);
     }
     if vc_is_arith_op(op) {
@@ -434,7 +433,7 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
 // The specific reason (float remainder, unmodelled builtin) for an instruction
 // `vc_inst_supported` rejected, or "" when it is only generically unsupported.
 // Only the two per-instruction classes of the op-model table can have one, so
-// every other opcode costs a single table lookup.
+// other opcodes cost one table lookup.
 fn vc_inst_specific_reason(inst: IrInst) -> String {
     let model: i64 = vc_op_model(inst.op);
     if model == VC_OPM_FLOAT_REM() { return vc_reason(VC_SKIP_FLOAT_REM(), opcode_name(inst.op)); }
