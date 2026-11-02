@@ -1,0 +1,156 @@
+module LowerStruct
+
+use ast
+use ir
+use lower
+
+// Private declaration facts. Callers lower a whole source expression and never
+// coordinate ordinals, physical slots, value types or result metadata themselves.
+struct LowerStructField {
+    ordinal: i64,
+    type_name: String,
+    ty: i64,
+    ast_tid: i64,
+    vec_elem: String,
+    slot: i64,
+    data_kind: i64,
+}
+
+fn lower_struct_field(ctx: LowerCtx, struct_name: String, field_name: String) -> LowerStructField {
+    let ordinal: i64 = lctx_struct_field_index(ctx, struct_name, field_name);
+    let type_name: String = lctx_struct_field_type(ctx, struct_name, ordinal);
+    LowerStructField {
+        ordinal: ordinal,
+        type_name: type_name,
+        ty: ity_for_scalar_type_name(type_name),
+        ast_tid: lctx_struct_field_ast_tid(ctx, struct_name, ordinal),
+        vec_elem: lctx_struct_field_vec_elem(ctx, struct_name, ordinal),
+        slot: lctx_struct_field_slot(ctx, struct_name, ordinal),
+        data_kind: lower_field_dk(type_name),
+    }
+}
+
+fn lower_struct_receiver_tag(ctx: LowerCtx, recv_id: i64, field_name: String, is_write: bool) -> String {
+    let struct_name: String = lctx_get_tag(ctx, recv_id);
+    if struct_name.len() == 0 {
+        let warning: String = if is_write {
+            String::from("warning: FieldSet on untagged instruction %")
+        } else {
+            String::from("warning: FieldGet on untagged instruction %")
+        };
+        warning.push_str(i64_to_string(recv_id));
+        warning.push_str(String::from(", field '"));
+        warning.push_str(field_name);
+        warning.push_str(String::from("' -- defaulting to index 0"));
+        ctx.warnings.push(warning);
+    }
+    struct_name
+}
+
+fn lower_struct_missing(ctx: LowerCtx, origin: i64) -> i64 {
+    lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), Vec::new(), IDATA_CONST_I64(), 0, 0, String::from(""), origin)
+}
+
+fn lower_struct_emit_store(ctx: LowerCtx, recv_id: i64, value: i64, field: LowerStructField, origin: i64) -> i64 {
+    let args: Vec<i64> = Vec::new();
+    args.push(recv_id);
+    args.push(value);
+    lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), args, field.data_kind, field.slot, 0, String::from(""), origin)
+}
+
+fn lower_struct_read(ctx: LowerCtx, eid: i64, origin: i64) -> i64 {
+    let a: AstArena = ctx.arena;
+    let field_name: String = arena_str(a, expr_b(a, eid));
+    let recv_id: i64 = lower_expr(ctx, expr_a(a, eid));
+    let struct_name: String = lower_struct_receiver_tag(ctx, recv_id, field_name, false);
+    let field: LowerStructField = lower_struct_field(ctx, struct_name, field_name);
+    if field.ordinal == -1 { return lower_struct_missing(ctx, origin); }
+    let args: Vec<i64> = Vec::new();
+    args.push(recv_id);
+    let result: i64 = lctx_emit(ctx, IOP_FIELD_GET(), field.ty, args, field.data_kind, field.slot, 0, String::from(""), origin);
+    lctx_tag_declared_ast_tid(ctx, result, field.ast_tid);
+    if field.type_name != String::from("") && !is_scalar_field_type_name(field.type_name) {
+        lctx_tag(ctx, result, field.type_name);
+    }
+    if field.vec_elem.len() > 0 { lctx_tag_vec_elem(ctx, result, field.vec_elem); }
+    result
+}
+
+fn lower_struct_assign(ctx: LowerCtx, eid: i64, origin: i64) -> i64 {
+    let a: AstArena = ctx.arena;
+    let lhs: i64 = expr_a(a, eid);
+    let rhs: i64 = expr_b(a, eid);
+    let field_name: String = arena_str(a, expr_b(a, lhs));
+    // Preserve this compiler's receiver-before-RHS ordering and failed-lookup
+    // recovery: an invalid destination never evaluates or consumes the RHS.
+    let recv_id: i64 = lower_expr(ctx, expr_a(a, lhs));
+    let struct_name: String = lower_struct_receiver_tag(ctx, recv_id, field_name, true);
+    let field: LowerStructField = lower_struct_field(ctx, struct_name, field_name);
+    if field.ordinal == -1 { return lower_struct_missing(ctx, origin); }
+    lctx_record_wide_expected_ast_context(ctx, a, rhs, field.ast_tid);
+    lctx_record_wide_control_flow_context(ctx, a, rhs, field.ty);
+    let original: i64 = lower_expr(ctx, rhs);
+    let value: i64 = lower_narrow_literal(ctx, a, rhs, original, field.ty);
+    lctx_emit_linear_consume_if_needed(ctx, value, origin);
+    // Field assignment returns the Unit-typed store instruction in this compiler.
+    lower_struct_emit_store(ctx, recv_id, value, field, origin)
+}
+
+fn lower_struct_allocate(ctx: LowerCtx, struct_name: String, supplied_fields: i64, origin: i64) -> i64 {
+    let struct_index: i64 = lctx_find_struct(ctx, struct_name);
+    let declared_fields: i64 = if struct_index != -1 {
+        let names: Vec<String> = ctx.struct_field_lists[struct_index as u64];
+        names.len() as i64
+    } else {
+        0
+    };
+    let actual_fields: i64 = if declared_fields > supplied_fields { declared_fields } else { supplied_fields };
+    let counted: i64 = lctx_struct_field_slot(ctx, struct_name, declared_fields);
+    let slots: i64 = if counted > actual_fields { counted } else { actual_fields };
+    let ty: i64 = if vec_contains_str(ctx.linear_owner_names, struct_name) { ITY_LPTR() } else { ITY_PTR() };
+    let result: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), ty, Vec::new(), IDATA_ALLOC_SIZE(), (slots + 1) * 8, 8, String::from(""), origin);
+    lctx_tag(ctx, result, struct_name);
+    result
+}
+
+fn lower_struct_literal(ctx: LowerCtx, eid: i64, origin: i64) -> i64 {
+    let a: AstArena = ctx.arena;
+    let path: i64 = expr_a(a, eid);
+    let fields: i64 = expr_b(a, eid);
+    let struct_name: String = arena_str(a, list_get(a, path, 0));
+    let count: i64 = list_len(a, fields) / 2;
+    let result: i64 = lower_struct_allocate(ctx, struct_name, count, origin);
+    let mut i: i64 = 0;
+    while i < count {
+        let field_name: String = arena_str(a, list_get(a, fields, i * 2));
+        let value_expr: i64 = list_get(a, fields, i * 2 + 1);
+        let field: LowerStructField = lower_struct_field(ctx, struct_name, field_name);
+        if field.ordinal != -1 {
+            lctx_record_wide_expected_ast_context(ctx, a, value_expr, field.ast_tid);
+            lctx_record_wide_control_flow_context(ctx, a, value_expr, field.ty);
+        }
+        // Invalid literal fields still evaluate/consume their initializer; the
+        // consume is anchored to that initializer, before any wide coercion.
+        let mut value: i64 = lower_consumed_expr(ctx, value_expr);
+        if field.ordinal != -1 {
+            if field.ty == ITY_I128() || field.ty == ITY_U128() {
+                value = lower_narrow_literal(ctx, a, value_expr, value, field.ty);
+            }
+            lower_struct_emit_store(ctx, result, value, field, origin);
+        }
+        i = i + 1;
+    }
+    result
+}
+
+// The expression dispatcher supplies a field read, a field assignment, or a
+// struct literal. Declaration lookup, layout, contexts, ownership and metadata
+// remain behind this single interface; enum payloads retain their own lowering.
+fn lower_struct_expr(ctx: LowerCtx, eid: i64) -> i64 {
+    let a: AstArena = ctx.arena;
+    let origin: i64 = expr_span(a, eid);
+    let tag: i64 = expr_tag(a, eid);
+    if tag == EXPR_FIELD() { return lower_struct_read(ctx, eid, origin); }
+    if tag == EXPR_ASSIGN() { return lower_struct_assign(ctx, eid, origin); }
+    lower_struct_literal(ctx, eid, origin)
+}
