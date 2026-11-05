@@ -9,6 +9,7 @@ use vc_solver
 use vc_cache
 use vc_clause
 use vc_round
+use vc_typed
 use tests.builders
 
 fn round_args(a: i64, b: i64) -> Vec<i64> {
@@ -43,7 +44,7 @@ fn round_function(claims: bool) -> IrFunction {
 }
 
 fn decide(f: IrFunction, cache: VcCache, timeout_ms: i64, all: bool, acc: VcClauseAcc, scratch: String) -> VcRound [io, read, write] {
-    let env: VcRoundEnvironment = VcRoundEnvironment { target: f, frames: vc_frames_new(), started: time_micros(), scratch: scratch, cache: cache, slicing: true, full: true };
+    let env: VcRoundEnvironment = VcRoundEnvironment { target: f, frames: vc_frames_new(), started: time_micros(), scratch: scratch, cache: cache, slicing: true, full: true, types: vc_types_none() };
     let req: VcRoundRequest = VcRoundRequest { body: f, hyp: Vec::new(), sites: Vec::new(), timeout_ms: timeout_ms, all_claims: all, clauses: acc, cover: Vec::new() };
     vc_decide_round(env, req)
 }

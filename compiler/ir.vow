@@ -329,6 +329,10 @@ struct IrModule {
     struct_layouts: Vec<IrStructLayout>,
     enum_layouts: Vec<IrEnumLayout>,
     warnings: Vec<String>,
+    // Verifier-only, parallel to `struct_layouts`: per struct, the head key of the declared type of
+    // each slot (`vc_annotate_field_keys`), "" for a slot without one. Empty where nothing
+    // annotated the module.
+    field_keys: Vec<Vec<String>>,
 }
 
 fn ir_inst_new(id: i64, op: i64, ty: i64, args: Vec<i64>, dk: i64, dv: i64, dv2: i64, ds: String) -> IrInst {
@@ -402,7 +406,19 @@ fn ir_module_new(name: String) -> IrModule {
         struct_layouts: Vec::new(),
         enum_layouts: Vec::new(),
         warnings: Vec::new(),
+        field_keys: Vec::new(),
     }
+}
+
+// A module with the declarations of `m` (strings, layouts, warnings) and no functions.
+fn ir_module_shell(m: IrModule) -> IrModule {
+    let out: IrModule = ir_module_new(m.name);
+    out.strings = m.strings;
+    out.struct_layouts = m.struct_layouts;
+    out.enum_layouts = m.enum_layouts;
+    out.warnings = m.warnings;
+    out.field_keys = m.field_keys;
+    out
 }
 
 fn fresh_arena_variant_extern(sym: String) -> bool {

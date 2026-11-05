@@ -534,12 +534,8 @@ struct VcSummarised {
 
 // A copy of `m` whose function list is `fns`.
 fn vc_module_with(m: IrModule, fns: Vec<IrFunction>) -> IrModule {
-    let out: IrModule = ir_module_new(m.name);
+    let out: IrModule = ir_module_shell(m);
     out.functions = fns;
-    out.strings = m.strings;
-    out.struct_layouts = m.struct_layouts;
-    out.enum_layouts = m.enum_layouts;
-    out.warnings = m.warnings;
     out
 }
 

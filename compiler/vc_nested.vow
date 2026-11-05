@@ -11,6 +11,7 @@ use vc_fieldrows
 use vc_readrows
 use vc_reads
 use vc_vecmodel
+use vc_typed
 
 // The contents behind the handles a failed claim reads (`vc_reads`). The counterexample of a
 // claim lists the address of every `Vec`, `String` or struct the function reached through memory
@@ -328,11 +329,12 @@ fn vc_nest_attach(first: VcSolverAnswer, nested: VcSolverAnswer) -> VcSolverAnsw
 }
 
 // The model of claim `k` with the contents of its `Vec` and `String` parameters (`vc_vecmodel`) and
-// of the objects behind the handles it reads. `budget_ms` is shared by both asks. An answer that
+// of the objects behind the handles it reads, the first listing kept free of objects of two declared
+// types at one address where the model can (`vc_typed`). `budget_ms` is shared by both asks. An answer that
 // was enriched ends in the count of its contents (`vc_nest_extra`), 0 when none were listed.
-fn vc_enrich_vec_model(cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: VcSolverAnswer, pin: bool, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+fn vc_enrich_vec_model(t: VcTypes, cache: VcCache, bin: String, cs: VcClaims, k: u64, ans: VcSolverAnswer, pin: bool, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
     let started: i64 = time_micros();
-    let first: VcSolverAnswer = vc_enrich_vec_first(cache, bin, cs, k, ans, pin, budget_ms, scratch);
+    let first: VcSolverAnswer = vc_enrich_typed(t, cache, bin, cs, k, ans, pin, started, budget_ms, scratch);
     if !vc_nest_enabled(cs, k) || first.values.len() <= vc_claim_model_count(cs, k) { return first; }
     let plan: VcNestPlan = vc_nest_plan(cs, k, first, vc_answer_body(cs, k, first));
     if plan.cls.len() == 0 || (vc_nest_collections(plan) == 0 && plan.s_grp.len() == 0) { return first; }
