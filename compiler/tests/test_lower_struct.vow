@@ -1,0 +1,230 @@
+module TestLowerStruct
+
+use ast
+use diag
+use lexer
+use parser
+use ir
+use lower
+use lower_struct
+
+fn struct_test_source(ctx: LowerCtx, expression: String) -> Module {
+    let source: String = String::from("module Fields\nstruct Box { wide: i128, tail: i16, items: Vec<Widget>, child: Widget, bit: bool }\nfn f() { let result = ");
+    source.push_str(expression);
+    source.push_str(String::from("; }"));
+    parse_module_into(lex(source), ctx.arena, diag_ctx_new(), String::from("fields.vow"))
+}
+
+fn struct_test_expression(parsed: Module) -> i64 {
+    let a: AstArena = parsed.arena;
+    let body: i64 = fn_body_bid(a, item_id(parsed.items[1]));
+    stmt_c(a, list_get(a, blk_stmts(a, body), 0))
+}
+
+fn struct_test_declaration(ctx: LowerCtx, parsed: Module) {
+    let a: AstArena = parsed.arena;
+    let fields: i64 = sdef_fields_lid(a, item_id(parsed.items[0]));
+    let names: Vec<String> = Vec::new();
+    let types: Vec<String> = Vec::new();
+    let tids: Vec<i64> = Vec::new();
+    let elements: Vec<String> = Vec::new();
+    let mut i: i64 = 0;
+    while i < list_len(a, fields) / 2 {
+        names.push(arena_str(a, list_get(a, fields, i * 2)));
+        let tid: i64 = list_get(a, fields, i * 2 + 1);
+        tids.push(tid);
+        let name: String = arena_str(a, type_a(a, tid));
+        types.push(name);
+        elements.push(if name == String::from("Vec") { String::from("Widget") } else { String::from("") });
+        i = i + 1;
+    }
+    ctx.struct_names.push(String::from("Box"));
+    ctx.struct_field_lists.push(names);
+    ctx.struct_field_type_names.push(types);
+    ctx.struct_field_ast_tids.push(tids);
+    ctx.struct_field_vec_elems.push(elements);
+}
+
+fn struct_test_binding(ctx: LowerCtx, name: String, tag: String, ty: i64) -> i64 {
+    let id: i64 = lctx_emit(ctx, IOP_GET_ARG(), ty, Vec::new(), IDATA_NONE(), 0, 0, String::from(""), 0);
+    lctx_define(ctx, name, id);
+    if tag.len() > 0 { lctx_tag(ctx, id, tag); }
+    id
+}
+
+fn struct_test_inst(ctx: LowerCtx, id: i64) -> IrInst {
+    let f: IrFunction = ctx.func;
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let block: IrBlock = f.blocks[b];
+        let mut i: u64 = 0;
+        while i < block.insts.len() {
+            let inst: IrInst = block.insts[i];
+            if inst.id == id { return inst; }
+            i = i + 1;
+        }
+        b = b + 1;
+    }
+    let first: IrBlock = f.blocks[0];
+    first.insts[0]
+}
+
+// Drive the same whole-expression interface as the production dispatcher.
+fn struct_test_lower(ctx: LowerCtx, eid: i64) -> i64 {
+    lower_struct_expr(ctx, eid)
+}
+
+fn check_struct_literal() -> i64 {
+    let ctx: LowerCtx = lctx_new(String::from("literal"), ITY_UNIT(), 0, arena_new(), Vec::new());
+    let parsed: Module = struct_test_source(ctx, String::from("Box { tail: 7, wide: 4, items: items, child: owned, bit: true }"));
+    struct_test_declaration(ctx, parsed);
+    ctx.linear_owner_names.push(String::from("Box"));
+    struct_test_binding(ctx, String::from("items"), String::from("Vec"), ITY_PTR());
+    let owned: i64 = struct_test_binding(ctx, String::from("owned"), String::from("Widget"), ITY_LPTR());
+    let eid: i64 = struct_test_expression(parsed);
+    let result: i64 = struct_test_lower(ctx, eid);
+    let alloc: IrInst = struct_test_inst(ctx, result);
+    if alloc.op != IOP_REGION_ALLOC() || alloc.ty != ITY_LPTR() || alloc.dv != 56 || alloc.dv2 != 8 { return 1; }
+    if lctx_get_tag(ctx, result) != String::from("Box") { return 2; }
+    let expected_slots: Vec<i64> = Vec::new();
+    expected_slots.push(2); expected_slots.push(0); expected_slots.push(3); expected_slots.push(4); expected_slots.push(5);
+    let f: IrFunction = ctx.func;
+    let block: IrBlock = f.blocks[0];
+    let mut stores: u64 = 0;
+    let mut consumes: i64 = 0;
+    let mut i: u64 = 0;
+    while i < block.insts.len() {
+        let inst: IrInst = block.insts[i];
+        if inst.op == IOP_LINEAR_CONSUME() {
+            if inst.args[0] != owned { return 3; }
+            let initializer: i64 = list_get(ctx.arena, expr_b(ctx.arena, eid), 7);
+            if inst.ostart != span_unpack_start(expr_span(ctx.arena, initializer)) { return 16; }
+            consumes = consumes + 1;
+        }
+        if inst.op == IOP_FIELD_SET() {
+            if stores >= expected_slots.len() || inst.dv != expected_slots[stores] || inst.args[0] != result { return 4; }
+            let expected_dk: i64 = if stores == 1 { IDATA_WIDE_SLOT() } else { IDATA_FIELD() };
+            if inst.dk != expected_dk || inst.ostart != span_unpack_start(expr_span(ctx.arena, eid)) { return 5; }
+            if stores == 0 && lctx_inst_ty(ctx, inst.args[1]) != ITY_I16() { return 6; }
+            if stores == 1 && lctx_inst_ty(ctx, inst.args[1]) != ITY_I128() { return 7; }
+            if stores == 3 && (i == 0 || block.insts[i - 1].op != IOP_LINEAR_CONSUME()) { return 8; }
+            stores = stores + 1;
+        }
+        i = i + 1;
+    }
+    if stores != 5 || consumes != 1 || parsed.items.len() != 2 { return 9; }
+    0
+}
+
+fn check_struct_read(field: String, wanted_ty: i64, wanted_slot: i64, wanted_tag: String) -> i64 {
+    let ctx: LowerCtx = lctx_new(String::from("read"), ITY_UNIT(), 0, arena_new(), Vec::new());
+    let text: String = String::from("base."); text.push_str(field);
+    let parsed: Module = struct_test_source(ctx, text);
+    struct_test_declaration(ctx, parsed);
+    let base: i64 = struct_test_binding(ctx, String::from("base"), String::from("Box"), ITY_PTR());
+    let eid: i64 = struct_test_expression(parsed);
+    let result: i64 = struct_test_lower(ctx, eid);
+    let inst: IrInst = struct_test_inst(ctx, result);
+    if inst.op != IOP_FIELD_GET() || inst.ty != wanted_ty || inst.dv != wanted_slot || inst.args[0] != base { return 10; }
+    let wanted_dk: i64 = if wanted_ty == ITY_I128() { IDATA_WIDE_SLOT() } else { IDATA_FIELD() };
+    if inst.dk != wanted_dk || lctx_get_tag(ctx, result) != wanted_tag { return 11; }
+    if inst.ostart != span_unpack_start(expr_span(ctx.arena, eid)) || inst.olen != span_unpack_len(expr_span(ctx.arena, eid)) { return 12; }
+    let ordinal: i64 = lctx_struct_field_index(ctx, String::from("Box"), field);
+    if lctx_get_declared_ast_tid(ctx, result) != lctx_struct_field_ast_tid(ctx, String::from("Box"), ordinal) { return 13; }
+    if field == String::from("items") && lctx_get_vec_elem(ctx, result) != String::from("Widget") { return 14; }
+    if parsed.items.len() != 2 { return 15; }
+    0
+}
+
+fn check_struct_assignment() -> i64 {
+    let ctx: LowerCtx = lctx_new(String::from("write"), ITY_UNIT(), 0, arena_new(), Vec::new());
+    let parsed: Module = struct_test_source(ctx, String::from("({ x = 1; base }).tail = { x = 2; 9 }"));
+    struct_test_declaration(ctx, parsed);
+    struct_test_binding(ctx, String::from("x"), String::from(""), ITY_I64());
+    let base: i64 = struct_test_binding(ctx, String::from("base"), String::from("Box"), ITY_PTR());
+    let eid: i64 = struct_test_expression(parsed);
+    let result: i64 = struct_test_lower(ctx, eid);
+    let inst: IrInst = struct_test_inst(ctx, result);
+    if inst.op != IOP_FIELD_SET() || inst.ty != ITY_UNIT() || inst.args[0] != base || inst.dv != 2 { return 20; }
+    if lctx_inst_ty(ctx, inst.args[1]) != ITY_I16() { return 21; }
+    let current: IrInst = struct_test_inst(ctx, lctx_lookup(ctx, String::from("x")));
+    if current.op != IOP_CONST_I64() || current.dv != 2 { return 22; }
+    let f: IrFunction = ctx.func;
+    let block: IrBlock = f.blocks[0];
+    let mut one: i64 = -1;
+    let mut two: i64 = -1;
+    let mut i: u64 = 0;
+    while i < block.insts.len() {
+        let value: IrInst = block.insts[i];
+        if value.op == IOP_CONST_I64() && value.dv == 1 { one = i as i64; }
+        if value.op == IOP_CONST_I64() && value.dv == 2 { two = i as i64; }
+        i = i + 1;
+    }
+    if one == -1 || two <= one || parsed.items.len() != 2 { return 23; }
+    0
+}
+
+fn check_struct_owned_assignment() -> i64 {
+    let ctx: LowerCtx = lctx_new(String::from("owned_write"), ITY_UNIT(), 0, arena_new(), Vec::new());
+    let parsed: Module = struct_test_source(ctx, String::from("base.child = owned"));
+    struct_test_declaration(ctx, parsed);
+    let base: i64 = struct_test_binding(ctx, String::from("base"), String::from("Box"), ITY_PTR());
+    let owned: i64 = struct_test_binding(ctx, String::from("owned"), String::from("Widget"), ITY_LPTR());
+    let eid: i64 = struct_test_expression(parsed);
+    let result: i64 = struct_test_lower(ctx, eid);
+    let store: IrInst = struct_test_inst(ctx, result);
+    if store.op != IOP_FIELD_SET() || store.ty != ITY_UNIT() || store.dv != 4 || store.args[0] != base || store.args[1] != owned { return 24; }
+    let consume: IrInst = struct_test_inst(ctx, result - 1);
+    if consume.op != IOP_LINEAR_CONSUME() || consume.args[0] != owned { return 25; }
+    if consume.ostart != span_unpack_start(expr_span(ctx.arena, eid)) || consume.olen != span_unpack_len(expr_span(ctx.arena, eid)) || parsed.items.len() != 2 { return 26; }
+    0
+}
+
+fn check_struct_recovery() -> i64 {
+    let ctx: LowerCtx = lctx_new(String::from("missing"), ITY_UNIT(), 0, arena_new(), Vec::new());
+    let parsed: Module = struct_test_source(ctx, String::from("base.missing = { x = 5; 8 }"));
+    struct_test_declaration(ctx, parsed);
+    let original: i64 = struct_test_binding(ctx, String::from("x"), String::from(""), ITY_I64());
+    struct_test_binding(ctx, String::from("base"), String::from("Box"), ITY_PTR());
+    let result: i64 = struct_test_lower(ctx, struct_test_expression(parsed));
+    let inst: IrInst = struct_test_inst(ctx, result);
+    if inst.op != IOP_CONST_I64() || inst.dv != 0 || lctx_lookup(ctx, String::from("x")) != original { return 30; }
+    if ctx.warnings.len() != 1 || ctx.warnings[0] != String::from("warning: field 'missing' not found in struct 'Box' -- returning -1") { return 31; }
+    if parsed.items.len() != 2 { return 32; }
+    let untagged: LowerCtx = lctx_new(String::from("untagged"), ITY_UNIT(), 0, arena_new(), Vec::new());
+    let read_parsed: Module = struct_test_source(untagged, String::from("base.tail"));
+    struct_test_binding(untagged, String::from("base"), String::from(""), ITY_PTR());
+    let sentinel: i64 = struct_test_lower(untagged, struct_test_expression(read_parsed));
+    if struct_test_inst(untagged, sentinel).op != IOP_CONST_I64() || untagged.warnings.len() != 1 { return 33; }
+    if untagged.warnings[0] != String::from("warning: FieldGet on untagged instruction %0, field 'tail' -- defaulting to index 0") || read_parsed.items.len() != 2 { return 34; }
+    0
+}
+
+fn check_struct_unknown_literal() -> i64 {
+    let ctx: LowerCtx = lctx_new(String::from("unknown"), ITY_UNIT(), 0, arena_new(), Vec::new());
+    let parsed: Module = struct_test_source(ctx, String::from("Unknown { missing: owned }"));
+    let owned: i64 = struct_test_binding(ctx, String::from("owned"), String::from("Widget"), ITY_LPTR());
+    let result: i64 = struct_test_lower(ctx, struct_test_expression(parsed));
+    let alloc: IrInst = struct_test_inst(ctx, result);
+    if alloc.op != IOP_REGION_ALLOC() || alloc.dv != 16 { return 40; }
+    if ctx.warnings.len() != 1 || ctx.warnings[0] != String::from("warning: struct 'Unknown' not registered -- field lookup returning -1") { return 41; }
+    let f: IrFunction = ctx.func;
+    let block: IrBlock = f.blocks[0];
+    if block.insts.len() != 3 || block.insts[2].op != IOP_LINEAR_CONSUME() || block.insts[2].args[0] != owned || parsed.items.len() != 2 { return 42; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let mut code: i64 = check_struct_literal();
+    if code == 0 { code = check_struct_read(String::from("wide"), ITY_I128(), 0, String::from("")); }
+    if code == 0 { code = check_struct_read(String::from("tail"), ITY_I16(), 2, String::from("")); }
+    if code == 0 { code = check_struct_read(String::from("items"), ITY_I64(), 3, String::from("Vec")); }
+    if code == 0 { code = check_struct_read(String::from("child"), ITY_I64(), 4, String::from("Widget")); }
+    if code == 0 { code = check_struct_read(String::from("bit"), ITY_BOOL(), 5, String::from("")); }
+    if code == 0 { code = check_struct_assignment(); }
+    if code == 0 { code = check_struct_owned_assignment(); }
+    if code == 0 { code = check_struct_recovery(); }
+    if code == 0 { code = check_struct_unknown_literal(); }
+    if code != 0 { print_i64(code); return 1; }
+    0
+}

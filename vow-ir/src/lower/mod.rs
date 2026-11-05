@@ -1,6 +1,9 @@
 mod branch_join;
 #[cfg(test)]
 mod branch_join_tests;
+mod fields;
+#[cfg(test)]
+mod fields_tests;
 mod loop_control;
 pub mod vow;
 
@@ -1124,8 +1127,6 @@ fn type_tag_name(ast_ty: &AstType, type_aliases: &HashMap<String, AstType>) -> S
     }
 }
 
-const FIELD_IDX_SENTINEL: usize = u32::MAX as usize;
-
 pub(crate) struct LowerCtx {
     pub(super) func: Function,
     pub(super) current_block: BlockId,
@@ -2238,12 +2239,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
         }
         ExprKind::Assign { lhs, rhs } => {
+            if matches!(lhs.kind, ExprKind::FieldAccess { .. }) {
+                return fields::lower_struct_expr(ctx, expr);
+            }
             let index_ty = known_index_assignment_ty(ctx, lhs);
             if let Some(expected) = known_assignment_ast_type(ctx, lhs) {
                 record_wide_expected_ast_context(ctx, rhs, &expected);
-            }
-            if let Some(field_ty) = known_field_assignment_ty(ctx, lhs) {
-                record_wide_control_flow_context(ctx, rhs, field_ty);
             }
             if let Some(index_ty) = index_ty {
                 record_wide_control_flow_context(ctx, rhs, index_ty);
@@ -2288,76 +2289,18 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 return new_val;
             }
             let mut new_val = lower_expr(ctx, rhs);
-            match &lhs.kind {
-                ExprKind::Ident(name) => {
-                    if let Some(current) = ctx.lookup(name) {
-                        let current_ty = ctx.inst_ty(current);
-                        let declared_ast_type = ctx.inst_declared_ast_types.get(&current).cloned();
-                        if narrow_int_width(current_ty).is_some() {
-                            new_val = lower_narrow_literal(ctx, rhs, new_val, current_ty);
-                        }
-                        if let Some(ast_type) = declared_ast_type {
-                            ctx.inst_declared_ast_types.insert(new_val, ast_type);
-                        }
+            if let ExprKind::Ident(name) = &lhs.kind {
+                if let Some(current) = ctx.lookup(name) {
+                    let current_ty = ctx.inst_ty(current);
+                    let declared_ast_type = ctx.inst_declared_ast_types.get(&current).cloned();
+                    if narrow_int_width(current_ty).is_some() {
+                        new_val = lower_narrow_literal(ctx, rhs, new_val, current_ty);
                     }
-                    ctx.assign(name, new_val);
-                }
-                ExprKind::FieldAccess { base, field } => {
-                    let ptr_id = lower_expr(ctx, base);
-                    let struct_name = ctx
-                        .inst_struct_type
-                        .get(&ptr_id)
-                        .cloned()
-                        .unwrap_or_default();
-                    if struct_name.is_empty() {
-                        ctx.warn(
-                            format!("FieldSet on untagged instruction %{}, field '{}' -- ICE: returning sentinel index", ptr_id.0, field),
-                            span,
-                        );
-                    }
-                    let field_idx = if let Some(names) = ctx.struct_field_map.get(&struct_name) {
-                        match names.iter().position(|n| n == field) {
-                            Some(idx) => idx,
-                            None => {
-                                if !struct_name.is_empty() {
-                                    ctx.warn(
-                                        format!("field '{}' not found in struct '{}' -- ICE: returning sentinel index", field, struct_name),
-                                        span,
-                                    );
-                                }
-                                FIELD_IDX_SENTINEL
-                            }
-                        }
-                    } else {
-                        if !struct_name.is_empty() {
-                            ctx.warn(
-                                format!("struct '{}' not registered -- field lookup ICE: returning sentinel index", struct_name),
-                                span,
-                            );
-                        }
-                        FIELD_IDX_SENTINEL
-                    } as u32;
-                    if field_idx != FIELD_IDX_SENTINEL as u32 {
-                        let field_ty = ctx
-                            .struct_field_type_names
-                            .get(&struct_name)
-                            .and_then(|types| types.get(field_idx as usize))
-                            .map(|type_name| scalar_ty_for_field_type_name(type_name));
-                        if let Some(field_ty @ (Ty::I128 | Ty::U128)) = field_ty {
-                            new_val = lower_narrow_literal(ctx, rhs, new_val, field_ty);
-                        }
-                        // Field store transfers a linear RHS into the heap container.
-                        ctx.emit_linear_consume_if_needed(new_val, span);
-                        ctx.emit(
-                            Opcode::FieldSet,
-                            Ty::Unit,
-                            vec![ptr_id, new_val],
-                            struct_field_data(ctx, &struct_name, field_idx as usize),
-                            span,
-                        );
+                    if let Some(ast_type) = declared_ast_type {
+                        ctx.inst_declared_ast_types.insert(new_val, ast_type);
                     }
                 }
-                _ => {}
+                ctx.assign(name, new_val);
             }
             new_val
         }
@@ -2379,172 +2322,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         }
         ExprKind::Break { value } => loop_control::lower_loop_break(ctx, value.as_deref(), span),
         ExprKind::Continue => loop_control::lower_loop_continue(ctx, span),
-        ExprKind::FieldAccess { base, field } => {
-            let ptr_id = lower_expr(ctx, base);
-            let struct_name = ctx
-                .inst_struct_type
-                .get(&ptr_id)
-                .cloned()
-                .unwrap_or_default();
-            if struct_name.is_empty() {
-                ctx.warn(
-                    format!(
-                        "FieldGet on untagged instruction %{}, field '{}' -- ICE: returning sentinel index",
-                        ptr_id.0, field
-                    ),
-                    span,
-                );
-            }
-            let field_idx = if let Some(names) = ctx.struct_field_map.get(&struct_name) {
-                match names.iter().position(|n| n == field) {
-                    Some(idx) => idx,
-                    None => {
-                        if !struct_name.is_empty() {
-                            ctx.warn(
-                                format!(
-                                    "field '{}' not found in struct '{}' -- ICE: returning sentinel index",
-                                    field, struct_name
-                                ),
-                                span,
-                            );
-                        }
-                        FIELD_IDX_SENTINEL
-                    }
-                }
-            } else {
-                if !struct_name.is_empty() {
-                    ctx.warn(
-                        format!(
-                            "struct '{}' not registered -- field lookup ICE: returning sentinel index",
-                            struct_name
-                        ),
-                        span,
-                    );
-                }
-                FIELD_IDX_SENTINEL
-            } as u32;
-            if field_idx == FIELD_IDX_SENTINEL as u32 {
-                ctx.emit(
-                    Opcode::ConstI64,
-                    Ty::I64,
-                    vec![],
-                    InstData::ConstI64(0),
-                    span,
-                )
-            } else {
-                let field_type_name = ctx
-                    .struct_field_type_names
-                    .get(&struct_name)
-                    .and_then(|names| names.get(field_idx as usize))
-                    .cloned()
-                    .unwrap_or_default();
-                let field_ty = scalar_ty_for_field_type_name(&field_type_name);
-                let result_id = ctx.emit(
-                    Opcode::FieldGet,
-                    field_ty,
-                    vec![ptr_id],
-                    struct_field_data(ctx, &struct_name, field_idx as usize),
-                    span,
-                );
-                if let Some(ast_type) = ctx
-                    .struct_field_ast_types
-                    .get(&struct_name)
-                    .and_then(|types| types.get(field_idx as usize))
-                    .cloned()
-                {
-                    ctx.inst_declared_ast_types.insert(result_id, ast_type);
-                }
-                if !field_type_name.is_empty() && !is_scalar_field_type_name(&field_type_name) {
-                    ctx.inst_struct_type.insert(result_id, field_type_name);
-                }
-                if let Some(vec_elems) = ctx.struct_field_vec_elems.get(&struct_name)
-                    && let Some(elem_name) = vec_elems.get(field_idx as usize)
-                    && !elem_name.is_empty()
-                {
-                    ctx.inst_vec_elem_types
-                        .insert(result_id, vec![elem_name.clone()]);
-                }
-                result_id
-            }
-        }
-        ExprKind::StructLiteral { name, fields } => {
-            let field_names = if let Some(names) = ctx.struct_field_map.get(name) {
-                names.clone()
-            } else {
-                ctx.warn(
-                    format!(
-                        "struct '{}' not registered -- field lookup ICE: returning sentinel index",
-                        name
-                    ),
-                    span,
-                );
-                vec![]
-            };
-            let n_fields = field_names.len().max(fields.len());
-            let n_slots = (struct_field_slot(ctx, name, field_names.len()) as usize).max(n_fields);
-            let result_ty = if ctx.linear_owner_names.contains(name) {
-                Ty::LinearPtr
-            } else {
-                Ty::Ptr
-            };
-            let ptr_id = ctx.emit(
-                Opcode::RegionAlloc,
-                result_ty,
-                vec![],
-                InstData::AllocSize {
-                    size: (n_slots as u32 + 1) * 8,
-                    align: 8,
-                },
-                span,
-            );
-            ctx.inst_struct_type.insert(ptr_id, name.clone());
-            for (field_name, field_expr) in fields {
-                let idx = match field_names.iter().position(|n| n == field_name) {
-                    Some(i) => i,
-                    None => {
-                        if !field_names.is_empty() {
-                            ctx.warn(
-                                format!("StructLiteral field '{}' not found in struct '{}' -- ICE: returning sentinel index", field_name, name),
-                                span,
-                            );
-                        }
-                        FIELD_IDX_SENTINEL
-                    }
-                } as u32;
-                let field_ty = if idx != FIELD_IDX_SENTINEL as u32 {
-                    ctx.struct_field_type_names
-                        .get(name)
-                        .and_then(|types| types.get(idx as usize))
-                        .map(|type_name| scalar_ty_for_field_type_name(type_name))
-                } else {
-                    None
-                };
-                if let Some(expected) = ctx
-                    .struct_field_ast_types
-                    .get(name)
-                    .and_then(|types| types.get(idx as usize))
-                    .cloned()
-                {
-                    record_wide_expected_ast_context(ctx, field_expr, &expected);
-                }
-                if let Some(field_ty @ (Ty::I128 | Ty::U128)) = field_ty {
-                    record_wide_control_flow_context(ctx, field_expr, field_ty);
-                }
-                let mut val_id = lower_consumed_expr(ctx, field_expr);
-                if idx != FIELD_IDX_SENTINEL as u32 {
-                    if let Some(field_ty @ (Ty::I128 | Ty::U128)) = field_ty {
-                        val_id = lower_narrow_literal(ctx, field_expr, val_id, field_ty);
-                    }
-                    ctx.emit(
-                        Opcode::FieldSet,
-                        Ty::Unit,
-                        vec![ptr_id, val_id],
-                        struct_field_data(ctx, name, idx as usize),
-                        span,
-                    );
-                }
-            }
-            ptr_id
+        ExprKind::FieldAccess { .. } | ExprKind::StructLiteral { .. } => {
+            fields::lower_struct_expr(ctx, expr)
         }
         ExprKind::EnumConstruct { path, fields } => {
             let enum_name = path.first().map(|s| s.as_str()).unwrap_or("");
