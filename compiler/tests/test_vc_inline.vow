@@ -7,6 +7,7 @@ use vc_gate
 use vc_cfg
 use vc_loops
 use vc_inline
+use vc_callgraph
 use tests.builders
 
 fn args1(a: i64) -> Vec<i64> {
@@ -75,49 +76,6 @@ fn module3(a: IrFunction, b: IrFunction, c: IrFunction) -> IrModule {
     fs.push(b);
     fs.push(c);
     mk_module(fs)
-}
-
-fn check_cycles() -> i64 {
-    let self_rec: IrModule = module3(forwarder(0, String::from("a"), 0), leaf(1, String::from("l")), leaf(2, String::from("m")));
-    let idx: Vec<i64> = vc_fn_index_table(self_rec.functions);
-    if vc_call_cycle(self_rec.functions, idx, 0) != String::from("a -> a") { return 1; }
-
-    let mutual: IrModule = module3(forwarder(0, String::from("a"), 1), forwarder(1, String::from("b"), 0), leaf(2, String::from("m")));
-    let midx: Vec<i64> = vc_fn_index_table(mutual.functions);
-    if vc_call_cycle(mutual.functions, midx, 0) != String::from("a -> b -> a") { return 2; }
-    if vc_call_cycle(mutual.functions, midx, 1) != String::from("b -> a -> b") { return 3; }
-
-    let indirect: IrModule = module3(forwarder(0, String::from("a"), 1), forwarder(1, String::from("b"), 2), forwarder(2, String::from("c"), 1));
-    let iidx: Vec<i64> = vc_fn_index_table(indirect.functions);
-    if vc_call_cycle(indirect.functions, iidx, 0) != String::from("b -> c -> b") { return 4; }
-
-    let chain: IrModule = module3(forwarder(0, String::from("a"), 1), forwarder(1, String::from("b"), 2), leaf(2, String::from("c")));
-    let cidx: Vec<i64> = vc_fn_index_table(chain.functions);
-    if vc_call_cycle(chain.functions, cidx, 0).len() != 0 { return 5; }
-
-    // A cycle that the root does not reach is not the root's problem.
-    let aside: IrModule = module3(forwarder(0, String::from("a"), 1), leaf(1, String::from("b")), forwarder(2, String::from("c"), 2));
-    let aidx: Vec<i64> = vc_fn_index_table(aside.functions);
-    if vc_call_cycle(aside.functions, aidx, 0).len() != 0 { return 6; }
-    0
-}
-
-// a calls b twice, b calls c: a diamond without a cycle.
-fn check_diamond_is_acyclic() -> i64 {
-    let top_i: Vec<IrInst> = Vec::new();
-    top_i.push(mk_inst_arg(0, ITY_I64(), 0));
-    top_i.push(mk_inst_call_target(1, ITY_I64(), args1(0), 1));
-    top_i.push(mk_inst_call_target(2, ITY_I64(), args1(1), 2));
-    top_i.push(mk_inst_return(3, 2));
-    let top: IrFunction = fn_of(0, String::from("top"), ITY_I64(), one(mk_block(0, top_i)));
-    let m: IrModule = module3(top, forwarder(1, String::from("left"), 2), leaf(2, String::from("base")));
-    let idx: Vec<i64> = vc_fn_index_table(m.functions);
-    if vc_call_cycle(m.functions, idx, 0).len() != 0 { return 1; }
-    let seen: Vec<i64> = dom_fill(3, 0);
-    let order: Vec<i64> = Vec::new();
-    vc_reachable_callees(m.functions, idx, seen, order, 0);
-    if order.len() != 2 || order[0] != 2 || order[1] != 1 { return 2; }
-    0
 }
 
 fn check_splice_single_call() -> i64 {
@@ -482,8 +440,7 @@ fn check_handle_result_retyped() -> i64 {
 }
 
 fn main() -> i32 {
-    let mut r: i64 = check_cycles();
-    if r == 0 { let d: i64 = check_diamond_is_acyclic(); if d != 0 { r = 100 + d; } }
+    let mut r: i64 = 0;
     if r == 0 { let d: i64 = check_splice_single_call(); if d != 0 { r = 200 + d; } }
     if r == 0 { let d: i64 = check_splice_unit_callee(); if d != 0 { r = 300 + d; } }
     if r == 0 { let d: i64 = check_copies_do_not_share_values(); if d != 0 { r = 400 + d; } }

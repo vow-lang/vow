@@ -10,6 +10,7 @@ use verifier
 use verify_report
 use vc_gate
 use vc_inline
+use vc_callgraph
 use vc_native
 use vc_cex
 use vc_cex_elem

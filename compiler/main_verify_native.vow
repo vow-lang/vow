@@ -232,8 +232,7 @@ fn native_plan(fns: Vec<IrFunction>, ir_mod: IrModule, vm: IrModule, const_fn_in
     let entries: Vec<NativeEntry> = Vec::new();
     let vfns: Vec<IrFunction> = vm.functions;
     let replan: bool = prev.len() > 0;
-    let idx_of: Vec<i64> = { if replan { vc_fn_index_table(vfns) } else { Vec::new() } };
-    let sizes: Vec<i64> = { if replan { dom_fill(vfns.len(), -1) } else { Vec::new() } };
+    let graph: VcCallGraph = vc_calls_new({ if replan { vfns } else { Vec::new() } }, cfg.budget);
     let mut p: u64 = 0;
     let mut fi: u64 = 0;
     while fi < fns.len() {
@@ -241,7 +240,7 @@ fn native_plan(fns: Vec<IrFunction>, ir_mod: IrModule, vm: IrModule, const_fn_in
         if is_verify_target(f, ir_mod, const_fn_indices) {
             while p < prev.len() && prev[p].fn_index < fi as i64 { p = p + 1; }
             let reason: String = {
-                if p < prev.len() && prev[p].fn_index == fi as i64 { vc_module_skip_reason_retrust(vfns, idx_of, sizes, vfns[fi], vm, cfg.trusted, cfg.budget, prev[p].reason) }
+                if p < prev.len() && prev[p].fn_index == fi as i64 { vc_module_skip_reason_retrust(graph, vfns[fi], vm, cfg.trusted, cfg.budget, prev[p].reason) }
                 else { vc_module_skip_reason_trusted(vfns[fi], vm, cfg.trusted, cfg.budget) }
             };
             let pre: i64 = vc_waves_outcome_of(waves, fi as i64);
@@ -278,8 +277,7 @@ fn native_skip_rescuable(f: IrFunction, vm: IrModule, budget: i64, ids: Vec<i64>
 fn native_summary_roots(entries: Vec<NativeEntry>, vm: IrModule, budget: i64, sums: VcRootSums) -> Vec<i64> [read] {
     let roots: Vec<i64> = Vec::new();
     let vfns: Vec<IrFunction> = vm.functions;
-    let idx_of: Vec<i64> = vc_fn_index_table(vfns);
-    let sizes: Vec<i64> = dom_fill(vfns.len(), -1);
+    let graph: VcCallGraph = vc_calls_new(vfns, VC_INLINE_SKIP_INSTS());
     let root_min: i64 = vc_trust_root_min();
     let mut e: u64 = 0;
     while e < entries.len() {
@@ -291,7 +289,7 @@ fn native_summary_roots(entries: Vec<NativeEntry>, vm: IrModule, budget: i64, su
                 sums.fns.push(en.fn_index);
                 sums.ids.push(ids);
             }
-        } else if en.task >= 0 && vc_tree_size(vfns, idx_of, sizes, en.fn_index, VC_INLINE_SKIP_INSTS()) > root_min { roots.push(en.fn_index); }
+        } else if en.task >= 0 && vc_calls_size(graph, en.fn_index) > root_min { roots.push(en.fn_index); }
         e = e + 1;
     }
     roots

@@ -2,6 +2,7 @@ module TestVcMemory
 
 use ir
 use vc_inline
+use vc_callgraph
 use vc_summary
 use vc_waves
 use tests.builders
