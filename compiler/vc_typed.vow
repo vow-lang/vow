@@ -69,7 +69,7 @@ fn vc_key_struct(t: VcTypes, key: String) -> i64 {
 // Kind (`VC_READ_*`) of the object an address of declared type `key` names; 0 for any other.
 fn vc_key_class(t: VcTypes, key: String) -> i64 {
     if key == String::from("String") { return VC_READ_STR(); }
-    if key == String::from("Vec") || (key.len() > 4 && key.substring(0, 4) == String::from("Vec<")) { return VC_READ_VEC(); }
+    if key == String::from("Vec") || string_starts_with(key, String::from("Vec<")) != 0 { return VC_READ_VEC(); }
     if vc_key_struct(t, key) >= 0 { return VC_READ_OBJ(); }
     0
 }
@@ -87,8 +87,8 @@ fn vc_key_slot(t: VcTypes, key: String, slot: i64) -> String {
 // argument that is not a bare head. An element that is itself a `Vec` or a map has no key: the key
 // of `Vec<Vec<i64>>` is `Vec<Vec>`, which does not say the element type.
 fn vc_key_elem(key: String) -> String {
-    if key.len() < 6 || key.substring(0, 4) != String::from("Vec<") || key.byte_at(key.len() - 1) != 62 { return String::from(""); }
-    let inner: String = key.substring(4, key.len() - 1);
+    let inner: String = vc_heap_key_elem(key);
+    if inner.len() == 0 || key.byte_at(key.len() - 1) != 62 { return String::from(""); }
     let mut i: u64 = 0;
     while i < inner.len() {
         if inner.byte_at(i) == 44 || inner.byte_at(i) == 60 { return String::from(""); }
@@ -231,12 +231,13 @@ fn vc_typed_has_pair(apart: Vec<String>, a: String, b: String) -> bool {
 fn vc_typed_pairs(t: VcTypes, cs: VcClaims, k: u64, ans: VcSolverAnswer, apart: Vec<String>) -> bool {
     let es: VcTypedEntries = vc_typed_entries(t, cs, k, ans);
     let before: u64 = apart.len();
+    let cap: u64 = 2 * (VC_TYPED_PAIRS() as u64);
     let mut a: u64 = 0;
-    while a < es.at.len() && apart.len() < 2 * (VC_TYPED_PAIRS() as u64) {
+    while a < es.at.len() && apart.len() < cap {
         let x: u64 = es.at[a] as u64;
         let cls: i64 = es.cls[a];
         let mut b: u64 = a + 1;
-        while b < es.at.len() && apart.len() < 2 * (VC_TYPED_PAIRS() as u64) {
+        while b < es.at.len() && apart.len() < cap {
             let y: u64 = es.at[b] as u64;
             if ans.values[x] == ans.values[y] && ans.highs[x] == ans.highs[y] && cls == es.cls[b] && es.key[a] != es.key[b]
                 && vc_typed_read_at(cs, k, ans, cls, ans.values[x]) && !vc_typed_has_pair(apart, es.sym[a], es.sym[b]) {
