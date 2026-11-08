@@ -1,0 +1,42 @@
+// TEST: stdout "x\n"
+// Issue #1933, `AliasOfAny` variant. `pass` returns one of two arguments, so
+// its result may be either; the stored value still embeds a field of `r`, which
+// `fill` allocated and must therefore live as long as `main`'s `ces`.
+module RegionPassThroughStoreAliasOfAny
+
+struct Res {
+    names: Vec<String>,
+}
+
+struct Ce {
+    names: Vec<String>,
+}
+
+fn pass(ce: Ce, other: Ce, c: bool) -> Ce {
+    if c { ce } else { other }
+}
+
+fn report(r: Res, ces: Vec<Ce>) {
+    ces.push(pass(Ce { names: r.names }, Ce { names: Vec::new() }, true));
+}
+
+fn fill(ces: Vec<Ce>) {
+    let n: Vec<String> = Vec::new();
+    n.push(String::from("x"));
+    let r: Res = Res { names: n };
+    report(r, ces);
+}
+
+fn main() -> i32 [io] {
+    let ces: Vec<Ce> = Vec::new();
+    fill(ces);
+    let junk: Vec<String> = Vec::new();
+    let mut i: i64 = 0;
+    while i < 100 {
+        junk.push(String::from("overwrite-overwrite-overwrite"));
+        i = i + 1;
+    }
+    print_str(ces[0].names[0]);
+    print_str("\n");
+    0
+}

@@ -902,170 +902,6 @@ fn add_store_effect(
     aliases_list.push(clone_i64_vec(aliases));
 }
 
-// Trace alias chain (FieldGet/Load/vec-get/Phi) for ambiguous-slot check;
-// mirrors clif_value_receiver_region. Returns packed region (>=0) on a
-// heap-producer terminus (Caller sentinel triggers conservative reject)
-// or -1 on a safe terminus.
-fn underlying_caller_via_aliases(
-    id_to_inst: Vec<IrInst>,
-    region_keys: Vec<i64>, region_vals: Vec<i64>,
-    m_functions: Vec<IrFunction>,
-    source_arg_id: i64
-) -> i64 {
-    let seen: Vec<i64> = Vec::new();
-    underlying_caller_via_aliases_inner(
-        id_to_inst, region_keys, region_vals, m_functions, source_arg_id, seen)
-}
-
-fn underlying_caller_via_aliases_inner(
-    id_to_inst: Vec<IrInst>,
-    region_keys: Vec<i64>, region_vals: Vec<i64>,
-    m_functions: Vec<IrFunction>,
-    source_arg_id: i64,
-    seen: Vec<i64>
-) -> i64 {
-    let mut current: i64 = source_arg_id;
-    let local_seen: Vec<i64> = clone_i64_vec(seen);
-    let mut keep_going: bool = true;
-    let mut result: i64 = -1;
-    while keep_going {
-        let mut already: bool = false;
-        let mut si: u64 = 0;
-        while si < local_seen.len() {
-            if local_seen[si] == current { already = true; }
-            si = si + 1;
-        }
-        if already {
-            keep_going = false;
-        } else {
-            local_seen.push(current);
-            let direct: i64 = lookup_inst_region(region_keys, region_vals, current);
-            if direct >= 0 {
-                result = direct;
-                keep_going = false;
-            } else {
-                let inst: IrInst = lookup_inst_or_default(id_to_inst, current);
-                if inst.id < 0 {
-                    keep_going = false;
-                } else if (inst.op == IOP_FIELD_GET() || inst.op == IOP_LOAD()) && inst.args.len() > 0 {
-                    current = inst.args[0];
-                } else if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
-                    && (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
-                    && inst.args.len() > 0
-                {
-                    current = inst.args[0];
-                } else if inst.op == IOP_PHI() {
-                    // Mirror codegen's `clif_value_receiver_region` Phi
-                    // semantics for the all-arms-agree case. For divergent
-                    // arms, codegen's source_value_region falls back to
-                    // the Phi's own (default) region — but that fallback
-                    // only governs how *future re-allocations* would
-                    // route. It does NOT undo a `RegionAlloc{Caller(_)}`
-                    // that already executed in some arm at runtime.
-                    // Hidden caller slots have asymmetric lifetimes, so a
-                    // fresh Caller(0) arm can be stored into slot 1's
-                    // target whose arena outlives slot 0's. To stay sound
-                    // under `ambiguous_caller_slot`, *any* Caller(_)-
-                    // carrying arm — even mixed with safe arms — must
-                    // trigger the conservative reject. The Rust mirror in
-                    // `vow-ir/src/region.rs` carries the same widened
-                    // logic; both compilers must keep this in sync.
-                    let mut have_first: bool = false;
-                    let mut first_rgn: i64 = -1;
-                    let mut diverged: bool = false;
-                    let mut any_caller_arm: i64 = -1;
-                    let mut ki: u64 = 0;
-                    while ki < id_to_inst.len() {
-                        let up: IrInst = id_to_inst[ki];
-                        if up.id >= 0 && up.op == IOP_UPSILON() && up.dk == IDATA_PHI_TARGET()
-                            && up.dv == inst.id && up.args.len() > 0
-                        {
-                            // Each arm gets the path-to-Phi seen set as a
-                            // starting `seen`; the inner call clones it on
-                            // entry, so arms explore independently and arm
-                            // B does not inherit arm A's exploration.
-                            // Mirrors `arm_seen = seen.clone()` in Rust.
-                            let arm_rgn: i64 = underlying_caller_via_aliases_inner(
-                                id_to_inst, region_keys, region_vals, m_functions, up.args[0], local_seen);
-                            if arm_rgn >= 0 && region_kind(arm_rgn) == REGION_KIND_CALLER()
-                                && any_caller_arm < 0
-                            {
-                                any_caller_arm = arm_rgn;
-                            }
-                            if !have_first {
-                                have_first = true;
-                                first_rgn = arm_rgn;
-                            } else if first_rgn != arm_rgn {
-                                diverged = true;
-                            }
-                        }
-                        ki = ki + 1;
-                    }
-                    if diverged {
-                        result = any_caller_arm;
-                    } else if have_first {
-                        result = first_rgn;
-                    }
-                    keep_going = false;
-                } else if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
-                    // The callee returns a value derived from its parameters
-                    // (AliasOf / AliasOfAny). The marker propagation pushes
-                    // VirtualCaller markers from the call result back to the
-                    // underlying allocs via the alias edge; the call result
-                    // itself isn't heap-producing for AliasOf returns, so
-                    // `region_map` has no entry and we fall through to here.
-                    // Trace through to those arg(s) — same as FieldGet/Load
-                    // semantically. AliasOfAny: any-caller-arm wins (mirror
-                    // Phi pattern). Mirrors the CallTarget arm in
-                    // vow-ir/src/region.rs:underlying_caller_via_aliases_inner;
-                    // both compilers must keep this in sync.
-                    let callee_idx: i64 = inst.dv;
-                    if callee_idx >= 0 && callee_idx < m_functions.len() as i64 {
-                        let callee: IrFunction = m_functions[callee_idx as u64];
-                        let rkind: i64 = callee.rsum_return_kind;
-                        if rkind == RSUM_KIND_ALIAS_OF() {
-                            let j_idx: i64 = callee.rsum_return_aux;
-                            if j_idx >= 0 && j_idx < inst.args.len() as i64 {
-                                current = inst.args[j_idx as u64];
-                            } else {
-                                keep_going = false;
-                            }
-                        } else if rkind == RSUM_KIND_ALIAS_OF_ANY() {
-                            let aliases: Vec<i64> = callee.rsum_return_aliases;
-                            let mut any_caller: i64 = -1;
-                            let mut ai: u64 = 0;
-                            while ai < aliases.len() && any_caller < 0 {
-                                let j_idx: i64 = aliases[ai];
-                                if j_idx >= 0 && j_idx < inst.args.len() as i64 {
-                                    let arm_rgn: i64 = underlying_caller_via_aliases_inner(
-                                        id_to_inst, region_keys, region_vals, m_functions,
-                                        inst.args[j_idx as u64], local_seen);
-                                    if arm_rgn >= 0 && region_kind(arm_rgn) == REGION_KIND_CALLER() {
-                                        any_caller = arm_rgn;
-                                    }
-                                }
-                                ai = ai + 1;
-                            }
-                            result = any_caller;
-                            keep_going = false;
-                        } else {
-                            // FreshInCaller is heap-producing → has a
-                            // region_map entry handled above. Other kinds
-                            // (ConstantGlobal / Uninit) can't carry Caller.
-                            keep_going = false;
-                        }
-                    } else {
-                        keep_going = false;
-                    }
-                } else {
-                    keep_going = false;
-                }
-            }
-        }
-    }
-    result
-}
-
 // Mirrors Rust's `any_published_store` filter at vow-ir/src/region.rs:1481-1484.
 // Returns true if the parallel `int_se_src_kinds[fi]` array contains any
 // kind other than RSUM_INTERNAL_UNINIT(). This is exact (not merely
@@ -2202,6 +2038,8 @@ fn analyze_function(
                         source_id,
                         target_param,
                         int_kinds,
+                        int_auxs,
+                        int_aliases_list,
                         int_se_targets[fidx_u],
                         int_se_src_kinds[fidx_u],
                         int_se_src_aux[fidx_u],
@@ -2227,6 +2065,8 @@ fn analyze_function(
                                 source_id2,
                                 target_param2,
                                 int_kinds,
+                                int_auxs,
+                                int_aliases_list,
                                 int_se_targets[fidx_u],
                                 int_se_src_kinds[fidx_u],
                                 int_se_src_aux[fidx_u],
@@ -2259,6 +2099,8 @@ fn analyze_function(
                     id_to_inst,
                     alias_to,
                     int_kinds,
+                    int_auxs,
+                    int_aliases_list,
                     int_se_targets,
                     int_se_src_kinds,
                     int_se_src_aux,
@@ -2415,7 +2257,7 @@ fn is_heap_producing_for_region(inst: IrInst, int_kinds: Vec<i64>) -> bool {
 
 fn add_store_effect_source_constraints(
     id_to_inst: Vec<IrInst>, source_id: i64, target_param: i64,
-    int_kinds: Vec<i64>,
+    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
     targets: Vec<i64>, kinds: Vec<i64>, auxs: Vec<i64>, aliases_list: Vec<Vec<i64>>
 ) {
     let source: DeepRet = trace_origin_shallow(id_to_inst, source_id);
@@ -2447,6 +2289,23 @@ fn add_store_effect_source_constraints(
     if callee_idx < 0 || callee_idx >= int_kinds.len() as i64 {
         return;
     }
+    let aliased: Vec<i64> = alias_call_arg_ids(source_inst, int_kinds, int_auxs, int_aliases_list);
+    let mut ali: u64 = 0;
+    while ali < aliased.len() {
+        add_store_effect_source_constraints(
+            id_to_inst,
+            aliased[ali],
+            target_param,
+            int_kinds,
+            int_auxs,
+            int_aliases_list,
+            targets,
+            kinds,
+            auxs,
+            aliases_list,
+        );
+        ali = ali + 1;
+    }
     if int_kinds[callee_idx as u64] != RSUM_KIND_FRESH_IN_CALLER() {
         return;
     }
@@ -2467,6 +2326,39 @@ fn add_store_effect_source_constraints(
         }
         ai = ai + 1;
     }
+}
+
+// Arguments of an internal call that its result is the same object as, when the
+// callee returns `AliasOf` or `AliasOfAny`. Mirrors Rust `alias_call_args`.
+fn alias_call_arg_ids(
+    inst: IrInst, int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>
+) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let callee: i64 = inst.dv;
+    if callee < 0 || callee >= int_kinds.len() as i64 {
+        return out;
+    }
+    let kind: i64 = int_kinds[callee as u64];
+    let positions: Vec<i64> = Vec::new();
+    if kind == RSUM_KIND_ALIAS_OF() {
+        positions.push(int_auxs[callee as u64]);
+    } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
+        let als: Vec<i64> = int_aliases_list[callee as u64];
+        let mut ai: u64 = 0;
+        while ai < als.len() {
+            positions.push(als[ai]);
+            ai = ai + 1;
+        }
+    }
+    let mut pi: u64 = 0;
+    while pi < positions.len() {
+        let pos: i64 = positions[pi];
+        if pos >= 0 && pos < inst.args.len() as i64 {
+            out.push(inst.args[pos as u64]);
+        }
+        pi = pi + 1;
+    }
+    out
 }
 
 fn publish_embedded_param_aliases(
@@ -2499,6 +2391,7 @@ fn publish_embedded_param_aliases(
 
 fn publish_transitive_store_effects(
     call_inst: IrInst, id_to_inst: Vec<IrInst>, alias_to: Vec<i64>, int_kinds: Vec<i64>,
+    int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
     all_targets: Vec<Vec<i64>>, all_kinds: Vec<Vec<i64>>,
     all_auxs: Vec<Vec<i64>>, all_aliases: Vec<Vec<Vec<i64>>>,
     targets: Vec<i64>, kinds: Vec<i64>, auxs: Vec<i64>, aliases_list: Vec<Vec<i64>>
@@ -2526,6 +2419,8 @@ fn publish_transitive_store_effects(
                             call_inst.args[source_pos as u64],
                             current_target_param,
                             int_kinds,
+                            int_auxs,
+                            int_aliases_list,
                             targets,
                             kinds,
                             auxs,
@@ -2543,6 +2438,8 @@ fn publish_transitive_store_effects(
                                 call_inst.args[source_pos2 as u64],
                                 current_target_param,
                                 int_kinds,
+                                int_auxs,
+                                int_aliases_list,
                                 targets,
                                 kinds,
                                 auxs,
@@ -2999,167 +2896,6 @@ fn direct_markers_collect_regions(
     }
 }
 
-fn value_lub_concrete_block(
-    f: IrFunction, id: i64, defining_block: i64,
-    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>,
-    block_parent: Vec<i64>, block_depth: Vec<i64>,
-    return_is_scalar: bool,
-    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
-    int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>
-) -> i64 {
-    let work: Vec<i64> = Vec::new();
-    let seen: Vec<i64> = Vec::new();
-    let markers: Vec<i64> = Vec::new();
-    linear_insert_i64(markers, defining_block);
-    work.push(id);
-    while work.len() > 0 {
-        let cur: i64 = work[work.len() - 1];
-        work.pop();
-        if region_vec_contains_i64(seen, cur) {
-            continue;
-        }
-        seen.push(cur);
-        if !direct_markers_collect_concrete_blocks(
-            f,
-            cur,
-            id_to_inst,
-            id_to_block,
-            markers,
-            return_is_scalar,
-            int_kinds,
-            int_auxs,
-            int_aliases_list,
-            int_se_targets,
-            int_se_src_kinds,
-            int_se_src_aux,
-            work,
-            seen
-        ) {
-            return -1;
-        }
-    }
-    sort_i64_vec_inplace(markers);
-    block_tree_lca_all(block_parent, block_depth, markers)
-}
-
-fn direct_markers_collect_concrete_blocks(
-    f: IrFunction, id: i64,
-    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>,
-    markers: Vec<i64>,
-    return_is_scalar: bool,
-    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
-    int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>,
-    work: Vec<i64>, seen: Vec<i64>
-) -> bool {
-    let bks: Vec<IrBlock> = f.blocks;
-    let mut bi: u64 = 0;
-    while bi < bks.len() {
-        let blk: IrBlock = bks[bi];
-        let mut ii: u64 = 0;
-        while ii < blk.insts.len() {
-            let inst: IrInst = blk.insts[ii];
-            let mut ai: i64 = 0;
-            while ai < inst.args.len() as i64 {
-                if inst.args[ai as u64] == id {
-                    // Every argument use contributes the use-block marker.
-                    linear_insert_i64(markers, blk.id);
-                    if inst.op == IOP_RETURN() && !return_is_scalar {
-                        return false;
-                    }
-                    if (inst.op == IOP_STORE() || inst.op == IOP_FIELD_SET()) && ai == 1 {
-                        let target_block: i64 = target_marker_concrete_block(
-                            id_to_inst,
-                            id_to_block,
-                            inst.args[0],
-                            int_kinds
-                        );
-                        if target_block < 0 {
-                            return false;
-                        }
-                        linear_insert_i64(markers, target_block);
-                        // Stored values must follow later widening of their
-                        // target container. The target-marker check above
-                        // handles the target's origin; the work item catches
-                        // use-derived widening such as returning the target.
-                        push_region_work(work, seen, inst.args[0]);
-                    }
-                    if inst.op == IOP_UPSILON() && ai == 0 && inst.dk == IDATA_PHI_TARGET() {
-                        let phi_block: i64 = lookup_inst_block(id_to_block, inst.dv);
-                        if phi_block < 0 {
-                            return false;
-                        }
-                        linear_insert_i64(markers, phi_block);
-                        push_region_work(work, seen, inst.dv);
-                    }
-                    if inst.op == IOP_FIELD_GET() && ai == 0 {
-                        push_region_work(work, seen, inst.id);
-                    }
-                    if inst.op == IOP_LOAD() && ai == 0 && !is_scalar_ity(inst.ty) {
-                        push_region_work(work, seen, inst.id);
-                    }
-                    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
-                        let callee_idx: i64 = inst.dv;
-                        if !call_store_effects_collect_concrete_blocks(
-                            inst,
-                            ai,
-                            id_to_inst,
-                            id_to_block,
-                            int_kinds,
-                            markers,
-                            int_se_targets,
-                            int_se_src_kinds,
-                            int_se_src_aux,
-                            work,
-                            seen
-                        ) {
-                            return false;
-                        }
-                        if callee_idx >= 0 && callee_idx < int_kinds.len() as i64
-                            && int_kinds[callee_idx as u64] == RSUM_KIND_FRESH_IN_CALLER()
-                        {
-                            push_region_work(work, seen, inst.id);
-                        }
-                        if callee_return_aliases_arg(
-                            callee_idx,
-                            ai,
-                            int_kinds,
-                            int_auxs,
-                            int_aliases_list
-                        ) {
-                            push_region_work(work, seen, inst.id);
-                        }
-                    }
-                    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
-                        let target_pos2: i64 = extern_store_target_for_source(inst.ds, ai);
-                        if target_pos2 >= 0 && target_pos2 < inst.args.len() as i64 {
-                            let target_block2: i64 = target_marker_concrete_block(
-                                id_to_inst,
-                                id_to_block,
-                                inst.args[target_pos2 as u64],
-                                int_kinds
-                            );
-                            if target_block2 < 0 {
-                                return false;
-                            }
-                            linear_insert_i64(markers, target_block2);
-                            push_region_work(work, seen, inst.args[target_pos2 as u64]);
-                        }
-                        if (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
-                            && ai == 0
-                        {
-                            push_region_work(work, seen, inst.id);
-                        }
-                    }
-                }
-                ai = ai + 1;
-            }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    true
-}
-
 fn push_region_work(work: Vec<i64>, seen: Vec<i64>, id: i64) {
     if id < 0 {
         return;
@@ -3171,23 +2907,6 @@ fn push_region_work(work: Vec<i64>, seen: Vec<i64>, id: i64) {
         return;
     }
     work.push(id);
-}
-
-fn target_marker_concrete_block(
-    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, target_id: i64,
-    int_kinds: Vec<i64>
-) -> i64 {
-    let inst: IrInst = lookup_inst_or_default(id_to_inst, target_id);
-    if inst.id < 0 {
-        return -1;
-    }
-    if inst.op == IOP_GET_ARG() {
-        return -1;
-    }
-    if is_heap_producing_for_region(inst, int_kinds) {
-        return lookup_inst_block(id_to_block, target_id);
-    }
-    -1
 }
 
 fn target_marker_region(
@@ -3307,45 +3026,6 @@ fn call_store_effects_collect_regions(
         }
         i = i + 1;
     }
-}
-
-fn call_store_effects_collect_concrete_blocks(
-    call_inst: IrInst, source_arg_pos: i64,
-    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, int_kinds: Vec<i64>,
-    markers: Vec<i64>,
-    int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>,
-    work: Vec<i64>, seen: Vec<i64>
-) -> bool {
-    let callee_idx: i64 = call_inst.dv;
-    if callee_idx < 0 || callee_idx >= int_se_targets.len() as i64 {
-        return true;
-    }
-    let targets: Vec<i64> = int_se_targets[callee_idx as u64];
-    let kinds: Vec<i64> = int_se_src_kinds[callee_idx as u64];
-    let auxs: Vec<i64> = int_se_src_aux[callee_idx as u64];
-    let mut i: u64 = 0;
-    while i < targets.len() && i < kinds.len() && i < auxs.len() {
-        if kinds[i] == RSUM_KIND_ALIAS_OF() && auxs[i] == source_arg_pos {
-            let target_param: i64 = targets[i];
-            if target_param >= 0 && target_param < call_inst.args.len() as i64 {
-                let target_block: i64 = target_marker_concrete_block(
-                    id_to_inst,
-                    id_to_block,
-                    call_inst.args[target_param as u64],
-                    int_kinds
-                );
-                if target_block < 0 {
-                    return false;
-                }
-                linear_insert_i64(markers, target_block);
-                push_region_work(work, seen, call_inst.args[target_param as u64]);
-            }
-        } else if kinds[i] == RSUM_KIND_ALIAS_OF_ANY() {
-            return false;
-        }
-        i = i + 1;
-    }
-    true
 }
 
 fn callee_return_aliases_arg(
@@ -4580,18 +4260,6 @@ fn refresh_regions_for_edge(
     refresh
 }
 
-fn remove_regions(regions: Vec<i64>, remove: Vec<i64>) -> Vec<i64> {
-    let kept: Vec<i64> = Vec::new();
-    let mut i: u64 = 0;
-    while i < regions.len() {
-        if !region_vec_contains_i64(remove, regions[i]) {
-            kept.push(regions[i]);
-        }
-        i = i + 1;
-    }
-    kept
-}
-
 fn region_marker_inst(id: i64, op: i64, region_block: i64) -> IrInst {
     let mut marker: IrInst = ir_inst_new(
         id, op, ITY_UNIT(), Vec::new(), 0, 0, 0, String::from("")
@@ -5369,47 +5037,6 @@ fn region_vec_contains_i64(v: Vec<i64>, x: i64) -> bool {
         i = i + 1;
     }
     false
-}
-
-// Currently unused — same scaffolding rationale as `region_caller0` above.
-// Becomes live once the clif-shim accepts hidden caller regions on
-// `IOP_REGION_ALLOC`.
-fn collect_escaping_allocs(m: IrModule, f: IrFunction) -> Vec<i64> {
-    // Conservative helper: a RegionAlloc inst escapes if its id appears as
-    // the sole arg of any Return in the same function. Full transitive
-    // handling happens in the return-summary walk above.
-    let escaping: Vec<i64> = Vec::new();
-    let bks: Vec<IrBlock> = f.blocks;
-    // Pass 1: collect Return arg ids.
-    let returned_ids: Vec<i64> = Vec::new();
-    let mut bi: u64 = 0;
-    while bi < bks.len() {
-        let blk: IrBlock = bks[bi];
-        let mut ii: u64 = 0;
-        while ii < blk.insts.len() {
-            let inst: IrInst = blk.insts[ii];
-            if inst.op == IOP_RETURN() && inst.args.len() > 0 {
-                returned_ids.push(inst.args[0]);
-            }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    // Pass 2: a RegionAlloc whose id is in returned_ids escapes.
-    let mut bi2: u64 = 0;
-    while bi2 < bks.len() {
-        let blk: IrBlock = bks[bi2];
-        let mut ii2: u64 = 0;
-        while ii2 < blk.insts.len() {
-            let inst: IrInst = blk.insts[ii2];
-            if inst.op == IOP_REGION_ALLOC() && region_vec_contains_i64(returned_ids, inst.id) {
-                escaping.push(inst.id);
-            }
-            ii2 = ii2 + 1;
-        }
-        bi2 = bi2 + 1;
-    }
-    escaping
 }
 
 // ---- Call graph + Tarjan SCC ----
