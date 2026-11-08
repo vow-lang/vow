@@ -1,5 +1,7 @@
 """Command, option and output sections of the help JSON, derived from cli.md."""
 
+import re
+
 from helpgen.config import (
     DEFAULT_MAX_K_STEP,
     SCHEMA_VERSION,
@@ -33,6 +35,57 @@ def _options(
     return options, entries
 
 
+_MUTANTS_USAGE_FLAG = re.compile(r"(--[a-z0-9-]+) ([^\s\]-][^\s\]]*)")
+
+
+def _mutants_value_names(cli: str) -> dict[str, tuple[str, str]]:
+    """Map each `vow mutants` flag to (value placeholder, kind) from its usage block."""
+    section = cli.split("### `vow mutants`", 1)[1].split("\n### ", 1)[0]
+    block = section.split("```")[1]
+    names: dict[str, tuple[str, str]] = {}
+    for flag, token in _MUTANTS_USAGE_FLAG.findall(block):
+        name = token.strip("'")
+        kind = {"N": "integer", "DIR": "path"}.get(name, "string")
+        names[flag] = (name, kind)
+    return names
+
+
+def _mutants_options(cli: str) -> list[dict]:
+    """Read the `vow mutants` flag table as structured entries.
+
+    A flag whose usage line shows no placeholder takes no value.
+    """
+    value_names = _mutants_value_names(cli)
+    entries: list[dict] = []
+    for row in extract_table(cli, "vow mutants", heading_level=3):
+        if len(row) < 3:
+            continue
+        flag, default, desc = row[0], row[1], row[2]
+        long_flag = flag.split(" ")[0]
+        value_name, value_kind = value_names.get(long_flag, (None, "flag"))
+        form = long_flag if value_name is None else f"{long_flag} <{value_name}>"
+        description = desc if default in ("", "off") else f"{desc} (default: {default})"
+        entry: dict[str, object] = {
+            "form": form,
+            "description": description,
+            "long": long_flag,
+            "value_kind": value_kind,
+        }
+        if value_name is not None:
+            entry["value_name"] = value_name
+        entries.append(entry)
+    return entries
+
+
+def _flag_option(flag: str, description: str) -> dict:
+    return {
+        "form": flag,
+        "description": description,
+        "long": flag,
+        "value_kind": "flag",
+    }
+
+
 def verification_defaults() -> dict:
     # Collection model capacities (Vec/String/HashMap/BTreeMap) are deliberately
     # absent: they are internal verifier-model bounds, not language properties or
@@ -58,6 +111,7 @@ def build_cli_help(cli: str) -> dict:
     )
     contracts_options, contracts_option_entries = _options(cli, "vow contracts")
     complexity_options, complexity_option_entries = _options(cli, "vow complexity")
+    mutants_option_entries = _mutants_options(cli)
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -105,6 +159,7 @@ def build_cli_help(cli: str) -> dict:
             "contracts": "List all contracts with optional verification status",
             "skill": "Generate or install the Claude Code skill document for this compiler version",
             "complexity": "Report per-function complexity metrics as deterministic, byte-identical JSON",
+            "mutants": "Run mutation testing on a Vow source tree (self-hosted compiler only)",
         },
         "command_details": {
             "build": {
@@ -238,6 +293,74 @@ def build_cli_help(cli: str) -> dict:
                     "reports only functions defined in the queried entry file",
                     "complexity_score is a readability / refactor-priority gate, not a defect predictor",
                     "--max-score / --max-cognitive / --max-cyclomatic gates are opt-in; exit nonzero only when set",
+                ],
+            },
+            "skill": {
+                "status": "implemented",
+                "usage": "vow skill [print [--bundle] | install [--local | --global]]",
+                "default_subcommand": "print",
+                "subcommands": {
+                    "print": {
+                        "usage": "vow skill print [--bundle]",
+                        "options": [
+                            _flag_option(
+                                "--bundle",
+                                "Print one self-contained document for harnesses that cannot load supporting files",
+                            )
+                        ],
+                        "stdout": {"format": "markdown"},
+                    },
+                    "install": {
+                        "usage": "vow skill install [--local | --global]",
+                        "options": [
+                            _flag_option(
+                                "--local",
+                                "Install to ./.claude/skills/vow/ (requires .git and .claude/ in the current directory)",
+                            ),
+                            _flag_option(
+                                "--global",
+                                "Install to $HOME/.claude/skills/vow/",
+                            ),
+                        ],
+                        "stdout": {"format": "none"},
+                        "side_effects": [
+                            {
+                                "kind": "write_directory",
+                                "default_path": "<scope>/.claude/skills/vow/",
+                            }
+                        ],
+                    },
+                },
+                "notes": [
+                    "the skill text is embedded in the compiler binary and always matches its version",
+                    "install prompts on stderr for a scope when neither --local nor --global is given; scripts should pass one explicitly",
+                ],
+            },
+            "mutants": {
+                "status": "self-hosted-only",
+                "usage": "vowc mutants <version | list | run> [OPTIONS]",
+                "subcommands": {
+                    "version": {
+                        "usage": "vowc mutants version",
+                        "stdout": {"format": "text"},
+                    },
+                    "list": {
+                        "usage": "vowc mutants list [--root DIR] [--shard X/Y]",
+                        "stdout": {"format": "jsonl"},
+                    },
+                    "run": {
+                        "usage": "vowc mutants run [OPTIONS]",
+                        "stdout": {"format": "summary line"},
+                        "writes": {
+                            "schema_ref": "schemas/mutants-result.schema.json",
+                            "directory": "--output-dir",
+                        },
+                    },
+                },
+                "options": mutants_option_entries,
+                "notes": [
+                    "implemented in the self-hosted compiler (build/vowc) only; the Rust bootstrap compiler reports an error pointing to build/vowc",
+                    "see docs/mutants.md for mutation kinds, the skip list and known limitations",
                 ],
             },
         },

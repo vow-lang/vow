@@ -22,6 +22,10 @@ def build_help_human(data: dict) -> str:
     lines.append(
         "                                        Generate or install Claude Code skill"
     )
+    lines.append("  vowc mutants <version|list|run> [OPTIONS]")
+    lines.append(
+        "                                        Mutation testing (self-hosted compiler only)"
+    )
     lines.append(
         "  vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)"
     )
