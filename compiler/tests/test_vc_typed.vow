@@ -90,7 +90,7 @@ fn check_keys() -> i64 {
     if vc_key_class(t, String::from("String")) != VC_READ_STR() { return 22; }
     if vc_key_class(t, String::from("i64")) != 0 || vc_key_class(t, String::from("Option")) != 0 || vc_key_class(t, String::from("")) != 0 { return 23; }
     if vc_key_elem(String::from("Vec<Node>")) != String::from("Node") { return 24; }
-    if vc_key_elem(String::from("Vec")).len() != 0 || vc_key_elem(String::from("HashMap<i64,u8>")).len() != 0 || vc_key_elem(String::from("Vec<Vec<i64>>")).len() != 0 { return 25; }
+    if vc_key_elem(String::from("Vec")).len() != 0 || vc_key_elem(String::from("HashMap<i64,u8>")).len() != 0 || vc_key_elem(String::from("Vec<Vec>")).len() != 0 || vc_key_elem(String::from("Vec<HashMap>")).len() != 0 { return 25; }
     if vc_key_walk(t, String::from("Node"), String::from("")) != String::from("Node") { return 26; }
     if vc_key_walk(t, String::from("Node"), String::from(".2")) != String::from("Pair") { return 27; }
     if vc_key_walk(t, String::from("Wide"), String::from(".2.0")) != String::from("i64") { return 28; }
