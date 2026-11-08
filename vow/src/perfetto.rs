@@ -149,7 +149,10 @@ impl Profiler {
                 Ok(p) => p.as_u32() as u64,
                 Err(_) => return,
             };
-            let mut sys = sysinfo::System::new();
+            let mut sys = match sysinfo::System::new() {
+                Ok(s) => s,
+                Err(_) => return,
+            };
             while !stop_thread.load(Ordering::Relaxed) {
                 // sysinfo CPU% is a delta between refreshes; a process first
                 // seen this tick reports 0% (RSS is correct immediately).
