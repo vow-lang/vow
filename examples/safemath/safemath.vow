@@ -20,7 +20,8 @@ fn safe_sub(a: i64, b: i64) -> i64 vow {
 }
 
 fn safe_div(a: i64, b: i64) -> i64 vow {
-  requires: b != 0
+  requires: b != 0,
+  requires: a >= -9223372036854775807 || b != -1
 } {
   a / b
 }

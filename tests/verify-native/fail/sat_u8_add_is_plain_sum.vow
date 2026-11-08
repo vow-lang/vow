@@ -1,0 +1,18 @@
+// TEST: counterexample-fn "add_without_saturation"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures result as i64 == a as i64 + b as i64"
+// `add_sat_u8` clamps at 255, so the claim that it is the plain sum is refuted by
+// every pair whose sum exceeds 255.
+module SatU8AddIsPlainSum
+
+fn add_without_saturation(a: u8, b: u8) -> u8 vow {
+  ensures: result as i64 == (a as i64) + (b as i64)
+} {
+  add_sat_u8(a, b)
+}
+
+fn main() -> i32 [io] {
+  print_i64(add_without_saturation(1, 2) as i64);
+  0
+}
