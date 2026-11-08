@@ -668,84 +668,119 @@ fn skill_json() -> String {
       "usage": "vowc mutants <version | list | run> [OPTIONS]",
       "subcommands": {
         "version": {
-          "usage": "vowc mutants version"
+          "usage": "vowc mutants version",
+          "stdout": {
+            "format": "text"
+          }
         },
         "list": {
-          "usage": "vowc mutants list [--root DIR] [--shard X/Y]"
+          "usage": "vowc mutants list [--root DIR] [--shard X/Y]",
+          "stdout": {
+            "format": "jsonl"
+          }
         },
         "run": {
-          "usage": "vowc mutants run [OPTIONS]"
+          "usage": "vowc mutants run [OPTIONS]",
+          "stdout": {
+            "format": "summary line"
+          },
+          "writes": {
+            "schema_ref": "schemas/mutants-result.schema.json",
+            "directory": "--output-dir"
+          }
         }
       },
       "options": [
         {
-          "form": "--root",
-          "description": "Directory whose *.vow files are mutated. test_*.vow files are excluded.",
-          "default": "compiler"
+          "form": "--root <DIR>",
+          "description": "Directory whose *.vow files are mutated. test_*.vow files are excluded. (default: compiler)",
+          "long": "--root",
+          "value_kind": "path",
+          "value_name": "DIR"
         },
         {
-          "form": "--shard X/Y",
-          "description": "Round-robin split of the deterministic mutant ID space. Mutant id is selected iff id % Y == X.",
-          "default": "0/1"
+          "form": "--shard <X/Y>",
+          "description": "Round-robin split of the deterministic mutant ID space. Mutant id is selected iff id % Y == X. (default: 0/1)",
+          "long": "--shard",
+          "value_kind": "string",
+          "value_name": "X/Y"
         },
         {
-          "form": "--tier1-cmd",
-          "description": "Fast oracle. Anything but exit 0 = caught at Tier 1.",
-          "default": "scripts/bootstrap.sh --skip-cargo"
+          "form": "--tier1-cmd <cmd>",
+          "description": "Fast oracle. Anything but exit 0 = caught at Tier 1. (default: scripts/bootstrap.sh --skip-cargo)",
+          "long": "--tier1-cmd",
+          "value_kind": "string",
+          "value_name": "cmd"
         },
         {
-          "form": "--tier15-cmd",
-          "description": "Checkpoint oracle, run on Tier-1 survivors only. Fast, behavior-exercising prefix of full_test.sh (Sections 0-8c) \u2014 see docs/mutants.md.",
-          "default": "VOW_FULL_TEST_SKIP_CARGO=1 VOW_FULL_TEST_TIER15_ONLY=1 scripts/full_test.sh"
+          "form": "--tier15-cmd <cmd>",
+          "description": "Checkpoint oracle, run on Tier-1 survivors only. Fast, behavior-exercising prefix of full_test.sh (Sections 0-8c) \u2014 see docs/mutants.md. (default: VOW_FULL_TEST_SKIP_CARGO=1 VOW_FULL_TEST_TIER15_ONLY=1 scripts/full_test.sh)",
+          "long": "--tier15-cmd",
+          "value_kind": "string",
+          "value_name": "cmd"
         },
         {
-          "form": "--tier2-cmd",
-          "description": "Full oracle. Only run on Tier-1.5 survivors. The env var skips the redundant cargo build --all --release step \u2014 see docs/mutants.md.",
-          "default": "VOW_FULL_TEST_SKIP_CARGO=1 scripts/full_test.sh"
+          "form": "--tier2-cmd <cmd>",
+          "description": "Full oracle. Only run on Tier-1.5 survivors. The env var skips the redundant cargo build --all --release step \u2014 see docs/mutants.md. (default: VOW_FULL_TEST_SKIP_CARGO=1 scripts/full_test.sh)",
+          "long": "--tier2-cmd",
+          "value_kind": "string",
+          "value_name": "cmd"
         },
         {
-          "form": "--tier1-timeout-secs",
-          "description": "Per-mutant Tier-1 wall-clock cap.",
-          "default": "180"
+          "form": "--tier1-timeout-secs <N>",
+          "description": "Per-mutant Tier-1 wall-clock cap. (default: 180)",
+          "long": "--tier1-timeout-secs",
+          "value_kind": "integer",
+          "value_name": "N"
         },
         {
-          "form": "--tier15-timeout-secs",
-          "description": "Per-mutant Tier-1.5 wall-clock cap.",
-          "default": "1200"
+          "form": "--tier15-timeout-secs <N>",
+          "description": "Per-mutant Tier-1.5 wall-clock cap. (default: 1200)",
+          "long": "--tier15-timeout-secs",
+          "value_kind": "integer",
+          "value_name": "N"
         },
         {
-          "form": "--tier2-timeout-secs",
-          "description": "Per-mutant Tier-2 wall-clock cap.",
-          "default": "3600"
+          "form": "--tier2-timeout-secs <N>",
+          "description": "Per-mutant Tier-2 wall-clock cap. (default: 3600)",
+          "long": "--tier2-timeout-secs",
+          "value_kind": "integer",
+          "value_name": "N"
         },
         {
-          "form": "--tier2-budget-secs",
-          "description": "Per-shard total Tier-2 budget. Once exhausted, surviving Tier-1.5 mutants are emitted with status:\"unrun\".",
-          "default": "7200"
+          "form": "--tier2-budget-secs <N>",
+          "description": "Per-shard total Tier-2 budget. Once exhausted, surviving Tier-1.5 mutants are emitted with status:\"unrun\". (default: 7200)",
+          "long": "--tier2-budget-secs",
+          "value_kind": "integer",
+          "value_name": "N"
         },
         {
-          "form": "--workdir",
-          "description": "Path of the throwaway git worktree used for all mutations.",
-          "default": "/tmp/vow-mutants-<ms>"
+          "form": "--workdir <DIR>",
+          "description": "Path of the throwaway git worktree used for all mutations. (default: /tmp/vow-mutants-<ms>)",
+          "long": "--workdir",
+          "value_kind": "path",
+          "value_name": "DIR"
         },
         {
-          "form": "--output-dir",
-          "description": "Directory for mutants.json, outcomes.json, status text files, diff/, logs/.",
-          "default": "mutants.out"
+          "form": "--output-dir <DIR>",
+          "description": "Directory for mutants.json, outcomes.json, status text files, diff/, logs/. (default: mutants.out)",
+          "long": "--output-dir",
+          "value_kind": "path",
+          "value_name": "DIR"
         },
         {
           "form": "--force-unlock",
-          "description": "Remove a stale output_dir/.lock before starting."
+          "description": "Remove a stale output_dir/.lock before starting.",
+          "long": "--force-unlock",
+          "value_kind": "flag"
         },
         {
           "form": "--skip-baseline",
-          "description": "Skip the baseline run of Tier 1 and Tier 1.5 on the unmutated worktree. Without it, a failing baseline aborts the run with exit 1 \u2014 see docs/mutants.md."
+          "description": "Skip the baseline run of Tier 1 and Tier 1.5 on the unmutated worktree. Without it, a failing baseline aborts the run with exit 1 \u2014 see docs/mutants.md.",
+          "long": "--skip-baseline",
+          "value_kind": "flag"
         }
       ],
-      "stdout": {
-        "format": "json",
-        "schema_ref": "schemas/mutants-result.schema.json"
-      },
       "notes": [
         "implemented in the self-hosted compiler (build/vowc) only; the Rust bootstrap compiler reports an error pointing to build/vowc",
         "see docs/mutants.md for mutation kinds, the skip list and known limitations"
@@ -1201,7 +1236,8 @@ USAGE
   vow decl [OPTIONS] <source.vow>    Emit declaration file (.vow.d)
   vow skill [print [--bundle]|install [--local|--global]]
                                         Generate or install Claude Code skill
-  vowc mutants <version|list|run> [OPTIONS]  Mutation testing (self-hosted compiler only)
+  vowc mutants <version|list|run> [OPTIONS]
+                                        Mutation testing (self-hosted compiler only)
   vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)
 
 BUILD OPTIONS

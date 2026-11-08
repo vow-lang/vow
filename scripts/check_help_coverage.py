@@ -75,18 +75,13 @@ def cli_command_names(cli: str) -> list[str]:
 
 def check_commands(help_data: dict, cli: str) -> list[str]:
     """Commands in cli.md, `commands` and `command_details` must agree."""
-    missing = []
-    commands = help_data.get("commands", {})
-    details = help_data.get("command_details", {})
-    for name in cli_command_names(cli):
-        if name not in commands:
-            missing.append(f"command:{name}")
-    for name in commands:
-        if name not in details:
-            missing.append(f"command_details:{name}")
-    for name in details:
-        if name not in commands:
-            missing.append(f"command:{name}")
+    commands = help_data.get("commands", {}).keys()
+    details = help_data.get("command_details", {}).keys()
+    documented = set(cli_command_names(cli))
+    missing = [f"command:{n}" for n in documented - commands]
+    missing += [f"cli.md heading for command:{n}" for n in commands - documented]
+    missing += [f"command_details:{n}" for n in commands - details]
+    missing += [f"command:{n}" for n in details - commands]
     return sorted(set(missing))
 
 
@@ -114,6 +109,8 @@ def main():
     cli_path = Path(grammar_path).with_name("cli.md")
     if cli_path.exists():
         missing.extend(check_commands(help_data, cli_path.read_text()))
+    else:
+        missing.append(f"file:{cli_path} (cli.md must sit next to grammar.md)")
 
     # 1. Primitive types
     prims = extract_table_column(grammar, "Primitive Types", 0)

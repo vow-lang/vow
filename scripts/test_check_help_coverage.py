@@ -11,8 +11,10 @@ and confirm the checker actually catches it.
 """
 
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -21,6 +23,7 @@ CHECKER = REPO_ROOT / "scripts" / "check_help_coverage.py"
 GRAMMAR = REPO_ROOT / "docs" / "spec" / "grammar.md"
 
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
+import check_help_coverage  # noqa: E402
 import generate_help  # noqa: E402
 
 
@@ -85,17 +88,18 @@ class CheckHelpCoverageTest(unittest.TestCase):
 
 
 class CommandCatalogTest(unittest.TestCase):
-    def test_every_command_has_details(self):
-        data = _build_help_data()
-        self.assertEqual(set(data["commands"]), set(data["command_details"]))
-
     def test_documented_subcommands_are_represented(self):
-        data = _build_help_data()
         cli = (REPO_ROOT / "docs" / "spec" / "cli.md").read_text()
-        for heading in cli.splitlines():
-            if heading.startswith("### `vow ") and "--help" not in heading:
-                name = heading.split("`")[1].split()[1]
-                self.assertIn(name, data["commands"], heading)
+        self.assertEqual(
+            check_help_coverage.check_commands(_build_help_data(), cli), []
+        )
+
+    def test_mutants_options_have_value_kinds(self):
+        options = _build_help_data()["command_details"]["mutants"]["options"]
+        by_long = {o["long"]: o for o in options}
+        self.assertEqual(by_long["--skip-baseline"]["value_kind"], "flag")
+        self.assertEqual(by_long["--tier2-budget-secs"]["value_kind"], "integer")
+        self.assertTrue(all("value_kind" in o for o in options))
 
     def test_mutants_is_marked_self_hosted_only(self):
         details = _build_help_data()["command_details"]["mutants"]
@@ -123,6 +127,32 @@ class CommandCatalogTest(unittest.TestCase):
         result = _run_checker(data)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("command:mutants", result.stdout)
+
+    def test_missing_cli_md_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            grammar = Path(tmp) / "grammar.md"
+            shutil.copy(GRAMMAR, grammar)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CHECKER),
+                    str(grammar),
+                    json.dumps(_build_help_data()),
+                ],
+                capture_output=True,
+                text=True,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cli.md", result.stdout)
+
+    def test_command_without_cli_heading_is_caught(self):
+        data = _build_help_data()
+        data["commands"]["bogus"] = "x"
+        data["command_details"]["bogus"] = {"status": "implemented"}
+
+        result = _run_checker(data)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("command:bogus", result.stdout)
 
     def test_details_without_catalog_entry_is_caught(self):
         data = _build_help_data()
