@@ -4,6 +4,7 @@ use ir
 use vc_ops
 use vc_gate
 use vc_inline
+use vc_callgraph
 use vc_summary
 use tests.builders
 
@@ -298,7 +299,7 @@ fn check_swap() -> i64 {
 }
 
 fn applies(fns: Vec<IrFunction>, f: IrFunction, budget: i64) -> bool {
-    vc_summary_applies(fns, vc_fn_index_table(fns), dom_fill(fns.len(), -1), f, budget)
+    vc_summary_applies(vc_calls_new(fns, budget), f, budget)
 }
 
 fn check_summary_applies() -> i64 {
@@ -317,11 +318,11 @@ fn check_summary_applies() -> i64 {
 // The reason the second plan gives is the one a full gate with the summaries gives.
 fn retrust_matches_full(m: IrModule, ids: Vec<i64>, budget: i64) -> bool {
     let fns: Vec<IrFunction> = m.functions;
-    let idx_of: Vec<i64> = vc_fn_index_table(fns);
+    let graph: VcCallGraph = vc_calls_new(fns, budget);
     let mut fi: u64 = 0;
     while fi < fns.len() {
         let before: String = vc_module_skip_reason_trusted(fns[fi], m, Vec::new(), budget);
-        let again: String = vc_module_skip_reason_retrust(fns, idx_of, dom_fill(fns.len(), -1), fns[fi], m, ids, budget, before);
+        let again: String = vc_module_skip_reason_retrust(graph, fns[fi], m, ids, budget, before);
         if again != vc_module_skip_reason_trusted(fns[fi], m, ids, budget) { return false; }
         fi = fi + 1;
     }
@@ -331,7 +332,7 @@ fn retrust_matches_full(m: IrModule, ids: Vec<i64>, budget: i64) -> bool {
 fn check_retrust() -> i64 {
     let m: IrModule = module_of(caller_of(6), contracted_writer());
     let fns: Vec<IrFunction> = m.functions;
-    let idx_of: Vec<i64> = vc_fn_index_table(fns);
+    let graph: VcCallGraph = vc_calls_new(fns, 100);
     let ids: Vec<i64> = Vec::new();
     ids.push(1);
     if !retrust_matches_full(m, ids, 100) { return 1; }
@@ -339,10 +340,10 @@ fn check_retrust() -> i64 {
     // the caller is too large to inline at 100 and fits once the callee is summarised
     let big: String = vc_module_skip_reason_trusted(fns[0], m, Vec::new(), 100);
     if vc_reason_code(big) != VC_SKIP_INLINING_TOO_LARGE() { return 3; }
-    if vc_module_skip_reason_retrust(fns, idx_of, dom_fill(fns.len(), -1), fns[0], m, ids, 100, big).len() != 0 { return 4; }
+    if vc_module_skip_reason_retrust(graph, fns[0], m, ids, 100, big).len() != 0 { return 4; }
     // with nothing trusted nothing can change, and inside the budget the earlier decision stands
-    if vc_module_skip_reason_retrust(fns, idx_of, dom_fill(fns.len(), -1), fns[0], m, Vec::new(), 100, big) != big { return 5; }
-    if vc_module_skip_reason_retrust(fns, idx_of, dom_fill(fns.len(), -1), fns[0], m, ids, 100000, String::from("kept")) != String::from("kept") { return 6; }
+    if vc_module_skip_reason_retrust(graph, fns[0], m, Vec::new(), 100, big) != big { return 5; }
+    if vc_module_skip_reason_retrust(vc_calls_new(fns, 100000), fns[0], m, ids, 100000, String::from("kept")) != String::from("kept") { return 6; }
     0
 }
 

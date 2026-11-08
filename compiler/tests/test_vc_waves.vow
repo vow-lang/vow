@@ -5,6 +5,7 @@ use vc_ops
 use vc_inline
 use vc_summary
 use vc_waves
+use vc_callgraph
 use verifier
 use tests.builders
 
@@ -78,7 +79,7 @@ fn repeats() -> IrModule {
 }
 
 fn repeated_at(c: VcWaveCtx, fi: u64) -> String {
-    ids_text(vc_trust_repeated(c, fi, vc_trust_reach(c, fi)))
+    ids_text(vc_trust_repeated(c, vc_trust_reach(c, fi)))
 }
 
 // A callee its root's call tree holds twice or more and whose own tree is from a sixteenth to a
@@ -96,8 +97,8 @@ fn check_trust_repeated() -> i64 [read] {
 }
 
 fn copies_text(c: VcWaveCtx, fi: u64) -> String {
-    let order: Vec<i64> = vc_trust_reach(c, fi);
-    let copies: Vec<i64> = vc_call_copies(c, fi, order);
+    let reach: VcCallReach = vc_trust_reach(c, fi);
+    let copies: Vec<i64> = vc_calls_copies(reach);
     vc_ids_text(copies)
 }
 
@@ -162,7 +163,7 @@ fn ids_text(ids: Vec<i64>) -> String {
 
 fn needs_at(c: VcWaveCtx, fi: u64, root_min: i64) -> String {
     c.root_min = root_min;
-    ids_text(vc_trust_needs(c, vc_trust_reach(c, fi)))
+    ids_text(vc_trust_needs(c, vc_trust_reach(c, fi).callees))
 }
 
 // A function above `root_min` waits for the callees whose own call tree is at least a quarter of

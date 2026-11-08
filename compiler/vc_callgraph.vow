@@ -1,0 +1,251 @@
+module VcCallgraph
+
+use ir
+use ir_dominance
+
+// User-call graph facts for one stable function list and one size cap. The graph owns
+// its id index and size memo: callers cannot accidentally share sizes between caps.
+// Treat the functions and these fields as immutable except for the module's size memo.
+// A changed or summarised function list needs a new graph.
+struct VcCallGraph {
+    fns: Vec<IrFunction>,
+    idx_of: Vec<i64>,
+    sizes: Vec<i64>,
+    cap: i64,
+}
+
+// Reachability belongs to its graph and root; copy counts use that same pair. A
+// cyclic reach has cycle text and no callees. Acyclic callees are module indices,
+// each once, in postorder, excluding root. Keep reaches local to the decision:
+// retaining one also retains its graph and function list.
+struct VcCallReach {
+    graph: VcCallGraph,
+    root: i64,
+    cycle: String,
+    callees: Vec<i64>,
+}
+
+fn vc_calls_new(fns: Vec<IrFunction>, cap: i64) -> VcCallGraph {
+    VcCallGraph { fns: fns, idx_of: vc_fn_index_table(fns), sizes: dom_fill(fns.len(), -1), cap: cap }
+}
+
+// First module index for a nonnegative function id; -1 when the id is absent.
+fn vc_calls_resolve(g: VcCallGraph, id: i64) -> i64 {
+    vc_callee_index(g.idx_of, id)
+}
+
+// The first cycle and, only when acyclic, the bottom-up callees of a valid module
+// index. A negative root represents an absent question and has neither. The
+// colours, path and seen table are scratch for this question alone.
+fn vc_calls_reach(g: VcCallGraph, root: i64) -> VcCallReach {
+    let order: Vec<i64> = Vec::new();
+    if root < 0 {
+        return VcCallReach { graph: g, root: root, cycle: String::from(""), callees: order };
+    }
+    let cycle: String = vc_call_cycle(g.fns, g.idx_of, root);
+    if cycle.len() == 0 {
+        let seen: Vec<i64> = dom_fill(g.fns.len(), 0);
+        vc_reachable_callees(g.fns, g.idx_of, seen, order, root);
+    }
+    VcCallReach { graph: g, root: root, cycle: cycle, callees: order }
+}
+
+// Expanded instruction estimate for a valid module index, memoised at this
+// graph's cap. The call instruction itself remains part of its caller's count.
+fn vc_calls_size(g: VcCallGraph, root: i64) -> i64 {
+    vc_tree_size(g.fns, g.idx_of, g.sizes, root, g.cap)
+}
+
+// Count the supplied body, which need not equal the indexed function with its
+// id. Only its callees come from the graph. The result saturates at cap + 1.
+fn vc_calls_body_size(g: VcCallGraph, body: IrFunction) -> i64 {
+    vc_body_size(g.fns, g.idx_of, g.sizes, body, g.cap)
+}
+
+// Copies of each module function in an acyclic reach's expanded tree, saturated
+// at 2: its root once, and each callee once per call occurrence in every caller
+// copy. An absent reach has no copies. The caller asks only when repeated copies
+// matter; no graph query pays for this propagation otherwise.
+fn vc_calls_copies(reach: VcCallReach) -> Vec<i64> {
+    let g: VcCallGraph = reach.graph;
+    let order: Vec<i64> = reach.callees;
+    let copies: Vec<i64> = dom_fill(g.fns.len(), 0);
+    if reach.root < 0 { return copies; }
+    let fi: u64 = reach.root as u64;
+    copies[fi] = 1;
+    // Callers before callees: the root, then order backwards.
+    let mut k: u64 = order.len() + 1;
+    while k > 0 {
+        k = k - 1;
+        let u: u64 = { if k == order.len() { fi } else { order[k] as u64 } };
+        let calls: Vec<IrInst> = vc_user_calls(g.fns[u]);
+        let mut ci: u64 = 0;
+        while ci < calls.len() {
+            let t: i64 = vc_callee_index(g.idx_of, calls[ci].dv);
+            if t >= 0 {
+                let sum: i64 = copies[t as u64] + copies[u];
+                copies[t as u64] = { if sum > 2 { 2 } else { sum } };
+            }
+            ci = ci + 1;
+        }
+    }
+    copies
+}
+
+fn vc_is_user_call(inst: IrInst) -> bool {
+    inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET()
+}
+
+// The calls of user functions in g, in block and instruction order.
+fn vc_user_calls(g: IrFunction) -> Vec<IrInst> {
+    let out: Vec<IrInst> = Vec::new();
+    let mut bi: u64 = 0;
+    while bi < g.blocks.len() {
+        let blk: IrBlock = g.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if vc_is_user_call(inst) { out.push(inst); }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    out
+}
+
+fn vc_has_user_call(g: IrFunction) -> bool {
+    vc_user_calls(g).len() > 0
+}
+
+// Index of each function in the module, by function id; -1 when absent.
+fn vc_fn_index_table(fns: Vec<IrFunction>) -> Vec<i64> {
+    let mut max_id: i64 = 0;
+    let mut i: u64 = 0;
+    while i < fns.len() {
+        let g: IrFunction = fns[i];
+        if g.id > max_id { max_id = g.id; }
+        i = i + 1;
+    }
+    let table: Vec<i64> = dom_fill((max_id + 1) as u64, -1);
+    i = 0;
+    while i < fns.len() {
+        let g: IrFunction = fns[i];
+        if g.id >= 0 && table[g.id as u64] < 0 {
+            table[g.id as u64] = i as i64;
+        }
+        i = i + 1;
+    }
+    table
+}
+
+fn vc_callee_index(idx_of: Vec<i64>, id: i64) -> i64 {
+    if id < 0 || id >= idx_of.len() as i64 { return -1; }
+    idx_of[id as u64]
+}
+
+// "a -> b -> a" for the cycle that closes at path position at.
+fn vc_cycle_text(fns: Vec<IrFunction>, path: Vec<i64>, at: u64) -> String {
+    let out: String = String::from("");
+    let mut i: u64 = at;
+    while i < path.len() {
+        let g: IrFunction = fns[path[i] as u64];
+        out.push_str(g.name);
+        out.push_str(String::from(" -> "));
+        i = i + 1;
+    }
+    let first: IrFunction = fns[path[at] as u64];
+    out.push_str(first.name);
+    out
+}
+
+// Depth-first search from function u over user calls. colour: 0 unvisited,
+// 1 on the current path, 2 finished. Returns the first cycle found as text, or "".
+fn vc_cycle_from(fns: Vec<IrFunction>, idx_of: Vec<i64>, colour: Vec<i64>, path: Vec<i64>, u: i64) -> String {
+    colour[u as u64] = 1;
+    path.push(u);
+    let calls: Vec<IrInst> = vc_user_calls(fns[u as u64]);
+    let mut ci: u64 = 0;
+    while ci < calls.len() {
+        let t: i64 = vc_callee_index(idx_of, calls[ci].dv);
+        if t >= 0 {
+            if colour[t as u64] == 1 {
+                let mut at: u64 = 0;
+                while path[at] != t {
+                    at = at + 1;
+                }
+                return vc_cycle_text(fns, path, at);
+            }
+            if colour[t as u64] == 0 {
+                let r: String = vc_cycle_from(fns, idx_of, colour, path, t);
+                if r.len() > 0 { return r; }
+            }
+        }
+        ci = ci + 1;
+    }
+    colour[u as u64] = 2;
+    path.pop();
+    String::from("")
+}
+
+// The first call cycle reachable from function index root, as "a -> b -> a";
+// "" when the call graph below it is acyclic.
+fn vc_call_cycle(fns: Vec<IrFunction>, idx_of: Vec<i64>, root: i64) -> String {
+    let colour: Vec<i64> = dom_fill(fns.len(), 0);
+    let path: Vec<i64> = Vec::new();
+    vc_cycle_from(fns, idx_of, colour, path, root)
+}
+
+// Reachable callees of u in postorder (callees before their callers), each
+// once; the root itself is not listed.
+fn vc_reachable_callees(fns: Vec<IrFunction>, idx_of: Vec<i64>, seen: Vec<i64>, order: Vec<i64>, u: i64) {
+    seen[u as u64] = 1;
+    let calls: Vec<IrInst> = vc_user_calls(fns[u as u64]);
+    let mut ci: u64 = 0;
+    while ci < calls.len() {
+        let t: i64 = vc_callee_index(idx_of, calls[ci].dv);
+        if t >= 0 && seen[t as u64] == 0 {
+            vc_reachable_callees(fns, idx_of, seen, order, t);
+            order.push(t);
+        }
+        ci = ci + 1;
+    }
+}
+
+fn vc_inst_count(g: IrFunction) -> i64 {
+    let mut n: i64 = 0;
+    let mut bi: u64 = 0;
+    while bi < g.blocks.len() {
+        let blk: IrBlock = g.blocks[bi];
+        n = n + blk.insts.len() as i64;
+        bi = bi + 1;
+    }
+    n
+}
+
+// Instructions of g with every call replaced by its callee's tree, saturating
+// one past cap. Computed before anything is materialised, so a call tree that
+// grows exponentially costs a table walk, not memory.
+fn vc_body_size(fns: Vec<IrFunction>, idx_of: Vec<i64>, memo: Vec<i64>, g: IrFunction, cap: i64) -> i64 {
+    let calls: Vec<IrInst> = vc_user_calls(g);
+    let mut total: i64 = vc_inst_count(g);
+    let mut ci: u64 = 0;
+    while ci < calls.len() && total <= cap {
+        let t: i64 = vc_callee_index(idx_of, calls[ci].dv);
+        if t >= 0 {
+            total = total + vc_tree_size(fns, idx_of, memo, t, cap);
+        }
+        ci = ci + 1;
+    }
+    if total > cap { total = cap + 1; }
+    total
+}
+
+// vc_body_size of function u, memoised. memo: -1 not computed.
+fn vc_tree_size(fns: Vec<IrFunction>, idx_of: Vec<i64>, memo: Vec<i64>, u: i64, cap: i64) -> i64 {
+    if memo[u as u64] >= 0 { return memo[u as u64]; }
+    // On the current path: a cycle, never expanded.
+    memo[u as u64] = cap + 1;
+    let total: i64 = vc_body_size(fns, idx_of, memo, fns[u as u64], cap);
+    memo[u as u64] = total;
+    total
+}

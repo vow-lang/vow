@@ -10,6 +10,7 @@ use vc_loops
 use vc_agg_shape
 use vc_sources
 use vc_inline
+use vc_callgraph
 use vc_objects
 use vc_summary_ens
 
@@ -543,15 +544,17 @@ fn vc_module_with(m: IrModule, fns: Vec<IrFunction>) -> IrModule {
     out
 }
 
-// True when proven callees can change the module `f` is inlined in: `f` is in the module, its call
-// tree has no cycle and is above `budget`. Where it is false `vc_summary_module` is `m` itself,
-// whatever is trusted, so a decision made without summaries stands. `sizes` is the memo of
-// `vc_tree_size`, `dom_fill(fns.len(), -1)` or a table already filled for `budget`.
-fn vc_summary_applies(fns: Vec<IrFunction>, idx_of: Vec<i64>, sizes: Vec<i64>, f: IrFunction, budget: i64) -> bool {
-    let root: i64 = vc_callee_index(idx_of, f.id);
-    if root < 0 { return false; }
-    if vc_call_cycle(fns, idx_of, root).len() > 0 { return false; }
-    vc_body_size(fns, idx_of, sizes, f, budget) > budget
+// The original graph's reach when summaries can matter: module membership, an
+// acyclic tree and a supplied body above budget. An absent reach means no change.
+fn vc_summary_reach(graph: VcCallGraph, f: IrFunction, budget: i64) -> VcCallReach {
+    let root: i64 = vc_calls_resolve(graph, f.id);
+    if root < 0 || vc_calls_body_size(graph, f) <= budget { return vc_calls_reach(graph, -1); }
+    vc_calls_reach(graph, root)
+}
+
+fn vc_summary_applies(graph: VcCallGraph, f: IrFunction, budget: i64) -> bool {
+    let reach: VcCallReach = vc_summary_reach(graph, f, budget);
+    reach.root >= 0 && reach.cycle.len() == 0
 }
 
 // The module `f` is inlined in: `m` itself unless the call tree of `f` is above `budget`,
@@ -564,13 +567,11 @@ fn vc_summary_module(f: IrFunction, m: IrModule, trusted: Vec<i64>, budget: i64)
     let same: VcSummarised = VcSummarised { m: m, used: false, used_ids: Vec::new() };
     if trusted.len() == 0 { return same; }
     let fns: Vec<IrFunction> = m.functions;
-    let idx_of: Vec<i64> = vc_fn_index_table(fns);
-    let sizes: Vec<i64> = dom_fill(fns.len(), -1);
-    if !vc_summary_applies(fns, idx_of, sizes, f, budget) { return same; }
-    let root: i64 = vc_callee_index(idx_of, f.id);
-    let seen: Vec<i64> = dom_fill(fns.len(), 0);
-    let order: Vec<i64> = Vec::new();
-    vc_reachable_callees(fns, idx_of, seen, order, root);
+    let graph: VcCallGraph = vc_calls_new(fns, budget);
+    let reach: VcCallReach = vc_summary_reach(graph, f, budget);
+    if reach.root < 0 || reach.cycle.len() > 0 { return same; }
+    let root: i64 = reach.root;
+    let order: Vec<i64> = reach.callees;
     let cur: Vec<IrFunction> = Vec::new();
     let mut i: u64 = 0;
     while i < fns.len() {
@@ -584,7 +585,7 @@ fn vc_summary_module(f: IrFunction, m: IrModule, trusted: Vec<i64>, budget: i64)
     while oi < order.len() {
         let u: i64 = order[oi];
         let g: IrFunction = fns[u as u64];
-        if vc_trusts(trusted, g.id) && vc_tree_size(fns, idx_of, sizes, u, budget) > min {
+        if vc_trusts(trusted, g.id) && vc_calls_size(graph, u) > min {
             let flat: VcInlined = vc_inline(g, out, VC_INLINE_INST_CAP());
             if flat.status == VC_INLINE_OK() && vc_skip_reason(flat.f).len() == 0 {
                 let e: VcEffects = vc_effects_of(g, flat.f);
@@ -600,9 +601,9 @@ fn vc_summary_module(f: IrFunction, m: IrModule, trusted: Vec<i64>, budget: i64)
         oi = oi + 1;
     }
     if swapped.len() == 0 { return same; }
-    let seen2: Vec<i64> = dom_fill(fns.len(), 0);
-    let order2: Vec<i64> = Vec::new();
-    vc_reachable_callees(cur, idx_of, seen2, order2, root);
+    let changed: VcCallGraph = vc_calls_new(cur, budget);
+    let remaining: VcCallReach = vc_calls_reach(changed, root);
+    let order2: Vec<i64> = remaining.callees;
     let used_ids: Vec<i64> = Vec::new();
     oi = 0;
     while oi < order2.len() {
@@ -620,8 +621,8 @@ fn vc_module_skip_reason_trusted(f: IrFunction, m: IrModule, trusted: Vec<i64>, 
 
 // The same once `trusted` is known, for a caller that decided `before` with nothing trusted: a
 // function no summary can change (`vc_summary_applies`) keeps `before` instead of being gated
-// again, which flattens its whole call tree. `fns`, `idx_of` and `sizes` are those of `m`.
-fn vc_module_skip_reason_retrust(fns: Vec<IrFunction>, idx_of: Vec<i64>, sizes: Vec<i64>, f: IrFunction, m: IrModule, trusted: Vec<i64>, budget: i64, before: String) -> String {
-    if trusted.len() == 0 || !vc_summary_applies(fns, idx_of, sizes, f, budget) { return before; }
+// again, which flattens its whole call tree. The graph describes `m` at `budget`.
+fn vc_module_skip_reason_retrust(graph: VcCallGraph, f: IrFunction, m: IrModule, trusted: Vec<i64>, budget: i64, before: String) -> String {
+    if trusted.len() == 0 || !vc_summary_applies(graph, f, budget) { return before; }
     vc_module_skip_reason_trusted(f, m, trusted, budget)
 }
