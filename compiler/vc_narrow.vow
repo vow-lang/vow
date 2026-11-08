@@ -85,15 +85,17 @@ fn vc_narrow_sat_kind(sym: String) -> i64 {
 }
 
 fn vc_narrow_is_sat_op(nar: VcNarrow) -> bool {
-    nar.kind >= VC_NAR_ADD_SAT()
+    nar.kind >= VC_NAR_ADD_SAT() && nar.kind <= VC_NAR_MUL_SAT()
 }
 
 // `__vow_<src>_to_<dst>_<kind>` is 18 bytes at the shortest (`__vow_i8_to_u8_try`)
 // and 23 at the longest (`__vow_u128_to_i128_wrap`).
 fn vc_narrow_parse(sym: String) -> VcNarrow {
-    let sat: i64 = vc_narrow_sat_kind(sym);
-    if sat != VC_NAR_NONE() { return VcNarrow { kind: sat, src: ITY_U8(), dst: ITY_U8() }; }
     let n: u64 = sym.len();
+    if n == 16 {
+        let sat: i64 = vc_narrow_sat_kind(sym);
+        if sat != VC_NAR_NONE() { return VcNarrow { kind: sat, src: ITY_U8(), dst: ITY_U8() }; }
+    }
     if n < 18 || n > 23 { return vc_narrow_none(); }
     if string_starts_with(sym, String::from("__vow_")) != 1 { return vc_narrow_none(); }
     let body: String = sym.substring(6, n);

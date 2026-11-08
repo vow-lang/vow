@@ -1,0 +1,18 @@
+// TEST: counterexample-fn "sub_zero_only_if_equal"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures result != 0 || a == b"
+// `sub_sat_u8` clamps at 0: it returns 0 whenever `a < b`. A wrapping subtraction
+// would return 0 only when `a == b`, so this property separates the two models.
+module SatU8SubZeroOnlyWhenEqual
+
+fn sub_zero_only_if_equal(a: u8, b: u8) -> u8 vow {
+  ensures: result != 0 || a == b
+} {
+  sub_sat_u8(a, b)
+}
+
+fn main() -> i32 [io] {
+  print_i64(sub_zero_only_if_equal(5, 3) as i64);
+  0
+}

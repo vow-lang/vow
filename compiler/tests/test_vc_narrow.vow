@@ -199,6 +199,16 @@ fn sat_fn(sym: String, a_ty: i64, b_ty: i64, ret: i64) -> IrFunction {
     one_block(p, ret, insts)
 }
 
+fn sat_one_arg_fn(sym: String) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_U8(), 0));
+    insts.push(mk_inst_call_extern(1, ITY_U8(), args1(0), sym));
+    insts.push(mk_inst_return(2, 1));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_U8());
+    one_block(p, ITY_U8(), insts)
+}
+
 fn check_sat_u8_gate() -> i64 {
     let add: String = String::from("__vow_add_sat_u8");
     if vc_skip_reason(sat_fn(add, ITY_U8(), ITY_U8(), ITY_U8())).len() != 0 { return 150; }
@@ -207,6 +217,7 @@ fn check_sat_u8_gate() -> i64 {
     if vc_skip_reason(sat_fn(add, ITY_U8(), ITY_I8(), ITY_U8())).len() == 0 { return 153; }
     if vc_skip_reason(sat_fn(add, ITY_U16(), ITY_U8(), ITY_U8())).len() == 0 { return 154; }
     if vc_skip_reason(sat_fn(add, ITY_U8(), ITY_U8(), ITY_I8())).len() == 0 { return 155; }
+    if vc_skip_reason(sat_one_arg_fn(add)).len() == 0 { return 156; }
     0
 }
 
