@@ -14,6 +14,7 @@ use vc_unroll
 use vc_induct
 use vc_clause
 use vc_round
+use vc_typed
 
 // Native verification schedules rounds inside the subset accepted by `vc_skip_reason`.
 // `vc_round` owns complete claim decision; this module owns inlining, loop closure,
@@ -292,7 +293,7 @@ fn vc_verify_function_in(f: IrFunction, m: IrModule, timeout_ms: i64, scratch: S
     let closed: IrFunction = vc_close_loops(inl.f);
     let started: i64 = time_micros();
     let slicing: bool = vc_slicing_enabled();
-    let env: VcRoundEnvironment = VcRoundEnvironment { target: f, frames: inl.frames, started: started, scratch: scratch, cache: cache, slicing: slicing, full: full };
+    let env: VcRoundEnvironment = VcRoundEnvironment { target: f, frames: inl.frames, started: started, scratch: scratch, cache: cache, slicing: slicing, full: full, types: vc_types_of(f, m) };
     let acc: VcClauseAcc = vc_clause_acc_new();
     let mut targets: Vec<i64> = Vec::new();
     if all_claims { targets = vc_clause_targets(f); }
