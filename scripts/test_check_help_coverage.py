@@ -84,5 +84,54 @@ class CheckHelpCoverageTest(unittest.TestCase):
         self.assertIn("builtin:print_str", result.stdout)
 
 
+class CommandCatalogTest(unittest.TestCase):
+    def test_every_command_has_details(self):
+        data = _build_help_data()
+        self.assertEqual(set(data["commands"]), set(data["command_details"]))
+
+    def test_documented_subcommands_are_represented(self):
+        data = _build_help_data()
+        cli = (REPO_ROOT / "docs" / "spec" / "cli.md").read_text()
+        for heading in cli.splitlines():
+            if heading.startswith("### `vow ") and "--help" not in heading:
+                name = heading.split("`")[1].split()[1]
+                self.assertIn(name, data["commands"], heading)
+
+    def test_mutants_is_marked_self_hosted_only(self):
+        details = _build_help_data()["command_details"]["mutants"]
+        self.assertEqual(details["status"], "self-hosted-only")
+
+    def test_skill_details_describe_subcommands(self):
+        details = _build_help_data()["command_details"]["skill"]
+        self.assertEqual(details["status"], "implemented")
+        self.assertIn("print", json.dumps(details))
+        self.assertIn("install", json.dumps(details))
+
+    def test_command_without_details_is_caught(self):
+        data = _build_help_data()
+        del data["command_details"]["skill"]
+
+        result = _run_checker(data)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("command_details:skill", result.stdout)
+
+    def test_command_missing_from_catalog_is_caught(self):
+        data = _build_help_data()
+        del data["commands"]["mutants"]
+        del data["command_details"]["mutants"]
+
+        result = _run_checker(data)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("command:mutants", result.stdout)
+
+    def test_details_without_catalog_entry_is_caught(self):
+        data = _build_help_data()
+        del data["commands"]["decl"]
+
+        result = _run_checker(data)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("command:decl", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,7 @@ Exits 0 if all features present, 1 with missing items listed.
 import json
 import re
 import sys
+from pathlib import Path
 
 
 def extract_table_rows(text: str, heading: str) -> list[list[str]]:
@@ -62,6 +63,33 @@ def extract_table_column(text: str, heading: str, col: int = 0) -> list[str]:
     return items
 
 
+def cli_command_names(cli: str) -> list[str]:
+    """Names of the vow command headings (level 3, `vow <name>`) in cli.md."""
+    names = []
+    for line in cli.splitlines():
+        m = re.match(r"^### `vow ([a-z][a-z0-9_-]*)`", line)
+        if m:
+            names.append(m.group(1))
+    return names
+
+
+def check_commands(help_data: dict, cli: str) -> list[str]:
+    """Commands in cli.md, `commands` and `command_details` must agree."""
+    missing = []
+    commands = help_data.get("commands", {})
+    details = help_data.get("command_details", {})
+    for name in cli_command_names(cli):
+        if name not in commands:
+            missing.append(f"command:{name}")
+    for name in commands:
+        if name not in details:
+            missing.append(f"command_details:{name}")
+    for name in details:
+        if name not in commands:
+            missing.append(f"command:{name}")
+    return sorted(set(missing))
+
+
 def main():
     if len(sys.argv) != 3:
         print(f"Usage: {sys.argv[0]} <grammar.md> <help-json>", file=sys.stderr)
@@ -82,6 +110,10 @@ def main():
     lang = help_data.get("language", {})
 
     missing = []
+
+    cli_path = Path(grammar_path).with_name("cli.md")
+    if cli_path.exists():
+        missing.extend(check_commands(help_data, cli_path.read_text()))
 
     # 1. Primitive types
     prims = extract_table_column(grammar, "Primitive Types", 0)
@@ -138,7 +170,7 @@ def main():
             missing.append(f"key:{key}")
 
     if missing:
-        print(f"FAIL: {len(missing)} missing item(s) in --help language section:")
+        print(f"FAIL: {len(missing)} missing item(s) in --help output:")
         for m in missing:
             print(f"  - {m}")
         sys.exit(1)

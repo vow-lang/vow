@@ -46,7 +46,8 @@ fn skill_json() -> String {
     "decl": "Emit declaration file (.vow.d) with type signatures only",
     "contracts": "List all contracts with optional verification status",
     "skill": "Generate or install the Claude Code skill document for this compiler version",
-    "complexity": "Report per-function complexity metrics as deterministic, byte-identical JSON"
+    "complexity": "Report per-function complexity metrics as deterministic, byte-identical JSON",
+    "mutants": "Run mutation testing on a Vow source tree (self-hosted compiler only)"
   },
   "command_details": {
     "build": {
@@ -610,6 +611,145 @@ fn skill_json() -> String {
         "complexity_score is a readability / refactor-priority gate, not a defect predictor",
         "--max-score / --max-cognitive / --max-cyclomatic gates are opt-in; exit nonzero only when set"
       ]
+    },
+    "skill": {
+      "status": "implemented",
+      "usage": "vow skill [print [--bundle] | install [--local | --global]]",
+      "default_subcommand": "print",
+      "subcommands": {
+        "print": {
+          "usage": "vow skill print [--bundle]",
+          "options": [
+            {
+              "form": "--bundle",
+              "description": "Print one self-contained document for harnesses that cannot load supporting files",
+              "long": "--bundle",
+              "value_kind": "flag"
+            }
+          ],
+          "stdout": {
+            "format": "markdown"
+          }
+        },
+        "install": {
+          "usage": "vow skill install [--local | --global]",
+          "options": [
+            {
+              "form": "--local",
+              "description": "Install to ./.claude/skills/vow/ (requires .git and .claude/ in the current directory)",
+              "long": "--local",
+              "value_kind": "flag"
+            },
+            {
+              "form": "--global",
+              "description": "Install to $HOME/.claude/skills/vow/",
+              "long": "--global",
+              "value_kind": "flag"
+            }
+          ],
+          "stdout": {
+            "format": "none"
+          },
+          "side_effects": [
+            {
+              "kind": "write_directory",
+              "default_path": "<scope>/.claude/skills/vow/"
+            }
+          ]
+        }
+      },
+      "notes": [
+        "the skill text is embedded in the compiler binary and always matches its version",
+        "install prompts on stderr for a scope when neither --local nor --global is given; scripts should pass one explicitly"
+      ]
+    },
+    "mutants": {
+      "status": "self-hosted-only",
+      "usage": "vowc mutants <version | list | run> [OPTIONS]",
+      "subcommands": {
+        "version": {
+          "usage": "vowc mutants version"
+        },
+        "list": {
+          "usage": "vowc mutants list [--root DIR] [--shard X/Y]"
+        },
+        "run": {
+          "usage": "vowc mutants run [OPTIONS]"
+        }
+      },
+      "options": [
+        {
+          "form": "--root",
+          "description": "Directory whose *.vow files are mutated. test_*.vow files are excluded.",
+          "default": "compiler"
+        },
+        {
+          "form": "--shard X/Y",
+          "description": "Round-robin split of the deterministic mutant ID space. Mutant id is selected iff id % Y == X.",
+          "default": "0/1"
+        },
+        {
+          "form": "--tier1-cmd",
+          "description": "Fast oracle. Anything but exit 0 = caught at Tier 1.",
+          "default": "scripts/bootstrap.sh --skip-cargo"
+        },
+        {
+          "form": "--tier15-cmd",
+          "description": "Checkpoint oracle, run on Tier-1 survivors only. Fast, behavior-exercising prefix of full_test.sh (Sections 0-8c) \u2014 see docs/mutants.md.",
+          "default": "VOW_FULL_TEST_SKIP_CARGO=1 VOW_FULL_TEST_TIER15_ONLY=1 scripts/full_test.sh"
+        },
+        {
+          "form": "--tier2-cmd",
+          "description": "Full oracle. Only run on Tier-1.5 survivors. The env var skips the redundant cargo build --all --release step \u2014 see docs/mutants.md.",
+          "default": "VOW_FULL_TEST_SKIP_CARGO=1 scripts/full_test.sh"
+        },
+        {
+          "form": "--tier1-timeout-secs",
+          "description": "Per-mutant Tier-1 wall-clock cap.",
+          "default": "180"
+        },
+        {
+          "form": "--tier15-timeout-secs",
+          "description": "Per-mutant Tier-1.5 wall-clock cap.",
+          "default": "1200"
+        },
+        {
+          "form": "--tier2-timeout-secs",
+          "description": "Per-mutant Tier-2 wall-clock cap.",
+          "default": "3600"
+        },
+        {
+          "form": "--tier2-budget-secs",
+          "description": "Per-shard total Tier-2 budget. Once exhausted, surviving Tier-1.5 mutants are emitted with status:\"unrun\".",
+          "default": "7200"
+        },
+        {
+          "form": "--workdir",
+          "description": "Path of the throwaway git worktree used for all mutations.",
+          "default": "/tmp/vow-mutants-<ms>"
+        },
+        {
+          "form": "--output-dir",
+          "description": "Directory for mutants.json, outcomes.json, status text files, diff/, logs/.",
+          "default": "mutants.out"
+        },
+        {
+          "form": "--force-unlock",
+          "description": "Remove a stale output_dir/.lock before starting."
+        },
+        {
+          "form": "--skip-baseline",
+          "description": "Skip the baseline run of Tier 1 and Tier 1.5 on the unmutated worktree. Without it, a failing baseline aborts the run with exit 1 \u2014 see docs/mutants.md."
+        }
+      ],
+      "stdout": {
+        "format": "json",
+        "schema_ref": "schemas/mutants-result.schema.json"
+      },
+      "notes": [
+        "implemented in the self-hosted compiler (build/vowc) only; the Rust bootstrap compiler reports an error pointing to build/vowc",
+        "see docs/mutants.md for mutation kinds, the skip list and known limitations"
+      ]
     }
   },
   "build_options": {
@@ -1061,6 +1201,7 @@ USAGE
   vow decl [OPTIONS] <source.vow>    Emit declaration file (.vow.d)
   vow skill [print [--bundle]|install [--local|--global]]
                                         Generate or install Claude Code skill
+  vowc mutants <version|list|run> [OPTIONS]  Mutation testing (self-hosted compiler only)
   vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)
 
 BUILD OPTIONS
