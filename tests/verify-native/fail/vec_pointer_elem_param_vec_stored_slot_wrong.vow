@@ -1,0 +1,28 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// The slot a `Vec` parameter was pushed into holds the object stored, so its length is the length of
+// that object and not one more (#1905).
+module VecPointerElemParamVecStoredSlotWrong
+
+fn f(outer: Vec<Vec<i64>>, w: Vec<i64>) -> bool vow {
+  requires: outer.len() > 0
+  ensures: result
+} {
+  let n: u64 = outer.len();
+  outer.push(w);
+  let e: Vec<i64> = outer[n];
+  e.len() == w.len() + 1
+}
+
+fn main() -> i32 [io] {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  outer.push(w);
+  if f(outer, w) {
+    print_i64(1);
+  } else {
+    print_i64(0);
+  }
+  0
+}

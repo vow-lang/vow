@@ -1,8 +1,6 @@
-// TEST: skip-reason unsupported-opcode
-// A pointer stored into a `Vec` parameter: the elements it already holds are memory the caller
-// gave, which the address model does not tell from the stored object, so reading one back stays
-// `Skipped`.
-module VecPointerElemParamVecReadBackSkipped
+// A pointer stored into a `Vec` parameter: the elements it already held are memory the caller gave,
+// the slot written is the object stored, and a read of either is a read through a handle (#1905).
+module VecPointerElemParamVecReadBack
 
 fn push_and_read(outer: Vec<Vec<i64>>, w: Vec<i64>, i: u64) -> u64 vow {
   requires: i < outer.len()

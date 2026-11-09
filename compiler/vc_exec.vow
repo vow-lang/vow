@@ -39,7 +39,7 @@ use ir_dominance
 // Symbolic execution of an acyclic integer/Bool function (one that
 // `vc_skip_reason` accepts, after `vc_unroll` removed its loops), with its
 // aggregates scalarised by `vc_agg`, into proof obligations. Blocks are walked in
-// reverse postorder (`vc_flow` holds the path conditions and merges). A value
+// reverse postorder (`vc_flow` holds path conditions). A value
 // that is a variable or a constant is used as it is; a composite one becomes a
 // `define-fun` the first time its term is built, and every later value with the
 // same term shares that name. Each `requires` is an assumption for the claims
@@ -592,7 +592,7 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
         if kind == VC_VEC_GET() {
             let t: i64 = vc_tm_app2(ar, VC_OP_SELECT(), vc_vec_cur_arr(vv, s, b), idx);
             vc_define(w, inst, t);
-            vc_overlay_note_elem(w.memory, t, inst.args[0]);
+            vc_overlay_note_elem(w.memory, t, inst.args[0], s, idx);
             w.elem_obj[inst.id as u64] = w.obj_of[inst.args[0] as u64];
         } else {
             vc_mark_stored_float(w, w.obj_of[inst.args[0] as u64], inst.args[2]);

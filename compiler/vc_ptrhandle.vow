@@ -6,6 +6,7 @@ use vc_ops
 use vc_heap
 use vc_objects
 use vc_elemgate
+use vc_ptrparam
 
 // A handle stored into a `Vec` that also holds objects (`mixed.push(src[0])`, #1663). The IR types a
 // pointer an element read returned `i64`, so storing it is no pointer store (`vc_ptr_store_value`): a
@@ -29,8 +30,9 @@ fn VC_PH_NONE() -> i64 { 0 }
 fn VC_PH_GIVEN() -> i64 { 1 }
 fn VC_PH_OTHER() -> i64 { 2 }
 
-// 1 for the result of `GetArg` of a `Vec` parameter.
-fn vc_ptr_handle_tagged(f: IrFunction, tys: Vec<i64>) -> Vec<i64> {
+// 1 for the result of `GetArg` of a `Vec` parameter that receives no pointer (`held`): a parameter that
+// does holds stored addresses too, and its elements are not all given memory (`vc_ptrparam`).
+fn vc_ptr_handle_tagged(f: IrFunction, held: Vec<i64>, tys: Vec<i64>) -> Vec<i64> {
     let tagged: Vec<i64> = dom_fill(tys.len(), 0);
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
@@ -39,7 +41,7 @@ fn vc_ptr_handle_tagged(f: IrFunction, tys: Vec<i64>) -> Vec<i64> {
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
             if inst.op == IOP_GET_ARG() && inst.ty == ITY_PTR() && inst.id >= 0 && (inst.id as u64) < tagged.len()
-                && vc_overlay_param_class(f, inst.dv) == VC_OV_VEC() {
+                && held[inst.id as u64] != 1 && vc_overlay_param_class(f, inst.dv) == VC_OV_VEC() {
                 tagged[inst.id as u64] = 1;
             }
             ii = ii + 1;
@@ -76,7 +78,7 @@ fn vc_ptr_handle_maybe_address(f: IrFunction, tys: Vec<i64>) -> Vec<i64> {
 fn vc_ptr_handle_status(f: IrFunction, held: Vec<i64>, tys: Vec<i64>) -> i64 {
     let n_ids: u64 = tys.len();
     let recv: Vec<i64> = vc_elem_get_recv(f, n_ids);
-    let tagged: Vec<i64> = vc_ptr_handle_tagged(f, tys);
+    let tagged: Vec<i64> = vc_ptr_handle_tagged(f, held, tys);
     let may: Vec<i64> = vc_ptr_handle_maybe_address(f, tys);
     let mut stored_handle: bool = false;
     let mut other: bool = false;
@@ -104,9 +106,20 @@ fn vc_ptr_handle_status(f: IrFunction, held: Vec<i64>, tys: Vec<i64>) -> i64 {
     VC_PH_GIVEN()
 }
 
-// The `Vec` parameters whose `get` results are noted as given memory (`vc_ptr_handle_tagged`) when a
-// handle is stored into a held `Vec` and the model tells it from an address; else empty.
+// What `VcOverlay.tagged` holds: 1 for a `Vec` parameter whose `get` results are noted as given memory
+// when a handle is stored into a held `Vec` and the model tells it from an address, 2 for a `Vec`
+// parameter that receives a pointer (`vc_ptrparam`); empty when there is none.
 fn vc_ptr_handle_tags(f: IrFunction, held: Vec<i64>, tys: Vec<i64>) -> Vec<i64> {
-    if vc_ptr_handle_status(f, held, tys) != VC_PH_GIVEN() { return Vec::new(); }
-    vc_ptr_handle_tagged(f, tys)
+    let params: Vec<i64> = vc_ptr_param_held(f, held, tys);
+    let given: bool = vc_ptr_handle_status(f, held, tys) == VC_PH_GIVEN();
+    if !given && !vc_ptr_param_any(params) { return Vec::new(); }
+    let tags: Vec<i64> = {
+        if given { vc_ptr_handle_tagged(f, held, tys) } else { dom_fill(tys.len(), 0) }
+    };
+    let mut i: u64 = 0;
+    while i < params.len() {
+        if params[i] == 1 { tags[i] = VC_PP_HELD(); }
+        i = i + 1;
+    }
+    tags
 }
