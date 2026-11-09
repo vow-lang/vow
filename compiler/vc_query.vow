@@ -1,13 +1,14 @@
 module VcQuery
 
+use ir
 use vc_ops
 use vc_term
 use vc_heap
 use vc_smt
 
-// Claim query construction. The executor records append-only prefixes; full,
-// selected, incremental and hook callers ask this module to assemble them.
-// Solver transport, cone selection and verdict decisions stay with callers.
+// Claim recording and query construction. Recording captures header and assumption
+// prefixes; full, selected, incremental and hook callers ask this module to assemble
+// them. Solver transport, cone selection and verdict decisions stay with callers.
 
 // One shared command list (`header`) and one append-only assumption list serve
 // every claim: claim `k` is the first `header_lens[k]` header commands, the
@@ -60,6 +61,125 @@ struct VcClaims {
     map_len_hdr: Vec<i64>,
     // The fields the function read through a handle that the counterexample lists (`vc_heaplist`).
     listed: VcHeapListed,
+}
+
+fn VC_CLAIM_ENSURES() -> i64 { 0 }
+fn VC_CLAIM_DIV_ZERO() -> i64 { 1 }
+fn VC_CLAIM_DIV_OVERFLOW() -> i64 { 2 }
+fn VC_CLAIM_SHIFT_COUNT() -> i64 { 3 }
+fn VC_CLAIM_ARITH() -> i64 { 4 }
+fn VC_CLAIM_UNWRAP_NONE() -> i64 { 5 }
+fn VC_CLAIM_UNWIND() -> i64 { 6 }
+fn VC_CLAIM_CALLER_PRE() -> i64 { 7 }
+fn VC_CLAIM_CALLEE_POST() -> i64 { 8 }
+fn VC_CLAIM_VEC_BOUNDS() -> i64 { 9 }
+
+// Allocate storage without imposing a query prologue. The two constructors
+// below share this initialization without allocating unused frame metadata.
+fn vc_claims_storage(fr: VcFrames, pre_only: bool, step: bool) -> VcClaims {
+    let cs: VcClaims = VcClaims {
+        arena: vc_arena_new(),
+        header: vc_script_new(),
+        assumed: Vec::new(),
+        kinds: Vec::new(),
+        frames: Vec::new(),
+        fr: fr,
+        pre_only: pre_only,
+        step: step,
+        hyp_now: false,
+        vow_ids: Vec::new(),
+        labels: Vec::new(),
+        ostarts: Vec::new(),
+        olens: Vec::new(),
+        negated_goals: Vec::new(),
+        header_lens: Vec::new(),
+        assumed_lens: Vec::new(),
+        model_names: Vec::new(),
+        model_params: Vec::new(),
+        model_paths: Vec::new(),
+        model_tys: Vec::new(),
+        model_widths: Vec::new(),
+        model_slots: Vec::new(),
+        model_hdr: Vec::new(),
+        model_ambig: Vec::new(),
+        hook_vars: Vec::new(),
+        vec_param: Vec::new(),
+        vec_arr: Vec::new(),
+        vec_len: Vec::new(),
+        vec_hdr: Vec::new(),
+        map_vars: Vec::new(),
+        vec_wide: Vec::new(),
+        vec_path: Vec::new(),
+        vec_handle: Vec::new(),
+        map_len: Vec::new(),
+        map_len_hdr: Vec::new(),
+        listed: vc_heap_listed_new(),
+    };
+    cs
+}
+
+// A complete production recording session; the executor finalizes the logic
+// command after discovering which theories the function uses.
+fn vc_claims_new(fr: VcFrames, pre_only: bool, step: bool) -> VcClaims {
+    let cs: VcClaims = vc_claims_storage(fr, pre_only, step);
+    vc_script_set_logic(cs.header, String::from("QF_BV"));
+    vc_script_set_option(cs.header, String::from(":produce-models"), String::from("true"));
+    cs
+}
+
+// Empty storage for consumers constructing partial model/query snapshots.
+fn vc_claims_empty() -> VcClaims {
+    vc_claims_storage(vc_frames_new(), false, false)
+}
+
+// Records the claim that `goal` holds on the paths satisfying `pc`, unless the
+// simplifier already decided it: the negated query is the constant `false`, or
+// `pc => goal` is itself an earlier assumption (the terms are hash-consed, so
+// equal formulas are one id). Both are `unsat` under any assumptions, so the
+// solver would only confirm what the claim list already says.
+fn vc_add_claim(cs: VcClaims, kind: i64, vow_id: i64, label: String, pc: i64, goal: i64, ostart: i64, olen: i64, frame: i64) {
+    if cs.hyp_now {
+        return;
+    }
+    if cs.pre_only && kind != VC_CLAIM_CALLER_PRE() && kind != VC_CLAIM_UNWIND() {
+        return;
+    }
+    let ar: VcArena = cs.arena;
+    let negated: i64 = vc_tm_and(ar, pc, vc_tm_app1(ar, VC_OP_NOT(), goal));
+    if vc_tm_is_false(ar, negated) {
+        return;
+    }
+    if cs.assumed.len() > 0 {
+        if ar.assumed[vc_tm_implies(ar, pc, goal) as u64] == 1 {
+            return;
+        }
+    }
+    let hdr: SmtScript = cs.header;
+    cs.kinds.push(kind);
+    cs.frames.push(frame);
+    cs.vow_ids.push(vow_id);
+    cs.labels.push(label);
+    cs.ostarts.push(ostart);
+    cs.olens.push(olen);
+    cs.negated_goals.push(negated);
+    cs.header_lens.push(hdr.kinds.len() as i64);
+    cs.assumed_lens.push(cs.assumed.len() as i64);
+}
+
+fn vc_assume(cs: VcClaims, pc: i64, t: i64) {
+    let ar: VcArena = cs.arena;
+    let fact: i64 = vc_tm_implies(ar, pc, t);
+    if vc_tm_is_true(ar, fact) {
+        return;
+    }
+    ar.assumed[fact as u64] = 1;
+    cs.assumed.push(fact);
+}
+
+// Claims `goal` on the paths reaching `inst`, then assumes it.
+fn vc_guard(cs: VcClaims, kind: i64, label: String, pc: i64, goal: i64, inst: IrInst) {
+    vc_add_claim(cs, kind, -1, label, pc, goal, inst.ostart, inst.olen, vc_frame_of(inst));
+    vc_assume(cs, pc, goal);
 }
 
 // `model_slots` of the length of a `Vec` or `String` parameter; a scalar

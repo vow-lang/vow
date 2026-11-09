@@ -3,13 +3,12 @@ module TestVcQuery
 use ir
 use vc_term
 use vc_smt
-use vc_exec
+use vc_ops
+use vc_query
 use tests.builders
 
 fn empty_claims() -> VcClaims {
-    let blocks: Vec<IrBlock> = Vec::new();
-    blocks.push(mk_block(0, Vec::new()));
-    vc_claims(mk_function(1, String::from("query"), Vec::new(), ITY_UNIT(), blocks))
+    vc_claims_new(vc_frames_new(), false, false)
 }
 
 // Two recorded prefixes followed by later declarations and assumptions. Query
@@ -127,10 +126,117 @@ fn check_empty_model() -> i64 {
     0
 }
 
+// Recording captures both context prefixes and the diagnostic identity. Later
+// appends must not turn a failing earlier obligation into a vacuous proof.
+fn check_recorded_prefix() -> i64 {
+    let cs: VcClaims = empty_claims();
+    let ar: VcArena = cs.arena;
+    let yes: i64 = vc_tm_bool_const(ar, true);
+    let a: i64 = vc_tm_var(ar, String::from("a"));
+    let b: i64 = vc_tm_var(ar, String::from("b"));
+    vc_script_declare_const(cs.header, String::from("a"), VC_SORT_BOOL());
+    vc_script_declare_const(cs.header, String::from("b"), VC_SORT_BOOL());
+    vc_assume(cs, yes, a);
+    vc_add_claim(cs, VC_CLAIM_ENSURES(), 41, String::from("post"), yes, b, 12, 8, 3);
+    if cs.kinds.len() != 1 || cs.kinds[0] != VC_CLAIM_ENSURES() { return 40; }
+    if cs.vow_ids[0] != 41 || cs.labels[0] != String::from("post") || cs.frames[0] != 3 { return 41; }
+    if cs.ostarts[0] != 12 || cs.olens[0] != 8 { return 42; }
+    let want: String = String::from("(set-logic QF_BV)\n(set-option :produce-models true)\n(declare-const a Bool)\n(declare-const b Bool)\n(assert a)\n(assert (not b))\n(check-sat)\n");
+    if vc_claim_query(cs, 0) != want { return 43; }
+    vc_script_declare_const(cs.header, String::from("later"), VC_SORT_BOOL());
+    vc_assume(cs, yes, vc_tm_bool_const(ar, false));
+    if vc_claim_query(cs, 0) != want { return 44; }
+    0
+}
+
+// A guard is asked before it is assumed, and its assumption is conditional on
+// the path reaching the instruction. Repeating that guard needs no new query.
+fn check_guard_recording() -> i64 {
+    let cs: VcClaims = empty_claims();
+    let ar: VcArena = cs.arena;
+    let pc: i64 = vc_tm_var(ar, String::from("path"));
+    let goal: i64 = vc_tm_var(ar, String::from("safe"));
+    vc_script_declare_const(cs.header, String::from("path"), VC_SORT_BOOL());
+    vc_script_declare_const(cs.header, String::from("safe"), VC_SORT_BOOL());
+    let inst: IrInst = mk_inst_const_i64(0, 0);
+    inst.ostart = 17;
+    inst.olen = 4;
+    inst.ds = vc_frame_mark(2);
+    vc_guard(cs, VC_CLAIM_DIV_ZERO(), String::from("guard"), pc, goal, inst);
+    let want: String = String::from("(set-logic QF_BV)\n(set-option :produce-models true)\n(declare-const path Bool)\n(declare-const safe Bool)\n(assert (and path (not safe)))\n(check-sat)\n");
+    if cs.kinds.len() != 1 || vc_claim_query(cs, 0) != want { return 50; }
+    if cs.vow_ids[0] != -1 || cs.frames[0] != 2 || cs.ostarts[0] != 17 || cs.olens[0] != 4 { return 51; }
+    if cs.assumed.len() != 1 { return 52; }
+    vc_guard(cs, VC_CLAIM_DIV_ZERO(), String::from("again"), pc, goal, inst);
+    if cs.kinds.len() != 1 || cs.assumed.len() != 2 { return 53; }
+    let assumption: String = String::from("(or (not path) safe)");
+    if vc_term_text(ar, cs.assumed[0]) != assumption || vc_term_text(ar, cs.assumed[1]) != assumption { return 54; }
+    // An unconditional fact cannot be inferred from a guard on one path.
+    vc_add_claim(cs, VC_CLAIM_ENSURES(), 9, String::from(""), vc_tm_bool_const(ar, true), goal, 0, 0, -1);
+    if cs.kinds.len() != 2 || cs.assumed_lens[1] != 2 { return 55; }
+    if vc_claim_query(cs, 0) != want { return 56; }
+    0
+}
+
+fn check_recording_filters() -> i64 {
+    let cs: VcClaims = empty_claims();
+    let ar: VcArena = cs.arena;
+    let yes: i64 = vc_tm_bool_const(ar, true);
+    let no: i64 = vc_tm_bool_const(ar, false);
+    let goal: i64 = vc_tm_var(ar, String::from("g"));
+    vc_add_claim(cs, VC_CLAIM_ENSURES(), 1, String::from(""), yes, yes, 0, 0, -1);
+    vc_add_claim(cs, VC_CLAIM_ENSURES(), 2, String::from(""), no, goal, 0, 0, -1);
+    vc_assume(cs, yes, yes);
+    if cs.kinds.len() != 0 || cs.assumed.len() != 0 { return 60; }
+    cs.pre_only = true;
+    let mut kind: i64 = 0;
+    while kind <= VC_CLAIM_VEC_BOUNDS() {
+        vc_add_claim(cs, kind, kind, String::from(""), yes, goal, 0, 0, -1);
+        kind = kind + 1;
+    }
+    if cs.kinds.len() != 2 || cs.kinds[0] != VC_CLAIM_UNWIND() || cs.kinds[1] != VC_CLAIM_CALLER_PRE() { return 61; }
+    // A claim alone adds no assumption, including an unwinding claim.
+    if cs.assumed.len() != 0 { return 62; }
+    cs.hyp_now = true;
+    let inst: IrInst = mk_inst_const_i64(0, 0);
+    vc_guard(cs, VC_CLAIM_CALLER_PRE(), String::from("hypothesis"), yes, goal, inst);
+    if cs.kinds.len() != 2 || cs.assumed.len() != 1 { return 63; }
+    cs.hyp_now = false;
+    cs.pre_only = false;
+    vc_add_claim(cs, VC_CLAIM_ENSURES(), 3, String::from(""), yes, goal, 0, 0, -1);
+    if cs.kinds.len() != 2 { return 64; }
+    // Demoting a guard still assumes it, just as a hypothesis guard does.
+    cs.pre_only = true;
+    vc_guard(cs, VC_CLAIM_ARITH(), String::from("demoted"), yes, no, inst);
+    if cs.kinds.len() != 2 || cs.assumed.len() != 2 { return 65; }
+    if !vc_tm_is_false(ar, cs.assumed[1]) { return 66; }
+    0
+}
+
+fn check_recording_creation() -> i64 {
+    let fr: VcFrames = vc_frames_new();
+    fr.func_ids.push(17);
+    let cs: VcClaims = vc_claims_new(fr, true, true);
+    if !cs.pre_only || !cs.step || cs.hyp_now { return 70; }
+    let kept: VcFrames = cs.fr;
+    if kept.func_ids.len() != 1 || kept.func_ids[0] != 17 { return 71; }
+    if vc_smt_render(cs.arena, cs.header) != String::from("(set-logic QF_BV)\n(set-option :produce-models true)\n") { return 72; }
+    let raw: VcClaims = vc_claims_empty();
+    if raw.header.kinds.len() != 0 || raw.pre_only || raw.step || raw.hyp_now { return 73; }
+    vc_assume(cs, vc_tm_bool_const(cs.arena, true), vc_tm_bool_const(cs.arena, false));
+    vc_script_declare_const(cs.header, String::from("only_this_store"), VC_SORT_BOOL());
+    if raw.assumed.len() != 0 || raw.header.kinds.len() != 0 { return 74; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_full_and_context();
     if r == 0 { r = check_header_and_delta(); }
     if r == 0 { r = check_selected_and_independent_script(); }
     if r == 0 { r = check_empty_model(); }
+    if r == 0 { r = check_recorded_prefix(); }
+    if r == 0 { r = check_guard_recording(); }
+    if r == 0 { r = check_recording_filters(); }
+    if r == 0 { r = check_recording_creation(); }
     i64_to_i32_wrap(r)
 }

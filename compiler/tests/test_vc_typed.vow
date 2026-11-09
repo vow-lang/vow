@@ -9,7 +9,7 @@ use lower
 use verifier
 use vc_ops
 use vc_solver
-use vc_exec
+use vc_query
 use vc_smt
 use vc_term
 use vc_vecmodel
@@ -99,44 +99,7 @@ fn check_keys() -> i64 {
 }
 
 fn claims() -> VcClaims {
-    let cs: VcClaims = VcClaims {
-        arena: vc_arena_new(),
-        header: vc_script_new(),
-        assumed: Vec::new(),
-        kinds: Vec::new(),
-        frames: Vec::new(),
-        fr: vc_frames_new(),
-        pre_only: false,
-        step: false,
-        hyp_now: false,
-        vow_ids: Vec::new(),
-        labels: Vec::new(),
-        ostarts: Vec::new(),
-        olens: Vec::new(),
-        negated_goals: Vec::new(),
-        header_lens: Vec::new(),
-        assumed_lens: Vec::new(),
-        model_names: Vec::new(),
-        model_params: Vec::new(),
-        model_paths: Vec::new(),
-        model_tys: Vec::new(),
-        model_widths: Vec::new(),
-        model_slots: Vec::new(),
-        model_hdr: Vec::new(),
-        model_ambig: Vec::new(),
-        hook_vars: Vec::new(),
-        map_vars: Vec::new(),
-        vec_param: Vec::new(),
-        vec_arr: Vec::new(),
-        vec_len: Vec::new(),
-        vec_hdr: Vec::new(),
-        vec_wide: Vec::new(),
-        vec_path: Vec::new(),
-        vec_handle: Vec::new(),
-        map_len: Vec::new(),
-        map_len_hdr: Vec::new(),
-        listed: vc_heap_listed_new(),
-    };
+    let cs: VcClaims = vc_claims_empty();
     cs.header_lens.push(10);
     cs
 }
