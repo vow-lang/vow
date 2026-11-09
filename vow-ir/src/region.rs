@@ -2285,10 +2285,7 @@ fn handle_inst(
                     && let Some(target_param) =
                         trace_target_param(target_id, inst_lookup, summaries)
                 {
-                    summary.store_effects.insert((
-                        target_param,
-                        InternalReturnRegion::Published(RegionConstraint::ConstantGlobal),
-                    ));
+                    publish_store_effect(summary, target_param, RegionConstraint::ConstantGlobal);
                 }
             }
 
@@ -2685,16 +2682,18 @@ fn publish_transitive_store_effect(
             }
         }
         InternalReturnRegion::Published(RegionConstraint::FreshInCaller) => {
-            summary.store_effects.insert((
+            publish_store_effect(
+                summary,
                 current_target_param,
-                InternalReturnRegion::Published(RegionConstraint::FreshInCaller),
-            ));
+                RegionConstraint::FreshInCaller,
+            );
         }
         InternalReturnRegion::Published(RegionConstraint::ConstantGlobal) => {
-            summary.store_effects.insert((
+            publish_store_effect(
+                summary,
                 current_target_param,
-                InternalReturnRegion::Published(RegionConstraint::ConstantGlobal),
-            ));
+                RegionConstraint::ConstantGlobal,
+            );
         }
         InternalReturnRegion::Uninit => {}
     }
@@ -2708,6 +2707,12 @@ fn add_marker(
     must_outlive.entry(inst_id).or_default().insert(marker);
 }
 
+fn publish_store_effect(summary: &mut InternalSummary, target: u32, constraint: RegionConstraint) {
+    summary
+        .store_effects
+        .insert((target, InternalReturnRegion::Published(constraint)));
+}
+
 fn add_store_effect_source_constraints(
     summary: &mut InternalSummary,
     target_param: u32,
@@ -2717,10 +2722,7 @@ fn add_store_effect_source_constraints(
 ) {
     let source_origin = trace_origin(source_id, inst_lookup);
     let source_constraint = origin_to_constraint(&source_origin);
-    summary.store_effects.insert((
-        target_param,
-        InternalReturnRegion::Published(source_constraint),
-    ));
+    publish_store_effect(summary, target_param, source_constraint);
     publish_embedded_param_aliases(summary, target_param, source_id, inst_lookup);
 
     let Some((_, source_inst)) = inst_lookup.get(&source_id) else {
@@ -2729,6 +2731,9 @@ fn add_store_effect_source_constraints(
     let Opcode::Call = source_inst.opcode else {
         return;
     };
+    for arg_id in alias_call_args(source_inst, summaries).unwrap_or_default() {
+        add_store_effect_source_constraints(summary, target_param, arg_id, inst_lookup, summaries);
+    }
     let InstData::CallTarget(callee_id) = &source_inst.data else {
         return;
     };
@@ -2741,10 +2746,7 @@ fn add_store_effect_source_constraints(
 
     for &arg_id in &source_inst.args {
         if let Some(param_idx) = trace_param(arg_id, inst_lookup) {
-            summary.store_effects.insert((
-                target_param,
-                InternalReturnRegion::Published(RegionConstraint::AliasOf(param_idx)),
-            ));
+            publish_store_effect(summary, target_param, RegionConstraint::AliasOf(param_idx));
         }
     }
 }
@@ -2756,17 +2758,12 @@ fn publish_embedded_param_aliases(
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
 ) {
     for (_, inst) in inst_lookup.values() {
-        if !matches!(inst.opcode, Opcode::Store | Opcode::FieldSet) || inst.args.len() < 2 {
-            continue;
-        }
-        if inst.args[0] != aggregate_id {
-            continue;
-        }
-        if let Some(param_idx) = trace_param(inst.args[1], inst_lookup) {
-            summary.store_effects.insert((
-                target_param,
-                InternalReturnRegion::Published(RegionConstraint::AliasOf(param_idx)),
-            ));
+        if matches!(inst.opcode, Opcode::Store | Opcode::FieldSet)
+            && inst.args.len() >= 2
+            && inst.args[0] == aggregate_id
+            && let Some(param_idx) = trace_param(inst.args[1], inst_lookup)
+        {
+            publish_store_effect(summary, target_param, RegionConstraint::AliasOf(param_idx));
         }
     }
 }
