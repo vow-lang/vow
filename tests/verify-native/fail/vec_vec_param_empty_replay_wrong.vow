@@ -1,0 +1,22 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// A `Vec<Vec<i64>>` parameter whose counterexample length is 0 is rebuilt as an empty `Vec`, so
+// replay confirms the failure although the element type is not a named type.
+module VecVecParamEmptyReplayWrong
+
+fn f(outer: Vec<Vec<i64>>) -> bool vow {
+  ensures: result
+} {
+  outer.len() > 0
+}
+
+fn main() -> i32 [io] {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  if f(outer) {
+    print_i64(1);
+  } else {
+    print_i64(0);
+  }
+  0
+}
