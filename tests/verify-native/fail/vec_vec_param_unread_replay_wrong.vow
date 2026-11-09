@@ -1,0 +1,22 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// A `Vec<Vec<i64>>` parameter that the function never reads is absent from the counterexample, and
+// replay rebuilds it as an empty `Vec`.
+module VecVecParamUnreadReplayWrong
+
+fn f(outer: Vec<Vec<i64>>, x: i64) -> bool vow {
+  ensures: result
+} {
+  x > 0
+}
+
+fn main() -> i32 [io] {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  if f(outer, 1) {
+    print_i64(1);
+  } else {
+    print_i64(0);
+  }
+  0
+}

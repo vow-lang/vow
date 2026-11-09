@@ -407,12 +407,12 @@ fn replay_def_done(defs: Vec<String>, done: Vec<bool>, name: String) -> bool {
 // How deep an aggregate held in an aggregate is rebuilt.
 fn REPLAY_MAX_DEPTH() -> i64 { 8 }
 
-// Skip of a field of AST type text `shown`; `tail` completes "field of type `<shown>" with its closing quote.
+// Skip of a field of type `shown`; `tail` closes the quote.
 fn replay_field_skip(shown: String, tail: String) -> ReplayArg {
     replay_arg_skip(str3r(String::from("field of type `"), shown, tail))
 }
 
-// True for the element types a held `Vec` rebuilds: `bool` and the integers (a float is a raw slot).
+// True for the element types a held `Vec` rebuilds: `bool` and the integers.
 fn replay_held_elem_scalar(a: AstArena, tid: i64) -> bool {
     type_tag(a, tid) == TY_NAMED() && replay_held_elem_name(arena_str(a, type_a(a, tid)))
 }
@@ -731,7 +731,7 @@ fn replay_wide_element(pname: String, i: i64, name: String, names: Vec<String>, 
 
 // Element `i` of a `Vec<f64>` parameter. The counterexample marks a `Vec` whose elements the
 // function reads as floats with `<param>.elem` = `f64`, and then lists each element as the
-// float's decimal text; without the mark an element is a raw slot, which a float cannot rebuild.
+// float's decimal text; without the mark an element is a raw slot.
 fn replay_float_element(pname: String, i: i64, name: String, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
     let marked: String = replay_cex_value(names, vals, str3r(pname, String::from(".elem"), String::from("")));
     if marked != name {
@@ -785,10 +785,11 @@ fn replay_vec_arg(a: AstArena, tid: i64, pname: String, names: Vec<String>, vals
     let shown: String = print_type_text(a, tid);
     let args_lid: i64 = type_b(a, tid);
     let len: i64 = replay_vec_len(pname, names, vals);
-    if list_len(a, args_lid) != 1 || type_tag(a, list_get(a, args_lid, 0)) != TY_NAMED() {
+    let empty: bool = len == 0 || len == -1;
+    if !empty && (list_len(a, args_lid) != 1 || type_tag(a, list_get(a, args_lid, 0)) != TY_NAMED()) {
         return replay_arg_skip(str3r(String::from("parameter type `"), shown, String::from("` is not rebuilt by replay")));
     }
-    let ename: String = arena_str(a, type_a(a, list_get(a, args_lid, 0)));
+    let ename: String = { if empty { String::from("") } else { arena_str(a, type_a(a, list_get(a, args_lid, 0))) } };
     if len == -2 {
         return replay_arg_skip(str3r(String::from("length of `"), pname, String::from("` is not a length replay can build")));
     }
