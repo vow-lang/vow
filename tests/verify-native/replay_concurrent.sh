@@ -53,9 +53,9 @@ except Exception:
 
 rounds=3
 round=0
+runs=(alpha beta alpha beta)
 while [ "$round" -lt "$rounds" ]; do
     round=$((round + 1))
-    runs=(alpha beta alpha beta)
     idx=0
     pids=()
     for src in "${runs[@]}"; do
@@ -64,7 +64,7 @@ while [ "$round" -lt "$rounds" ]; do
         mkdir -p "$bw"
         PATH="$FAKE_DIR:$PATH" TMPDIR="$SCRATCH" FAKE_BW_MODE=sat_zero FAKE_BW_DIR="$bw" \
             "$VOWC_BIN" verify --no-cache --backend native --replay-cex "$SRC_DIR/$src.vow" \
-            >"$TMP_ROOT/out.$round.$idx" 2>/dev/null &
+            >"$TMP_ROOT/out.$round.$idx" 2>"$TMP_ROOT/err.$round.$idx" &
         pids+=("$!")
     done
     for pid in "${pids[@]}"; do wait "$pid" || true; done
@@ -73,7 +73,7 @@ while [ "$round" -lt "$rounds" ]; do
         idx=$((idx + 1))
         got=$(replay_status "$TMP_ROOT/out.$round.$idx")
         if [ "$got" != "confirmed" ]; then
-            fail "round $round run $idx ($src): replay is '$got', want 'confirmed'"
+            fail "round $round run $idx ($src): replay is '$got', want 'confirmed': $(head -c 400 "$TMP_ROOT/err.$round.$idx")"
         fi
     done
 done

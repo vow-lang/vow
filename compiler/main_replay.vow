@@ -321,12 +321,12 @@ fn replay_one_ce(ce: VerifyCE, m: Module, fns: Vec<IrFunction>, path: String, ma
     let token: String = replay_token_of(token_dir);
     if token.len() == 0 {
         fs_remove_dir(token_dir);
-        return replay_skip(String::from("replay: could not create a per-run token"));
+        return replay_skip(String::from("replay: could not create a per-run token (is TMPDIR writable?)"));
     }
     // Tag by source stem + function + vow_id + token: sources of one directory that share a
     // function name and a (per-function-local) vow_id do not collide.
     let tag: String = str4(String::from("__vow_replay_"), file_stem_from_path(path), String::from("_"), ce.function);
-    tag.push_str(str3(String::from("_"), i64_to_string(ce.vow_id), str2(String::from("_"), token)));
+    tag.push_str(str4(String::from("_"), i64_to_string(ce.vow_id), String::from("_"), token));
     let harness_path: String = str3(dir, tag, String::from(".vow"));
     let bin_path: String = str2(dir, tag);
     let oext: String = str2(bin_path, String::from(".o"));
