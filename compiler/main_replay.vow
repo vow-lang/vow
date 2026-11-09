@@ -162,6 +162,21 @@ fn replay_dir_of(path: String) -> String {
     }
 }
 
+// The random suffix `mktemp_dir` appended to its prefix, or "" if the call failed.
+fn replay_token_of(token_dir: String) -> String {
+    match str_rfind_byte(token_dir, 46) {
+        Option::None => String::from(""),
+        Option::Some(k) => token_dir.substring(k + 1u64, token_dir.len()),
+    }
+}
+
+fn replay_cleanup(harness_path: String, bin_path: String, oext: String, token_dir: String) [io] {
+    fs_remove(harness_path);
+    fs_remove(bin_path);
+    fs_remove(oext);
+    fs_remove_dir(token_dir);
+}
+
 fn replay_skip(reason: String) -> ReplayVerdict {
     ReplayVerdict { status: String::from("skipped"), reason: reason }
 }
@@ -300,9 +315,18 @@ fn replay_one_ce(ce: VerifyCE, m: Module, fns: Vec<IrFunction>, path: String, ma
     harness.push_str(String::from("}\n"));
 
     let dir: String = replay_dir_of(path);
-    // Tag by function + vow_id so two functions sharing a (per-function-local)
-    // vow_id do not collide within one run.
-    let tag: String = str4(String::from("__vow_replay_"), ce.function, String::from("_"), i64_to_string(ce.vow_id));
+    // The token is the random suffix of a directory `mktemp_dir` creates atomically and this run
+    // keeps until it ends, so no two live runs share a harness path, even for one source.
+    let token_dir: String = mktemp_dir(String::from("vow-replay"));
+    let token: String = replay_token_of(token_dir);
+    if token.len() == 0 {
+        fs_remove_dir(token_dir);
+        return replay_skip(String::from("replay: could not create a per-run token (is TMPDIR writable?)"));
+    }
+    // Tag by source stem + function + vow_id + token: sources of one directory that share a
+    // function name and a (per-function-local) vow_id do not collide.
+    let tag: String = str4(String::from("__vow_replay_"), file_stem_from_path(path), String::from("_"), ce.function);
+    tag.push_str(str4(String::from("_"), i64_to_string(ce.vow_id), String::from("_"), token));
     let harness_path: String = str3(dir, tag, String::from(".vow"));
     let bin_path: String = str2(dir, tag);
     let oext: String = str2(bin_path, String::from(".o"));
@@ -310,10 +334,12 @@ fn replay_one_ce(ce: VerifyCE, m: Module, fns: Vec<IrFunction>, path: String, ma
     // Never overwrite an existing file in the source tree — a collision with a
     // user file would otherwise be silently clobbered and then deleted.
     if fs_exists(harness_path) != 0 || fs_exists(bin_path) != 0 {
+        fs_remove_dir(token_dir);
         return replay_skip(String::from("replay: temp path already exists; not overwriting"));
     }
 
     if fs_write(harness_path, harness) != 0 {
+        fs_remove_dir(token_dir);
         return replay_skip(String::from("replay: could not write harness"));
     }
 
@@ -328,9 +354,7 @@ fn replay_one_ce(ce: VerifyCE, m: Module, fns: Vec<IrFunction>, path: String, ma
     let brc: i64 = process_run(argv0, bargs);
 
     if brc != 0 {
-        fs_remove(harness_path);
-        fs_remove(bin_path);
-        fs_remove(oext);
+        replay_cleanup(harness_path, bin_path, oext, token_dir);
         return replay_skip(String::from("replay: harness did not compile"));
     }
 
@@ -340,9 +364,7 @@ fn replay_one_ce(ce: VerifyCE, m: Module, fns: Vec<IrFunction>, path: String, ma
     let runargs: Vec<String> = Vec::new();
     let pid: i64 = process_start(bin_path, runargs);
     if pid < 0 {
-        fs_remove(harness_path);
-        fs_remove(bin_path);
-        fs_remove(oext);
+        replay_cleanup(harness_path, bin_path, oext, token_dir);
         return replay_skip(String::from("replay: harness failed to start"));
     }
     let rrc: i64 = process_wait_timeout(pid, 10000);
@@ -356,9 +378,7 @@ fn replay_one_ce(ce: VerifyCE, m: Module, fns: Vec<IrFunction>, path: String, ma
         }
     };
 
-    fs_remove(harness_path);
-    fs_remove(bin_path);
-    fs_remove(oext);
+    replay_cleanup(harness_path, bin_path, oext, token_dir);
 
     if timed_out {
         return replay_skip(String::from("replay: harness timed out"));

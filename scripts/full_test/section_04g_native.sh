@@ -17,6 +17,13 @@ else
     fail "verify-native/wiring" "$(tail -20 "$native_wiring_log")"
 fi
 
+native_replay_log="$TMPDIR/verify-native-replay-concurrent.log"
+if VOWC_BIN="$SELF" bash tests/verify-native/replay_concurrent.sh >"$native_replay_log" 2>&1; then
+    pass "verify-native/replay-concurrent"
+else
+    fail "verify-native/replay-concurrent" "$(tail -20 "$native_replay_log")"
+fi
+
 native_have_solver=0
 command -v bitwuzla >/dev/null 2>&1 && native_have_solver=1
 # Every fixture's `// TEST:` directives (pass/, fail/, unknown/, skip/, contracts/) and the cache
