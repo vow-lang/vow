@@ -2334,27 +2334,10 @@ fn alias_call_arg_ids(
     inst: IrInst, int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>
 ) -> Vec<i64> {
     let out: Vec<i64> = Vec::new();
-    let callee: i64 = inst.dv;
-    if callee < 0 || callee >= int_kinds.len() as i64 {
-        return out;
-    }
-    let kind: i64 = int_kinds[callee as u64];
-    let positions: Vec<i64> = Vec::new();
-    if kind == RSUM_KIND_ALIAS_OF() {
-        positions.push(int_auxs[callee as u64]);
-    } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
-        let als: Vec<i64> = int_aliases_list[callee as u64];
-        let mut ai: u64 = 0;
-        while ai < als.len() {
-            positions.push(als[ai]);
-            ai = ai + 1;
-        }
-    }
     let mut pi: u64 = 0;
-    while pi < positions.len() {
-        let pos: i64 = positions[pi];
-        if pos >= 0 && pos < inst.args.len() as i64 {
-            out.push(inst.args[pos as u64]);
+    while pi < inst.args.len() {
+        if callee_return_aliases_arg(inst.dv, pi as i64, int_kinds, int_auxs, int_aliases_list) {
+            out.push(inst.args[pi]);
         }
         pi = pi + 1;
     }
