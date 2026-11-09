@@ -1,0 +1,27 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// The slot a `Vec` parameter received a built object in holds that object, whose length is the number of
+// pushes made to it and not one more (#1905).
+module VecPointerElemParamVecStoredBuiltSlotWrong
+
+fn f(outer: Vec<Vec<i64>>) -> bool vow {
+  ensures: result
+} {
+  let n: u64 = outer.len();
+  let t: Vec<i64> = Vec::new();
+  outer.push(t);
+  t.push(7);
+  let e: Vec<i64> = outer[n];
+  e.len() == 2
+}
+
+fn main() -> i32 [io] {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  if f(outer) {
+    print_i64(1);
+  } else {
+    print_i64(0);
+  }
+  0
+}

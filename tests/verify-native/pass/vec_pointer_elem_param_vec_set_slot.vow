@@ -1,0 +1,24 @@
+// A `Vec` parameter that receives a pointer by `set`: the slot written holds that object, and a push
+// to it shows in the element read back (#1905).
+module VecPointerElemParamVecSetSlot
+
+fn f(outer: Vec<Vec<i64>>, w: Vec<i64>, i: u64) -> bool vow {
+  requires: i < outer.len()
+  ensures: result
+} {
+  outer[i] = w;
+  w.push(1);
+  let e: Vec<i64> = outer[i];
+  e.len() == w.len()
+}
+
+fn main() -> i32 [io] {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let w: Vec<i64> = Vec::new();
+  let v: Vec<i64> = Vec::new();
+  outer.push(v);
+  if f(outer, w, 0) {
+    print_i64(1);
+  }
+  0
+}

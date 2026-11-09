@@ -1,0 +1,22 @@
+// A `Vec` parameter that receives an object the function built: the slot it was pushed into is that object
+// and no memory the caller gave, so a push to the object shows in the element read back (#1905).
+module VecPointerElemParamVecStoredBuiltSlot
+
+fn f(outer: Vec<Vec<i64>>) -> bool vow {
+  ensures: result
+} {
+  let n: u64 = outer.len();
+  let t: Vec<i64> = Vec::new();
+  outer.push(t);
+  t.push(7);
+  let e: Vec<i64> = outer[n];
+  e.len() == 1
+}
+
+fn main() -> i32 [io] {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  if f(outer) {
+    print_i64(1);
+  }
+  0
+}

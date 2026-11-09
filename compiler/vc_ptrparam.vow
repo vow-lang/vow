@@ -1,0 +1,71 @@
+module VcPtrParam
+
+use ir
+use ir_dominance
+use vc_ops
+use vc_objects
+
+// A `Vec` parameter that receives a pointer (`outer.push(w)`, `outer[i] = w`, #1905) holds two kinds of
+// word: an element of the memory the caller gave, and the address of an object the function stored. A
+// `get` of it is a handle that may be either, so it is neither noted as given memory (that would
+// leave a stored address out of the chain, `VcOverlay.tagged` 1) nor read as one of the addresses
+// the function stored (`VcOverlay.exact`, off for any function with such a parameter).
+//
+// What tells the two apart is the index. An element below the length the parameter had on entry, and not
+// written since, is read out of the array it entered with, and a word of that array is never the address
+// of an object the function allocated (`VcOverlay.tags`). The fact is made at each `get`, as an
+// implication over the array of the entry (`vc_overlay_note_given`), so no quantifier is needed
+// and a later `push`, `set` or `pop` cannot make it false: the array of the entry does not change.
+// `VcOverlay.tagged` is 2 for such a parameter.
+
+fn VC_PP_HELD() -> i64 { 2 }
+
+// 1 for the `GetArg` of a `Vec` parameter that is a receiver of a pointer store (`held`).
+fn vc_ptr_param_held(f: IrFunction, held: Vec<i64>, tys: Vec<i64>) -> Vec<i64> {
+    let params: Vec<i64> = dom_fill(tys.len(), 0);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_GET_ARG() && inst.ty == ITY_PTR() && inst.id >= 0 && (inst.id as u64) < params.len()
+                && held[inst.id as u64] == 1 && vc_overlay_param_class(f, inst.dv) == VC_OV_VEC() {
+                params[inst.id as u64] = 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    params
+}
+
+// True when some entry of `marks` is 1.
+fn vc_ptr_param_any(marks: Vec<i64>) -> bool {
+    let mut i: u64 = 0;
+    while i < marks.len() {
+        if marks[i] == 1 { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// True when a marked parameter is merged by a Phi: its state is then the state of a Phi slot, and the
+// array of its entry is no longer the one an element read starts from.
+fn vc_ptr_param_merged(f: IrFunction, params: Vec<i64>) -> bool {
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_UPSILON() && inst.args.len() == 1 && inst.args[0] >= 0 && (inst.args[0] as u64) < params.len()
+                && params[inst.args[0] as u64] == 1 {
+                return true;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    false
+}

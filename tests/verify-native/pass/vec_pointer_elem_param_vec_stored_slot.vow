@@ -1,0 +1,22 @@
+// A `Vec` parameter that receives a pointer: the slot it was pushed into holds that object, whatever
+// the other elements are (#1905).
+module VecPointerElemParamVecStoredSlot
+
+fn f(outer: Vec<Vec<i64>>, w: Vec<i64>) -> bool vow {
+  ensures: result
+} {
+  let n: u64 = outer.len();
+  outer.push(w);
+  let e: Vec<i64> = outer[n];
+  w.push(1);
+  e.len() == w.len()
+}
+
+fn main() -> i32 [io] {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let v: Vec<i64> = Vec::new();
+  if f(outer, v) {
+    print_i64(1);
+  }
+  0
+}

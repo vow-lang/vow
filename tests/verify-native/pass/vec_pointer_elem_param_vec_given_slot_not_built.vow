@@ -1,0 +1,26 @@
+// A `Vec` parameter that receives a pointer: an element it held before is memory the caller gave, so it
+// is no object the function built, and a push to one it built leaves its length alone (#1905).
+module VecPointerElemParamVecGivenSlotNotBuilt
+
+fn f(outer: Vec<Vec<i64>>, i: u64) -> bool vow {
+  requires: i < outer.len()
+  ensures: result
+} {
+  let t: Vec<i64> = Vec::new();
+  outer.push(t);
+  let g: Vec<i64> = outer[i];
+  let before: u64 = g.len();
+  t.push(5);
+  let h: Vec<i64> = outer[i];
+  h.len() == before
+}
+
+fn main() -> i32 [io] {
+  let outer: Vec<Vec<i64>> = Vec::new();
+  let v: Vec<i64> = Vec::new();
+  outer.push(v);
+  if f(outer, 0) {
+    print_i64(1);
+  }
+  0
+}

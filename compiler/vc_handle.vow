@@ -13,6 +13,7 @@ use vc_held
 use vc_overlay
 use vc_objects
 use vc_reads
+use vc_ptrparam
 
 // Reads through a handle (`VcHandleMemory`, `vc_overlay`): the never-written heap overlaid with the
 // parameter and object entries, one `ite` arm per entry of the class the read asks for.
@@ -42,15 +43,33 @@ use vc_reads
 // Records `t`, the term of the `get` of the receiver `recv`, as an element of a `Vec` the function stored
 // pointers into. Terms are numbered as they are made, so a new one is above every one recorded and the
 // list stays sorted; an older term is not recorded, and a chain over it keeps the array.
-fn vc_overlay_note_elem(m: VcHandleMemory, t: i64, recv: i64) {
+fn vc_overlay_note_elem(m: VcHandleMemory, t: i64, recv: i64, s: i64, idx: i64) {
     let ov: VcOverlay = m.overlay;
     if recv >= 0 && (recv as u64) < ov.tagged.len() && ov.tagged[recv as u64] == 1 {
         vc_overlay_note_loaded(ov, m.ar, m.assumed, t);
         return;
     }
+    if recv >= 0 && (recv as u64) < ov.tagged.len() && ov.tagged[recv as u64] == VC_PP_HELD() {
+        vc_overlay_note_given(m, s, idx);
+        return;
+    }
     if !ov.exact || !vc_ptr_store_is_held(ov.held, recv) { return; }
     let n: u64 = ov.elem_h.len();
     if n == 0 || ov.elem_h[n - 1] < t { ov.elem_h.push(t); }
+}
+
+// An element of a `Vec` parameter that receives a pointer (`vc_ptrparam`): below the length the
+// parameter entered with, the word the array of the entry holds there is given memory, with tag 0 (no
+// object the function allocated). The array of the entry is `base_arr` of the slot, whatever has
+// been written since.
+fn vc_overlay_note_given(m: VcHandleMemory, s: i64, idx: i64) {
+    let ov: VcOverlay = m.overlay;
+    let ar: VcArena = m.ar;
+    vc_overlay_tag_start(ov, ar, m.header, m.assumed);
+    let word: i64 = vc_tm_app2(ar, VC_OP_SELECT(), m.vv.base_arr[s as u64], idx);
+    let tag: i64 = vc_tm_app2(ar, VC_OP_SELECT(), ov.tags, word);
+    let given: i64 = vc_tm_app2(ar, VC_OP_BVULT(), idx, m.vv.base_len[s as u64]);
+    vc_heap_assume(ar, m.assumed, vc_tm_implies(ar, given, vc_tm_app2(ar, VC_OP_EQ(), tag, vc_tm_bv(ar, 64, 0, 0))));
 }
 
 fn vc_overlay_sorted_has(l: Vec<i64>, t: i64) -> bool {
