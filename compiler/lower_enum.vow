@@ -1,0 +1,198 @@
+module LowerEnum
+
+use ast
+use ir
+use lower
+
+// Internal declaration selection shared by payload construction and binding.
+// Resolve once per operation; indexed reads never rescan enum names/variants
+// or allocate copies of declaration vectors.
+struct LowerEnumPayloads {
+    enum_index: i64,
+    tag: i64,
+}
+
+fn lower_enum_resolve(ctx: LowerCtx, name: String, variant: String) -> LowerEnumPayloads {
+    let eidx: i64 = lctx_find_enum(ctx, name);
+    if eidx >= 0 {
+        let variants: Vec<String> = ctx.enum_variant_lists[eidx as u64];
+        let mut i: u64 = 0;
+        while i < variants.len() {
+            if variants[i] == variant {
+                return LowerEnumPayloads { enum_index: eidx, tag: i as i64 };
+            }
+            i = i + 1;
+        }
+    }
+    LowerEnumPayloads { enum_index: eidx, tag: -1 }
+}
+
+fn lower_enum_payload_ty(ctx: LowerCtx, layout: LowerEnumPayloads, index: i64) -> i64 {
+    let eidx: i64 = layout.enum_index;
+    let tag: i64 = layout.tag;
+    if eidx < 0 || eidx >= ctx.enum_variant_payload_tys.len() as i64 || tag < 0 { return -1; }
+    let variants: Vec<Vec<i64>> = ctx.enum_variant_payload_tys[eidx as u64];
+    if tag >= variants.len() as i64 { return -1; }
+    let payload: Vec<i64> = variants[tag as u64];
+    if index < 0 || index >= payload.len() as i64 { return -1; }
+    payload[index as u64]
+}
+
+fn lower_enum_payload_ast_tid(ctx: LowerCtx, layout: LowerEnumPayloads, index: i64) -> i64 {
+    let eidx: i64 = layout.enum_index;
+    let tag: i64 = layout.tag;
+    if eidx < 0 || eidx >= ctx.enum_variant_payload_ast_tids.len() as i64 || tag < 0 { return -1; }
+    let variants: Vec<Vec<i64>> = ctx.enum_variant_payload_ast_tids[eidx as u64];
+    if tag >= variants.len() as i64 { return -1; }
+    let payload: Vec<i64> = variants[tag as u64];
+    if index < 0 || index >= payload.len() as i64 { return -1; }
+    payload[index as u64]
+}
+
+// Builtin constructor dispatch has already selected the enum fallback. All
+// payloads are evaluated and consumed before the wrapper is allocated.
+fn lower_enum_construct(ctx: LowerCtx, eid: i64) -> i64 {
+    let a: AstArena = ctx.arena;
+    let origin: i64 = expr_span(a, eid);
+    let path_lid: i64 = expr_a(a, eid);
+    let fields_lid: i64 = expr_b(a, eid);
+    let path_len: i64 = list_len(a, path_lid);
+    let enum_name: String = if path_len > 0 { arena_str(a, list_get(a, path_lid, 0)) } else { String::from("") };
+    let variant_name: String = if path_len > 1 { arena_str(a, list_get(a, path_lid, 1)) } else { String::from("") };
+    let layout: LowerEnumPayloads = lower_enum_resolve(ctx, enum_name, variant_name);
+    let tag_val: i64 = layout.tag;
+    let n_payload: i64 = list_len(a, fields_lid);
+    let payload_values: Vec<i64> = Vec::new();
+    // The declaration decides the layout, exactly as it does for every read; a
+    // value whose lowered type disagrees then fails closed in codegen. Built-in
+    // Option/Result have no declaration, so their value types are used.
+    let payload_slot_tys: Vec<i64> = Vec::new();
+    let payload_slots: Vec<i64> = Vec::new();
+    let mut next_slot: i64 = 1;
+    let mut owns_linear: bool = vec_contains_str(ctx.linear_owner_names, enum_name);
+    let mut pvi: i64 = 0;
+    while pvi < n_payload {
+        let payload_eid0: i64 = list_get(a, fields_lid, pvi);
+        let payload_ty: i64 = lower_enum_payload_ty(ctx, layout, pvi);
+        let payload_ast_tid: i64 = lower_enum_payload_ast_tid(ctx, layout, pvi);
+        lctx_record_wide_expected_ast_context(ctx, a, payload_eid0, payload_ast_tid);
+        lctx_record_wide_control_flow_context(ctx, a, payload_eid0, payload_ty);
+        let mut payload_value: i64 = lower_consumed_expr(ctx, payload_eid0);
+        if payload_ty == ITY_I128() || payload_ty == ITY_U128() {
+            payload_value = lower_narrow_literal(
+                ctx, a, payload_eid0, payload_value, payload_ty
+            );
+        }
+        payload_values.push(payload_value);
+        let value_ty: i64 = lctx_inst_ty(ctx, payload_value);
+        let slot_ty: i64 = if payload_ty != -1 { payload_ty } else { value_ty };
+        payload_slot_tys.push(slot_ty);
+        payload_slots.push(next_slot);
+        next_slot = next_slot + lower_payload_slot_width(slot_ty);
+        if value_ty == ITY_LPTR() {
+            owns_linear = true;
+        }
+        pvi = pvi + 1;
+    }
+    let size: i64 = (1 + next_slot) * 8;
+    let alloc_args: Vec<i64> = Vec::new();
+    let alloc_ty: i64 = if owns_linear { ITY_LPTR() } else { ITY_PTR() };
+    let ptr_id: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), alloc_ty, alloc_args, IDATA_ALLOC_SIZE(), size, 8, String::from(""), origin);
+    lctx_tag(ctx, ptr_id, enum_name);
+    if n_payload > 0 {
+        let contextual_payload_ty: i64 = lctx_inst_ty(ctx, payload_values[0]);
+        if contextual_payload_ty == ITY_I128() || contextual_payload_ty == ITY_U128() {
+            if enum_name == String::from("Option") && variant_name == String::from("Some") {
+                lctx_tag_option_elem(ctx, ptr_id, contextual_payload_ty);
+            } else if enum_name == String::from("Result") &&
+                      (variant_name == String::from("Ok") || variant_name == String::from("Err")) {
+                let contextual_variants: Vec<i64> = Vec::new();
+                contextual_variants.push(-1);
+                contextual_variants.push(-1);
+                if tag_val >= 0 && tag_val < contextual_variants.len() as i64 {
+                    contextual_variants[tag_val as u64] = contextual_payload_ty;
+                }
+                lctx_tag_variant_payloads(ctx, ptr_id, contextual_variants);
+            }
+        }
+    }
+
+    let tag_args: Vec<i64> = Vec::new();
+    let tag_id: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), tag_args, IDATA_CONST_I64(), tag_val, 0, String::from(""), origin);
+    let fs_args: Vec<i64> = Vec::new();
+    fs_args.push(ptr_id);
+    fs_args.push(tag_id);
+    lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_FIELD(), 0, 0, String::from(""), origin);
+
+    let mut pi: i64 = 0;
+    while pi < n_payload {
+        let val_id: i64 = payload_values[pi as u64];
+        let pfs_args: Vec<i64> = Vec::new();
+        pfs_args.push(ptr_id);
+        pfs_args.push(val_id);
+        lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), pfs_args, lower_payload_field_dk(payload_slot_tys[pi as u64]), payload_slots[pi as u64], 0, String::from(""), origin);
+        pi = pi + 1;
+    }
+    return ptr_id;
+}
+
+// The selected arm owns its block, wrapper consumption and scope lifetime.
+// This operation owns payload reads, physical layout and binding metadata.
+fn lower_enum_bind_variant(ctx: LowerCtx, ptr_id: i64, pat_id: i64, origin: i64) {
+    let a: AstArena = ctx.arena;
+    let path: i64 = pat_a(a, pat_id);
+    let inner_lid: i64 = pat_b(a, pat_id);
+    let n: i64 = list_len(a, path);
+    let en: String = if n > 0 { arena_str(a, list_get(a, path, 0)) } else { String::from("") };
+    let vn: String = if n > 1 { arena_str(a, list_get(a, path, 1)) } else { String::from("") };
+    let layout: LowerEnumPayloads = lower_enum_resolve(ctx, en, vn);
+    let expected_tag: i64 = layout.tag;
+    let variant_payloads: Vec<i64> = lctx_get_variant_payloads(ctx, ptr_id);
+    let payload_ty: i64 = {
+        if expected_tag >= 0 && expected_tag < variant_payloads.len() as i64 && variant_payloads[expected_tag as u64] != -1 {
+            variant_payloads[expected_tag as u64]
+        } else {
+            lctx_get_option_elem_ty(ctx, ptr_id)
+        }
+    };
+    let n_inner: i64 = list_len(a, inner_lid);
+    let mut ii: i64 = 0;
+    let mut field_slot: i64 = 1;
+    while ii < n_inner {
+        let inner_pid: i64 = list_get(a, inner_lid, ii);
+        let inner_ptag: i64 = pat_tag(a, inner_pid);
+        let declared_ty: i64 = lower_enum_payload_ty(ctx, layout, ii);
+        if inner_ptag == PAT_IDENT() {
+            let name_sid: i64 = pat_a(a, inner_pid);
+            let pname: String = arena_str(a, name_sid);
+            let aggregate_struct: String = lctx_get_pattern_aggregate(ctx, inner_pid);
+            // The declaration knows a wide payload's width whatever the value's provenance.
+            let declared_wide: i64 = if lower_payload_slot_width(declared_ty) == 2 { declared_ty } else { -1 };
+            let checked_scalar: i64 = lctx_get_pattern_scalar_ty(ctx, inner_pid);
+            let field_ty: i64 = {
+                if aggregate_struct.len() > 0 && lctx_pattern_is_linear(ctx, inner_pid) == 1 {
+                    ITY_LPTR()
+                } else if aggregate_struct.len() > 0 {
+                    ITY_PTR()
+                } else if declared_wide != -1 {
+                    declared_wide
+                } else if checked_scalar != -1 {
+                    checked_scalar
+                } else if ii == 0 {
+                    payload_ty
+                } else {
+                    ITY_I64()
+                }
+            };
+            let fg2_args: Vec<i64> = Vec::new();
+            fg2_args.push(ptr_id);
+            let field_val: i64 = lctx_emit(ctx, IOP_FIELD_GET(), field_ty, fg2_args, lower_payload_field_dk(field_ty), field_slot, 0, String::from(""), origin);
+            lctx_apply_pattern_aggregate_metadata(
+                ctx, field_val, inner_pid, aggregate_struct
+            );
+            lctx_define(ctx, pname, field_val);
+        }
+        field_slot = field_slot + lower_payload_slot_width(declared_ty);
+        ii = ii + 1;
+    }
+}
