@@ -1,0 +1,280 @@
+module TestLowerEnum
+
+use ast
+use diag
+use lexer
+use parser
+use ir
+use lower
+use lower_enum
+
+fn enum_test_ctx() -> LowerCtx {
+    lctx_new(String::from("payloads"), ITY_UNIT(), 0, arena_new(), Vec::new())
+}
+
+fn enum_test_expr(ctx: LowerCtx, text: String) -> i64 {
+    let source: String = String::from("module Payloads\nfn f() { let result = ");
+    source.push_str(text);
+    source.push_str(String::from("; }"));
+    let parsed: Module = parse_module_into(lex(source), ctx.arena, diag_ctx_new(), String::from("payloads.vow"));
+    let a: AstArena = ctx.arena;
+    let body: i64 = fn_body_bid(a, item_id(parsed.items[0]));
+    stmt_c(a, list_get(a, blk_stmts(a, body), 0))
+}
+
+fn enum_test_register(ctx: LowerCtx, name: String, types: Vec<i64>) {
+    ctx.enum_names.push(name);
+    let names: Vec<String> = Vec::new();
+    names.push(String::from("Empty"));
+    names.push(String::from("V"));
+    ctx.enum_variant_lists.push(names);
+    let variants: Vec<Vec<i64>> = Vec::new();
+    variants.push(Vec::new());
+    variants.push(types);
+    ctx.enum_variant_payload_tys.push(variants);
+    ctx.enum_variant_payload_ast_tids.push(Vec::new());
+}
+
+fn enum_test_types() -> Vec<i64> {
+    let types: Vec<i64> = Vec::new();
+    types.push(ITY_I64());
+    types.push(ITY_I128());
+    types.push(ITY_U128());
+    types.push(ITY_I16());
+    types.push(ITY_PTR());
+    types
+}
+
+fn enum_test_arg(ctx: LowerCtx, name: String, ty: i64) -> i64 {
+    let id: i64 = lctx_emit(ctx, IOP_GET_ARG(), ty, Vec::new(), IDATA_NONE(), 0, 0, String::from(""), 0);
+    lctx_define(ctx, name, id);
+    id
+}
+
+fn enum_test_insts(ctx: LowerCtx) -> Vec<IrInst> {
+    let f: IrFunction = ctx.func;
+    let out: Vec<IrInst> = Vec::new();
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let block: IrBlock = f.blocks[b];
+        let mut i: u64 = 0;
+        while i < block.insts.len() {
+            out.push(block.insts[i]);
+            i = i + 1;
+        }
+        b = b + 1;
+    }
+    out
+}
+
+// Cross the same operation interface as construction and selected match arms.
+fn enum_test_construct(ctx: LowerCtx, eid: i64) -> i64 {
+    lower_enum_construct(ctx, eid)
+}
+
+fn enum_test_bind(ctx: LowerCtx, wrapper: i64, eid: i64) {
+    lctx_push_scope(ctx);
+    lower_enum_bind_variant(ctx, wrapper, enum_test_pattern(ctx, eid), expr_span(ctx.arena, eid));
+    lctx_pop_scope(ctx);
+}
+
+fn check_enum_constructor() -> i64 {
+    let ctx: LowerCtx = enum_test_ctx();
+    enum_test_register(ctx, String::from("Mix"), enum_test_types());
+    enum_test_arg(ctx, String::from("a"), ITY_I64());
+    enum_test_arg(ctx, String::from("b"), ITY_U128());
+    enum_test_arg(ctx, String::from("tail"), ITY_I16());
+    let child: i64 = enum_test_arg(ctx, String::from("child"), ITY_LPTR());
+    let eid: i64 = enum_test_expr(ctx, String::from("Mix::V(a, { 9 }, b, tail, child)"));
+    let ptr: i64 = enum_test_construct(ctx, eid);
+    if lctx_inst_ty(ctx, ptr) != ITY_LPTR() { return 1; }
+    if lctx_get_tag(ctx, ptr) != String::from("Mix") { return 2; }
+    let slots: Vec<i64> = Vec::new();
+    slots.push(0); slots.push(1); slots.push(2); slots.push(4); slots.push(6); slots.push(7);
+    let insts: Vec<IrInst> = enum_test_insts(ctx);
+    let mut stores: u64 = 0;
+    let mut consumed: i64 = 0;
+    let mut allocated: bool = false;
+    let mut i: u64 = 0;
+    while i < insts.len() {
+        let inst: IrInst = insts[i];
+        if inst.op == IOP_LINEAR_CONSUME() {
+            if allocated || inst.args[0] != child { return 3; }
+            let a: AstArena = ctx.arena;
+            let payload_span: i64 = expr_span(a, list_get(a, expr_b(a, eid), 4));
+            if inst.ostart != span_unpack_start(payload_span) || inst.olen != span_unpack_len(payload_span) { return 12; }
+            consumed = consumed + 1;
+        }
+        if inst.op == IOP_REGION_ALLOC() {
+            if inst.id != ptr || inst.dv != 72 || inst.dv2 != 8 { return 4; }
+            if consumed != 1 { return 5; }
+            allocated = true;
+        }
+        if inst.op == IOP_FIELD_SET() {
+            if !allocated || stores >= slots.len() || inst.dv != slots[stores] { return 6; }
+            if (inst.dk == IDATA_WIDE_SLOT()) != (stores == 2 || stores == 3) { return 7; }
+            if inst.ostart != span_unpack_start(expr_span(ctx.arena, eid)) ||
+               inst.olen != span_unpack_len(expr_span(ctx.arena, eid)) { return 8; }
+            if stores == 0 {
+                if inst.args[0] != ptr { return 9; }
+            } else if stores == 2 && lctx_inst_ty(ctx, inst.args[1]) != ITY_I128() { return 10; }
+            stores = stores + 1;
+        }
+        i = i + 1;
+    }
+    if !allocated || stores != slots.len() || consumed != 1 { return 11; }
+    0
+}
+
+fn enum_test_pattern(ctx: LowerCtx, eid: i64) -> i64 {
+    let a: AstArena = ctx.arena;
+    list_get(a, expr_b(a, eid), 0)
+}
+
+fn enum_test_pattern_facts(ctx: LowerCtx) {
+    let a: AstArena = ctx.arena;
+    let mut i: u64 = 0;
+    while i < a.pat_data.len() / 4 {
+        ctx.pat_scalar_tys.push(-1);
+        ctx.pat_aggregate_names.push(String::from(""));
+        ctx.pat_aggregate_linear.push(0);
+        i = i + 1;
+    }
+}
+
+fn check_enum_binding() -> i64 {
+    let ctx: LowerCtx = enum_test_ctx();
+    enum_test_register(ctx, String::from("Mix"), enum_test_types());
+    let wrapper: i64 = enum_test_arg(ctx, String::from("base"), ITY_PTR());
+    let eid: i64 = enum_test_expr(ctx, String::from("match base { Mix::V(x, _, y, z, child) => { 0 } }"));
+    let a: AstArena = ctx.arena;
+    let inner: i64 = pat_b(a, enum_test_pattern(ctx, eid));
+    enum_test_pattern_facts(ctx);
+    ctx.pat_scalar_tys[list_get(a, inner, 0) as u64] = ITY_I8();
+    ctx.pat_scalar_tys[list_get(a, inner, 2) as u64] = ITY_I16();
+    let child_pid: i64 = list_get(a, inner, 4);
+    ctx.pat_aggregate_names[child_pid as u64] = String::from("Widget");
+    ctx.pat_aggregate_linear[child_pid as u64] = 1;
+    enum_test_bind(ctx, wrapper, eid);
+    let insts: Vec<IrInst> = enum_test_insts(ctx);
+    let mut reads: i64 = 0;
+    let mut i: u64 = 0;
+    while i < insts.len() {
+        let inst: IrInst = insts[i];
+        if inst.op == IOP_FIELD_GET() && inst.dv != 0 {
+            if inst.args[0] != wrapper { return 20; }
+            if reads == 0 && (inst.ty != ITY_I8() || inst.dv != 1 || inst.dk != IDATA_FIELD()) { return 21; }
+            if reads == 1 && (inst.ty != ITY_U128() || inst.dv != 4 || inst.dk != IDATA_WIDE_SLOT()) { return 22; }
+            if reads == 2 && (inst.ty != ITY_I64() || inst.dv != 6 || inst.dk != IDATA_FIELD()) { return 23; }
+            if reads == 3 {
+                if inst.ty != ITY_LPTR() || inst.dv != 7 || inst.dk != IDATA_FIELD() { return 24; }
+                if lctx_get_tag(ctx, inst.id) != String::from("Widget") { return 25; }
+            }
+            reads = reads + 1;
+        }
+        i = i + 1;
+    }
+    if reads != 4 { return 26; }
+    0
+}
+
+fn check_enum_fallbacks() -> i64 {
+    let ctx: LowerCtx = enum_test_ctx();
+    let eid: i64 = enum_test_expr(ctx, String::from("Unknown::V(4u128, 7)"));
+    let ptr: i64 = enum_test_construct(ctx, eid);
+    let insts: Vec<IrInst> = enum_test_insts(ctx);
+    let mut i: u64 = 0;
+    while i < insts.len() {
+        let inst: IrInst = insts[i];
+        if inst.id == ptr && (inst.dv != 40 || inst.ty != ITY_PTR()) { return 30; }
+        if inst.op == IOP_FIELD_SET() && inst.dv == 0 {
+            let tag: i64 = inst.args[1];
+            let mut j: u64 = 0;
+            while j < insts.len() {
+                if insts[j].id == tag && insts[j].dv != -1 { return 31; }
+                j = j + 1;
+            }
+        }
+        i = i + 1;
+    }
+    let empty: i64 = enum_test_construct(ctx, enum_test_expr(ctx, String::from("Unknown::Empty")));
+    let all: Vec<IrInst> = enum_test_insts(ctx);
+    i = 0;
+    while i < all.len() {
+        if all[i].id == empty && all[i].dv != 16 { return 32; }
+        i = i + 1;
+    }
+    let option: i64 = enum_test_construct(ctx, enum_test_expr(ctx, String::from("Option::Some(9i128)")));
+    if lctx_get_option_elem_ty(ctx, option) != ITY_I128() { return 33; }
+    let result: i64 = enum_test_construct(ctx, enum_test_expr(ctx, String::from("Result::Err(9u128)")));
+    // A missing Result declaration retains the original unknown-tag fallback.
+    let variants: Vec<i64> = lctx_get_variant_payloads(ctx, result);
+    if variants.len() != 2 || variants[0] != -1 || variants[1] != -1 { return 34; }
+    ctx.enum_names.push(String::from("Result"));
+    let names: Vec<String> = Vec::new();
+    names.push(String::from("Ok")); names.push(String::from("Err"));
+    ctx.enum_variant_lists.push(names);
+    ctx.enum_variant_payload_tys.push(Vec::new());
+    ctx.enum_variant_payload_ast_tids.push(Vec::new());
+    let known: i64 = enum_test_construct(ctx, enum_test_expr(ctx, String::from("Result::Err(9u128)")));
+    let known_types: Vec<i64> = lctx_get_variant_payloads(ctx, known);
+    if known_types.len() != 2 || known_types[0] != -1 || known_types[1] != ITY_U128() { return 35; }
+    0
+}
+
+fn check_enum_binding_precedence() -> i64 {
+    let ctx: LowerCtx = enum_test_ctx();
+    enum_test_register(ctx, String::from("Mix"), enum_test_types());
+    let wrapper: i64 = enum_test_arg(ctx, String::from("base"), ITY_PTR());
+    let eid: i64 = enum_test_expr(ctx, String::from("match base { Mix::V(_, owned, _, _, _) => { 0 } }"));
+    let a: AstArena = ctx.arena;
+    let inner: i64 = pat_b(a, enum_test_pattern(ctx, eid));
+    enum_test_pattern_facts(ctx);
+    let pid: i64 = list_get(a, inner, 1);
+    ctx.pat_aggregate_names[pid as u64] = String::from("Widget");
+    ctx.pat_aggregate_linear[pid as u64] = 1;
+    enum_test_bind(ctx, wrapper, eid);
+    let insts: Vec<IrInst> = enum_test_insts(ctx);
+    let mut i: u64 = 0;
+    while i < insts.len() {
+        let inst: IrInst = insts[i];
+        if inst.op == IOP_FIELD_GET() && inst.dv == 2 {
+            if inst.ty != ITY_LPTR() || inst.dk != IDATA_FIELD() { return 40; }
+            if lctx_get_tag(ctx, inst.id) != String::from("Widget") { return 41; }
+            return 0;
+        }
+        i = i + 1;
+    }
+    42
+}
+
+fn check_enum_missing_binding() -> i64 {
+    let ctx: LowerCtx = enum_test_ctx();
+    let wrapper: i64 = enum_test_arg(ctx, String::from("base"), ITY_PTR());
+    lctx_tag_option_elem(ctx, wrapper, ITY_I128());
+    let eid: i64 = enum_test_expr(ctx, String::from("match base { Unknown::V(first, _, last) => { 0 } }"));
+    enum_test_bind(ctx, wrapper, eid);
+    let insts: Vec<IrInst> = enum_test_insts(ctx);
+    let mut reads: i64 = 0;
+    let mut i: u64 = 0;
+    while i < insts.len() {
+        let inst: IrInst = insts[i];
+        if inst.op == IOP_FIELD_GET() && inst.dv != 0 {
+            if reads == 0 && (inst.dv != 1 || inst.ty != ITY_I128() || inst.dk != IDATA_WIDE_SLOT()) { return 50; }
+            if reads == 1 && (inst.dv != 3 || inst.ty != ITY_I64() || inst.dk != IDATA_FIELD()) { return 51; }
+            reads = reads + 1;
+        }
+        i = i + 1;
+    }
+    if reads != 2 { return 52; }
+    0
+}
+
+fn main() -> i32 {
+    let mut code: i64 = check_enum_constructor();
+    if code == 0 { code = check_enum_binding(); }
+    if code == 0 { code = check_enum_fallbacks(); }
+    if code == 0 { code = check_enum_binding_precedence(); }
+    if code == 0 { code = check_enum_missing_binding(); }
+    i64_to_i32_wrap(code)
+}

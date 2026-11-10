@@ -1,6 +1,9 @@
 mod branch_join;
 #[cfg(test)]
 mod branch_join_tests;
+mod enum_payload;
+#[cfg(test)]
+mod enum_payload_tests;
 mod fields;
 #[cfg(test)]
 mod fields_tests;
@@ -962,14 +965,6 @@ fn variant_payload_ty(ctx: &LowerCtx, inst: InstId, tag: i64) -> Option<Ty> {
         .flatten()
 }
 
-fn declared_payload_tys(ctx: &LowerCtx, enum_name: &str, tag: i64) -> Vec<Ty> {
-    usize::try_from(tag)
-        .ok()
-        .and_then(|tag| ctx.enum_variant_payload_tys.get(enum_name)?.get(tag))
-        .cloned()
-        .unwrap_or_default()
-}
-
 fn payload_slot_width(ty: Ty) -> u32 {
     if matches!(ty, Ty::I128 | Ty::U128) {
         2
@@ -984,14 +979,6 @@ fn payload_field_data(ty: Ty, slot: u32) -> InstData {
     } else {
         InstData::FieldIndex(slot)
     }
-}
-
-fn payload_slot(payload_tys: &[Ty], index: usize) -> u32 {
-    1 + payload_tys
-        .iter()
-        .take(index)
-        .map(|ty| payload_slot_width(*ty))
-        .sum::<u32>()
 }
 
 fn field_type_slot_width(type_name: &str) -> u32 {
@@ -1019,35 +1006,10 @@ fn struct_field_data(ctx: &LowerCtx, struct_name: &str, index: usize) -> InstDat
     payload_field_data(field_ty, struct_field_slot(ctx, struct_name, index))
 }
 
-/// Declared 128-bit width of an enum variant's payload slot, by enum name.
-///
-/// The per-instruction payload maps only know a width when the scrutinee was
-/// built in the same function, so a wide payload read out of a parameter would
-/// lower as `I64` and slip past the wide-aggregate gates in codegen and the C
-/// emitters — truncating the value and letting a contract over it be reported
-/// `Verified` against the 8-byte model. The declaration knows the width whatever
-/// the value's provenance. Narrow widths are deliberately not returned: they
-/// already lower correctly, and widening them here would change existing
-/// `FieldGet` types.
-fn declared_wide_payload_ty(
-    ctx: &LowerCtx,
-    enum_name: &str,
-    tag: i64,
-    payload_index: usize,
-) -> Option<Ty> {
-    let tag = usize::try_from(tag).ok()?;
-    ctx.enum_variant_payload_tys
-        .get(enum_name)
-        .and_then(|variants| variants.get(tag))
-        .and_then(|payloads| payloads.get(payload_index))
-        .copied()
-        .filter(|ty| matches!(ty, Ty::I128 | Ty::U128))
-}
-
 /// `Result<T, E>` payload types that diverge from the speculative `i64`
 /// lowering width, indexed by variant tag (`Ok` = 0, `Err` = 1).
 ///
-/// `Result` is built in, so [`declared_wide_payload_ty`] finds nothing for it —
+/// `Result` is built in, so the enum payload module has no declaration for it —
 /// its payload widths come from the instantiation rather than a declaration.
 /// Returns `None` when neither payload diverges, so `i64`/`u64`-identical
 /// payloads keep relying on the existing contextual-widening path.
@@ -2465,109 +2427,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ctx.inst_struct_type.insert(result, "Vec".to_string());
                 return result;
             }
-            let tag = ctx
-                .enum_variant_map
-                .get(enum_name)
-                .and_then(|vs| vs.iter().position(|v| v == variant_name))
-                .unwrap_or(0) as i64;
-            let payload_tys = declared_payload_tys(ctx, enum_name, tag);
-            let payload_ast_types = ctx
-                .enum_variant_payload_ast_types
-                .get(enum_name)
-                .and_then(|variants| variants.get(tag as usize))
-                .cloned()
-                .unwrap_or_default();
-            // Evaluate and transfer payloads before allocating the wrapper so
-            // built-in Option/Result constructors can inherit linear ownership
-            // from their type-erased payload expression.
-            let payload_values: Vec<InstId> = fields
-                .iter()
-                .enumerate()
-                .map(|(index, field)| {
-                    if let Some(expected) = payload_ast_types.get(index) {
-                        record_wide_expected_ast_context(ctx, field, expected);
-                    }
-                    if let Some(ty @ (Ty::I128 | Ty::U128)) = payload_tys.get(index).copied() {
-                        record_wide_control_flow_context(ctx, field, ty);
-                    }
-                    let original = lower_consumed_expr(ctx, field);
-                    match payload_tys.get(index).copied() {
-                        Some(ty @ (Ty::I128 | Ty::U128)) => {
-                            lower_narrow_literal(ctx, field, original, ty)
-                        }
-                        _ => original,
-                    }
-                })
-                .collect();
-            let contextual_wide_payload_ty = payload_values
-                .first()
-                .map(|value| ctx.inst_ty(*value))
-                .filter(|ty| matches!(ty, Ty::I128 | Ty::U128));
-            let owns_linear = ctx.linear_owner_names.contains(enum_name)
-                || payload_values
-                    .iter()
-                    .any(|value| ctx.inst_ty(*value) == Ty::LinearPtr);
-            // The declaration decides the layout, exactly as it does for every
-            // read; a value whose lowered type disagrees then fails closed in
-            // codegen instead of being stored with a different slot map.
-            let value_tys: Vec<Ty> = payload_values
-                .iter()
-                .enumerate()
-                .map(|(i, v)| {
-                    payload_tys
-                        .get(i)
-                        .copied()
-                        .unwrap_or_else(|| ctx.inst_ty(*v))
-                })
-                .collect();
-            let size = (payload_slot(&value_tys, value_tys.len()) + 1) * 8;
-            let ptr_id = ctx.emit(
-                Opcode::RegionAlloc,
-                if owns_linear { Ty::LinearPtr } else { Ty::Ptr },
-                vec![],
-                InstData::AllocSize { size, align: 8 },
-                span,
-            );
-            ctx.inst_struct_type.insert(ptr_id, enum_name.to_string());
-            if enum_name == "Option" && variant_name == "Some" {
-                if let Some(payload_ty) = contextual_wide_payload_ty {
-                    ctx.inst_option_elem_ty.insert(ptr_id, payload_ty);
-                }
-            } else if enum_name == "Result"
-                && matches!(variant_name, "Ok" | "Err")
-                && let Some(payload_ty) = contextual_wide_payload_ty
-            {
-                let variant_count = ctx.enum_variant_map.get(enum_name).map_or(2, Vec::len);
-                let mut variant_tys = vec![None; variant_count];
-                if let Some(slot) = variant_tys.get_mut(tag as usize) {
-                    *slot = Some(payload_ty);
-                }
-                ctx.inst_variant_payload_tys.insert(ptr_id, variant_tys);
-            }
-            let tag_val = ctx.emit(
-                Opcode::ConstI64,
-                Ty::I64,
-                vec![],
-                InstData::ConstI64(tag),
-                span,
-            );
-            ctx.emit(
-                Opcode::FieldSet,
-                Ty::Unit,
-                vec![ptr_id, tag_val],
-                InstData::FieldIndex(0),
-                span,
-            );
-            for (i, val_id) in payload_values.into_iter().enumerate() {
-                ctx.emit(
-                    Opcode::FieldSet,
-                    Ty::Unit,
-                    vec![ptr_id, val_id],
-                    payload_field_data(value_tys[i], payload_slot(&value_tys, i)),
-                    span,
-                );
-            }
-            ptr_id
+            enum_payload::lower_constructor(ctx, expr)
         }
         ExprKind::Match { scrutinee, arms } => {
             // The selected arm consumes an owned wrapper. Delaying the transfer
@@ -2600,7 +2460,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             while let Some((arm_index, arm)) = arm_iter.next() {
                 let is_last = arm_iter.peek().is_none();
                 match &arm.pattern.kind {
-                    PatKind::EnumVariant { path, inner } => {
+                    PatKind::EnumVariant { path, .. } => {
                         let enum_name = path.first().map(|s| s.as_str()).unwrap_or("");
                         let variant_name = path.get(1).map(|s| s.as_str()).unwrap_or("");
                         let expected_tag = ctx
@@ -2640,54 +2500,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         ctx.switch_to_block(arm_block);
                         ctx.emit_linear_consume_if_needed(ptr_id, span);
                         ctx.push_scope();
-                        // Narrow scalar Option<T> payloads carry their real IR type.
-                        // Aggregate payload metadata is tracked separately so the binding
-                        // retains the struct/Vec tag needed by field and index lowering.
-                        let payload_ty = variant_payload_ty(ctx, ptr_id, expected_tag)
-                            .or_else(|| ctx.inst_option_elem_ty.get(&ptr_id).copied())
-                            .unwrap_or(Ty::I64);
-                        let declared_payload_tys =
-                            declared_payload_tys(ctx, enum_name, expected_tag);
-                        for (i, inner_pat) in inner.iter().enumerate() {
-                            if let PatKind::Ident { name, .. } = &inner_pat.kind {
-                                let aggregate = ctx
-                                    .pattern_aggregates
-                                    .get(&(inner_pat as *const _ as usize))
-                                    .cloned();
-                                let declared_wide =
-                                    declared_wide_payload_ty(ctx, enum_name, expected_tag, i);
-                                let checked_scalar =
-                                    checked_payload_ty(ctx, inner_pat as *const _ as usize);
-                                let field_ty =
-                                    if aggregate.as_ref().is_some_and(|info| info.is_linear) {
-                                        Ty::LinearPtr
-                                    } else if aggregate.is_some() {
-                                        Ty::Ptr
-                                    } else if let Some(wide) = declared_wide {
-                                        wide
-                                    } else if let Some(scalar) = checked_scalar {
-                                        scalar
-                                    } else if i == 0 {
-                                        payload_ty
-                                    } else {
-                                        Ty::I64
-                                    };
-                                let field_val = ctx.emit(
-                                    Opcode::FieldGet,
-                                    field_ty,
-                                    vec![ptr_id],
-                                    payload_field_data(
-                                        field_ty,
-                                        payload_slot(&declared_payload_tys, i),
-                                    ),
-                                    span,
-                                );
-                                if let Some(info) = aggregate {
-                                    apply_pattern_aggregate_metadata(ctx, field_val, info);
-                                }
-                                ctx.define(name.clone(), field_val);
-                            }
-                        }
+                        enum_payload::bind_variant(ctx, ptr_id, &arm.pattern, span);
                         let arm_result = lower_value_expr(ctx, &arm.body);
                         ctx.pop_scope();
 
