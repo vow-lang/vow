@@ -1,0 +1,188 @@
+module TestVcOperands
+
+use ir
+use vc_gate
+use vc_exec
+use vc_query
+use vc_smt
+use vc_term
+use vc_operands
+use ir_dominance
+use tests.builders
+
+fn pair(a: i64, b: i64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    out.push(a);
+    out.push(b);
+    out
+}
+
+fn operand_function(insts: Vec<IrInst>, ty: i64) -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ty);
+    mk_function(0, String::from("operands"), params, ty, blocks)
+}
+
+// Pin the existing gate and executor before moving their shared policy. Sparse
+// ids and both operand orders make provenance independent of instruction order.
+fn check_existing_queries() -> i64 {
+    let mut unsigned: i64 = 0;
+    while unsigned < 2 {
+        let ty: i64 = { if unsigned == 0 { ITY_I128() } else { ITY_U128() } };
+        let mut reversed: i64 = 0;
+        while reversed < 2 {
+            let insts: Vec<IrInst> = Vec::new();
+            insts.push(mk_inst_arg(2, ty, 0));
+            insts.push(mk_inst_const_i64(5, -9223372036854775807 - 1));
+            let args: Vec<i64> = { if reversed == 0 { pair(2, 5) } else { pair(5, 2) } };
+            insts.push(mk_inst(7, IOP_LE(), ITY_BOOL(), args));
+            let pred: Vec<i64> = Vec::new();
+            pred.push(7);
+            insts.push(ir_inst_new(8, IOP_VOW_ENS(), ITY_UNIT(), pred, IDATA_VOW_ID(), 0, 0, String::from("")));
+            insts.push(mk_inst_return(9, 2));
+            let f: IrFunction = operand_function(insts, ty);
+            if vc_skip_reason(f).len() != 0 { return 1; }
+            let cs: VcClaims = vc_claims(f);
+            let text: String = vc_smt_render(cs.arena, cs.header);
+            let literal: String = { if unsigned == 0 {
+                String::from("#xffffffffffffffff8000000000000000")
+            } else { String::from("#x00000000000000008000000000000000") } };
+            let op: String = { if unsigned == 0 { String::from("(bvsle ") } else { String::from("(bvule ") } };
+            let expected: String = String::from(op);
+            if reversed == 0 {
+                expected.push_str(String::from("p0 "));
+                expected.push_str(literal);
+            } else {
+                expected.push_str(literal);
+                expected.push_str(String::from(" p0"));
+            }
+            expected.push_str(String::from(")"));
+            if !text.contains(expected) { return 2; }
+            reversed = reversed + 1;
+        }
+        unsigned = unsigned + 1;
+    }
+    0
+}
+
+// A typed nonliteral mismatch must still fail closed, for both arithmetic and
+// comparisons; a folded value must not gain contextual-literal provenance.
+fn check_existing_rejections() -> i64 {
+    let mut cmp: i64 = 0;
+    while cmp < 2 {
+        let insts: Vec<IrInst> = Vec::new();
+        insts.push(mk_inst_arg(0, ITY_U64(), 0));
+        insts.push(mk_inst_const_i64(1, 0));
+        insts.push(mk_inst_const_i64(2, 1));
+        insts.push(mk_inst(3, IOP_WSUB(), ITY_I64(), pair(1, 2)));
+        if cmp == 0 { insts.push(mk_inst(4, IOP_WADD(), ITY_U64(), pair(0, 3))); }
+        else { insts.push(mk_inst(4, IOP_LE(), ITY_BOOL(), pair(0, 3))); }
+        insts.push(mk_inst_return(5, 0));
+        if vc_skip_reason(operand_function(insts, ITY_U64())).len() == 0 { return 3; }
+        cmp = cmp + 1;
+    }
+    0
+}
+
+fn facts_function() -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_U64(), 0));
+    insts.push(mk_inst_const_i64(1, -5));
+    insts.push(mk_inst_arg(2, ITY_I32(), 1));
+    insts.push(mk_inst_arg(3, ITY_BOOL(), 2));
+    insts.push(ir_inst_new(4, IOP_CONST_I32(), ITY_I32(), Vec::new(), IDATA_CONST_I32(), 7, 0, String::from("")));
+    insts.push(ir_inst_new(5, IOP_CONST_I64(), ITY_U64(), Vec::new(), IDATA_CONST_I64(), 7, 0, String::from("")));
+    let f: IrFunction = operand_function(insts, ITY_U64());
+    let tail: Vec<IrInst> = Vec::new();
+    tail.push(mk_inst_const_i64(8, -9223372036854775807 - 1));
+    f.blocks.push(mk_block(1, tail));
+    f
+}
+
+fn comparison(a: i64, b: i64) -> IrInst {
+    mk_inst(9, IOP_LE(), ITY_BOOL(), pair(a, b))
+}
+
+fn check_type_policy() -> i64 {
+    let f: IrFunction = facts_function();
+    let operands: VcOperands = vc_operands_new(f, vc_ty_table(f));
+    if vc_operands_cmp_ty(operands, comparison(0, 1)) != ITY_U64() { return 10; }
+    if vc_operands_cmp_ty(operands, comparison(1, 0)) != ITY_U64() { return 11; }
+    if vc_operands_cmp_ty(operands, comparison(0, 2)) != -1 { return 12; }
+    if vc_operands_cmp_ty(operands, comparison(0, 4)) != -1 { return 13; }
+    if vc_operands_cmp_ty(operands, comparison(3, 3)) != ITY_BOOL() { return 14; }
+    if vc_operands_cmp_ty(operands, comparison(0, 3)) != -1 { return 15; }
+    if !vc_operands_accepts(operands, comparison(0, 1), 1, ITY_U8()) { return 16; }
+    if vc_operands_accepts(operands, comparison(0, 2), 1, ITY_U64()) { return 17; }
+    if vc_operands_accepts(operands, comparison(0, 5), 1, ITY_I128()) { return 18; }
+    if vc_operands_accepts(operands, comparison(0, 1), 1, ITY_BOOL()) { return 19; }
+    if !vc_operands_accepts(operands, comparison(3, 3), 0, ITY_BOOL()) { return 20; }
+    if !vc_operands_accepts(operands, comparison(0, 8), 1, ITY_I128()) { return 21; }
+    if vc_operands_accepts(operands, comparison(0, 6), 1, ITY_U8()) { return 22; }
+    if vc_operands_accepts(operands, comparison(0, -1), 1, ITY_U8()) { return 23; }
+    if vc_operands_accepts(operands, comparison(0, 99), 1, ITY_U8()) { return 24; }
+    if vc_operands_accepts(operands, comparison(0, 1), 2, ITY_U8()) { return 25; }
+    0
+}
+
+fn check_term_policy() -> i64 {
+    let f: IrFunction = facts_function();
+    let tys: Vec<i64> = vc_ty_table(f);
+    let operands: VcOperands = vc_operands_new(f, tys);
+    let ar: VcArena = vc_arena_new();
+    let terms: Vec<i64> = dom_fill(tys.len(), -1);
+    terms[0] = vc_tm_var(ar, String::from("x"));
+    terms[1] = vc_tm_bv(ar, 64, -5, 0);
+    terms[2] = vc_tm_var(ar, String::from("y"));
+    terms[4] = vc_tm_bv(ar, 32, 7, 0);
+    terms[8] = vc_tm_bv(ar, 64, -9223372036854775807 - 1, 0);
+    if vc_operands_term_at(operands, ar, terms, ITY_I64(), 1) != terms[1] { return 30; }
+    if vc_operands_term_at(operands, ar, terms, ITY_I128(), 0) != terms[0] { return 31; }
+    if vc_operands_term_at(operands, ar, terms, ITY_I128(), 4) != terms[4] { return 32; }
+    if vc_term_text(ar, vc_operands_term_at(operands, ar, terms, ITY_I128(), 1)) != String::from("#xfffffffffffffffffffffffffffffffb") { return 33; }
+    if vc_term_text(ar, vc_operands_term_at(operands, ar, terms, ITY_U128(), 1)) != String::from("#x0000000000000000fffffffffffffffb") { return 34; }
+    if vc_term_text(ar, vc_operands_term_at(operands, ar, terms, ITY_U8(), 1)) != String::from("#xfb") { return 35; }
+    if vc_term_text(ar, vc_operands_term_at(operands, ar, terms, ITY_I128(), 8)) != String::from("#xffffffffffffffff8000000000000000") { return 36; }
+    if vc_term_text(ar, vc_operands_term_at(operands, ar, terms, ITY_U128(), 8)) != String::from("#x00000000000000008000000000000000") { return 37; }
+    0
+}
+
+fn map_read(key: i64, btree: bool) -> IrInst {
+    let name: String = { if btree { String::from("__vow_btreemap_contains") } else { String::from("__vow_map_contains") } };
+    mk_inst_call_extern(9, ITY_BOOL(), pair(0, key), name)
+}
+
+fn check_key_policy() -> i64 {
+    let f: IrFunction = facts_function();
+    let tys: Vec<i64> = vc_ty_table(f);
+    let operands: VcOperands = vc_operands_new(f, tys);
+    let ar: VcArena = vc_arena_new();
+    let terms: Vec<i64> = dom_fill(tys.len(), -1);
+    terms[0] = vc_tm_var(ar, String::from("wide"));
+    terms[1] = vc_tm_bv(ar, 64, -5, 0);
+    terms[2] = vc_tm_var(ar, String::from("narrow"));
+    terms[3] = vc_tm_var(ar, String::from("flag"));
+    if vc_operands_map_key_bits(operands, ar, terms, map_read(0, false)) != 64 { return 40; }
+    if vc_operands_map_key_bits(operands, ar, terms, map_read(2, false)) != 32 { return 41; }
+    if vc_operands_map_key_bits(operands, ar, terms, map_read(3, false)) != 1 { return 42; }
+    if vc_operands_map_key_bits(operands, ar, terms, map_read(1, false)) != -1 { return 43; }
+    terms[2] = vc_tm_app2(ar, VC_OP_BVSUB(), vc_tm_bv(ar, 32, 0, 0), vc_tm_bv(ar, 32, 1, 0));
+    if vc_operands_map_key_bits(operands, ar, terms, map_read(2, false)) != -1 { return 44; }
+    if vc_operands_accepts(operands, comparison(0, 2), 1, ITY_U64()) { return 45; }
+    if vc_operands_map_key_bits(operands, ar, terms, map_read(1, true)) != 64 { return 46; }
+    terms[3] = vc_tm_bool_const(ar, true);
+    if vc_operands_map_key_bits(operands, ar, terms, map_read(3, false)) != 1 { return 47; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let mut r: i64 = check_existing_queries();
+    if r == 0 { r = check_existing_rejections(); }
+    if r == 0 { r = check_type_policy(); }
+    if r == 0 { r = check_term_policy(); }
+    if r == 0 { r = check_key_policy(); }
+    if r != 0 { print_i64(r); return 1; }
+    0
+}
