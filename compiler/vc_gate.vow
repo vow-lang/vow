@@ -5,6 +5,7 @@ use ir_printer
 use ir_dominance
 use vc_ops
 use vc_int
+use vc_operands
 use vc_fp
 use vc_cfg
 use vc_loops
@@ -85,54 +86,6 @@ fn vc_ty_table(f: IrFunction) -> Vec<i64> {
         bi = bi + 1;
     }
     tys
-}
-
-// 1 for every value defined by an `i64` literal (`ConstI64[i64]`), else 0. A bare
-// literal lowers to `i64` even beside another integer type (a comparison, an
-// arithmetic clause such as `result == x + 1` on a `u64`, a saturating `u8` call
-// argument); the checker has range-checked it, so it is read at the other type.
-fn vc_literal_table(f: IrFunction, tys: Vec<i64>) -> Vec<i64> {
-    let lits: Vec<i64> = Vec::new();
-    let mut k: u64 = 0;
-    while k < tys.len() {
-        lits.push(0);
-        k = k + 1;
-    }
-    let mut bi: u64 = 0;
-    while bi < f.blocks.len() {
-        let blk: IrBlock = f.blocks[bi];
-        let mut ii: u64 = 0;
-        while ii < blk.insts.len() {
-            let inst: IrInst = blk.insts[ii];
-            if inst.id >= 0 && inst.op == IOP_CONST_I64() && inst.ty == ITY_I64() {
-                lits[inst.id as u64] = 1;
-            }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    lits
-}
-
-// The integer type a comparison reads its operands at, or -1 when the operand
-// types do not agree: equal types, or an `i64` literal against another integer
-// type.
-fn vc_cmp_operand_ty(inst: IrInst, tys: Vec<i64>, lits: Vec<i64>) -> i64 {
-    let t0: i64 = vc_arg_ty(tys, inst, 0);
-    let t1: i64 = vc_arg_ty(tys, inst, 1);
-    if t0 == t1 { return t0; }
-    if !vc_ty_is_int(t0) || !vc_ty_is_int(t1) { return -1; }
-    if lits[inst.args[1] as u64] == 1 { return t0; }
-    if lits[inst.args[0] as u64] == 1 { return t1; }
-    -1
-}
-
-// True when operand `k` of `inst` can be read at integer type `want`: it has
-// that type, or it is an `i64` literal (see `vc_literal_table`).
-fn vc_operand_ok(inst: IrInst, tys: Vec<i64>, lits: Vec<i64>, k: u64, want: i64) -> bool {
-    let t: i64 = vc_arg_ty(tys, inst, k);
-    if t == want { return true; }
-    vc_ty_is_int(want) && vc_ty_is_int(t) && lits[inst.args[k] as u64] == 1
 }
 
 // Types a Phi may carry. Unit is accepted for the statement-position `if`,
@@ -348,7 +301,7 @@ fn vc_str_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
 // True when the instruction is one the symbolic executor models, given the
 // types of the values it reads. `calls` admits a scalar call of a user function
 // (inlined before execution); without it only the unwrap abort is a call.
-fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>, calls: bool) -> bool {
+fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, operands: VcOperands, calls: bool) -> bool {
     let op: i64 = inst.op;
     if !vc_op_gate_candidate(op) { return false; }
     let n: u64 = inst.args.len();
@@ -394,12 +347,12 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
             return n == 1 && inst.ty == ITY_U64() && vc_vec_index_ok(t0);
         }
         let nar: VcNarrow = vc_narrow_of(inst);
-        if nar.kind != VC_NAR_NONE() { return vc_narrow_shape_ok(nar, inst, t0, vc_operand_ok(inst, tys, lits, 0, ITY_U8()) && vc_operand_ok(inst, tys, lits, 1, ITY_U8())); }
+        if nar.kind != VC_NAR_NONE() { return vc_narrow_shape_ok(nar, inst, t0, vc_operands_accepts(operands, inst, 0, ITY_U8()) && vc_operands_accepts(operands, inst, 1, ITY_U8())); }
         return calls && vc_call_inlinable(inst, tys);
     }
     if vc_is_arith_op(op) {
-        return vc_ty_is_int(inst.ty) && n == 2 && vc_operand_ok(inst, tys, lits, 0, inst.ty)
-            && vc_operand_ok(inst, tys, lits, 1, inst.ty);
+        return vc_ty_is_int(inst.ty) && n == 2 && vc_operands_accepts(operands, inst, 0, inst.ty)
+            && vc_operands_accepts(operands, inst, 1, inst.ty);
     }
     if op == IOP_SHL() || op == IOP_SHR() {
         return inst.dk == IDATA_INTEGER() && vc_ty_is_int(inst.ty) && inst.dv == inst.ty && n == 2
@@ -411,7 +364,7 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
     }
     if vc_is_cmp_op(op) {
         if inst.ty != ITY_BOOL() || n != 2 { return false; }
-        let at: i64 = vc_cmp_operand_ty(inst, tys, lits);
+        let at: i64 = vc_operands_cmp_ty(operands, inst);
         if op == IOP_EQ() || op == IOP_NE() { return vc_ty_is_int(at) || at == ITY_BOOL(); }
         return vc_ty_is_int(at);
     }
@@ -499,7 +452,7 @@ fn vc_skip_reason_with(src: IrFunction, calls: bool) -> String {
         return closed_dom;
     }
     let tys: Vec<i64> = vc_ty_table(f);
-    let lits: Vec<i64> = vc_literal_table(f, tys);
+    let operands: VcOperands = vc_operands_new(f, tys);
     // A specific reason (float remainder, unmodelled builtin) beats
     // the generic `unsupported-opcode` of an earlier instruction: it names what
     // has to be modelled, and the generic one would hide it behind a parameter
@@ -514,7 +467,7 @@ fn vc_skip_reason_with(src: IrFunction, calls: bool) -> String {
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
             if inst.op == IOP_CALL() && vc_inst_vec_kind(inst) != VC_VEC_NONE() { has_vec = true; }
-            if !vc_inst_supported(f, inst, tys, lits, calls) {
+            if !vc_inst_supported(f, inst, tys, operands, calls) {
                 let specific: String = vc_inst_specific_reason(inst);
                 if specific.len() > 0 { return specific; }
                 if !have_generic {

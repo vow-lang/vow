@@ -1,0 +1,87 @@
+module VcOperands
+
+use ir
+use vc_int
+use vc_term
+use vc_mapops
+
+// Contextual integer operands for one transformed function. Keep literal
+// provenance distinct from constant folding: only ConstI64[i64] may adopt
+// another integer type, while any folded bitvector hides a map's key width.
+// The type vector is shared with the gate/executor, not copied. All storage
+// follows their existing per-function region lifetime.
+struct VcOperands {
+    tys: Vec<i64>,
+    literals: Vec<i64>,
+}
+
+fn vc_operands_new(f: IrFunction, tys: Vec<i64>) -> VcOperands {
+    let literals: Vec<i64> = Vec::new();
+    let mut k: u64 = 0;
+    while k < tys.len() {
+        literals.push(0);
+        k = k + 1;
+    }
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.id >= 0 && inst.op == IOP_CONST_I64() && inst.ty == ITY_I64() {
+                literals[inst.id as u64] = 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    VcOperands { tys: tys, literals: literals }
+}
+
+fn vc_operands_arg_ty(operands: VcOperands, inst: IrInst, k: u64) -> i64 {
+    if k >= inst.args.len() { return -1; }
+    let id: i64 = inst.args[k];
+    if id < 0 || id >= operands.tys.len() as i64 { return -1; }
+    operands.tys[id as u64]
+}
+
+// Equal types win, including Bool. Otherwise an i64 literal is read at the
+// other integer operand's type; a nonliteral mismatch remains unsupported.
+fn vc_operands_cmp_ty(operands: VcOperands, inst: IrInst) -> i64 {
+    let t0: i64 = vc_operands_arg_ty(operands, inst, 0);
+    let t1: i64 = vc_operands_arg_ty(operands, inst, 1);
+    if t0 == t1 { return t0; }
+    if !vc_ty_is_int(t0) || !vc_ty_is_int(t1) { return -1; }
+    if operands.literals[inst.args[1] as u64] == 1 { return t0; }
+    if operands.literals[inst.args[0] as u64] == 1 { return t1; }
+    -1
+}
+
+fn vc_operands_accepts(operands: VcOperands, inst: IrInst, k: u64, want: i64) -> bool {
+    let t: i64 = vc_operands_arg_ty(operands, inst, k);
+    if t == want { return true; }
+    vc_ty_is_int(want) && vc_ty_is_int(t) && operands.literals[inst.args[k] as u64] == 1
+}
+
+// Read a defined operand after the gate/dominance checks. A literal's 64-bit
+// constant term retains its exact low word: vc_define leaves constants unnamed.
+// No separate data-value table or per-instruction recording is needed. Only a
+// signed destination sign-extends into the high limb; narrow widths mask as usual.
+fn vc_operands_term_at(operands: VcOperands, ar: VcArena, terms: Vec<i64>, at: i64, id: i64) -> i64 {
+    let term: i64 = terms[id as u64];
+    if operands.tys[id as u64] == at || operands.literals[id as u64] != 1 { return term; }
+    let lo: i64 = ar.aux[term as u64];
+    let mut hi: i64 = 0;
+    if vc_ty_signed(at) { hi = lo >> 63; }
+    vc_int_const(ar, at, lo, hi)
+}
+
+// BTreeMap keys are always i64. A HashMap literal (including a folded negative
+// literal) says nothing about its key type; a symbolic Bool has width one.
+fn vc_operands_map_key_bits(operands: VcOperands, ar: VcArena, terms: Vec<i64>, inst: IrInst) -> i64 {
+    if vc_inst_is_btree_op(inst) { return 64; }
+    let id: u64 = inst.args[1] as u64;
+    if operands.literals[id] == 1 || vc_is_bv(ar, terms[id]) { return -1; }
+    if operands.tys[id] == ITY_BOOL() { return 1; }
+    vc_ty_bits(operands.tys[id])
+}
