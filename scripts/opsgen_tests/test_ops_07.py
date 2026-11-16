@@ -292,3 +292,148 @@ class OperationFactTablesTest(unittest.TestCase):
             "compiler/tests/catalogue_facts_gen.vow: generated fact table is stale",
             stale,
         )
+
+
+class CatalogueOutputsTest(unittest.TestCase):
+    ANNOUNCED = [
+        "vow-ir/src/lower/mod.rs",
+        "vow-codegen/src/cranelift_backend.rs",
+        "vow-clif-shim/src/lib.rs",
+        "compiler/lower.vow",
+        "vow-ir/src/region.rs",
+        "vow-verify/src/c_emitter.rs",
+        "compiler/c_emitter.vow",
+        "vow-types/src/env.rs",
+        "vow-ir/src/lower/mod.rs",
+        "compiler/catalogue_ir_gen.vow",
+        "compiler/catalogue_vc_ops_gen.vow",
+        "compiler/tests/catalogue_facts_gen.vow",
+    ]
+
+    def _fixtures(self, root):
+        _write_target_fixtures(root)
+        _write_fact_fixtures(root)
+
+    def _snapshot(self, root):
+        return {
+            p.relative_to(root).as_posix(): p.read_bytes()
+            for p in root.rglob("*")
+            if p.is_file()
+        }
+
+    def test_existing_families_preserve_shared_host_and_authored_text(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self._fixtures(root)
+            go.write_projections(PRINT_OPS, root, [])
+            go.write_fact_tables(PRINT_OPS, root, EXCLUDED)
+            content = (root / "vow-ir/src/lower/mod.rs").read_text()
+            self.assertTrue(
+                content.startswith("fn vow_static_builtin_to_runtime() {}\n")
+            )
+            self.assertTrue(content.endswith("after\n"))
+            self.assertIn("fn catalogue_builtin_to_runtime", content)
+            self.assertIn("const LOWERING_FACTS", content)
+            self.assertEqual(go.check_projections(PRINT_OPS, root, []), [])
+            self.assertEqual(go.check_fact_tables(PRINT_OPS, root, EXCLUDED), [])
+
+    def test_combined_write_matches_existing_bytes_order_and_idempotence(self):
+        with tempfile.TemporaryDirectory() as d:
+            legacy, combined = Path(d) / "legacy", Path(d) / "combined"
+            self._fixtures(legacy)
+            self._fixtures(combined)
+            go.write_projections(PRINT_OPS, legacy, [])
+            go.write_fact_tables(PRINT_OPS, legacy, EXCLUDED)
+            paths = go.write_outputs(PRINT_OPS, combined, [], EXCLUDED)
+            self.assertEqual([p.as_posix() for p in paths], self.ANNOUNCED)
+            self.assertEqual(self._snapshot(combined), self._snapshot(legacy))
+            self.assertEqual(go.check_outputs(PRINT_OPS, combined, [], EXCLUDED), [])
+            go.write_outputs(PRINT_OPS, combined, [], EXCLUDED)
+            self.assertEqual(self._snapshot(combined), self._snapshot(legacy))
+
+    def test_check_reports_all_drift_in_execution_order_without_writing(self):
+        expected = [f"{p}: spliced block is stale" for p in self.ANNOUNCED[:7]]
+        expected += [f"{p}: generated file is stale" for p in self.ANNOUNCED[9:11]]
+        expected += [f"{p}: spliced fact table is stale" for p in self.ANNOUNCED[7:9]]
+        expected += [f"{self.ANNOUNCED[11]}: generated fact table is stale"]
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self._fixtures(root)
+            before = self._snapshot(root)
+            self.assertEqual(go.check_outputs(PRINT_OPS, root, [], EXCLUDED), expected)
+            self.assertEqual(self._snapshot(root), before)
+            self.assertFalse((root / "compiler/tests").exists())
+
+    def test_missing_whole_file_is_reported_and_recreated(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self._fixtures(root)
+            go.write_outputs(PRINT_OPS, root, [], EXCLUDED)
+            path = root / "compiler/tests/catalogue_facts_gen.vow"
+            before = path.read_bytes()
+            path.unlink()
+            path.parent.rmdir()
+            self.assertEqual(
+                go.check_outputs(PRINT_OPS, root, [], EXCLUDED),
+                [
+                    "compiler/tests/catalogue_facts_gen.vow: generated fact table is stale"
+                ],
+            )
+            go.write_outputs(PRINT_OPS, root, [], EXCLUDED)
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_bad_markers_raise_after_preserving_earlier_writes(self):
+        corruptions = [
+            ("no markers\n", "not found"),
+            (go.MARKER_START + "\n", "not found"),
+            (
+                f"{go.MARKER_START}\n{go.MARKER_END}\n{go.MARKER_START}\n",
+                "multiple",
+            ),
+        ]
+        for content, message in corruptions:
+            with self.subTest(content=content), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                self._fixtures(root)
+                (root / "compiler/lower.vow").write_text(content)
+                facts_before = (root / "vow-types/src/env.rs").read_bytes()
+                with self.assertRaisesRegex(ValueError, message):
+                    go.write_outputs(PRINT_OPS, root, [], EXCLUDED)
+                self.assertIn(
+                    "catalogue_builtin_to_runtime",
+                    (root / "vow-ir/src/lower/mod.rs").read_text(),
+                )
+                self.assertEqual(
+                    (root / "vow-types/src/env.rs").read_bytes(), facts_before
+                )
+                self.assertFalse((root / "compiler/catalogue_ir_gen.vow").exists())
+                before_check = self._snapshot(root)
+                with self.assertRaisesRegex(ValueError, message):
+                    go.check_outputs(PRINT_OPS, root, [], EXCLUDED)
+                self.assertEqual(self._snapshot(root), before_check)
+
+    def test_fact_failure_happens_after_runtime_whole_files_are_written(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self._fixtures(root)
+            (root / "vow-types/src/env.rs").write_text("no markers\n")
+            with self.assertRaisesRegex(ValueError, "OPERATION_FACTS:START.*not found"):
+                go.write_outputs(PRINT_OPS, root, [], EXCLUDED)
+            self.assertTrue((root / "compiler/catalogue_ir_gen.vow").exists())
+            self.assertTrue((root / "compiler/catalogue_vc_ops_gen.vow").exists())
+            self.assertFalse((root / "compiler/tests/catalogue_facts_gen.vow").exists())
+
+    def test_missing_splice_host_raises_in_both_modes(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self._fixtures(root)
+            (root / self.ANNOUNCED[0]).unlink()
+            before = self._snapshot(root)
+            for operation in (go.write_outputs, go.check_outputs):
+                with self.assertRaises(FileNotFoundError):
+                    operation(PRINT_OPS, root, [], EXCLUDED)
+                self.assertEqual(self._snapshot(root), before)
+
+    def test_whole_inventory_excludes_splices(self):
+        self.assertEqual(go.whole_output_paths(), set(self.ANNOUNCED[9:]))
+        self.assertEqual(go.generated_output_paths(), go.whole_output_paths())

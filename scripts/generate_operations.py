@@ -66,21 +66,24 @@ from opsgen.excluded import excluded_matches, load_excluded
 from opsgen.facts import (
     FACTS_MARKER_END,
     FACTS_MARKER_START,
-    FACT_TARGET_FILES,
-    FACT_WHOLE_TARGETS,
     _doc_params,
-    check_fact_tables,
     gen_rust_facts_block,
     gen_rust_lowering_facts_block,
     gen_vow_facts_block,
     result_tag_token,
-    write_fact_tables,
 )
 from opsgen.markers import MARKER_END, MARKER_START, _replace_between_markers
-from opsgen.projections import (
+from opsgen.outputs import (
+    FACT_TARGET_FILES,
+    FACT_WHOLE_TARGETS,
     TARGET_FILES,
     WHOLE_FILE_TARGETS,
+    check_fact_tables,
+    check_outputs,
     check_projections,
+    whole_output_paths,
+    write_fact_tables,
+    write_outputs,
     write_projections,
 )
 from opsgen.tokens import (
@@ -114,6 +117,7 @@ __all__ = [
     "check_c_models",
     "check_doc_facts",
     "check_fact_tables",
+    "check_outputs",
     "check_projections",
     "check_runtime_exports",
     "check_verifier_models",
@@ -137,14 +141,15 @@ __all__ = [
     "result_shape",
     "result_tag_token",
     "write_fact_tables",
+    "whole_output_paths",
+    "write_outputs",
     "write_projections",
 ]
 
 
 def generated_output_paths() -> set[str]:
     """Repo-relative paths of the whole files this generator writes."""
-    targets = WHOLE_FILE_TARGETS + FACT_WHOLE_TARGETS
-    return {path.as_posix() for path, _, _ in targets}
+    return whole_output_paths()
 
 
 def main() -> None:
@@ -184,8 +189,7 @@ def main() -> None:
 
     if check_only:
         mismatches = (
-            check_projections(ops, repo_root, routes)
-            + check_fact_tables(ops, repo_root, excluded)
+            check_outputs(ops, repo_root, routes, excluded)
             + check_doc_facts(ops, repo_root)
             + check_runtime_exports(routes, repo_root)
         )
@@ -197,11 +201,7 @@ def main() -> None:
         print("OK: operations catalogue up to date")
         return
 
-    write_projections(ops, repo_root, routes)
-    write_fact_tables(ops, repo_root, excluded)
-    for rel_path, _ in TARGET_FILES + FACT_TARGET_FILES:
-        print(f"Updated {rel_path}")
-    for rel_path, _, _ in WHOLE_FILE_TARGETS + FACT_WHOLE_TARGETS:
+    for rel_path in write_outputs(ops, repo_root, routes, excluded):
         print(f"Updated {rel_path}")
 
 
