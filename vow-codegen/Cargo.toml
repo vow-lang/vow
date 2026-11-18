@@ -20,7 +20,7 @@ vow-types = { path = "../vow-types" }
 vow-diag = { path = "../vow-diag" }
 proptest = "1"
 tempfile = "3"
-object = "0.40"
+object = "0.41"
 divan = { version = "5.0.3", package = "codspeed-divan-compat" }
 
 [[bench]]
